@@ -1,0 +1,3 @@
+pnpm format:check
+pnpm build:backend
+pnpm build:web

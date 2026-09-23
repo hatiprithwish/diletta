@@ -1,0 +1,70 @@
+{
+  "name": "scaffold-worker",
+  "main": "src/index.ts",
+  // DEV_NOTE: keep it up to date with the current date.
+  "compatibility_date": "2026-05-22",
+  // DEV_NOTE: nodejs_compat flag is needed for using AsyncLocalStorage.
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ALLOWED_CORS_ORIGIN": "http://localhost:3000",
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "scaffold-db",
+      "database_id": "c950b22e-c50c-4840-bb9b-f91143980fe1",
+      "migrations_dir": "src/db/migrations",
+      "remote": true,
+    },
+  ],
+  "env": {
+    "staging": {
+      "name": "scaffold-worker-staging",
+      "vars": {
+        "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://scaffold-web-staging.hatiprithwish.workers.dev",
+      },
+      "observability": {
+        "logs": {
+          "enabled": true,
+          "invocation_logs": true,
+        },
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "scaffold-db",
+          "database_id": "c950b22e-c50c-4840-bb9b-f91143980fe1",
+          "migrations_dir": "src/db/migrations",
+          "remote": true,
+        },
+      ],
+    },
+    "production": {
+      "name": "scaffold-worker",
+      "vars": {
+        "ALLOWED_CORS_ORIGIN": "https://scaffold-web.hatiprithwish.workers.dev",
+      },
+      "observability": {
+        "logs": {
+          "enabled": true,
+          "invocation_logs": true,
+        },
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "scaffold-db",
+          "database_id": "c950b22e-c50c-4840-bb9b-f91143980fe1",
+          "migrations_dir": "src/db/migrations",
+          "remote": true,
+        },
+      ],
+    },
+  },
+}

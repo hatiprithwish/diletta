@@ -1,0 +1,16 @@
+# ============================================================
+# SOURCE OF TRUTH for required environment variables.
+#
+# runtime-only  → set via `wrangler secret put`, NOT needed in GitHub
+# ci-required   → must exist as a GitHub environment secret
+#
+# When adding a new CI secret:
+#   1. Tag it with # ci-required here
+#   2. Add the secret value in GitHub → Settings → Environments → staging + production
+# ============================================================
+
+CLERK_PUBLISHABLE_KEY=  # runtime-only
+CLERK_SECRET_KEY=       # runtime-only
+
+CLOUDFLARE_API_TOKEN=   # ci-required
+CLOUDFLARE_ACCOUNT_ID=  # ci-required

@@ -1,0 +1,67 @@
+name: Deploy Worker (Staging)
+
+on:
+  push:
+    branches: [staging]
+    paths:
+      - "apps/backend/**"
+      - "packages/schemas/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-worker-staging
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare Workers (Staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate secrets
+        run: |
+          missing=()
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            [[ "$line" != *"# ci-required"* ]] && continue
+            key="${line%%=*}"
+            key="${key%% *}"
+            [[ -z "${!key}" ]] && missing+=("$key")
+          done < apps/backend/.dev.vars.example
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "❌ Missing secrets: ${missing[*]}"
+            exit 1
+          fi
+          echo "✅ All secrets present"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/backend
+          command: deploy --env staging
