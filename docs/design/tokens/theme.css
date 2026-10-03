@@ -1,0 +1,131 @@
+/*
+ * Companion theme for shadcn/ui (Tailwind v4). Drop into packages/ui as the base stylesheet.
+ * Lime is the brand colour. It is a FILL colour: use it for primary buttons, active
+ * toggles, chart bars and the launcher, always with --primary-foreground (near-black) on it.
+ * Never use --primary as text on a light background; use --brand-text instead.
+ * shadcn's --accent stays NEUTRAL (it is the hover/selected surface, not the brand).
+ */
+
+:root {
+  --radius: 0.5rem;
+
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+
+  --primary: #a3e635; /* lime fill */
+  --primary-foreground: #1a2e05; /* text on lime */
+  --secondary: #f3f3f3;
+  --secondary-foreground: #171717;
+  --muted: #f3f3f3;
+  --muted-foreground: #6e6e6e;
+  --accent: #f3f3f3; /* neutral hover / selected */
+  --accent-foreground: #171717;
+  --destructive: #bf2a1d;
+  --border: #ebebeb;
+  --input: #ebebeb;
+  --ring: #4d7c0f;
+
+  --sidebar: #fafafa;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #a3e635;
+  --sidebar-primary-foreground: #1a2e05;
+  --sidebar-accent: #f3f3f3;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #ebebeb;
+  --sidebar-ring: #4d7c0f;
+
+  --chart-1: #a3e635;
+  --chart-2: #4d7c0f;
+  --chart-3: #6e6e6e;
+  --chart-4: #995100;
+  --chart-5: #bf2a1d;
+
+  /* Companion extras (not in stock shadcn) */
+  --brand-text: #4d7c0f; /* lime as text / links / focus on light */
+  --brand-soft: #f3fbe6; /* lime-tinted surface, "Production" chip, info banners */
+  --success: #4d7c0f;
+  --success-soft: #f3fbe6;
+  --warning: #995100;
+  --warning-soft: #fff5e6;
+  --destructive-soft: #fdedeb;
+  --diff-new: #e4f7c2; /* highlight behind the NEW value in a change diff */
+  --bubble: #f3f3f3; /* user message bubble in the widget */
+  --surface-subtle: #fafafa; /* tool-step panel, selected table row */
+  --surface-subtle: #fafafa; /* tool-step panel, selected table row */
+  --subtle-foreground: #4f4f4f; /* strong secondary text, inactive nav, icon buttons */
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+.dark {
+  --background: #0c0d0c;
+  --foreground: #ededed;
+  --card: #151715;
+  --card-foreground: #ededed;
+  --popover: #151715;
+  --popover-foreground: #ededed;
+
+  --primary: #a3e635;
+  --primary-foreground: #142305;
+  --secondary: #1d201d;
+  --secondary-foreground: #ededed;
+  --muted: #1d201d;
+  --muted-foreground: #909090;
+  --accent: #1d201d;
+  --accent-foreground: #ededed;
+  --destructive: #ff7b6f;
+  --border: #272a27;
+  --input: #272a27;
+  --ring: #b8ef5c;
+
+  --sidebar: #111311;
+  --sidebar-foreground: #ededed;
+  --sidebar-primary: #a3e635;
+  --sidebar-primary-foreground: #142305;
+  --sidebar-accent: #1d201d;
+  --sidebar-accent-foreground: #ededed;
+  --sidebar-border: #272a27;
+  --sidebar-ring: #b8ef5c;
+
+  --chart-1: #a3e635;
+  --chart-2: #b8ef5c;
+  --chart-3: #909090;
+  --chart-4: #f2a541;
+  --chart-5: #ff7b6f;
+
+  --brand-text: #b8ef5c;
+  --brand-soft: #1a2410;
+  --success: #b8ef5c;
+  --success-soft: #1a2410;
+  --warning: #f2a541;
+  --warning-soft: #2a1f0e;
+  --destructive-soft: #2e1714;
+  --diff-new: #2b3b12;
+  --bubble: #1f221f;
+  --surface-subtle: #111311;
+  --surface-subtle: #111311;
+  --subtle-foreground: #b6b6b6;
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-brand-text: var(--brand-text);
+  --color-brand-soft: var(--brand-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-diff-new: var(--diff-new);
+  --color-bubble: var(--bubble);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --shadow-float: var(--shadow-float);
+}
