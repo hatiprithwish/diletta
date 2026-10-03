@@ -7,7 +7,7 @@
     "build": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
     "generate-types": "wrangler types",
-    "db:generate": "drizzle-kit generate --name scaffold",
+    "db:generate": "drizzle-kit generate --name diletta",
     "db:migrate": "wrangler d1 migrations apply scaffold-db --remote",
     "test": "vitest run",
     "test:watch": "vitest",

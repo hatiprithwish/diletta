@@ -120,8 +120,9 @@ Before using any third-party API: check the installed version in `package.json`,
 ## Commands
 
 ```bash
-pnpm dev:web                      # web app (no root `pnpm dev` yet; M0-1 adds it)
-pnpm dev:backend                  # backend worker
+pnpm dev                          # web + backend together
+pnpm dev:web                      # web app only
+pnpm dev:backend                  # backend worker only
 pnpm lint
 pnpm format:check
 pnpm --filter web test

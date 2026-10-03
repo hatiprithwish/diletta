@@ -1,5 +1,5 @@
 {
-  "name": "scaffold-worker",
+  "name": "diletta-worker",
   "main": "src/index.ts",
   // DEV_NOTE: keep it up to date with the current date.
   "compatibility_date": "2026-05-22",
@@ -25,9 +25,9 @@
   ],
   "env": {
     "staging": {
-      "name": "scaffold-worker-staging",
+      "name": "diletta-worker-staging",
       "vars": {
-        "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://scaffold-web-staging.hatiprithwish.workers.dev",
+        "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
       },
       "observability": {
         "logs": {
@@ -46,9 +46,9 @@
       ],
     },
     "production": {
-      "name": "scaffold-worker",
+      "name": "diletta-worker",
       "vars": {
-        "ALLOWED_CORS_ORIGIN": "https://scaffold-web.hatiprithwish.workers.dev",
+        "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
       },
       "observability": {
         "logs": {

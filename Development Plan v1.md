@@ -36,7 +36,7 @@ Four lanes, owned by 2–4 engineers; with two people, one owns Platform + Runti
 - The Pattern Enforcer reviews every PR first, then a human does. Security-critical paths need a second reviewer: RLS, crypto, auth, action engine, budget.
 - The v0.15 diagram is the schema source of truth. A PR that changes a table updates the diagram in the same PR.
 - Changing a locked decision (Architecture baseline) needs a short ADR in `docs/adr/` first.
-- `main` always deploys to staging. Production deploys are manual promotions.
+- The `staging` branch deploys to staging. `main` deploys to production.
 
 ## Repository and tooling
 
@@ -67,12 +67,12 @@ companion/                    (from scaffold)
   CLAUDE.md
 ```
 
-| Environment | Workers                                        | Database                  | Used for                            |
-| ----------- | ---------------------------------------------- | ------------------------- | ----------------------------------- |
-| Local       | `pnpm dev`                                     | Neon branch per developer | daily work                          |
-| Preview     | per PR (new)                                   | Neon branch per PR (new)  | integration + RLS tests             |
-| Staging     | scaffold staging workflows, on merge to `main` | Neon staging              | our test company, eRegister staging |
-| Production  | scaffold production workflows, manual          | Neon production           | eRegister live                      |
+| Environment | Workers                                           | Database                  | Used for                            |
+| ----------- | ------------------------------------------------- | ------------------------- | ----------------------------------- |
+| Local       | `pnpm dev`                                        | Neon branch per developer | daily work                          |
+| Preview     | per PR (new)                                      | Neon branch per PR (new)  | integration + RLS tests             |
+| Staging     | scaffold staging workflows, on push to `staging`  | Neon staging              | our test company, eRegister staging |
+| Production  | scaffold production workflows, on merge to `main` | Neon production           | eRegister live                      |
 
 CI on every PR: lint, typecheck, unit tests, integration and RLS tests on the PR's Neon branch, a JSON Schema drift check between `packages/schemas` and `evals/`, and the Pattern Enforcer against `.github/pattern-rules.md`. Merges to `main` also run the platform eval suite against staging.
 
@@ -148,7 +148,7 @@ Each row is one PR for one Claude Code session. Start a session with: "Read CLAU
 
 ### M0 Foundations
 
-Exit: the scaffold runs on Neon Postgres with the tenant transaction pattern as a golden file, every PR gets a preview Worker and Neon branch, `main` deploys to staging.
+Exit: the scaffold runs on Neon Postgres with the tenant transaction pattern as a golden file, every PR gets a preview Worker and Neon branch, `staging` deploys to staging and `main` to production.
 
 | ID   | Task                                                                                                                                                                           | Done when                                                  | Lane     |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | -------- |

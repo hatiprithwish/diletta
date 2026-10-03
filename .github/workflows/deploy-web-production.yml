@@ -78,8 +78,8 @@ jobs:
           node -e "
             const fs = require('fs');
             const cfg = JSON.parse(fs.readFileSync('dist/server/wrangler.json', 'utf8'));
-            cfg.name = 'scaffold-web';
-            cfg.vars = { VITE_API_URL: 'https://scaffold-worker.hatiprithwish.workers.dev', SENTRY_PROJECT: 'scaffold' };
+            cfg.name = 'diletta-web';
+            cfg.vars = { VITE_API_URL: 'https://diletta-worker.hatiprithwish.workers.dev', SENTRY_PROJECT: 'diletta' };
             fs.writeFileSync('dist/server/wrangler.json', JSON.stringify(cfg));
           "
 

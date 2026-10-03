@@ -1,8 +1,9 @@
 {
-  "name": "scaffold",
+  "name": "diletta",
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "pnpm --parallel --filter web --filter backend dev",
     "dev:backend": "pnpm --filter backend dev",
     "dev:web": "pnpm --filter web dev",
     "build:backend": "pnpm --filter backend build",

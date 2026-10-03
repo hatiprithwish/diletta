@@ -4,3 +4,4 @@ build
 .output
 .wrangler
 pnpm-lock.yaml
+docs/design/pages
