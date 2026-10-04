@@ -5,7 +5,6 @@ import { requestId } from "hono/request-id";
 import { configureLogger, disposeLogger, withRequestContext } from "@/providers/logger";
 import AuthRoutes from "@/routes/AuthRoutes";
 import UsersRoutes from "@/routes/UserRoutes";
-import NotesRoutes from "@/routes/NotesRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 
@@ -42,7 +41,6 @@ app.use(
 
 app.route("/auth", AuthRoutes);
 app.route("/users", UsersRoutes);
-app.route("/notes", NotesRoutes);
 
 export default {
   fetch(req: Request, env: Env, ctx: ExecutionContext) {

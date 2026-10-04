@@ -20,13 +20,16 @@
 
 | Layer               | File                                                 |
 | ------------------- | ---------------------------------------------------- |
-| DAL                 | `apps/backend/src/data-access-layer/NotesDAL.ts`     |
-| Repository          | `apps/backend/src/repositories/NotesRepo.ts`         |
-| Routes              | `apps/backend/src/routes/NotesRoutes.ts`             |
-| Frontend data layer | `apps/web/src/routes/_authenticated/notes/-data.ts`  |
-| Frontend page       | `apps/web/src/routes/_authenticated/notes/index.tsx` |
+| Tenant transaction  | `apps/backend/src/db/withTenant.ts`                  |
+| DAL                 | `apps/backend/src/data-access-layer/ChatbotsDAL.ts`  |
+| Repository          | `apps/backend/src/repositories/ChatbotsRepo.ts`      |
+| Schemas             | `packages/schemas/src/chatbots/`                     |
+| Tenant tests        | `apps/backend/src/tests/chatbots.test.ts`            |
+| Routes              | `apps/backend/src/routes/UserRoutes.ts` (until M1-8) |
+| Frontend data layer | none yet: first dashboard page sets it (M4)          |
+| Frontend page       | none yet: first dashboard page sets it (M4)          |
 
-Notes is the scaffold example on Postgres. M0-5 adds tenant-aware DAL + Repo golden files and updates this table; until then, follow Notes.
+Chatbots is the tenant golden example (M0-5). It has no routes yet: the Clerk admin → company lookup arrives with M1-8, which adds the first tenant route and replaces the Routes row. Until a frontend golden exists, follow the Conventions below and flag anything they don't cover.
 
 ## Stack
 
@@ -51,10 +54,10 @@ Before using any third-party API: check the installed version in `package.json`,
 
 ## Conventions
 
-- **Status Enum Pattern** (any discrete-state field): DB stores int only. Define `<Feature>StatusIntEnum`, `<Feature>StatusLabelEnum`, `<FEATURE>_STATUS_LABEL_MAP` in `<Feature>Common.ts`. DAL returns raw int; Repo maps int→label in a private `withStatusLabel`; API response always carries both `<feature>Status` (int) and `<feature>StatusLabel` (string). See `NotesCommon.ts` / `NotesRepo.ts`.
-- **Public ID Pattern** (every table): `id` is internal-only — joins and references, never sent to or accepted from a client. `publicId` (`Utility.generatePublicId()`, unique-indexed) is client-facing — every route param, API response, and frontend reference uses it instead. DAL generates it on insert and finds rows by it; API response types structurally omit `id` (`Omit<Note, "id">`). See `NotesCommon.ts` / `NotesDAL.ts` / `NotesRoutes.ts`.
-- **DAL**: class holding `private db`, ctor takes `env`. Every method inits `{ isSuccess: false }`, try/catch, `AppLogger.error` with `LogCategory`/`LogAction` on failure.
-- **Repo**: thin — maps API shapes to DAL params, business logic lives here, not in DAL.
+- **Status Enum Pattern** (any discrete-state field): DB stores int only. Define `<Feature>StatusIntEnum`, `<Feature>StatusLabelEnum`, `<FEATURE>_STATUS_LABEL_MAP` in `<Feature>Common.ts`. DAL returns raw int; Repo maps int→label in a private `withStatusLabel`; API response always carries both `<feature>Status` (int) and `<feature>StatusLabel` (string). See `ChatbotsCommon.ts` / `ChatbotsRepo.ts`.
+- **Public ID Pattern** (every table): `id` is internal-only — joins and references, never sent to or accepted from a client. `publicId` (`Utility.generatePublicId()`, unique-indexed) is client-facing — every route param, API response, and frontend reference uses it instead. DAL generates it on insert and finds rows by it; API response types structurally omit `id` and every other internal id (`companyId`, `<verb>_by`), e.g. `Omit<Chatbot, "id" | "companyId" | "createdBy" | "updatedBy">`. See `ChatbotsCommon.ts` / `ChatbotsDAL.ts` / `ChatbotsRepo.ts`.
+- **DAL**: tenant DALs hold no db. Every method takes `tx` from `withTenant` first and filters on `companyId`. Non-tenant DALs (`UsersDAL`) hold `private db` from a ctor taking `env`. Every method inits `{ isSuccess: false }`, try/catch, `AppLogger.error` with `LogCategory`/`LogAction` on failure.
+- **Repo**: thin. Maps API shapes to DAL params; business logic lives here, not in the DAL. Tenant Repos hold `private db = getDbClient(env)` and open one `withTenant` per method.
 - **Routes**: `checkAuth` first, then `zValidator`. `c.get("clerkUserId")` for the user. 201/200/404/500.
 - **Frontend `-data.ts`**: `Queries` class with hierarchical keys (`keys.all()` invalidates every detail). `setQueryData` on update, `removeQueries` on delete, `mutateAsync` when the caller must await, `mutate` otherwise. Every mutation needs a non-empty `onError` (toast).
 - **Frontend pages**: `useAuth()` at page level, explicit loading/error states, all requests through `apiClient`.
@@ -74,10 +77,10 @@ Before using any third-party API: check the installed version in `package.json`,
 
 **From M0-5 (tenant pattern):**
 
-- Tenant queries only inside `withTenant(companyId, tx => ...)`, which sets `set_config('app.company_id', …, true)` per transaction. Never set RLS context per session. DAL methods take `tx`; Repo opens the transaction.
-- Transactional flows (outbox, action engine) throw to roll back; plain CRUD keeps the `{ isSuccess }` response pattern.
+- Tenant queries only inside `withTenant(db, companyId, tx => ...)` (`companyId` = internal `companies.id`, resolved server-side), which sets `set_config('app.company_id', …, true)` per transaction. Never set RLS context per session. DAL methods take `tx`; Repo opens the transaction.
+- Transactional flows (outbox, action engine) throw `TenantRollbackError(dalResponse.message)` to roll back; `withTenant` turns it into `{ isSuccess: false, message }`. Plain CRUD keeps the `{ isSuccess }` response pattern. See `ChatbotsRepo.setDefaultChatbot`.
 - Critical events: `activity_log` + `event_outbox` row in the same transaction.
-- A new tenant table ships with its RLS tests in the same PR.
+- A new tenant table ships with tests showing company B can't read or write company A's rows, in the same PR. From M1-3 these are RLS tests. Until then the worker connects as the table owner, which bypasses RLS, so only the `companyId` filter protects tenants.
 
 ## Runtime
 
