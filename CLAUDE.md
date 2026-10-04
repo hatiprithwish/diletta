@@ -7,6 +7,7 @@
 - Your task row in `Development Plan v1.md` and its **Architecture baseline** section. The baseline lists locked decisions; changing one needs an ADR in `docs/adr/` first.
 - `docs/architecture/companion-architecture-v0_15.excalidraw` — schema source of truth (30 tables, 8 groups).
 - UI tasks: `docs/design/README.md` says which design files go with which task.
+- `.github/pattern-rules.md` — what the Pattern Enforcer flags on every PR. Writing code that breaks a rule there fails review.
 
 ## Principles
 
@@ -42,6 +43,8 @@ Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/cry
 **Known drift in the scaffold — don't copy it:** `react-hook-form` and `@hookform/resolvers` are installed but unused; never use them.
 
 Before using any third-party API: check the installed version in `package.json`, read its file under `llm-context/`, and use context7 if still unclear. Never code against training-data memory of a library.
+
+`llm-context/` index — app stack: `tanstack.md`, `clerk.md`, `hono.md`, `drizzle.md`, `zod.md`, `zustand.md`, `shadcn.md`, `tailwind.md`, `logtape.md`, `sentry.md`, `vitest.md`, `eslint.md`, `prettier.md`, `pnpm.md`, `github-actions.md`. Platform: `cloudflare.md` (per-product `llms.txt` index), `neon.md`, `hyperdrive.md`, `pgvector.md` (data); `durable-objects.md`, `think.md`, `ai-gateway.md`, `queues.md` (runtime). Each platform file ends with how Diletta uses that product; those notes repeat locked decisions, they don't replace this file.
 
 ## New feature checklist
 
@@ -106,6 +109,8 @@ Before using any third-party API: check the installed version in `package.json`,
 ## Done means
 
 - The task's "Done when" from the dev plan is shown in the PR.
+- A new tenant table ships with its company-isolation tests (RLS tests from M1-3).
+- A new CLAUDE.md rule or hard ban gets a matching rule in `.github/pattern-rules.md` in the same PR.
 - Schema change = architecture diagram updated in the same PR.
 - Locked decision changed = ADR in `docs/adr/` first.
 
