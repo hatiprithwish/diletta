@@ -1,17 +1,22 @@
 name: Pattern Enforcer
 
 # Automated validation of code patterns against project standards
-# Runs on every PR, posts inline comments for violations
+# Runs on every PR touching app/package TypeScript, migrations or a package.json; posts one PR comment per violation
 # Uses .github/pattern-rules.md as the source of truth for checks
-# Token-efficient: analyzes only PR diff, not entire codebase
+# Token-efficient: flags only the PR diff, reads a changed file only when a rule needs context
+# claude-code-action skips PRs that change this file (OIDC validation against the default branch)
 
 on:
   pull_request:
     types: [opened, synchronize]
+    # DEV_NOTE: GitHub path filters support * ** ? + [] ! only, not {a,b} braces — list each extension.
     paths:
-      - "apps/web/src/**/*.{ts,tsx,js,jsx}"
-      - "apps/backend/src/**/*.{ts,tsx,js,jsx}"
-      - "packages/schemas/src/**/*.{ts,tsx,js,jsx}"
+      - "apps/**/*.ts"
+      - "apps/**/*.tsx"
+      - "packages/**/*.ts"
+      - "packages/**/*.tsx"
+      - "apps/backend/src/db/migrations/**"
+      - "**/package.json"
 
 permissions:
   contents: read
@@ -40,23 +45,24 @@ jobs:
             You are a code pattern enforcer specialized in validating PRs against project standards.
 
             TASK:
-            1. Read .github/pattern-rules.md to understand all enforced patterns (CLAUDE.md rules + custom rules)
+            1. Read .github/pattern-rules.md in full: it is the only rule list. Every numbered rule in sections 1, 2 and 3 is in scope
             2. Get the PR diff using `gh pr diff`
-            3. Analyze ONLY the added/modified lines for pattern violations
+            3. Flag violations ONLY on added/modified lines
             4. For each violation:
                - Identify file, line number, and exact code
                - Determine which rule is violated
                - Classify severity: CRITICAL, WARNING, or INFO
                - Generate specific, actionable fix suggestion
-            5. Post ONE inline PR comment per violation
+            5. Post ONE PR comment per violation
             6. After all violation comments, post a summary comment
 
-            CRITICAL PRINCIPLE: DIFF-ONLY ANALYSIS
-            - You MUST analyze only the PR diff
-            - Do NOT read entire files
+            CRITICAL PRINCIPLE: DIFF-FIRST ANALYSIS
+            - Flag only added/modified lines (lines with + in the diff)
+            - You MAY read a changed file, and apps/backend/src/db/tables.ts, when a rule needs context:
+              e.g. section 3 rules (is this query inside a withTenant callback? does the table have a companyId column?)
             - Do NOT scan the whole codebase
-            - Focus on added/modified lines only (lines with + in diff)
-            - This keeps analysis token-efficient
+            - Section 3.1 (tenant query outside withTenant) is CRITICAL: check every new or changed query in
+              apps/backend/src against it, including queries in Repos, DALs, Durable Objects, Queue consumers and Cron handlers
 
             VIOLATION COMMENT FORMAT:
             Use this exact format for each violation:
@@ -96,30 +102,15 @@ jobs:
             ```
 
             RULES TO CHECK:
-            Read .github/pattern-rules.md and check for:
-
-            SECTION 1 - CLAUDE.MD RULES:
-            1.1 Layer boundaries (Routes→Repo→DAL→DB)
-            1.2 Type definitions must be in packages/schemas
-            1.3 console.log forbidden (use AppLogger)
-            1.4 Type safety (no any, no @ts-ignore)
-            1.5 Import path consistency
-            1.6 DB schema changes need migrations
-            1.7 Correct file placement per architecture
-            1.8 Naming conventions (PascalCase, camelCase, snake_case)
-            1.9 DAL error handling & logging
-            1.10 Mutation error handling (onError required)
-            1.11 Styling (Tailwind only, no inline styles except dynamic)
-
-            SECTION 2 - CUSTOM RULES:
-            2.1 Tailwind hard-coded pixels (px-[12px] forbidden, use standard scale)
-            2.2 Design system colors (no hardcoded hex, use color scale)
+            Every rule in .github/pattern-rules.md, by its number (1.x CLAUDE.md rules, 2.x UI and project rules,
+            3.x Companion platform rules). Do not rely on a fixed list here: new rules are added to that file only.
+            Use each rule's heading text to build its anchor link, e.g.
+            "### 3.1 Tenant Query Outside withTenant [CRITICAL]" → #31-tenant-query-outside-withtenant-critical
 
             ANALYSIS STEPS:
             1. Get PR diff: `gh pr diff ${{ github.event.pull_request.number }}`
             2. For each file in the diff:
-               - Read the file to understand context
-               - Look at only the added/modified lines (+)
+               - Look at the added/modified lines (+); read the file or tables.ts only when a rule needs context
                - Check against each rule
                - Flag violations with specific line numbers
             3. Post comments for violations
@@ -132,4 +123,4 @@ jobs:
             - If NO violations, post: "✅ Pattern check passed! All rules satisfied."
 
           claude_args: |
-            --allowedTools Write,Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(rg:*),Bash(grep:*)
+            --allowedTools Read,Write,Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(rg:*),Bash(grep:*)
