@@ -31,6 +31,15 @@
           "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
         },
       ],
+      // DEV_NOTE: Envelope-encryption master key (docs/runbooks/master-key.md). Bindings don't inherit,
+      // so each env declares its own. Local reads MASTER_KEY_V1 from .dev.vars instead.
+      "secrets_store_secrets": [
+        {
+          "binding": "MASTER_KEY_V1",
+          "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
+          "secret_name": "diletta-master-key-v1-staging",
+        },
+      ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
       },
@@ -47,6 +56,15 @@
         {
           "binding": "HYPERDRIVE",
           "id": "eae07e9a1dfb486a83ef1f5fe7ee7b51", // diletta-production
+        },
+      ],
+      // DEV_NOTE: Envelope-encryption master key (docs/runbooks/master-key.md). Bindings don't inherit,
+      // so each env declares its own. Local reads MASTER_KEY_V1 from .dev.vars instead.
+      "secrets_store_secrets": [
+        {
+          "binding": "MASTER_KEY_V1",
+          "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
+          "secret_name": "diletta-master-key-v1-production",
         },
       ],
       "vars": {

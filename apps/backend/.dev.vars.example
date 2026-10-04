@@ -3,6 +3,8 @@
 #
 # runtime-only  → set via `wrangler secret put`, NOT needed in GitHub
 # ci-required   → must exist as a GitHub environment secret
+# local-only    → read from this file by `wrangler dev` and vitest only;
+#                 deployed envs get it from a Secrets Store binding instead
 #
 # When adding a new CI secret:
 #   1. Tag it with # ci-required here
@@ -16,3 +18,9 @@ CLERK_SECRET_KEY=       # runtime-only
 
 CLOUDFLARE_API_TOKEN=   # ci-required
 CLOUDFLARE_ACCOUNT_ID=  # ci-required
+
+# Envelope-encryption master key, version 1: base64 of 32 random bytes.
+# MUST equal the staging Secrets Store secret `diletta-master-key-v1-staging`: local dev
+# shares the staging database, so a different value makes company keys unreadable.
+# Get it from the team password manager — see docs/runbooks/master-key.md.
+MASTER_KEY_V1=          # local-only

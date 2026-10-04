@@ -4,6 +4,7 @@ export enum LogCategory {
   Repo = "Repo",
   Middleware = "Middleware",
   DB = "DB",
+  Crypto = "Crypto",
 }
 
 export enum LogAction {
@@ -26,4 +27,7 @@ export enum LogAction {
   DeleteChatbot = "DeleteChatbot",
   ClearDefaultChatbot = "ClearDefaultChatbot",
   SetDefaultChatbot = "SetDefaultChatbot",
+
+  // Crypto
+  ReadMasterKey = "ReadMasterKey",
 }
