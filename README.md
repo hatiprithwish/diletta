@@ -9,15 +9,16 @@
 ### Backend (`apps/backend`)
 
 - Change worker name in `apps/web/wrangler.jsonc` and `package.json`
-- Create a D1 database
-- Update `database_id` in `apps/backend/wrangler.jsonc` with the returned ID
+- Database is Neon Postgres via Hyperdrive. Deployed environments: staging and production (Hyperdrive IDs in `apps/backend/wrangler.jsonc`).
+- Copy `apps/backend/.env.example` to `apps/backend/.env` and set both variables to the Neon **staging** branch direct connection string (local dev and tests share the staging DB)
 - Add secrets via `wrangler secret put <KEY_NAME>`
-- Run migrations: `pnpm --filter backend db:migrate`
+- Staging migrations: `pnpm --filter backend db:migrate`
+- Production migrations: `DATABASE_URL=<production direct Neon URL> pnpm --filter backend db:migrate`
 
 ### Run everything
 
 ```bash
-pnpm install
+pnpm install   # also installs the husky git hooks (pre-commit: format, lint, typecheck, builds)
 pnpm dev
 ```
 
@@ -56,9 +57,10 @@ pnpm dev
 - Hono — Lightweight web framework (Cloudflare Workers compatible)
 - Cloudflare Workers — Serverless runtime
 - wrangler — Cloudflare CLI & local dev server
-- Drizzle ORM — Type-safe ORM for D1 (SQLite)
+- Drizzle ORM — Type-safe ORM for Postgres
 - drizzle-kit — Schema generation & migration tools
-- Cloudflare D1 — Serverless SQLite database
+- Neon Postgres via Cloudflare Hyperdrive — database + connection pooling
+- pg — node-postgres driver
 - @hono/zod-validator — Zod schema validator middleware for Hono
 - @clerk/backend — Clerk backend SDK for token verification
 - @logtape/logtape — Structured logging

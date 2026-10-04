@@ -26,15 +26,15 @@
 | Frontend data layer | `apps/web/src/routes/_authenticated/notes/-data.ts`  |
 | Frontend page       | `apps/web/src/routes/_authenticated/notes/index.tsx` |
 
-Notes is the scaffold example on D1. M0-5 adds tenant-aware DAL + Repo golden files and updates this table; until then, follow Notes.
+Notes is the scaffold example on Postgres. M0-5 adds tenant-aware DAL + Repo golden files and updates this table; until then, follow Notes.
 
 ## Stack
 
-Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, D1 → Neon Postgres via Hyperdrive in M0-2) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app).
+Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, Neon Postgres via Hyperdrive) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app).
 
 Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/ui` (shadcn, from M0-4), `packages/crypto`, `packages/adapter`, `evals/` (Python harness). Don't create them outside their task.
 
-**Approved packages — don't introduce alternatives:** routing `@tanstack/react-router`+`react-start` · server state `@tanstack/react-query` · client state `zustand` · forms `@tanstack/react-form` (not react-hook-form) · validation `zod` v4 · UI `shadcn/ui` + Tailwind v4 · icons `@phosphor-icons/react` · auth `@clerk/tanstack-react-start` (web) / `@clerk/backend` (worker) · HTTP `hono` v4 + `@hono/zod-validator` · ORM `drizzle-orm` (D1 now, Postgres from M0-2) · logging `@logtape/logtape` via `AppLogger` (never `console.log`) · errors Sentry · tests Vitest + RTL.
+**Approved packages — don't introduce alternatives:** routing `@tanstack/react-router`+`react-start` · server state `@tanstack/react-query` · client state `zustand` · forms `@tanstack/react-form` (not react-hook-form) · validation `zod` v4 · UI `shadcn/ui` + Tailwind v4 · icons `@phosphor-icons/react` · auth `@clerk/tanstack-react-start` (web) / `@clerk/backend` (worker) · HTTP `hono` v4 + `@hono/zod-validator` · ORM `drizzle-orm` + `drizzle-kit` pinned to `1.0.0-rc.4` (for `bigint` string mode) + `pg` (node-postgres) on Hyperdrive · logging `@logtape/logtape` via `AppLogger` (never `console.log`) · errors Sentry · tests Vitest + RTL.
 
 **Known drift in the scaffold — don't copy it:** `react-hook-form` and `@hookform/resolvers` are installed but unused; never use them. `apps/web/components.json` sets `iconLibrary: remixicon`, so `sonner.tsx` and `dropdown-menu.tsx` import Remix icons; use Phosphor in all new code. Fonts are Figtree / IBM Plex until M0-4 switches to the design fonts.
 
@@ -62,14 +62,15 @@ Before using any third-party API: check the installed version in `package.json`,
 
 ## Database
 
-**Now (D1, until M0-2 lands):** `sqliteTable` aliased `table`; camelCase in code, `snake_case` in DB; timestamps as `t.integer({ mode: "timestamp" })`; `createdAt` notNull + `updatedAt` nullable; index every FK; unique-index `publicId` and any other unique field.
+**Neon Postgres via Hyperdrive (Drizzle `node-postgres`, Hyperdrive caching disabled):**
 
-**From M0-2 (Neon Postgres via Hyperdrive, Drizzle pg, query cache off)** — these replace the D1 rules above:
-
-- ids: `bigint` identity, internal only; `publicId` everywhere else.
-- `created_at` and `updated_at`: `NOT NULL default now()`.
+- `pgTable` aliased `table`; camelCase in code, `snake_case` in DB. Unique-index `publicId` and any other unique field.
+- ids: `t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity()` (string in code, exact int64), internal only; `publicId` everywhere else.
+- `created_at` and `updated_at`: `t.timestamp(..., { withTimezone: true }).notNull().defaultNow()`. DAL sets `updatedAt` on update. Status/type ints: `t.smallint()`.
 - No DB foreign keys: the DAL checks references. Index every reference column.
-- RLS policies, partitions and `halfvec` live in raw-SQL migrations next to drizzle-kit output.
+- RLS policies, partitions, extensions and `halfvec` live in custom SQL migrations (`pnpm --filter backend db:generate:sql <name>`) in the same `src/db/migrations` journal as drizzle-kit output, so ordering is guaranteed.
+- `dbClient.ts` builds a client per request from `env.HYPERDRIVE.connectionString`; never cache a client across requests.
+- Environments: staging and production only. Two Neon branches (`staging`, `production`), each behind its own Hyperdrive config. Local dev and tests use the staging branch via `apps/backend/.env`; never point local at production. Tests must clean up the rows they create.
 
 **From M0-5 (tenant pattern):**
 
@@ -125,10 +126,13 @@ pnpm dev:web                      # web app only
 pnpm dev:backend                  # backend worker only
 pnpm lint
 pnpm format:check
+pnpm typecheck                    # tsc --noEmit in every package
+pnpm test                         # all packages; each app's test runs typecheck first
 pnpm --filter web test
-pnpm --filter backend test
-pnpm --filter backend db:generate # generate migration after schema change
-pnpm --filter backend db:migrate  # apply migration (D1 remote; no local variant yet)
+pnpm --filter backend test        # hits the Neon staging branch via apps/backend/.env
+pnpm --filter backend db:generate         # generate migration after schema change
+pnpm --filter backend db:generate:sql <n> # empty custom SQL migration (RLS, partitions, halfvec)
+pnpm --filter backend db:migrate          # apply migrations to DATABASE_URL (apps/backend/.env = staging branch)
 ```
 
 ---

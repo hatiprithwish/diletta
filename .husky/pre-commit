@@ -1,3 +1,8 @@
+# GUI git clients (VS Code, Fork, GitHub Desktop) may not load the shell PATH; fall back to common pnpm locations.
+command -v pnpm >/dev/null 2>&1 || export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/Library/pnpm:$HOME/.local/share/pnpm:$PATH"
+
 pnpm format:check
+pnpm lint
+pnpm typecheck
 pnpm build:backend
 pnpm build:web

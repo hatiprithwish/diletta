@@ -67,14 +67,13 @@ companion/                    (from scaffold)
   CLAUDE.md
 ```
 
-| Environment | Workers                                           | Database                  | Used for                            |
-| ----------- | ------------------------------------------------- | ------------------------- | ----------------------------------- |
-| Local       | `pnpm dev`                                        | Neon branch per developer | daily work                          |
-| Preview     | per PR (new)                                      | Neon branch per PR (new)  | integration + RLS tests             |
-| Staging     | scaffold staging workflows, on push to `staging`  | Neon staging              | our test company, eRegister staging |
-| Production  | scaffold production workflows, on merge to `main` | Neon production           | eRegister live                      |
+| Environment | Workers                                           | Database              | Used for                            |
+| ----------- | ------------------------------------------------- | --------------------- | ----------------------------------- |
+| Local       | `pnpm dev`                                        | Neon staging (shared) | daily work, local tests             |
+| Staging     | scaffold staging workflows, on push to `staging`  | Neon staging          | our test company, eRegister staging |
+| Production  | scaffold production workflows, on merge to `main` | Neon production       | eRegister live                      |
 
-CI on every PR: lint, typecheck, unit tests, integration and RLS tests on the PR's Neon branch, a JSON Schema drift check between `packages/schemas` and `evals/`, and the Pattern Enforcer against `.github/pattern-rules.md`. Merges to `main` also run the platform eval suite against staging.
+CI on every PR: lint, typecheck, unit tests, integration and RLS tests against Neon staging, a JSON Schema drift check between `packages/schemas` and `evals/`, and the Pattern Enforcer against `.github/pattern-rules.md`. Merges to `main` also run the platform eval suite against staging.
 
 ## Architecture baseline
 
@@ -148,13 +147,12 @@ Each row is one PR for one Claude Code session. Start a session with: "Read CLAU
 
 ### M0 Foundations
 
-Exit: the scaffold runs on Neon Postgres with the tenant transaction pattern as a golden file, every PR gets a preview Worker and Neon branch, `staging` deploys to staging and `main` to production.
+Exit: the scaffold runs on Neon Postgres with the tenant transaction pattern as a golden file, `staging` deploys to staging and `main` to production. There are two environments only (staging, production) and two Neon branches; local dev uses staging. No dev branch, no per-PR preview Worker or Neon branch.
 
 | ID   | Task                                                                                                                                                                           | Done when                                                  | Lane     |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | -------- |
 | M0-1 | Create the companion repo from the scaffold; rename Workers; keep Notes as the golden example until M0-5 replaces it                                                           | `pnpm dev` runs web + backend                              | Platform |
 | M0-2 | D1 → Neon Postgres via Hyperdrive: Drizzle pg client, `bigint` identity ids, `updated_at NOT NULL default now()`, a raw-SQL migration folder for RLS, partitions and `halfvec` | Notes golden files pass their tests on Postgres            | Platform |
-| M0-3 | Preview Worker + Neon branch per PR, next to the scaffold's staging and production workflows                                                                                   | A PR shows its own DB and URL                              | Platform |
 | M0-4 | Move shadcn from `apps/web/src/shadcn/ui` to `packages/ui`; Tailwind preset; lime theme, light + dark                                                                          | `apps/web` builds from `packages/ui`                       | Product  |
 | M0-5 | Tenant pattern: `withTenant(companyId, tx)` helper; DAL methods take `tx`; transactional flows throw to roll back; new golden DAL + Repo on a tenant table                     | Golden files listed in CLAUDE.md                           | Platform |
 | M0-6 | Extend CLAUDE.md, `pattern-rules.md` and `llm-context/` (Neon, Hyperdrive, Durable Objects, Think, AI Gateway, Queues, pgvector)                                               | Pattern Enforcer flags a tenant query outside `withTenant` | Platform |
@@ -270,8 +268,8 @@ Tenant isolation and the action engine get the most tests, because a bug there l
 | Layer           | What it proves                                                                    | Runs on                  | Blocks merge                |
 | --------------- | --------------------------------------------------------------------------------- | ------------------------ | --------------------------- |
 | Unit            | Zod schemas, placeholder renderer, router, budget math, crypto                    | Every PR                 | Yes                         |
-| Integration     | Repo layer, outbox relay, action engine against the test host                     | PR Neon branch           | Yes                         |
-| RLS suite       | Tenant A can't touch tenant B, for every table and Repo method                    | PR Neon branch           | Yes                         |
+| Integration     | Repo layer, outbox relay, action engine against the test host                     | Neon staging             | Yes                         |
+| RLS suite       | Tenant A can't touch tenant B, for every table and Repo method                    | Neon staging             | Yes                         |
 | Contract        | `packages/schemas` JSON Schema = Python harness types; widget ↔ DO message shapes | Every PR                 | Yes                         |
 | Action outcomes | verified, auto-undo, `needs_human`, expired, rejected, token refresh              | PR + staging             | Yes                         |
 | Platform evals  | Safety + core behaviour on our test company                                       | Merge to `main`, nightly | Blocks deploy to production |
@@ -311,7 +309,7 @@ eRegister goes live when every box below is ticked.
 
 - [ ] Host token in Workflows for large commits: fresh token per step, or cap bulk size and skip Workflows in v1? (M3-4, review item #2)
 - [ ] JWT algorithm pinning: which algorithms eRegister signs with (M2-1, review item #7)
-- [ ] Drizzle on Postgres (from the scaffold): which parts go to raw-SQL migrations beyond RLS, partitions and halfvec? (M0-2)
+- [x] Drizzle on Postgres (from the scaffold): which parts go to raw-SQL migrations beyond RLS, partitions and halfvec? (M0-2) — anything drizzle-kit can't express (RLS policies, partitions, extensions, `halfvec` columns and indexes) goes in a custom migration (`db:generate:sql`) in the same journal as drizzle-kit output.
 - [ ] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7)
 - [ ] Approval expiry and undo window default values (M3-4, M3-7)
 - [ ] Load test target: concurrent conversations per company (M6-5)

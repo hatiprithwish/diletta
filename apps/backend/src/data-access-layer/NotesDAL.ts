@@ -1,6 +1,6 @@
 import type { SQL } from "drizzle-orm";
 import { and, eq } from "drizzle-orm";
-import type { DrizzleD1Database } from "drizzle-orm/d1";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import getDbClient from "@/db/dbClient";
 import { notes } from "@/db/tables";
 import * as Schemas from "@app/schemas";
@@ -8,29 +8,25 @@ import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 export default class NotesDAL {
-  private db: DrizzleD1Database;
+  private db: NodePgDatabase;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
   }
 
   async createNote(params: Schemas.CreateNoteDALRequest) {
-    const response: Schemas.CreateNoteApiResponse = { isSuccess: false };
+    const response: Schemas.NoteDALResponse = { isSuccess: false };
 
     try {
-      const now = new Date();
-      const noteResponse = await this.db
+      const [noteResponse] = await this.db
         .insert(notes)
         .values({
           publicId: Utility.generatePublicId(),
           userId: params.userId,
           title: params.title,
           body: params.body,
-          createdAt: now,
-          updatedAt: null,
         })
-        .returning()
-        .get();
+        .returning();
 
       response.isSuccess = true;
       response.message = "Note created successfully";
@@ -51,7 +47,7 @@ export default class NotesDAL {
   }
 
   async getNoteDetails(params: Schemas.FindNoteDALRequest) {
-    const response: Schemas.GetNoteApiResponse = { isSuccess: false };
+    const response: Schemas.NoteDALResponse = { isSuccess: false };
 
     try {
       const conditions: SQL[] = [
@@ -96,7 +92,7 @@ export default class NotesDAL {
   }
 
   async getNotes(params: Schemas.GetNotesDALRequest) {
-    const response: Schemas.GetNotesApiResponse = { isSuccess: false };
+    const response: Schemas.NotesDALResponse = { isSuccess: false };
 
     try {
       const notesResponse = await this.db
@@ -123,22 +119,21 @@ export default class NotesDAL {
   }
 
   async updateNote(params: Schemas.UpdateNoteDALRequest) {
-    const response: Schemas.UpdateNoteApiResponse = { isSuccess: false };
+    const response: Schemas.NoteDALResponse = { isSuccess: false };
 
     try {
       const now = new Date();
-      const noteResponse = await this.db
+      const [noteResponse] = await this.db
         .update(notes)
         .set({
           // DEV_NOTE: When params.title === null, it's ignored
           title: params.title ?? undefined,
-          // DEV_NOTE: When params.body === null, it's NOT ignored
+          // DEV_NOTE: When params.body === undefined, it's ignored; null clears it
           body: params.body,
           updatedAt: now,
         })
         .where(and(eq(notes.publicId, params.publicId), eq(notes.userId, params.userId)))
-        .returning()
-        .get();
+        .returning();
 
       if (!noteResponse) {
         const message = "Note not found";

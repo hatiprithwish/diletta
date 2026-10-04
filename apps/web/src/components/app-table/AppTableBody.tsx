@@ -1,7 +1,7 @@
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { TableBody, TableCell, TableRow } from "@/shadcn/ui/table";
-import { AppTableColumn } from "./AppTable.types";
+import type { AppTableColumn } from "./AppTable.types";
 import { AppTableEmpty } from "./AppTableEmpty";
 import { DEFAULT_SKELETON_ROWS, SKELETON_CELL_CLASS, resolveVisibleColumns } from "./utils";
 
@@ -50,8 +50,8 @@ export function AppTableBody<TRow>({
   if (isLoading) {
     return (
       <TableBody>
-        {Array.from({ length: skeletonRows }).map((_, rowIdx) => (
-          <TableRow key={rowIdx} className="border-0 hover:bg-transparent">
+        {Array.from({ length: skeletonRows }, (_, rowIdx) => `skeleton-${rowIdx}`).map((rowKey) => (
+          <TableRow key={rowKey} className="border-0 hover:bg-transparent">
             {visibleColumns.map((col) => (
               <TableCell key={col.key} className={cn("px-4 py-3", col.className)}>
                 <div className={SKELETON_CELL_CLASS} />

@@ -5,11 +5,11 @@
     "moduleResolution": "bundler",
     "strict": true,
     "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types", "node"],
+    "types": ["node", "@cloudflare/vitest-pool-workers/types"],
     "skipLibCheck": true,
     "paths": {
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "worker-configuration.d.ts"]
+  "include": ["src", "worker-configuration.d.ts", "drizzle.config.ts", "vitest.config.mts"]
 }

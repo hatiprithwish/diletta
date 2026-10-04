@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { DrizzleD1Database } from "drizzle-orm/d1";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import getDbClient from "@/db/dbClient";
 import { users } from "@/db/tables";
 import * as Schemas from "@app/schemas";
@@ -7,7 +7,7 @@ import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 export default class UsersDAL {
-  private db: DrizzleD1Database;
+  private db: NodePgDatabase;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
@@ -75,8 +75,6 @@ export default class UsersDAL {
           clerkId: params.clerkId,
           email: params.email,
           role: params.role,
-          createdAt: now,
-          updatedAt: now,
         })
         .onConflictDoUpdate({
           target: users.clerkId,

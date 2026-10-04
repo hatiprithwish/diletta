@@ -14,18 +14,23 @@
       "invocation_logs": true,
     },
   },
-  "d1_databases": [
+  // DEV_NOTE: Local dev + tests use the staging branch. wrangler/vitest connect directly via
+  // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE from apps/backend/.env.
+  "hyperdrive": [
     {
-      "binding": "DB",
-      "database_name": "scaffold-db",
-      "database_id": "c950b22e-c50c-4840-bb9b-f91143980fe1",
-      "migrations_dir": "src/db/migrations",
-      "remote": true,
+      "binding": "HYPERDRIVE",
+      "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
     },
   ],
   "env": {
     "staging": {
       "name": "diletta-worker-staging",
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
+        },
+      ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
       },
@@ -35,18 +40,15 @@
           "invocation_logs": true,
         },
       },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "scaffold-db",
-          "database_id": "c950b22e-c50c-4840-bb9b-f91143980fe1",
-          "migrations_dir": "src/db/migrations",
-          "remote": true,
-        },
-      ],
     },
     "production": {
       "name": "diletta-worker",
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "eae07e9a1dfb486a83ef1f5fe7ee7b51", // diletta-production
+        },
+      ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
       },
@@ -56,15 +58,6 @@
           "invocation_logs": true,
         },
       },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "scaffold-db",
-          "database_id": "c950b22e-c50c-4840-bb9b-f91143980fe1",
-          "migrations_dir": "src/db/migrations",
-          "remote": true,
-        },
-      ],
     },
   },
 }

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { TableCell, TableRow } from "@/shadcn/ui/table";
-import { AppTableColumn } from "./AppTable.types";
+import type { AppTableColumn } from "./AppTable.types";
 import { FOOTER_ROW_CLASS, resolveVisibleColumns } from "./utils";
 
 interface AppTableFooterProps<TRow> {

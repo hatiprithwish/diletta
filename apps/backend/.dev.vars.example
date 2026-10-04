@@ -7,6 +7,8 @@
 # When adding a new CI secret:
 #   1. Tag it with # ci-required here
 #   2. Add the secret value in GitHub → Settings → Environments → staging + production
+#
+# Local database URLs live in apps/backend/.env — see .env.example.
 # ============================================================
 
 CLERK_PUBLISHABLE_KEY=  # runtime-only

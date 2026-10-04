@@ -74,7 +74,7 @@ export default class AppLogger {
     category: Schemas.LogCategory;
     action: Schemas.LogAction;
     message: string;
-    metadata?: any;
+    metadata?: unknown;
   }): void {
     AppLogger.get(params.category).info(params.message, {
       category: params.category,
@@ -87,7 +87,7 @@ export default class AppLogger {
     category: Schemas.LogCategory;
     action: Schemas.LogAction;
     message: string;
-    metadata?: any;
+    metadata?: unknown;
   }): void {
     AppLogger.get(params.category).warn(params.message, {
       category: params.category,
@@ -101,7 +101,7 @@ export default class AppLogger {
     action: Schemas.LogAction;
     message: string;
     error?: unknown;
-    metadata?: any;
+    metadata?: unknown;
   }): void {
     AppLogger.get(params.category).error(params.message, {
       category: params.category,

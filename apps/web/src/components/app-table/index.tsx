@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import type { DragEndEvent } from "@dnd-kit/core";
 import {
   DndContext,
-  DragEndEvent,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
@@ -12,7 +12,7 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
-import { AppTableProps } from "./AppTable.types";
+import type { AppTableProps } from "./AppTable.types";
 import { AppTableHeader } from "./AppTableHeader";
 import { AppTableBody } from "./AppTableBody";
 import { AppTableFooter } from "./AppTableFooter";

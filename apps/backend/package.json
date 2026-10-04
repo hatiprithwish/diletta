@@ -8,9 +8,11 @@
     "deploy": "wrangler deploy",
     "generate-types": "wrangler types",
     "db:generate": "drizzle-kit generate --name diletta",
-    "db:migrate": "wrangler d1 migrations apply scaffold-db --remote",
-    "test": "vitest run",
+    "db:generate:sql": "drizzle-kit generate --custom --name",
+    "db:migrate": "drizzle-kit migrate",
+    "test": "pnpm typecheck && vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix"
   },
@@ -21,15 +23,17 @@
     "@logtape/hono": "^2.3.2",
     "@logtape/logtape": "^2.3.2",
     "@logtape/redaction": "^2.3.2",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "1.0.0-rc.4",
     "hono": "^4.13.5",
     "nanoid": "^6.0.1",
+    "pg": "^8.23.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.20",
     "@types/node": "^25.9.5",
-    "drizzle-kit": "^0.31.10",
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "1.0.0-rc.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.11",
     "wrangler": "^4.127.0"

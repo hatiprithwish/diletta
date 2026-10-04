@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { TableCell, TableRow } from "@/shadcn/ui/table";
 import { DEFAULT_EMPTY_TITLE } from "./utils";
 

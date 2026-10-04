@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   CaretDoubleLeft,
   CaretDoubleRight,
@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shadcn/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { AppTablePaginationProps } from "./AppTable.types";
+import type { AppTablePaginationProps } from "./AppTable.types";
 import { PAGINATION_LABELS, PAGINATION_NAV_BTN_CLASS, computePaginationDisplay } from "./utils";
 
 // ─── Page Number Input ────────────────────────────────────────────────────────
@@ -23,11 +23,8 @@ interface PageInputProps {
 }
 
 function PageInput({ currentPage, totalPages, onJumpToPage, isDisabled }: PageInputProps) {
+  // DEV_NOTE: The parent keys this component by currentPage, so the input resets on page change.
   const [inputValue, setInputValue] = useState(String(currentPage));
-
-  useEffect(() => {
-    setInputValue(String(currentPage));
-  }, [currentPage]);
 
   return (
     <input
@@ -175,6 +172,7 @@ export function AppTablePagination({
               <TooltipTrigger asChild>
                 <span>
                   <PageInput
+                    key={currentPage}
                     currentPage={currentPage}
                     totalPages={totalPages}
                     onJumpToPage={onJumpToPage}

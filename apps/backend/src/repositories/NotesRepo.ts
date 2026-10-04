@@ -17,45 +17,46 @@ export default class NotesRepo {
     };
   }
 
-  async createNote(params: Schemas.CreateNoteApiRequest & { userId: string }) {
+  private withNoteResponse(result: Schemas.NoteDALResponse): Schemas.GetNoteApiResponse {
+    const { note, ...rest } = result;
+    return { ...rest, note: note ? this.withStatusLabel(note) : undefined };
+  }
+
+  async createNote(
+    params: Schemas.CreateNoteApiRequest & { userId: string },
+  ): Promise<Schemas.CreateNoteApiResponse> {
     const result = await this.dal.createNote({
       userId: params.userId,
       title: params.note.title,
       body: params.note.body,
     });
-    if (result.isSuccess && result.note) {
-      result.note = this.withStatusLabel(result.note);
-    }
-    return result;
+    return this.withNoteResponse(result);
   }
 
-  async getNoteDetails(params: { userId: string; publicId: string }) {
+  async getNoteDetails(params: {
+    userId: string;
+    publicId: string;
+  }): Promise<Schemas.GetNoteApiResponse> {
     const result = await this.dal.getNoteDetails(params);
-    if (result.isSuccess && result.note) {
-      result.note = this.withStatusLabel(result.note);
-    }
-    return result;
+    return this.withNoteResponse(result);
   }
 
-  async getNotes(params: { userId: string }) {
-    const result = await this.dal.getNotes(params);
-    if (result.isSuccess && result.notes) {
-      result.notes = result.notes.map((note) => this.withStatusLabel(note));
-    }
-    return result;
+  async getNotes(params: { userId: string }): Promise<Schemas.GetNotesApiResponse> {
+    const { notes, ...rest } = await this.dal.getNotes(params);
+    return { ...rest, notes: notes?.map((note) => this.withStatusLabel(note)) };
   }
 
-  async updateNote(params: Schemas.UpdateNoteApiRequest & { userId: string; publicId: string }) {
+  async updateNote(
+    params: Schemas.UpdateNoteApiRequest & { userId: string; publicId: string },
+  ): Promise<Schemas.UpdateNoteApiResponse> {
     const result = await this.dal.updateNote({
       publicId: params.publicId,
       userId: params.userId,
       title: params.note.title ?? null,
-      body: params.note.body ?? null,
+      // DEV_NOTE: Pass body through as-is — undefined leaves it unchanged, null clears it
+      body: params.note.body,
     });
-    if (result.isSuccess && result.note) {
-      result.note = this.withStatusLabel(result.note);
-    }
-    return result;
+    return this.withNoteResponse(result);
   }
 
   async deleteNote(params: { userId: string; publicId: string }) {

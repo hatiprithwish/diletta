@@ -1,4 +1,4 @@
-import { AppTableColumn } from "./AppTable.types";
+import type { AppTableColumn } from "./AppTable.types";
 
 // ─── CSS Class Constants ──────────────────────────────────────────────────────
 

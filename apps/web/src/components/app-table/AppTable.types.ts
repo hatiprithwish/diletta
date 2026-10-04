@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 
 export interface AppTableColumn<TRow> {
   /** Unique identifier for the column */
