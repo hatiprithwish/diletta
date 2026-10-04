@@ -65,7 +65,7 @@ jobs:
 
             **Issue:** Routes are importing directly from Drizzle, skipping the Repo layer.
 
-            **Location:** \`apps/backend/src/routes/NotesRoutes.ts\` (line XX)
+            **Location:** \`apps/backend/src/routes/UserRoutes.ts\` (line XX)
 
             **Current Code:**
             \`\`\`typescript
@@ -76,7 +76,7 @@ jobs:
             \`\`\`typescript
             // Remove drizzle import
             // Import the Repo instead:
-            import { NotesRepo } from '../repositories'
+            import UsersRepo from '@/repositories/UsersRepo'
             \`\`\`
 
             **See Rule:** [Layer Boundary Violations § 1.1](https://github.com/${{ github.repository }}/blob/main/.github/pattern-rules.md#11-layer-boundary-violations-critical)"

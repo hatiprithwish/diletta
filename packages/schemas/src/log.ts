@@ -15,10 +15,15 @@ export enum LogAction {
   // User
   GetUserDetails = "GetUserDetails",
 
-  // Notes
-  CreateNote = "CreateNote",
-  GetNoteDetails = "GetNoteDetails",
-  ListNotes = "ListNotes",
-  UpdateNote = "UpdateNote",
-  DeleteNote = "DeleteNote",
+  // Tenant transactions
+  WithTenant = "WithTenant",
+
+  // Chatbots
+  CreateChatbot = "CreateChatbot",
+  GetChatbotDetails = "GetChatbotDetails",
+  ListChatbots = "ListChatbots",
+  UpdateChatbot = "UpdateChatbot",
+  DeleteChatbot = "DeleteChatbot",
+  ClearDefaultChatbot = "ClearDefaultChatbot",
+  SetDefaultChatbot = "SetDefaultChatbot",
 }

@@ -36,5 +36,8 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/*.{test,spec}.ts"],
+    // DEV_NOTE: Tests run real transactions against Neon staging over the network; each
+    // withTenant call is several round trips, so multi-step tests exceed the 5s default.
+    testTimeout: 30_000,
   },
 });
