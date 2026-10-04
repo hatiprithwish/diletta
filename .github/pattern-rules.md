@@ -806,6 +806,38 @@ eslint-disable
 
 ---
 
+### 3.14 Master Key Never Logged or Extractable [CRITICAL]
+
+**Rule:** The envelope-encryption master key (M0-7, `apps/backend/src/providers/masterKey.ts`) is read only through `MasterKeyProvider.getMasterKey(env, version)`, which returns `{ isSuccess, message, masterKey? }` and never throws. The key comes back as a non-extractable `CryptoKey`; its raw bytes never appear in a log, an error message, or a response.
+
+**Violations:**
+
+- Reading `env.MASTER_KEY_V<n>` directly outside `MasterKeyProvider`
+- `crypto.subtle.importKey(..., true, ...)` (extractable) for a master or company key, or `crypto.subtle.exportKey(...)` on one
+- A master key, company key, or their raw/base64 bytes in `AppLogger` metadata, an error message, a thrown error, or a response body
+- A provider or util outside `data-access-layer/` that throws instead of returning `{ isSuccess, message }`
+
+**Detection Pattern:**
+
+```regex
+env\.MASTER_KEY_V\d+(?!.*masterKey\.ts)
+importKey\([^)]*,\s*true\s*,
+exportKey\(
+```
+
+**Examples:**
+
+```
+- ❌ const key = env.MASTER_KEY_V1; // outside masterKey.ts
+- ❌ crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, true, ["encrypt", "decrypt"])
+- ❌ AppLogger.error({ ..., metadata: { masterKey } })
+- ✅ const { isSuccess, masterKey, message } = await MasterKeyProvider.getMasterKey(env, version);
+```
+
+**Fix:** Go through `MasterKeyProvider`, keep `importKey` non-extractable, and never put key material in `metadata`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -893,5 +925,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-04 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6)
+Updated: 2026-10-04 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key)
 Maintainer: hatiprithwish
