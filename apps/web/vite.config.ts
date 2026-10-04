@@ -27,10 +27,18 @@ export default defineConfig(({ mode }) => {
     },
     resolve: {
       tsconfigPaths: true,
-      alias: {
-        "@": path.resolve(__dirname, "./src"),
-        "@app/schemas": path.resolve(__dirname, "../../packages/schemas/src/index.ts"),
-      },
+      alias: [
+        { find: "@", replacement: path.resolve(__dirname, "./src") },
+        {
+          find: "@app/schemas",
+          replacement: path.resolve(__dirname, "../../packages/schemas/src/index.ts"),
+        },
+        // shadcn components import bare `cn`; route it to the theme-aware instance in packages/ui
+        {
+          find: /^cn$/,
+          replacement: path.resolve(__dirname, "../../packages/ui/src/lib/utils.ts"),
+        },
+      ],
     },
   };
 });

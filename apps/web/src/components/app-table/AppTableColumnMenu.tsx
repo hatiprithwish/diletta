@@ -4,7 +4,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/shadcn/ui/dropdown-menu";
+} from "@app/ui/components/dropdown-menu";
 
 interface AppTableColumnMenuProps {
   children: React.ReactNode;

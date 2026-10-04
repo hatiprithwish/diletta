@@ -30,13 +30,13 @@ Notes is the scaffold example on Postgres. M0-5 adds tenant-aware DAL + Repo gol
 
 ## Stack
 
-Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, Neon Postgres via Hyperdrive) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app).
+Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, Neon Postgres via Hyperdrive) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app) · `packages/ui` (`@app/ui`: shadcn components, `cn`, Tailwind preset `@app/ui/globals.css` with the lime theme, light + dark).
 
-Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/ui` (shadcn, from M0-4), `packages/crypto`, `packages/adapter`, `evals/` (Python harness). Don't create them outside their task.
+Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/crypto`, `packages/adapter`, `evals/` (Python harness). Don't create them outside their task.
 
-**Approved packages — don't introduce alternatives:** routing `@tanstack/react-router`+`react-start` · server state `@tanstack/react-query` · client state `zustand` · forms `@tanstack/react-form` (not react-hook-form) · validation `zod` v4 · UI `shadcn/ui` + Tailwind v4 · icons `@phosphor-icons/react` · auth `@clerk/tanstack-react-start` (web) / `@clerk/backend` (worker) · HTTP `hono` v4 + `@hono/zod-validator` · ORM `drizzle-orm` + `drizzle-kit` pinned to `1.0.0-rc.4` (for `bigint` string mode) + `pg` (node-postgres) on Hyperdrive · logging `@logtape/logtape` via `AppLogger` (never `console.log`) · errors Sentry · tests Vitest + RTL.
+**Approved packages — don't introduce alternatives:** routing `@tanstack/react-router`+`react-start` · server state `@tanstack/react-query` · client state `zustand` · forms `@tanstack/react-form` (not react-hook-form) · validation `zod` v4 · UI `shadcn/ui` (style `radix-vega`) + Tailwind v4 + `cn` (shadcn's clsx/tailwind-merge replacement) · icons `@phosphor-icons/react` · auth `@clerk/tanstack-react-start` (web) / `@clerk/backend` (worker) · HTTP `hono` v4 + `@hono/zod-validator` · ORM `drizzle-orm` + `drizzle-kit` pinned to `1.0.0-rc.4` (for `bigint` string mode) + `pg` (node-postgres) on Hyperdrive · logging `@logtape/logtape` via `AppLogger` (never `console.log`) · errors Sentry · tests Vitest + RTL.
 
-**Known drift in the scaffold — don't copy it:** `react-hook-form` and `@hookform/resolvers` are installed but unused; never use them. `apps/web/components.json` sets `iconLibrary: remixicon`, so `sonner.tsx` and `dropdown-menu.tsx` import Remix icons; use Phosphor in all new code. Fonts are Figtree / IBM Plex until M0-4 switches to the design fonts.
+**Known drift in the scaffold — don't copy it:** `react-hook-form` and `@hookform/resolvers` are installed but unused; never use them.
 
 Before using any third-party API: check the installed version in `package.json`, read its file under `llm-context/`, and use context7 if still unclear. Never code against training-data memory of a library.
 
@@ -91,7 +91,9 @@ Before using any third-party API: check the installed version in `package.json`,
 - Colours only through the theme tokens (`docs/design/tokens/theme.css`) via Tailwind classes (`bg-primary`, `text-brand-text`, `bg-diff-new`). Lime (`primary`) is a fill only; for lime text use `brand-text`. No raw hex values in components.
 - `font-mono` only for machine values: record IDs, tool names, model names, config versions, keys.
 - Never show internal names (`turn_id`, `change_requests`, `needs_human`) in the UI. Copy follows DESIGN.md §8.
-- Tailwind only, no CSS modules. shadcn used as-is or via `className`; never edit the component files inside an app. Until M0-4 they live in `apps/web/src/shadcn/ui/`; after M0-4 in `packages/ui` (shared by `apps/web` and `apps/widget`), added with the shadcn CLI.
+- Tailwind only, no CSS modules. shadcn used as-is or via `className`; never edit the component files. They live in `packages/ui/src/components` (shared by `apps/web` and `apps/widget`), added with the shadcn CLI: `pnpm --filter @app/ui exec shadcn add <name>`. Import as `@app/ui/components/<name>`, and `cn` from `@app/ui/lib/utils`.
+- Type scale from DESIGN.md §2 is in the preset: `text-page-title`, `text-metric`, `text-section`, `text-body`, `text-caption`, `text-mono-value`. Prefer them over arbitrary `text-[…]` sizes.
+- shadcn components import bare `cn`; every app's `vite.config.ts` and `vitest.config.ts` must alias exactly `/^cn$/` to `packages/ui/src/lib/utils.ts`, or type-scale classes merge as text colours. Fonts load from Google Fonts in the app's document head.
 - Charts need Recharts (shadcn `Chart`), which isn't installed — ask before adding it.
 
 ## Naming

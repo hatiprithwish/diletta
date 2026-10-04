@@ -1,8 +1,8 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/shadcn/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@app/ui/components/card";
 import type * as Schemas from "@app/schemas";
 import { useDeleteNote } from "./-data";
 import { Link } from "@tanstack/react-router";
-import { Button } from "@/shadcn/ui/button";
+import { Button } from "@app/ui/components/button";
 
 const NoteCard = ({ note }: { note: Schemas.NoteWithStatus }) => {
   const deleteMutation = useDeleteNote();

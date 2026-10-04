@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, Link } from "@tanstack/react-router";
 import { useAuth } from "@clerk/tanstack-react-start";
 import { useEffect, useRef } from "react";
-import { Button } from "@/shadcn/ui/button";
+import { Button } from "@app/ui/components/button";
 import { apiClient } from "@/providers/apiClient";
 
 export const Route = createFileRoute("/_authenticated")({

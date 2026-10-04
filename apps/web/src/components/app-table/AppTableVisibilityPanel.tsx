@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { DotsThree, Eye, EyeSlash, MagnifyingGlass } from "@phosphor-icons/react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/shadcn/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@app/ui/components/popover";
 import type { AppTableColumn } from "./AppTable.types";
-import { cn } from "@/lib/utils";
+import { cn } from "@app/ui/lib/utils";
 
 interface AppTableVisibilityPanelProps<TRow> {
   columns: AppTableColumn<TRow>[];

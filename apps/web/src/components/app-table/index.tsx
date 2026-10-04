@@ -17,9 +17,9 @@ import { AppTableHeader } from "./AppTableHeader";
 import { AppTableBody } from "./AppTableBody";
 import { AppTableFooter } from "./AppTableFooter";
 import { AppTableVisibilityPanel } from "./AppTableVisibilityPanel";
-import { cn } from "@/lib/utils";
+import { cn } from "@app/ui/lib/utils";
 import { TABLE_WRAPPER_CLASS } from "./utils";
-import { Table } from "@/shadcn/ui/table";
+import { Table } from "@app/ui/components/table";
 
 export function AppTable<TRow>({
   columns,

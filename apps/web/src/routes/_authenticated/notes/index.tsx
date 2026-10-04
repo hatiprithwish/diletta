@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@clerk/tanstack-react-start";
 import { NotesQueries } from "./-data";
-import { Button } from "@/shadcn/ui/button";
+import { Button } from "@app/ui/components/button";
 import NoteCard from "./-NoteCard";
 
 export const Route = createFileRoute("/_authenticated/notes/")({

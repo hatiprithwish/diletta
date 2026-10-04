@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { TableCell, TableRow } from "@/shadcn/ui/table";
+import { TableCell, TableRow } from "@app/ui/components/table";
 import { DEFAULT_EMPTY_TITLE } from "./utils";
 
 interface AppTableEmptyProps {

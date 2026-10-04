@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
-import { TableBody, TableCell, TableRow } from "@/shadcn/ui/table";
+import { cn } from "@app/ui/lib/utils";
+import { TableBody, TableCell, TableRow } from "@app/ui/components/table";
 import type { AppTableColumn } from "./AppTable.types";
 import { AppTableEmpty } from "./AppTableEmpty";
 import { DEFAULT_SKELETON_ROWS, SKELETON_CELL_CLASS, resolveVisibleColumns } from "./utils";

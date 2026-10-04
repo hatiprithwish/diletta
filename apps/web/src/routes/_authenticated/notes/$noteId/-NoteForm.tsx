@@ -1,8 +1,8 @@
 import { useForm } from "@tanstack/react-form";
-import { Button } from "@/shadcn/ui/button";
-import { Input } from "@/shadcn/ui/input";
-import { Textarea } from "@/shadcn/ui/textarea";
-import { Field, FieldLabel, FieldError } from "@/shadcn/ui/field";
+import { Button } from "@app/ui/components/button";
+import { Input } from "@app/ui/components/input";
+import { Textarea } from "@app/ui/components/textarea";
+import { Field, FieldLabel, FieldError } from "@app/ui/components/field";
 import * as Schemas from "@app/schemas";
 
 interface NoteFormProps {

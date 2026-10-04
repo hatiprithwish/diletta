@@ -4,11 +4,20 @@ import * as Sentry from "@sentry/tanstackstart-react";
 import type { QueryClient } from "@tanstack/react-query";
 import appCss from "../styles.css?url";
 import type { ReactNode } from "react";
-import { Toaster } from "../shadcn/ui/sonner";
-import { ThemeProvider } from "../providers/ThemeProvider";
+import { Toaster } from "@app/ui/components/sonner";
+import { TooltipProvider } from "@app/ui/components/tooltip";
+import { ThemeProvider, useTheme } from "../providers/ThemeProvider";
+
+const FONTS_URL =
+  "https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wdth,wght@0,75..100,400..700;1,75..100,400..700&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap";
 
 interface RouterContext {
   queryClient: QueryClient;
+}
+
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster theme={theme} />;
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
@@ -18,8 +27,12 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        {children}
-        <Toaster />
+        <ThemeProvider defaultTheme="system" storageKey="app-theme">
+          <TooltipProvider>
+            {children}
+            <ThemedToaster />
+          </TooltipProvider>
+        </ThemeProvider>
         <Scripts />
       </body>
     </html>
@@ -46,19 +59,22 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      { rel: "stylesheet", href: FONTS_URL },
+      { rel: "stylesheet", href: appCss },
+    ],
   }),
   component: () => (
     <RootDocument>
-      <ThemeProvider defaultTheme="system" storageKey="app-theme">
-        <ClerkProvider
-          publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
-          signInUrl="/auth/sign-in"
-          signUpUrl="/auth/sign-up"
-        >
-          <Outlet />
-        </ClerkProvider>
-      </ThemeProvider>
+      <ClerkProvider
+        publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
+        signInUrl="/auth/sign-in"
+        signUpUrl="/auth/sign-up"
+      >
+        <Outlet />
+      </ClerkProvider>
     </RootDocument>
   ),
   errorComponent: ({ error }) => <RootErrorComponent error={error} />,

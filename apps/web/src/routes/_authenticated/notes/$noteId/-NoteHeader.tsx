@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Button } from "@/shadcn/ui/button";
+import { Button } from "@app/ui/components/button";
 
 interface NoteHeaderProps {
   isEditing: boolean;

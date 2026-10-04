@@ -1,0 +1,229 @@
+/*
+ * Companion Tailwind preset: shadcn theme (lime, light + dark), fonts, radius and type scale.
+ * Tokens mirror docs/design/tokens/theme.css; see docs/design/DESIGN.md §2.
+ * Lime (--primary) is a FILL colour, always with --primary-foreground on it.
+ * For lime text, links and focus use --brand-text. --accent stays neutral.
+ * Fonts (Instrument Sans, JetBrains Mono) are loaded by each app's document head.
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@source "..";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.5rem;
+
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+
+  --primary: #a3e635;
+  --primary-foreground: #1a2e05;
+  --secondary: #f3f3f3;
+  --secondary-foreground: #171717;
+  --muted: #f3f3f3;
+  --muted-foreground: #6e6e6e;
+  --accent: #f3f3f3;
+  --accent-foreground: #171717;
+  --destructive: #bf2a1d;
+  --border: #ebebeb;
+  --input: #ebebeb;
+  --ring: #4d7c0f;
+
+  --sidebar: #fafafa;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #a3e635;
+  --sidebar-primary-foreground: #1a2e05;
+  --sidebar-accent: #f3f3f3;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #ebebeb;
+  --sidebar-ring: #4d7c0f;
+
+  --chart-1: #a3e635;
+  --chart-2: #4d7c0f;
+  --chart-3: #6e6e6e;
+  --chart-4: #995100;
+  --chart-5: #bf2a1d;
+
+  /* Companion extras (not in stock shadcn) */
+  --brand-text: #4d7c0f;
+  --brand-soft: #f3fbe6;
+  --success: #4d7c0f;
+  --success-soft: #f3fbe6;
+  --warning: #995100;
+  --warning-soft: #fff5e6;
+  --destructive-soft: #fdedeb;
+  --diff-new: #e4f7c2;
+  --bubble: #f3f3f3;
+  --surface-subtle: #fafafa;
+  --subtle-foreground: #4f4f4f;
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+.dark {
+  --background: #0c0d0c;
+  --foreground: #ededed;
+  --card: #151715;
+  --card-foreground: #ededed;
+  --popover: #151715;
+  --popover-foreground: #ededed;
+
+  --primary: #a3e635;
+  --primary-foreground: #142305;
+  --secondary: #1d201d;
+  --secondary-foreground: #ededed;
+  --muted: #1d201d;
+  --muted-foreground: #909090;
+  --accent: #1d201d;
+  --accent-foreground: #ededed;
+  --destructive: #ff7b6f;
+  --border: #272a27;
+  --input: #272a27;
+  --ring: #b8ef5c;
+
+  --sidebar: #111311;
+  --sidebar-foreground: #ededed;
+  --sidebar-primary: #a3e635;
+  --sidebar-primary-foreground: #142305;
+  --sidebar-accent: #1d201d;
+  --sidebar-accent-foreground: #ededed;
+  --sidebar-border: #272a27;
+  --sidebar-ring: #b8ef5c;
+
+  --chart-1: #a3e635;
+  --chart-2: #b8ef5c;
+  --chart-3: #909090;
+  --chart-4: #f2a541;
+  --chart-5: #ff7b6f;
+
+  --brand-text: #b8ef5c;
+  --brand-soft: #1a2410;
+  --success: #b8ef5c;
+  --success-soft: #1a2410;
+  --warning: #f2a541;
+  --warning-soft: #2a1f0e;
+  --destructive-soft: #2e1714;
+  --diff-new: #2b3b12;
+  --bubble: #1f221f;
+  --surface-subtle: #111311;
+  --subtle-foreground: #b6b6b6;
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-heading: var(--font-sans);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-brand-text: var(--brand-text);
+  --color-brand-soft: var(--brand-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-diff-new: var(--diff-new);
+  --color-bubble: var(--bubble);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --shadow-float: var(--shadow-float);
+
+  /* DESIGN.md §2: 8px controls, 10–12px boxes, 18px widget panel */
+  --radius-sm: calc(var(--radius) * 0.75);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) * 1.25);
+  --radius-xl: calc(var(--radius) * 1.5);
+  --radius-2xl: calc(var(--radius) * 2.25);
+  --radius-3xl: calc(var(--radius) * 2.75);
+  --radius-4xl: calc(var(--radius) * 3.25);
+}
+
+/* DESIGN.md §2 type scale: text-page-title, text-metric, text-section, text-body, text-caption, text-mono-value */
+@theme {
+  --text-page-title: 26px;
+  --text-page-title--line-height: 1.2;
+  --text-page-title--font-weight: 600;
+  --text-page-title--letter-spacing: -0.025em;
+
+  --text-metric: 28px;
+  --text-metric--line-height: 1;
+  --text-metric--font-weight: 600;
+  --text-metric--letter-spacing: -0.03em;
+
+  --text-section: 15px;
+  --text-section--line-height: 1.4;
+  --text-section--font-weight: 600;
+  --text-section--letter-spacing: -0.01em;
+
+  --text-body: 13.5px;
+  --text-body--line-height: 1.5;
+
+  --text-caption: 12.5px;
+  --text-caption--line-height: 1.45;
+
+  --text-mono-value: 12px;
+  --text-mono-value--line-height: 1.45;
+  --text-mono-value--letter-spacing: -0.01em;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html {
+    @apply font-sans;
+  }
+}

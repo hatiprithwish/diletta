@@ -8,11 +8,11 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowsDownUp, CaretDown, CaretUp, DotsSixVertical, Info } from "@phosphor-icons/react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shadcn/ui/tooltip";
-import { TableHead, TableHeader, TableRow } from "@/shadcn/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@app/ui/components/tooltip";
+import { TableHead, TableHeader, TableRow } from "@app/ui/components/table";
 import type { AppTableColumn, AppTableSortDirection } from "./AppTable.types";
 import { AppTableColumnMenu } from "./AppTableColumnMenu";
-import { cn } from "@/lib/utils";
+import { cn } from "@app/ui/lib/utils";
 import {
   HEADER_ROW_CLASS,
   SORT_ICON_INACTIVE_CLASS,

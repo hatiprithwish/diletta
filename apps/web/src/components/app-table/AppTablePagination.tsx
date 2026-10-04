@@ -8,8 +8,8 @@ import {
   CaretRight,
   ArrowClockwise,
 } from "@phosphor-icons/react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shadcn/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@app/ui/components/tooltip";
+import { cn } from "@app/ui/lib/utils";
 import type { AppTablePaginationProps } from "./AppTable.types";
 import { PAGINATION_LABELS, PAGINATION_NAV_BTN_CLASS, computePaginationDisplay } from "./utils";
 
