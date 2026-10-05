@@ -138,13 +138,14 @@ File: apps/backend/src/routes/UserRoutes.ts (golden file)
 
 ### 1.6 Database Schema Pattern [CRITICAL]
 
-**Rule:** After ANY change to `apps/backend/src/db/tables.ts`, run `pnpm --filter backend db:generate` immediately and commit the migration with the schema change. Anything drizzle-kit can't express (RLS policies, partitions, extensions, `halfvec` columns and indexes) goes in a custom SQL migration from `pnpm --filter backend db:generate:sql <name>`, in the same `src/db/migrations` journal.
+**Rule:** After ANY change to `apps/backend/src/db/tables.ts`, run `pnpm --filter backend db:generate` immediately and commit the migration with the schema change. Anything drizzle-kit can't express (RLS policies, partitions, extensions) goes in a custom SQL migration from `pnpm --filter backend db:generate:sql <name>`, in the same `src/db/migrations` journal. `halfvec` columns and HNSW indexes are declared in `tables.ts`. Every new migration folder also gets a hand-written `down.sql` that reverses it, run by `pnpm --filter backend db:rollback`.
 
 **Violations:**
 
 - Schema change in `apps/backend/src/db/tables.ts` without a new folder under `apps/backend/src/db/migrations/`
 - Migration file missing or in a separate commit
-- A hand-written migration folder or SQL file outside the drizzle-kit journal (not created by `db:generate:sql`)
+- A hand-written migration folder or SQL file outside the drizzle-kit journal (not created by `db:generate:sql`). Exception: `down.sql` next to `migration.sql` in a journal folder
+- A new migration folder without a `down.sql`, or a `down.sql` that doesn't reverse every statement of its `migration.sql`
 - Editing an already-merged migration instead of adding a new one
 - Schema change without the architecture diagram (`docs/architecture/companion-architecture-v0_15.excalidraw`) updated in the same PR [WARNING]
 
@@ -479,7 +480,7 @@ font-mono
 
 Rules from the dev plan's Architecture baseline and CLAUDE.md (Database, Runtime, Hard bans). Several need context beyond the diff: the enforcer may read the changed file and `apps/backend/src/db/tables.ts`, but flags only added or modified lines.
 
-**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (today `chatbots`; M1 adds the rest of the 30). `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: `users`. Golden files: `apps/backend/src/db/withTenant.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
+**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case) and get their own RLS policies in M1-3. `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: `users`. Golden files: `apps/backend/src/db/withTenant.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
 
 ### 3.1 Tenant Query Outside withTenant [CRITICAL]
 
@@ -647,6 +648,8 @@ set_config\(
 - New tenant Repo method with no cross-company test
 - Tests that insert rows without `afterAll` / `afterEach` cleanup
 
+**Exception:** M1-1 creates the 28 M1 tables without DALs; it ships schema tests (`apps/backend/src/tests/migrations.test.ts`) instead. Each table's isolation tests arrive with its DAL + Repo (M1-4) and RLS policy (M1-3).
+
 **Fix:** Mirror `apps/backend/src/tests/chatbots.test.ts`.
 
 ---
@@ -681,9 +684,9 @@ FOREIGN KEY
 
 **Violations:**
 
-- `id` that isn't `t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity()` [CRITICAL]
-- Missing `publicId` with a unique index `UNQ_<table>_public_id` [CRITICAL]
-- `created_at` / `updated_at` not `t.timestamp(..., { withTimezone: true }).notNull().defaultNow()`
+- `id` that isn't `t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity()` [CRITICAL]. Exception: partitioned `activity_log`, whose primary key is `(id, created_at)`
+- Missing `publicId` with a unique index `UNQ_<table>_public_id` [CRITICAL]. Exceptions: append-only/derived `activity_log`, `event_outbox`, `activity_rollups`, `eval_results`, `knowledge_chunks`; `admins` (`clerk_user_id`) and `chatbot_users` (`host_user_id`)
+- `created_at` / `updated_at` not `t.timestamp(..., { withTimezone: true }).notNull().defaultNow()` (the append-only/derived tables above have no `updated_at`)
 - An update DAL method that doesn't set `updatedAt`
 - Status or type columns that aren't `t.smallint()`, or store strings
 - Booleans not named `is_` / `has_` / `was_`; actor columns not `<verb>_by` (→ admins)

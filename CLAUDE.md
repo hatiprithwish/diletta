@@ -58,7 +58,7 @@ Before using any third-party API: check the installed version in `package.json`,
 ## Conventions
 
 - **Status Enum Pattern** (any discrete-state field): DB stores int only. Define `<Feature>StatusIntEnum`, `<Feature>StatusLabelEnum`, `<FEATURE>_STATUS_LABEL_MAP` in `<Feature>Common.ts`. DAL returns raw int; Repo maps int→label in a private `withStatusLabel`; API response always carries both `<feature>Status` (int) and `<feature>StatusLabel` (string). See `ChatbotsCommon.ts` / `ChatbotsRepo.ts`.
-- **Public ID Pattern** (every table): `id` is internal-only — joins and references, never sent to or accepted from a client. `publicId` (`Utility.generatePublicId()`, unique-indexed) is client-facing — every route param, API response, and frontend reference uses it instead. DAL generates it on insert and finds rows by it; API response types structurally omit `id` and every other internal id (`companyId`, `<verb>_by`), e.g. `Omit<Chatbot, "id" | "companyId" | "createdBy" | "updatedBy">`. See `ChatbotsCommon.ts` / `ChatbotsDAL.ts` / `ChatbotsRepo.ts`.
+- **Public ID Pattern** (every table, except the append-only/derived `activity_log`, `event_outbox`, `activity_rollups`, `eval_results`, `knowledge_chunks`; `admins` and `chatbot_users` use `clerk_user_id` / `host_user_id`): `id` is internal-only — joins and references, never sent to or accepted from a client. `publicId` (`Utility.generatePublicId()`, unique-indexed) is client-facing — every route param, API response, and frontend reference uses it instead. DAL generates it on insert and finds rows by it; API response types structurally omit `id` and every other internal id (`companyId`, `<verb>_by`), e.g. `Omit<Chatbot, "id" | "companyId" | "createdBy" | "updatedBy">`. See `ChatbotsCommon.ts` / `ChatbotsDAL.ts` / `ChatbotsRepo.ts`.
 - **DAL**: tenant DALs hold no db. Every method takes `tx` from `withTenant` first and filters on `companyId`. Non-tenant DALs (`UsersDAL`) hold `private db` from a ctor taking `env`. Every method inits `{ isSuccess: false }`, try/catch, `AppLogger.error` with `LogCategory`/`LogAction` on failure.
 - **Repo**: thin. Maps API shapes to DAL params; business logic lives here, not in the DAL. Tenant Repos hold `private db = getDbClient(env)` and open one `withTenant` per method.
 - **Routes**: `checkAuth` first, then `zValidator`. `c.get("clerkUserId")` for the user. 201/200/404/500.
@@ -72,9 +72,11 @@ Before using any third-party API: check the installed version in `package.json`,
 
 - `pgTable` aliased `table`; camelCase in code, `snake_case` in DB. Unique-index `publicId` and any other unique field.
 - ids: `t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity()` (string in code, exact int64), internal only; `publicId` everywhere else.
-- `created_at` and `updated_at`: `t.timestamp(..., { withTimezone: true }).notNull().defaultNow()`. DAL sets `updatedAt` on update. Status/type ints: `t.smallint()`.
+- `created_at` and `updated_at`: `t.timestamp(..., { withTimezone: true }).notNull().defaultNow()` (append-only/derived tables above: no `updated_at`). DAL sets `updatedAt` on update. Status/type ints: `t.smallint()`.
 - No DB foreign keys: the DAL checks references. Index every reference column.
-- RLS policies, partitions, extensions and `halfvec` live in custom SQL migrations (`pnpm --filter backend db:generate:sql <name>`) in the same `src/db/migrations` journal as drizzle-kit output, so ordering is guaranteed.
+- `halfvec` columns and HNSW indexes go in `tables.ts` (`t.halfvec("embedding", { dimensions: 1024 })`, `.using("hnsw", col.op("halfvec_cosine_ops"))`). RLS policies, partitions and extensions live in custom SQL migrations (`pnpm --filter backend db:generate:sql <name>`) in the same `src/db/migrations` journal as drizzle-kit output, so ordering is guaranteed.
+- `activity_log` is partitioned by month (`*_partition_activity_log` migration), so its primary key is `(id, created_at)`. Monthly partitions exist through 2027-12, then rows land in `activity_log_default`; add months ahead of time.
+- Every new migration folder gets a hand-written `down.sql` that reverses it (`--> statement-breakpoint` between statements). `db:rollback` runs it and removes the journal row.
 - `dbClient.ts` builds a client per request from `env.HYPERDRIVE.connectionString`; never cache a client across requests.
 - Environments: staging and production only. Two Neon branches (`staging`, `production`), each behind its own Hyperdrive config. Local dev and tests use the staging branch via `apps/backend/.env`; never point local at production. Tests must clean up the rows they create.
 
@@ -141,8 +143,9 @@ pnpm test                         # all packages; each app's test runs typecheck
 pnpm --filter web test
 pnpm --filter backend test        # hits the Neon staging branch via apps/backend/.env
 pnpm --filter backend db:generate         # generate migration after schema change
-pnpm --filter backend db:generate:sql <n> # empty custom SQL migration (RLS, partitions, halfvec)
+pnpm --filter backend db:generate:sql <n> # empty custom SQL migration (RLS, partitions, extensions)
 pnpm --filter backend db:migrate          # apply migrations to DATABASE_URL (apps/backend/.env = staging branch)
+pnpm --filter backend db:rollback [n]     # run down.sql of the last n applied migrations (default 1)
 ```
 
 ---
