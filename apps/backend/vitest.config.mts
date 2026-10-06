@@ -24,9 +24,16 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      // DEV_NOTE: Test-only binding, never declared in wrangler.jsonc: the withTenant leak test
-      // runs through Neon's -pooler endpoint because local mode skips Hyperdrive's pool.
-      miniflare: { bindings: { NEON_POOLER_URL: process.env.NEON_POOLER_URL ?? "" } },
+      // DEV_NOTE: Test-only bindings, never declared in wrangler.jsonc. NEON_POOLER_URL: the withTenant
+      // leak test runs through Neon's -pooler endpoint because local mode skips Hyperdrive's pool.
+      // DATABASE_URL: the owner role (BYPASSRLS), for fixtures, cleanup and schema checks only; the code
+      // under test runs as diletta_app through the HYPERDRIVE binding.
+      miniflare: {
+        bindings: {
+          NEON_POOLER_URL: process.env.NEON_POOLER_URL ?? "",
+          DATABASE_URL: process.env.DATABASE_URL ?? "",
+        },
+      },
     }),
   ],
   resolve: {

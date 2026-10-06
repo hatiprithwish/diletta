@@ -18,6 +18,7 @@ export enum LogAction {
 
   // Tenant transactions
   WithTenant = "WithTenant",
+  WithPlatform = "WithPlatform",
 
   // Chatbots
   CreateChatbot = "CreateChatbot",
