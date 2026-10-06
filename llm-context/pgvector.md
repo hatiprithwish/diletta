@@ -26,7 +26,8 @@ No llms.txt for pgvector or postgresql.org; Neon's is [neon.com/docs/llms.txt](h
 
 ## How Diletta uses it
 
-- Embeddings are `halfvec(1024)` from Workers AI. The column, the `vector` extension and the HNSW index (`USING hnsw (embedding halfvec_cosine_ops)`) go in a custom SQL migration (`pnpm --filter backend db:generate:sql <name>`); drizzle-kit can't express them.
+- Embeddings are `halfvec(1024)` from Workers AI. The `vector` extension is a custom SQL migration (`20261003140745_enable_pgvector`). The column and the HNSW index are declared in `tables.ts`, which drizzle-orm `1.0.0-rc.4` supports: `t.halfvec("embedding", { dimensions: 1024 })` and `t.index(...).using("hnsw", table.embedding.op("halfvec_cosine_ops"))`. Columns: `knowledge_chunks.embedding` (HNSW), `doc_gaps.embedding`, `doc_gap_clusters.centroid`.
+- `knowledge_chunks.tsv` is a generated `tsvector` (heading weighted A, text B, `english` config) with a GIN index; the type is a `customType` in `tables.ts`.
 - HNSW indexes `halfvec` up to 4,000 dimensions, so 1024 fits.
 - Hybrid search (M2-6) = `tsvector` + GIN for keywords plus HNSW for vectors, merged by rank. Filters (company, source list) apply after the index scan, so turn on iterative scans (`SET LOCAL hnsw.iterative_scan = relaxed_order` inside the `withTenant` transaction) to keep recall.
 - `set_config(name, value, true)` applies only to the current transaction, which is what `withTenant` relies on.
