@@ -83,6 +83,7 @@ Before using any third-party API: check the installed version in `package.json`,
 **From M0-5 (tenant pattern):**
 
 - Tenant queries only inside `withTenant(db, companyId, tx => ...)` (`companyId` = internal `companies.id`, resolved server-side), which sets `set_config('app.company_id', …, true)` per transaction. Never set RLS context per session. DAL methods take `tx`; Repo opens the transaction.
+- Only exception: a backend test may set `app.company_id` per session (`set_config(…, false)`) as a leak-detection control, on a direct single-connection pool (never `NEON_POOLER_URL`), with `RESET app.company_id` in a `finally`. See pattern rule 3.2 and `withTenant.test.ts`.
 - Transactional flows (outbox, action engine) throw `TenantRollbackError(dalResponse.message)` to roll back; `withTenant` turns it into `{ isSuccess: false, message }`. Plain CRUD keeps the `{ isSuccess }` response pattern. See `ChatbotsRepo.setDefaultChatbot`.
 - Critical events: `activity_log` + `event_outbox` row in the same transaction.
 - A new tenant table ships with tests showing company B can't read or write company A's rows, in the same PR. From M1-3 these are RLS tests. Until then the worker connects as the table owner, which bypasses RLS, so only the `companyId` filter protects tenants.

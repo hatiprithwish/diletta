@@ -541,11 +541,18 @@ Anywhere outside apps/backend/src/db/withTenant.ts
 - `SET app.company_id`, `SET SESSION …`, `RESET`, or `SET ROLE` from application code
 - Edits to `withTenant.ts` that set the context outside `db.transaction`, or change `true` to `false`
 
+**Exemption:** test files under `apps/backend/src/tests/` may call `set_config('app.company_id', …, false)` only as a leak-detection control: on a throwaway single-connection pool over the direct connection string (never `NEON_POOLER_URL`), followed by nothing but a `current_setting` read, never before a query on a tenant table, and with `RESET app.company_id` in a `finally` before the pool ends. `pool.end()` alone doesn't clear the server session if a pooler sits in between (see `withTenant.test.ts`).
+
 **Detection Pattern:**
 
 ```regex
 set_config\(
 \bSET\s+(SESSION\s+)?(app\.|ROLE)
+```
+
+```
+File: any file except apps/backend/src/db/withTenant.ts and apps/backend/src/tests/*.test.ts → flag every match
+File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes only if it meets every condition of the exemption above; flag it otherwise
 ```
 
 **Examples:**
