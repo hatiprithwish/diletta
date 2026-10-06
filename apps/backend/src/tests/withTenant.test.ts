@@ -7,6 +7,7 @@ import { Pool } from "pg";
 import getDbClient from "@/db/dbClient";
 import { chatbots, companies } from "@/db/tables";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import withPlatform from "@/db/withPlatform";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import Utility from "@/utils/Utility";
 import type * as Schemas from "@app/schemas";
@@ -27,20 +28,29 @@ vi.mock("@/providers/logger", () => ({
 // afterAll deletes every chatbot and company this suite created. Workers allow 6 open
 // connections: the shared client opens at most 2 (the concurrent test), plus one test pool
 // at a time (at most 3), and every pool is ended. Don't add a pool, e.g. via a Repo, without
-// recounting.
+// recounting. The code under test runs as diletta_app (HYPERDRIVE); fixtures and cleanup run as
+// the owner, on a pool of 1 opened only in beforeAll / afterAll.
 const db = getDbClient(env);
-// DEV_NOTE: Test-only binding from apps/backend/.env, passed in by vitest.config.mts. Read through `in`
-// narrowing so neither the worker's Env nor a test-only type has to declare it.
+// DEV_NOTE: Test-only bindings from apps/backend/.env, passed in by vitest.config.mts. Read through `in`
+// narrowing so neither the worker's Env nor a test-only type has to declare them.
 const neonPoolerUrl =
   "NEON_POOLER_URL" in env && typeof env.NEON_POOLER_URL === "string" ? env.NEON_POOLER_URL : "";
+const ownerDatabaseUrl =
+  "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 let companyA = "";
 let companyB = "";
 
 const readCompanySetting = sql`select current_setting('app.company_id', true) as "companyId"`;
+const readPlatformSetting = sql`select current_setting('app.is_platform', true) as "isPlatform"`;
 
 async function readSetting(client: NodePgDatabase): Promise<string> {
   const { rows } = await client.execute<{ companyId: string | null }>(readCompanySetting);
   return rows[0]?.companyId ?? "";
+}
+
+async function readPlatformFlag(client: NodePgDatabase): Promise<string> {
+  const { rows } = await client.execute<{ isPlatform: string | null }>(readPlatformSetting);
+  return rows[0]?.isPlatform ?? "";
 }
 
 // DEV_NOTE: max 1 forces every query onto the connection the previous transaction used,
@@ -57,24 +67,37 @@ async function withSingleConnection(run: (client: NodePgDatabase) => Promise<voi
   }
 }
 
+async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
+  const pool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });
+  try {
+    await run(drizzle({ client: pool }));
+  } finally {
+    await pool.end();
+  }
+}
+
 beforeAll(async () => {
-  const created = await db
-    .insert(companies)
-    .values([
-      { publicId: Utility.generatePublicId(), name: `Test company A ${crypto.randomUUID()}` },
-      { publicId: Utility.generatePublicId(), name: `Test company B ${crypto.randomUUID()}` },
-    ])
-    .returning({ id: companies.id });
-  companyA = created[0]!.id;
-  companyB = created[1]!.id;
+  await withOwnerDb(async (ownerDb) => {
+    const created = await ownerDb
+      .insert(companies)
+      .values([
+        { publicId: Utility.generatePublicId(), name: `Test company A ${crypto.randomUUID()}` },
+        { publicId: Utility.generatePublicId(), name: `Test company B ${crypto.randomUUID()}` },
+      ])
+      .returning({ id: companies.id });
+    companyA = created[0]!.id;
+    companyB = created[1]!.id;
+  });
 });
 
 afterAll(async () => {
   try {
     const companyIds = [companyA, companyB].filter(Boolean);
     if (companyIds.length === 0) return;
-    await db.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
-    await db.delete(companies).where(inArray(companies.id, companyIds));
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
+      await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
+    });
   } finally {
     await db.$client.end();
   }
@@ -313,5 +336,63 @@ describe("withTenant context leak on pooled connections", () => {
     } finally {
       await pool.end();
     }
+  });
+});
+
+describe("withPlatform", () => {
+  it("sets app.is_platform inside the transaction and clears it after, on the same connection", async () => {
+    await withSingleConnection(async (client) => {
+      const inside = await withPlatform(client, async (tx) => ({
+        isSuccess: (await readSetting(tx)) === "",
+        message: await readPlatformFlag(tx),
+      }));
+      expect(inside).toEqual({ isSuccess: true, message: "on" });
+
+      expect(await readPlatformFlag(client)).toBe("");
+    });
+  });
+
+  it("leaves no flag behind after a rollback, an unexpected throw or a SQL error", async () => {
+    await withSingleConnection(async (client) => {
+      const rolledBack = await withPlatform(client, async () => {
+        throw new TenantRollbackError("Forced rollback");
+      });
+      expect(rolledBack).toEqual({ isSuccess: false, message: "Forced rollback" });
+      expect(await readPlatformFlag(client)).toBe("");
+
+      const thrown = await withPlatform(client, async () => {
+        throw new Error("boom");
+      });
+      expect(thrown).toEqual({
+        isSuccess: false,
+        message: "Unknown error in platform transaction",
+      });
+      expect(await readPlatformFlag(client)).toBe("");
+
+      const aborted = await withPlatform(client, async (tx) => {
+        await tx.execute(sql`select 1 / 0`);
+        return { isSuccess: true };
+      });
+      expect(aborted.isSuccess).toBe(false);
+      expect(await readPlatformFlag(client)).toBe("");
+    });
+  });
+
+  it("never carries the platform flag into a tenant transaction, or a company into a platform one", async () => {
+    await withSingleConnection(async (client) => {
+      for (let i = 0; i < 10; i++) {
+        const platform = await withPlatform(client, async (tx) => ({
+          isSuccess: true,
+          message: `${await readPlatformFlag(tx)}|${await readSetting(tx)}`,
+        }));
+        expect(platform).toEqual({ isSuccess: true, message: "on|" });
+
+        const tenant = await withTenant(client, companyA, async (tx) => ({
+          isSuccess: true,
+          message: `${await readPlatformFlag(tx)}|${await readSetting(tx)}`,
+        }));
+        expect(tenant).toEqual({ isSuccess: true, message: `|${companyA}` });
+      }
+    });
   });
 });

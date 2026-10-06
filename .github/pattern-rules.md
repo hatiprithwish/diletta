@@ -480,11 +480,13 @@ font-mono
 
 Rules from the dev plan's Architecture baseline and CLAUDE.md (Database, Runtime, Hard bans). Several need context beyond the diff: the enforcer may read the changed file and `apps/backend/src/db/tables.ts`, but flags only added or modified lines.
 
-**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case) and get their own RLS policies in M1-3. `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: `users`. Golden files: `apps/backend/src/db/withTenant.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
+**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case); tenants never match those rows, and tenants may read platform eval cases but not write them (`*_rls_policies` migration). `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: `users`. Golden files: `apps/backend/src/db/withTenant.ts`, `apps/backend/src/db/withPlatform.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
+
+**RLS (M1-3):** the worker connects as `diletta_app`, which can't bypass RLS. Every tenant table and `companies` has RLS enabled and forced, with a tenant policy (`company_id` = `app.company_id`) and a platform policy (`app.is_platform` = `on`). The owner role (`DATABASE_URL`) is for migrations and test fixtures only. See `docs/runbooks/app-role.md`.
 
 ### 3.1 Tenant Query Outside withTenant [CRITICAL]
 
-**Rule:** Every query on a tenant table runs on the `tx` handed out by `withTenant(this.db, companyId, async (tx) => ...)`. The Repo opens the transaction; the DAL only receives `tx`. Nothing else opens a transaction on tenant data.
+**Rule:** Every query on a tenant table runs on the `tx` handed out by `withTenant(this.db, companyId, async (tx) => ...)`, or by `withPlatform(this.db, async (tx) => ...)` where 3.15 allows it. The Repo opens the transaction; the DAL only receives `tx`. Nothing else opens a transaction on tenant data.
 
 **Violations:**
 
@@ -492,7 +494,7 @@ Rules from the dev plan's Architecture baseline and CLAUDE.md (Database, Runtime
 - `.select()`, `.insert()`, `.update()`, `.delete()`, `.execute()` or `.query.*` on a tenant table through `this.db`, `db`, `getDbClient(env)` or a `drizzle(...)` instance instead of `tx`
 - A tenant DAL holding `private db`, taking `env` in its constructor, or importing `getDbClient` / `drizzle`
 - A tenant DAL method whose first parameter isn't `tx: NodePgTransaction<EmptyRelations>`
-- `db.transaction(...)` anywhere except `apps/backend/src/db/withTenant.ts`
+- `db.transaction(...)` anywhere except `apps/backend/src/db/withTenant.ts` and `apps/backend/src/db/withPlatform.ts`
 - Durable Objects, Queue consumers, Cron handlers, Workflows or routes touching tenant tables without going through a tenant Repo (which opens `withTenant`)
 - A `tx` stored on a class field or module variable, or used after the `withTenant` callback returns
 - A db client or `Pool` cached at module scope or on a long-lived object (Durable Object field) instead of built per request with `getDbClient(env)`
@@ -532,14 +534,15 @@ Anywhere outside apps/backend/src/db/withTenant.ts
 
 ### 3.2 RLS Context Per Transaction Only [CRITICAL]
 
-**Rule:** `app.company_id` is set only by `withTenant`, with `set_config('app.company_id', …, true)` (transaction-local). Never per session: Hyperdrive pools connections, so session state leaks to the next request.
+**Rule:** `app.company_id` is set only by `withTenant`, with `set_config('app.company_id', …, true)`, and `app.is_platform` only by `withPlatform`, with `set_config('app.is_platform', 'on', true)`. Both are transaction-local. Never per session: Hyperdrive pools connections, so session state leaks to the next request.
 
 **Violations:**
 
 - `set_config('app.company_id', …)` anywhere except `apps/backend/src/db/withTenant.ts`
+- `set_config('app.is_platform', …)` anywhere except `apps/backend/src/db/withPlatform.ts`
 - `set_config(…, false)` or a missing third argument
 - `SET app.company_id`, `SET SESSION …`, `RESET`, or `SET ROLE` from application code
-- Edits to `withTenant.ts` that set the context outside `db.transaction`, or change `true` to `false`
+- Edits to `withTenant.ts` or `withPlatform.ts` that set the context outside `db.transaction`, or change `true` to `false`
 
 **Exemption:** test files under `apps/backend/src/tests/` may call `set_config('app.company_id', …, false)` only as a leak-detection control: on a throwaway single-connection pool over the direct connection string (never `NEON_POOLER_URL`), followed by nothing but a `current_setting` read, never before a query on a tenant table, and with `RESET app.company_id` in a `finally` before the pool ends. `pool.end()` alone doesn't clear the server session if a pooler sits in between (see `withTenant.test.ts`).
 
@@ -551,7 +554,7 @@ set_config\(
 ```
 
 ```
-File: any file except apps/backend/src/db/withTenant.ts and apps/backend/src/tests/*.test.ts → flag every match
+File: any file except apps/backend/src/db/withTenant.ts, apps/backend/src/db/withPlatform.ts and apps/backend/src/tests/*.test.ts → flag every match
 File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes only if it meets every condition of the exemption above; flag it otherwise
 ```
 
@@ -561,10 +564,11 @@ File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes
 - ❌ await db.execute(sql`set_config('app.company_id', ${companyId}, false)`)
 - ❌ await db.execute(sql`SET app.company_id = ${companyId}`)
 - ✅ withTenant(this.db, companyId, async (tx) => ...)   // sets it with `true` inside the transaction
-- ✅ RLS policy in a custom SQL migration: USING (company_id = current_setting('app.company_id')::bigint)
+- ✅ withPlatform(this.db, async (tx) => ...)               // sets app.is_platform with `true` inside the transaction
+- ✅ RLS policy in a custom SQL migration: USING ("company_id" = (SELECT NULLIF(current_setting('app.company_id', true), '')::bigint))
 ```
 
-**Fix:** Remove the call and run the query inside `withTenant`.
+**Fix:** Remove the call and run the query inside `withTenant` (or `withPlatform` where 3.15 allows it).
 
 ---
 
@@ -647,17 +651,16 @@ File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes
 
 ### 3.6 Tenant Tables Ship With Isolation Tests [CRITICAL]
 
-**Rule:** A PR that adds a tenant table, or a tenant Repo method, adds tests in `apps/backend/src/tests/` showing company B can't read or write company A's rows. From M1-3 these are RLS tests (non-owner app role). Tests clean up the rows they create.
+**Rule:** A PR that adds a tenant table, or a tenant Repo method, adds tests in `apps/backend/src/tests/` showing company B can't read or write company A's rows. These are RLS tests: the code under test runs as `diletta_app` (the `HYPERDRIVE` binding), and only fixtures and cleanup use the owner connection (`DATABASE_URL` test binding). A new tenant table gets a `FIXTURES` entry in `rls.test.ts`; its catalog test fails until it has one. Tests clean up the rows they create.
 
 **Violations:**
 
-- New table with a `companyId` column in `tables.ts` and no new/changed `apps/backend/src/tests/*.test.ts`
+- New table with a `companyId` column in `tables.ts` and no `FIXTURES` entry in `apps/backend/src/tests/rls.test.ts`
 - New tenant Repo method with no cross-company test
+- Code under test (Repo, DAL, `withTenant`, `withPlatform`) run on the owner connection, which bypasses RLS and proves nothing
 - Tests that insert rows without `afterAll` / `afterEach` cleanup
 
-**Exception:** M1-1 creates the 28 M1 tables without DALs; it ships schema tests (`apps/backend/src/tests/migrations.test.ts`) instead. Each table's isolation tests arrive with its DAL + Repo (M1-4) and RLS policy (M1-3).
-
-**Fix:** Mirror `apps/backend/src/tests/chatbots.test.ts`.
+**Fix:** Mirror `apps/backend/src/tests/rls.test.ts` (table policies) and `apps/backend/src/tests/chatbots.test.ts` (Repo methods).
 
 ---
 
@@ -848,6 +851,64 @@ exportKey\(
 
 ---
 
+### 3.15 withPlatform Only for Cross-Company Work [CRITICAL]
+
+**Rule:** `withPlatform` passes every RLS policy, so it reads and writes every company's rows. It is allowed only where no single company applies: operator routes (`/operator/*`, operator-only actions behind `can()`), Cron or Queue jobs that sweep across companies (outbox relay sweep, rollups, retention purge, nightly platform suite), and the lookups that resolve the company before `withTenant` can run (Clerk admin → company, JWT issuer → `company_connections` row). Anything scoped to one company uses `withTenant`, even when an operator triggers it.
+
+**Violations:**
+
+- `withPlatform` in a widget route, a dashboard route serving a company admin, or a Conversation DO turn
+- A pre-tenant lookup that, inside its `withPlatform` callback, reads or writes anything beyond the one row that resolves the company
+- `withPlatform` used to edit one known company's data instead of `withTenant(this.db, companyId, …)`
+- A DAL importing `withPlatform` (the Repo opens the transaction, as in 3.1)
+
+**Detection Pattern:**
+
+```regex
+withPlatform\(
+```
+
+**Examples:**
+
+```
+- ❌ // dashboard route for a company admin
+     await withPlatform(this.db, (tx) => this.dal.getChatbots(tx, { companyId }));
+- ✅ await withTenant(this.db, companyId, (tx) => this.dal.getChatbots(tx, { companyId }));
+- ✅ // Cron: outbox relay sweep across companies
+     await withPlatform(this.db, (tx) => this.dal.getPendingEvents(tx, { limit }));
+```
+
+**Fix:** Resolve the company first and use `withTenant`. Keep `withPlatform` callbacks to the cross-company query itself.
+
+---
+
+### 3.16 New Tables Granted and Protected in Their Migration [CRITICAL]
+
+**Rule:** `diletta_app` has no default privileges. A PR that adds a table to `tables.ts` also adds a custom SQL migration (`db:generate:sql`) that grants it to `diletta_app` by name, and for a tenant table enables and forces RLS with a tenant policy and a platform policy, mirroring `*_rls_policies`. Its `down.sql` reverses all of it.
+
+**Violations:**
+
+- A new table with no `GRANT … ON "<table>" TO diletta_app`
+- A new tenant table without `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY` and both policies
+- `GRANT … ON ALL TABLES`, `ALTER DEFAULT PRIVILEGES`, or a grant on an `activity_log_*` partition
+- A policy that casts `current_setting('app.company_id')` without `NULLIF(…, '')` (a reset setting reads `''` and fails the cast)
+- Granting `diletta_app` `BYPASSRLS`, `SUPERUSER`, `CREATEROLE`, `neon_superuser`, or table ownership
+
+**Examples:**
+
+```
+- ❌ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO diletta_app;
+- ✅ GRANT SELECT, INSERT, UPDATE, DELETE ON "new_table" TO diletta_app;
+     ALTER TABLE "new_table" ENABLE ROW LEVEL SECURITY;
+     ALTER TABLE "new_table" FORCE ROW LEVEL SECURITY;
+     CREATE POLICY "POL_new_table_tenant" ON "new_table" FOR ALL TO diletta_app USING (…) WITH CHECK (…);
+     CREATE POLICY "POL_new_table_platform" ON "new_table" FOR ALL TO diletta_app USING (…) WITH CHECK (…);
+```
+
+**Fix:** Copy one table's block from `apps/backend/src/db/migrations/*_rls_policies/migration.sql` and its `down.sql`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -935,5 +996,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-04 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants)
 Maintainer: hatiprithwish

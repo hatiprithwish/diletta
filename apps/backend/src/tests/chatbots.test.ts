@@ -1,8 +1,10 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { inArray } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import getDbClient from "@/db/dbClient";
 import { chatbots, companies } from "@/db/tables";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import Utility from "@/utils/Utility";
@@ -20,28 +22,45 @@ vi.mock("@/providers/logger", () => ({
 }));
 
 // DEV_NOTE: Tests hit the Neon staging branch. Two fresh companies per run isolate rows;
-// afterAll deletes every chatbot and company this suite created.
-const db = getDbClient(env);
+// afterAll deletes every chatbot and company this suite created. The Repo runs as diletta_app (HYPERDRIVE),
+// so RLS applies; fixtures and cleanup run as the owner, since only withPlatform may create companies.
+// DEV_NOTE: Test-only binding from apps/backend/.env, passed in by vitest.config.mts. Read through `in`
+// narrowing so neither the worker's Env nor a test-only type has to declare it.
+const ownerDatabaseUrl =
+  "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 let companyA = "";
 let companyB = "";
 
+async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
+  const pool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });
+  try {
+    await run(drizzle({ client: pool }));
+  } finally {
+    await pool.end();
+  }
+}
+
 beforeAll(async () => {
-  const created = await db
-    .insert(companies)
-    .values([
-      { publicId: Utility.generatePublicId(), name: `Test company A ${crypto.randomUUID()}` },
-      { publicId: Utility.generatePublicId(), name: `Test company B ${crypto.randomUUID()}` },
-    ])
-    .returning({ id: companies.id });
-  companyA = created[0]!.id;
-  companyB = created[1]!.id;
+  await withOwnerDb(async (ownerDb) => {
+    const created = await ownerDb
+      .insert(companies)
+      .values([
+        { publicId: Utility.generatePublicId(), name: `Test company A ${crypto.randomUUID()}` },
+        { publicId: Utility.generatePublicId(), name: `Test company B ${crypto.randomUUID()}` },
+      ])
+      .returning({ id: companies.id });
+    companyA = created[0]!.id;
+    companyB = created[1]!.id;
+  });
 });
 
 afterAll(async () => {
   const companyIds = [companyA, companyB].filter(Boolean);
   if (companyIds.length === 0) return;
-  await db.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
-  await db.delete(companies).where(inArray(companies.id, companyIds));
+  await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
+    await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
+  });
 });
 
 describe("ChatbotsRepo (tenant golden)", () => {

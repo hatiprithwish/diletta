@@ -19,16 +19,19 @@
 
 ### Golden files
 
-| Layer               | File                                                 |
-| ------------------- | ---------------------------------------------------- |
-| Tenant transaction  | `apps/backend/src/db/withTenant.ts`                  |
-| DAL                 | `apps/backend/src/data-access-layer/ChatbotsDAL.ts`  |
-| Repository          | `apps/backend/src/repositories/ChatbotsRepo.ts`      |
-| Schemas             | `packages/schemas/src/chatbots/`                     |
-| Tenant tests        | `apps/backend/src/tests/chatbots.test.ts`            |
-| Routes              | `apps/backend/src/routes/UserRoutes.ts` (until M1-8) |
-| Frontend data layer | none yet: first dashboard page sets it (M4)          |
-| Frontend page       | none yet: first dashboard page sets it (M4)          |
+| Layer                | File                                                 |
+| -------------------- | ---------------------------------------------------- |
+| Tenant transaction   | `apps/backend/src/db/withTenant.ts`                  |
+| Platform transaction | `apps/backend/src/db/withPlatform.ts`                |
+| RLS migration        | `apps/backend/src/db/migrations/*_rls_policies/`     |
+| DAL                  | `apps/backend/src/data-access-layer/ChatbotsDAL.ts`  |
+| Repository           | `apps/backend/src/repositories/ChatbotsRepo.ts`      |
+| Schemas              | `packages/schemas/src/chatbots/`                     |
+| Tenant tests         | `apps/backend/src/tests/chatbots.test.ts`            |
+| RLS tests            | `apps/backend/src/tests/rls.test.ts`                 |
+| Routes               | `apps/backend/src/routes/UserRoutes.ts` (until M1-8) |
+| Frontend data layer  | none yet: first dashboard page sets it (M4)          |
+| Frontend page        | none yet: first dashboard page sets it (M4)          |
 
 Chatbots is the tenant golden example (M0-5). It has no routes yet: the Clerk admin → company lookup arrives with M1-8, which adds the first tenant route and replaces the Routes row. Until a frontend golden exists, follow the Conventions below and flag anything they don't cover.
 
@@ -79,6 +82,7 @@ Before using any third-party API: check the installed version in `package.json`,
 - Every new migration folder gets a hand-written `down.sql` that reverses it (`--> statement-breakpoint` between statements). `db:rollback` runs it and removes the journal row.
 - `dbClient.ts` builds a client per request from `env.HYPERDRIVE.connectionString`; never cache a client across requests.
 - Environments: staging and production only. Two Neon branches (`staging`, `production`), each behind its own Hyperdrive config. Local dev and tests use the staging branch via `apps/backend/.env`; never point local at production. Tests must clean up the rows they create.
+- Roles: the worker (Hyperdrive, and `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` locally) connects as `diletta_app`, which RLS applies to. The owner role (`DATABASE_URL`, `BYPASSRLS`) runs migrations and test fixtures/cleanup only, never code under test. Setup and password rotation: `docs/runbooks/app-role.md`.
 
 **From M0-5 (tenant pattern):**
 
@@ -86,7 +90,9 @@ Before using any third-party API: check the installed version in `package.json`,
 - Only exception: a backend test may set `app.company_id` per session (`set_config(…, false)`) as a leak-detection control, on a direct single-connection pool (never `NEON_POOLER_URL`), with `RESET app.company_id` in a `finally`. See pattern rule 3.2 and `withTenant.test.ts`.
 - Transactional flows (outbox, action engine) throw `TenantRollbackError(dalResponse.message)` to roll back; `withTenant` turns it into `{ isSuccess: false, message }`. Plain CRUD keeps the `{ isSuccess }` response pattern. See `ChatbotsRepo.setDefaultChatbot`.
 - Critical events: `activity_log` + `event_outbox` row in the same transaction.
-- A new tenant table ships with tests showing company B can't read or write company A's rows, in the same PR. From M1-3 these are RLS tests. Until then the worker connects as the table owner, which bypasses RLS, so only the `companyId` filter protects tenants.
+- Cross-company work (operator routes, Cron/Queue sweeps across companies, and the Clerk admin → company and JWT issuer → connection lookups) runs in `withPlatform(db, tx => ...)`, which sets `app.is_platform` per transaction and passes every policy. Anything scoped to one company uses `withTenant`, even for an operator.
+- **RLS (M1-3):** every tenant table and `companies` has RLS enabled and forced, with a tenant and a platform policy; `admins` with no company (operators) and platform `eval_cases` never match a tenant, and tenants may read platform cases but not write them. The DAL still filters on `companyId` on top of RLS.
+- A new table ships, in the same PR, a custom migration that grants it to `diletta_app` by name (no default privileges) and, for a tenant table, enables and forces RLS with both policies, mirroring `*_rls_policies`. A new tenant table also gets a `FIXTURES` entry in `rls.test.ts`, and new tenant Repo methods get cross-company tests run as `diletta_app`.
 
 ## Runtime
 
@@ -112,7 +118,7 @@ Before using any third-party API: check the installed version in `package.json`,
 ## Done means
 
 - The task's "Done when" from the dev plan is shown in the PR.
-- A new tenant table ships with its company-isolation tests (RLS tests from M1-3).
+- A new tenant table ships with its grants, RLS policies and RLS tests (`rls.test.ts` `FIXTURES` entry).
 - A new CLAUDE.md rule or hard ban gets a matching rule in `.github/pattern-rules.md` in the same PR.
 - Schema change = architecture diagram updated in the same PR.
 - Locked decision changed = ADR in `docs/adr/` first.
@@ -128,7 +134,8 @@ Before using any third-party API: check the installed version in `package.json`,
 - A schema change without immediately running `db:generate`
 - A mutation with an absent or empty `onError`
 - Logging or persisting the host bearer token; calling a model provider outside the router
-- From M0-5: a tenant query outside `withTenant`
+- From M0-5: a tenant query outside `withTenant` (or `withPlatform` for cross-company work)
+- From M1-3: code under test on the owner connection; a table without its `diletta_app` grant and RLS policies; `withPlatform` for one company's data
 - `npm`/`yarn` — `pnpm` always
 
 ## Commands

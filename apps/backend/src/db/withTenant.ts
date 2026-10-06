@@ -43,8 +43,8 @@ function describeInvalidCompanyId(companyId: string): string {
 // DEV_NOTE: The only way to run a tenant query. Opens one transaction and sets app.company_id with
 // set_config(…, true): transaction-local, so it resets on COMMIT/ROLLBACK and never leaks to the next
 // request on a pooled connection. companyId is the internal companies.id, never a client-supplied value.
-// RLS policies (M1-3) read current_setting('app.company_id'). The worker currently connects as the
-// table owner with BYPASSRLS, so policies only take effect once Hyperdrive uses a non-owner app role.
+// RLS policies (*_rls_policies migration) read current_setting('app.company_id') and match it against
+// company_id; the worker connects as diletta_app, which can't bypass them. Cross-company work uses withPlatform.
 export default async function withTenant<T extends Schemas.ApiResponse>(
   db: NodePgDatabase,
   companyId: string,

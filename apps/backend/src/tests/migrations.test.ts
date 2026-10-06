@@ -2,8 +2,9 @@ import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { Buffer } from "node:buffer";
 import { eq, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import getDbClient from "@/db/dbClient";
 import {
   activityLog,
   activityRollups,
@@ -34,10 +35,16 @@ vi.mock("@/providers/logger", () => ({
 }));
 
 // DEV_NOTE: Checks the M1-1 schema on the Neon staging branch: every table exists, constraints from the v0.15
-// diagram reject bad rows, and activity_log routes rows to monthly partitions. Company isolation tests arrive with
-// each table's DAL (M1-4) and RLS (M1-3). One fresh company per run; afterAll deletes every row this suite created.
+// diagram reject bad rows, and activity_log routes rows to monthly partitions. It runs as the owner role
+// (DATABASE_URL, BYPASSRLS) because it checks the schema itself; company isolation is rls.test.ts, as diletta_app.
+// One fresh company per run; afterAll deletes every row this suite created.
 // Reference columns hold placeholder ids: there are no foreign keys, so nothing checks them at the DB.
-const db = getDbClient(env);
+// DEV_NOTE: Test-only binding from apps/backend/.env, passed in by vitest.config.mts. Read through `in`
+// narrowing so neither the worker's Env nor a test-only type has to declare it.
+const ownerDatabaseUrl =
+  "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
+const ownerPool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });
+const db = drizzle({ client: ownerPool });
 let companyId = "";
 
 const EXPECTED_TABLES = [
@@ -91,7 +98,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (!companyId) return;
+  if (!companyId) {
+    await ownerPool.end();
+    return;
+  }
   await db.delete(companyEncryptionKeys).where(eq(companyEncryptionKeys.companyId, companyId));
   await db.delete(companySecrets).where(eq(companySecrets.companyId, companyId));
   await db.delete(companyConnections).where(eq(companyConnections.companyId, companyId));
@@ -105,6 +115,7 @@ afterAll(async () => {
   await db.delete(activityRollups).where(eq(activityRollups.companyId, companyId));
   await db.delete(eventOutbox).where(eq(eventOutbox.companyId, companyId));
   await db.delete(companies).where(eq(companies.id, companyId));
+  await ownerPool.end();
 });
 
 describe("schema shape", () => {
