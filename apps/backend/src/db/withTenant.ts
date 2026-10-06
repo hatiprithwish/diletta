@@ -17,9 +17,14 @@ export class TenantRollbackError extends Error {
 // Anything else ('' included) would set a context the RLS `::bigint` cast can't read, so it never reaches set_config.
 const COMPANY_ID_PATTERN = /^(0|[1-9]\d{0,18})$/;
 const INT64_MAX = 9223372036854775807n;
+// DEV_NOTE: A caller bug can pass anything (a publicId, a serialized object), so only a prefix is logged
+const LOGGED_ID_MAX_LENGTH = 32;
 
-function isValidCompanyId(companyId: string): boolean {
-  return COMPANY_ID_PATTERN.test(companyId) && BigInt(companyId) <= INT64_MAX;
+function getCompanyIdError(companyId: string): string | null {
+  if (companyId === "") return "empty";
+  if (!COMPANY_ID_PATTERN.test(companyId)) return "not a canonical integer";
+  if (BigInt(companyId) > INT64_MAX) return "out of int64 range";
+  return null;
 }
 
 // DEV_NOTE: The only way to run a tenant query. Opens one transaction and sets app.company_id with
@@ -32,13 +37,14 @@ export default async function withTenant<T extends Schemas.ApiResponse>(
   companyId: string,
   callback: (tx: NodePgTransaction<EmptyRelations>) => Promise<T>,
 ): Promise<T | Schemas.ApiResponse> {
-  if (!isValidCompanyId(companyId)) {
+  const companyIdError = getCompanyIdError(companyId);
+  if (companyIdError) {
     const message = "Invalid company id";
     AppLogger.error({
       category: Schemas.LogCategory.DB,
       action: Schemas.LogAction.WithTenant,
       message,
-      metadata: { companyId },
+      metadata: { companyId: companyId.slice(0, LOGGED_ID_MAX_LENGTH), reason: companyIdError },
     });
     return { isSuccess: false, message };
   }

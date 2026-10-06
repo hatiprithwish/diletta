@@ -8,7 +8,6 @@ import getDbClient from "@/db/dbClient";
 import { chatbots, companies } from "@/db/tables";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
-import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -25,7 +24,9 @@ vi.mock("@/providers/logger", () => ({
 
 // DEV_NOTE: Tests hit the Neon staging branch. Two fresh companies per run isolate rows;
 // afterAll deletes every chatbot and company this suite created. Workers allow 6 open
-// connections, so this suite keeps at most 5: the shared client plus one test pool at a time.
+// connections: the shared client opens at most 2 (the concurrent test), plus one test pool
+// at a time (at most 3), and every pool is ended. Don't add a pool, e.g. via a Repo, without
+// recounting.
 const db = getDbClient(env);
 // DEV_NOTE: Test-only binding from apps/backend/.env, passed in by vitest.config.mts; kept off the worker's Env
 const testEnv: Env & { NEON_POOLER_URL?: string } = env;
@@ -67,6 +68,7 @@ afterAll(async () => {
   if (companyIds.length === 0) return;
   await db.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
   await db.delete(companies).where(inArray(companies.id, companyIds));
+  await db.$client.end();
 });
 
 describe("withTenant", () => {
@@ -116,33 +118,58 @@ describe("withTenant", () => {
       message: "Unknown error in tenant transaction",
     });
 
-    const repo = new ChatbotsRepo(env);
-    const listed = await repo.getChatbots({ companyId: companyA });
-    expect(listed.chatbots?.some((chatbot) => chatbot.name === name)).toBe(false);
+    const listed = await withTenant(db, companyA, (tx) =>
+      dal.getChatbots(tx, { companyId: companyA }),
+    );
+    expect(listed.isSuccess).toBe(true);
+    expect("chatbots" in listed && listed.chatbots?.some((chatbot) => chatbot.name === name)).toBe(
+      false,
+    );
   });
 
   it("rejects a malformed company id without opening a transaction", async () => {
     const invalidIds = ["", " ", "abc", "-1", "01", "1.5", "1e3", "9223372036854775808"];
 
-    await withSingleConnection(async (client) => {
+    const transaction = vi.spyOn(db, "transaction");
+    try {
       for (const companyId of invalidIds) {
         const callback = vi.fn(async () => ({ isSuccess: true }));
-        const result = await withTenant(client, companyId, callback);
+        const result = await withTenant(db, companyId, callback);
         expect(result).toEqual({ isSuccess: false, message: "Invalid company id" });
         expect(callback).not.toHaveBeenCalled();
       }
-      expect(await readSetting(client)).toBe("");
-    });
+      expect(transaction).not.toHaveBeenCalled();
+    } finally {
+      transaction.mockRestore();
+    }
+  });
+
+  it("accepts canonical ids up to int64 max", async () => {
+    const validIds = ["0", "1", "1000000000000000000", "9223372036854775807"];
+
+    for (const companyId of validIds) {
+      const result = await withTenant(db, companyId, async (tx) => ({
+        isSuccess: true,
+        message: await readSetting(tx),
+      }));
+      expect(result).toEqual({ isSuccess: true, message: companyId });
+    }
   });
 });
 
 describe("withTenant context leak on pooled connections", () => {
   // DEV_NOTE: Negative control. Proves the single-connection check below detects a leak:
   // a session-level set_config (third arg false) does survive into the next query.
+  // RESET in finally clears it before the pool ends, in case a pooler keeps the server session.
   it("detects a session-level setting on the reused connection", async () => {
     await withSingleConnection(async (client) => {
-      await client.execute(sql`select set_config('app.company_id', ${companyA}, false)`);
-      expect(await readSetting(client)).toBe(companyA);
+      try {
+        await client.execute(sql`select set_config('app.company_id', ${companyA}, false)`);
+        expect(await readSetting(client)).toBe(companyA);
+      } finally {
+        await client.execute(sql`reset app.company_id`);
+      }
+      expect(await readSetting(client)).toBe("");
     });
   });
 
@@ -195,7 +222,7 @@ describe("withTenant context leak on pooled connections", () => {
     }
     expect(new URL(testEnv.NEON_POOLER_URL).hostname).toContain("-pooler.");
 
-    const pool = new Pool({ connectionString: testEnv.NEON_POOLER_URL, max: 4 });
+    const pool = new Pool({ connectionString: testEnv.NEON_POOLER_URL, max: 3 });
     const pooledDb = drizzle({ client: pool });
 
     try {
