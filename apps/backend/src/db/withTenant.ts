@@ -13,6 +13,15 @@ export class TenantRollbackError extends Error {
   }
 }
 
+// DEV_NOTE: companies.id is a bigint identity: canonical decimal (no sign, no leading zeros), at most int64 max.
+// Anything else ('' included) would set a context the RLS `::bigint` cast can't read, so it never reaches set_config.
+const COMPANY_ID_PATTERN = /^(0|[1-9]\d{0,18})$/;
+const INT64_MAX = 9223372036854775807n;
+
+function isValidCompanyId(companyId: string): boolean {
+  return COMPANY_ID_PATTERN.test(companyId) && BigInt(companyId) <= INT64_MAX;
+}
+
 // DEV_NOTE: The only way to run a tenant query. Opens one transaction and sets app.company_id with
 // set_config(…, true): transaction-local, so it resets on COMMIT/ROLLBACK and never leaks to the next
 // request on a pooled connection. companyId is the internal companies.id, never a client-supplied value.
@@ -23,6 +32,17 @@ export default async function withTenant<T extends Schemas.ApiResponse>(
   companyId: string,
   callback: (tx: NodePgTransaction<EmptyRelations>) => Promise<T>,
 ): Promise<T | Schemas.ApiResponse> {
+  if (!isValidCompanyId(companyId)) {
+    const message = "Invalid company id";
+    AppLogger.error({
+      category: Schemas.LogCategory.DB,
+      action: Schemas.LogAction.WithTenant,
+      message,
+      metadata: { companyId },
+    });
+    return { isSuccess: false, message };
+  }
+
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.company_id', ${companyId}, true)`);

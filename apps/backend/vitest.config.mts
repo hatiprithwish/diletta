@@ -24,6 +24,9 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      // DEV_NOTE: Test-only binding, never declared in wrangler.jsonc: the withTenant leak test
+      // runs through Neon's -pooler endpoint because local mode skips Hyperdrive's pool.
+      miniflare: { bindings: { NEON_POOLER_URL: process.env.NEON_POOLER_URL ?? "" } },
     }),
   ],
   resolve: {

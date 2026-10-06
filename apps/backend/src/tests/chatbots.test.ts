@@ -1,13 +1,9 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { inArray, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { inArray } from "drizzle-orm";
 import * as Schemas from "@app/schemas";
 import getDbClient from "@/db/dbClient";
 import { chatbots, companies } from "@/db/tables";
-import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -29,8 +25,6 @@ const db = getDbClient(env);
 let companyA = "";
 let companyB = "";
 
-const readCompanySetting = sql`select current_setting('app.company_id', true) as "companyId"`;
-
 beforeAll(async () => {
   const created = await db
     .insert(companies)
@@ -48,69 +42,6 @@ afterAll(async () => {
   if (companyIds.length === 0) return;
   await db.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
   await db.delete(companies).where(inArray(companies.id, companyIds));
-});
-
-describe("withTenant", () => {
-  it("sets app.company_id inside the transaction and clears it after, on the same connection", async () => {
-    // DEV_NOTE: max 1 forces the follow-up query onto the connection the transaction used
-    const pool = new Pool({ connectionString: env.HYPERDRIVE.connectionString, max: 1 });
-    const singleConnectionDb = drizzle({ client: pool });
-
-    try {
-      const inside = await withTenant(singleConnectionDb, companyA, async (tx) => {
-        const { rows } = await tx.execute<{ companyId: string | null }>(readCompanySetting);
-        return { isSuccess: true, message: rows[0]?.companyId ?? "" };
-      });
-      expect(inside).toEqual({ isSuccess: true, message: companyA });
-
-      const { rows } = await singleConnectionDb.execute<{ companyId: string | null }>(
-        readCompanySetting,
-      );
-      expect(rows[0]?.companyId ?? "").toBe("");
-    } finally {
-      await pool.end();
-    }
-  });
-
-  it("keeps concurrent tenant transactions isolated", async () => {
-    const readAfterSleep = (companyId: string) =>
-      withTenant(db, companyId, async (tx) => {
-        await tx.execute(sql`select pg_sleep(0.1)`);
-        const { rows } = await tx.execute<{ companyId: string | null }>(readCompanySetting);
-        return { isSuccess: true, message: rows[0]?.companyId ?? "" };
-      });
-
-    const [resultA, resultB] = await Promise.all([
-      readAfterSleep(companyA),
-      readAfterSleep(companyB),
-    ]);
-    expect(resultA.message).toBe(companyA);
-    expect(resultB.message).toBe(companyB);
-  });
-
-  it("rolls back every write when the callback throws", async () => {
-    const dal = new ChatbotsDAL();
-    const name = `Rolled back ${crypto.randomUUID()}`;
-
-    const result = await withTenant(db, companyA, async (tx) => {
-      const created = await dal.createChatbot(tx, { companyId: companyA, name });
-      expect(created.isSuccess).toBe(true);
-      throw new TenantRollbackError("Forced rollback");
-    });
-    expect(result).toEqual({ isSuccess: false, message: "Forced rollback" });
-
-    const unexpected = await withTenant(db, companyA, async () => {
-      throw new Error("boom");
-    });
-    expect(unexpected).toEqual({
-      isSuccess: false,
-      message: "Unknown error in tenant transaction",
-    });
-
-    const repo = new ChatbotsRepo(env);
-    const listed = await repo.getChatbots({ companyId: companyA });
-    expect(listed.chatbots?.some((chatbot) => chatbot.name === name)).toBe(false);
-  });
 });
 
 describe("ChatbotsRepo (tenant golden)", () => {

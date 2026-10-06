@@ -541,6 +541,8 @@ Anywhere outside apps/backend/src/db/withTenant.ts
 - `SET app.company_id`, `SET SESSION …`, `RESET`, or `SET ROLE` from application code
 - Edits to `withTenant.ts` that set the context outside `db.transaction`, or change `true` to `false`
 
+**Exemption:** test files under `apps/backend/src/tests/` may call `set_config('app.company_id', …, false)` only as a leak-detection control: on a throwaway single-connection pool, followed by nothing but a `current_setting` read, never before a query on a tenant table (see `withTenant.test.ts`).
+
 **Detection Pattern:**
 
 ```regex
