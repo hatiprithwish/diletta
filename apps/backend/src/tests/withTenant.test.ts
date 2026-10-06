@@ -9,6 +9,7 @@ import { chatbots, companies } from "@/db/tables";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import Utility from "@/utils/Utility";
+import type * as Schemas from "@app/schemas";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -28,8 +29,10 @@ vi.mock("@/providers/logger", () => ({
 // at a time (at most 3), and every pool is ended. Don't add a pool, e.g. via a Repo, without
 // recounting.
 const db = getDbClient(env);
-// DEV_NOTE: Test-only binding from apps/backend/.env, passed in by vitest.config.mts; kept off the worker's Env
-const testEnv: Env & { NEON_POOLER_URL?: string } = env;
+// DEV_NOTE: Test-only binding from apps/backend/.env, passed in by vitest.config.mts. Read through `in`
+// narrowing so neither the worker's Env nor a test-only type has to declare it.
+const neonPoolerUrl =
+  "NEON_POOLER_URL" in env && typeof env.NEON_POOLER_URL === "string" ? env.NEON_POOLER_URL : "";
 let companyA = "";
 let companyB = "";
 
@@ -42,7 +45,10 @@ async function readSetting(client: NodePgDatabase): Promise<string> {
 
 // DEV_NOTE: max 1 forces every query onto the connection the previous transaction used,
 // so anything a transaction leaves behind on the session shows up in the next query.
+// The connection must be direct: through a pooler, a session-level setting (negative control below)
+// would land on a shared server connection.
 async function withSingleConnection(run: (client: NodePgDatabase) => Promise<void>) {
+  expect(new URL(env.HYPERDRIVE.connectionString).hostname).not.toContain("-pooler.");
   const pool = new Pool({ connectionString: env.HYPERDRIVE.connectionString, max: 1 });
   try {
     await run(drizzle({ client: pool }));
@@ -64,11 +70,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const companyIds = [companyA, companyB].filter(Boolean);
-  if (companyIds.length === 0) return;
-  await db.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
-  await db.delete(companies).where(inArray(companies.id, companyIds));
-  await db.$client.end();
+  try {
+    const companyIds = [companyA, companyB].filter(Boolean);
+    if (companyIds.length === 0) return;
+    await db.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
+    await db.delete(companies).where(inArray(companies.id, companyIds));
+  } finally {
+    await db.$client.end();
+  }
 });
 
 describe("withTenant", () => {
@@ -122,9 +131,10 @@ describe("withTenant", () => {
       dal.getChatbots(tx, { companyId: companyA }),
     );
     expect(listed.isSuccess).toBe(true);
-    expect("chatbots" in listed && listed.chatbots?.some((chatbot) => chatbot.name === name)).toBe(
-      false,
-    );
+    if (!("chatbots" in listed) || !listed.chatbots) {
+      throw new Error("getChatbots returned no chatbots list");
+    }
+    expect(listed.chatbots.some((chatbot) => chatbot.name === name)).toBe(false);
   });
 
   it("rejects a malformed company id without opening a transaction", async () => {
@@ -135,6 +145,26 @@ describe("withTenant", () => {
       for (const companyId of invalidIds) {
         const callback = vi.fn(async () => ({ isSuccess: true }));
         const result = await withTenant(db, companyId, callback);
+        expect(result).toEqual({ isSuccess: false, message: "Invalid company id" });
+        expect(callback).not.toHaveBeenCalled();
+      }
+      expect(transaction).not.toHaveBeenCalled();
+    } finally {
+      transaction.mockRestore();
+    }
+  });
+
+  it("rejects a non-string company id from an untyped caller instead of throwing", async () => {
+    const transaction = vi.spyOn(db, "transaction");
+    try {
+      for (const companyId of [undefined, null, 42, { id: "1" }]) {
+        const callback = vi.fn(async () => ({ isSuccess: true }));
+        // DEV_NOTE: Reflect.apply calls withTenant the way an untyped caller would, past its string type
+        const result: Schemas.ApiResponse = await Reflect.apply(withTenant, undefined, [
+          db,
+          companyId,
+          callback,
+        ]);
         expect(result).toEqual({ isSuccess: false, message: "Invalid company id" });
         expect(callback).not.toHaveBeenCalled();
       }
@@ -214,20 +244,32 @@ describe("withTenant context leak on pooled connections", () => {
   // DEV_NOTE: Local tests skip Hyperdrive's pool, so this runs through Neon's -pooler endpoint:
   // PgBouncer in transaction mode, which hands server connections out per transaction like
   // Hyperdrive does. Server connections are shared, so a leak would surface in a plain query.
+  // pg_backend_pid() is the server backend behind PgBouncer: it proves the pooler really handed
+  // one backend to both companies, and a backend to a plain read after a tenant transaction, so the
+  // test can't pass on backends pinned to one client.
+  // No session-level negative control here: it would leave a company id on shared staging backends.
   it("keeps contexts isolated across a transaction-mode pooler", async () => {
-    if (!testEnv.NEON_POOLER_URL) {
+    if (!neonPoolerUrl) {
       throw new Error(
         "Set NEON_POOLER_URL in apps/backend/.env (Neon staging connection string, -pooler host)",
       );
     }
-    expect(new URL(testEnv.NEON_POOLER_URL).hostname).toContain("-pooler.");
+    expect(new URL(neonPoolerUrl).hostname).toContain("-pooler.");
 
-    const pool = new Pool({ connectionString: testEnv.NEON_POOLER_URL, max: 3 });
+    const pool = new Pool({ connectionString: neonPoolerUrl, max: 3 });
     const pooledDb = drizzle({ client: pool });
+    // DEV_NOTE: backend pid → what it served, in order: a company id, or "" for a plain read.
+    // A backend runs one transaction at a time, so the order recorded here is the order it served.
+    const servedByBackend = new Map<number, string[]>();
+    const markServed = (pid: number, served: string) => {
+      servedByBackend.set(pid, [...(servedByBackend.get(pid) ?? []), served]);
+    };
 
     try {
       const tenantRead = async (companyId: string) => {
         const result = await withTenant(pooledDb, companyId, async (tx) => {
+          const { rows } = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+          markServed(rows[0]!.pid, companyId);
           const first = await readSetting(tx);
           await tx.execute(sql`select pg_sleep(0.05)`);
           const second = await readSetting(tx);
@@ -235,10 +277,14 @@ describe("withTenant context leak on pooled connections", () => {
         });
         return { expected: companyId, actual: result };
       };
-      const plainRead = async () => ({
-        expected: "",
-        actual: { isSuccess: true, message: await readSetting(pooledDb) },
-      });
+      // DEV_NOTE: pid and setting in one statement, so both come from the same backend
+      const plainRead = async () => {
+        const { rows } = await pooledDb.execute<{ pid: number; companyId: string | null }>(
+          sql`select pg_backend_pid() as pid, current_setting('app.company_id', true) as "companyId"`,
+        );
+        markServed(rows[0]!.pid, "");
+        return { expected: "", actual: { isSuccess: true, message: rows[0]?.companyId ?? "" } };
+      };
 
       const results = await Promise.all(
         Array.from({ length: 40 }, (_, i) => {
@@ -250,8 +296,20 @@ describe("withTenant context leak on pooled connections", () => {
         expect(actual).toEqual({ isSuccess: true, message: expected });
       }
 
-      const after = await Promise.all(Array.from({ length: 8 }, () => readSetting(pooledDb)));
-      expect(after).toEqual(Array.from({ length: 8 }, () => ""));
+      const after = await Promise.all(Array.from({ length: 8 }, () => plainRead()));
+      for (const { actual } of after) {
+        expect(actual).toEqual({ isSuccess: true, message: "" });
+      }
+
+      const backends = [...servedByBackend.values()];
+      expect(
+        backends.some((served) => served.includes(companyA) && served.includes(companyB)),
+      ).toBe(true);
+      const plainReadAfterTenant = (served: string[]) => {
+        const firstTenant = served.findIndex((entry) => entry !== "");
+        return firstTenant !== -1 && served.lastIndexOf("") > firstTenant;
+      };
+      expect(backends.some(plainReadAfterTenant)).toBe(true);
     } finally {
       await pool.end();
     }

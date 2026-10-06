@@ -551,7 +551,7 @@ set_config\(
 ```
 
 ```
-File: any file except apps/backend/src/db/withTenant.ts → flag every match
+File: any file except apps/backend/src/db/withTenant.ts and apps/backend/src/tests/*.test.ts → flag every match
 File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes only if it meets every condition of the exemption above; flag it otherwise
 ```
 
