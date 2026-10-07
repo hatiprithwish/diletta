@@ -17,4 +17,14 @@ export default class Constants {
 
   // DEV_NOTE: Master key version new company keys are wrapped with. See docs/runbooks/master-key.md.
   static readonly CURRENT_MASTER_KEY_VERSION = 1;
+
+  // DEV_NOTE: Outbox relay (M1-6). The Cron sweep picks pending rows older than the min age, so it never races the
+  // after-commit relay of a row just written; a send that fails OUTBOX_MAX_ATTEMPTS times moves the row to Failed
+  // and alerts. Published rows are purged after the retention window, which also ends their dedupe window.
+  static readonly OUTBOX_SWEEP_MIN_AGE_MS = 60_000;
+  static readonly OUTBOX_BATCH_SIZE = 100; // sendBatch caps at 100 messages
+  static readonly OUTBOX_SWEEP_MAX_BATCHES = 10;
+  static readonly OUTBOX_MAX_ATTEMPTS = 5;
+  static readonly OUTBOX_PUBLISHED_RETENTION_DAYS = 3;
+  static readonly OUTBOX_LAST_ERROR_MAX_LENGTH = 500;
 }

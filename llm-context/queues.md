@@ -19,6 +19,9 @@ Index: [queues/llms.txt](https://developers.cloudflare.com/queues/llms.txt)
 ## How Diletta uses it
 
 - Critical events are written as `activity_log` + `event_outbox` in one `withTenant` transaction; the relay (`waitUntil` + Cron sweep, M1-6) publishes pending outbox rows to the Queue. Nothing sends a critical event to a Queue directly.
+- Queues: `diletta-events-staging` and `diletta-events-production`, each with a `-dlq`, bound as `EVENTS_QUEUE` (producer and consumer on the same worker). Local dev and tests use miniflare's simulated queue under the staging names.
+- Relay (`EventOutboxRepo`): rows are locked `FOR UPDATE SKIP LOCKED`, sent with `sendBatch` (≤ 100), and marked published in one transaction. The Cron (`* * * * *`) sweeps pending rows older than 1 minute, up to 10 batches per run, and purges published rows after 3 days (which ends their dedupe window). 5 failed sends → `Failed` + error log; failed rows are not retried automatically.
+- Consumer (`queues/EventsConsumer.ts`): Zod-parses each body as `EventOutboxMessage` and acks per message. A body that doesn't parse is logged and acked, not sent to the DLQ.
 - Delivery is at-least-once: consumers dedupe on the outbox row's id as the idempotency key.
 - If `queue()` throws, the whole batch is retried; ack/retry per message instead. Defaults: batch 10 (max 100), timeout 5s, `max_retries` 3. Without a DLQ, messages past the retry limit are deleted, so every consumer gets a DLQ.
 - Limits: 128 KB per message, 100 messages / 256 KB per `sendBatch`, 15 min consumer wall time.

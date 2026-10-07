@@ -623,7 +623,7 @@ File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes
 
 ### 3.5 Critical Events Need the Outbox [CRITICAL]
 
-**Rule:** A critical event writes an `activity_log` row and an `event_outbox` row in the same `withTenant` transaction. The relay publishes outbox rows to the Queue; nothing sends a critical event to a Queue directly.
+**Rule:** A critical event writes an `activity_log` row and an `event_outbox` row in the same `withTenant` transaction, through `CriticalEventProvider.record(tx, …)` (golden: `providers/criticalEvent.ts`). The relay (`EventOutboxRepo.relayEvents` in `waitUntil` after commit, plus the Cron sweep) publishes outbox rows to the Queue; nothing sends a critical event to a Queue directly. Delivery is at-least-once, so consumers dedupe on `outboxId`.
 
 **Violations:**
 
@@ -631,22 +631,27 @@ File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes
 - The two inserts in separate `withTenant` calls or separate Repo methods
 - `env.<QUEUE>.send(...)` / `sendBatch(...)` for a critical event from a route, Repo or DO instead of the outbox relay
 - A failed outbox write that doesn't throw `TenantRollbackError` (see 3.4)
+- `ActivityLogDAL` / `EventOutboxDAL` called from a Repo, DO, Cron or consumer instead of `CriticalEventProvider` / `EventOutboxRepo`
+- `relayEvents` called inside the writer's `withTenant` callback (before commit) instead of in `waitUntil` after it
+- A Queue consumer that retries a whole batch (`retryAll`, or throwing from `queue()`) instead of acking or retrying per message, or a handler with side effects that doesn't dedupe on `outboxId`
 
 **Examples:**
 
 ```
 - ❌ await withTenant(this.db, companyId, (tx) => this.activityLogDAL.create(tx, event));
      await this.env.EVENTS_QUEUE.send(event);
-- ✅ await withTenant(this.db, companyId, async (tx) => {
-       const log = await this.activityLogDAL.create(tx, event);
-       if (!log.isSuccess) throw new TenantRollbackError(log.message);
-       const outbox = await this.eventOutboxDAL.create(tx, event);
-       if (!outbox.isSuccess) throw new TenantRollbackError(outbox.message);
-       return { isSuccess: true };
+- ✅ const result = await withTenant(this.db, companyId, async (tx) => {
+       const change = await this.dal.updateChangeRequest(tx, params);
+       if (!change.isSuccess) throw new TenantRollbackError(change.message);
+       const recorded = await CriticalEventProvider.record(tx, { companyId, ...criticalEvent });
+       if (!recorded.isSuccess) throw new TenantRollbackError(recorded.message);
+       return { ...change, outboxId: recorded.outboxId };
      });
+     // route / DO, after the commit:
+     ctx.waitUntil(new EventOutboxRepo(env).relayEvents({ companyId, outboxIds: [result.outboxId] }));
 ```
 
-**Fix:** Write both rows in one `withTenant` callback; let the relay publish.
+**Fix:** Call `CriticalEventProvider.record` in the change's `withTenant` callback; relay the `outboxId` in `waitUntil` after commit.
 
 ---
 

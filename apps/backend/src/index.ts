@@ -7,6 +7,8 @@ import AuthRoutes from "@/routes/AuthRoutes";
 import UsersRoutes from "@/routes/UserRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
+import runOutboxSweep from "@/crons/OutboxSweepCron";
+import consumeEvents from "@/queues/EventsConsumer";
 
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests
 await configureLogger();
@@ -47,4 +49,16 @@ export default {
     ctx.waitUntil(disposeLogger());
     return app.fetch(req, env, ctx);
   },
-};
+
+  // DEV_NOTE: One cron (every minute, wrangler.jsonc): the outbox relay sweep + purge
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    await runOutboxSweep(env);
+    ctx.waitUntil(disposeLogger());
+  },
+
+  // DEV_NOTE: EVENTS_QUEUE consumer (the only queue this worker consumes)
+  async queue(batch: MessageBatch<unknown>, _env: Env, ctx: ExecutionContext) {
+    await consumeEvents(batch);
+    ctx.waitUntil(disposeLogger());
+  },
+} satisfies ExportedHandler<Env>;
