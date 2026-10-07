@@ -909,6 +909,51 @@ withPlatform\(
 
 ---
 
+### 3.17 Paged Lists [WARNING]
+
+**Rule:** A DAL list over rows that grow without bound (chatbot users, conversations, messages, companies…) is paged as in CLAUDE.md › Conventions › Pagination. Golden: `ChatbotUsersDAL.getChatbotUsers` / `getChatbotUsersCount`.
+
+**Violations:**
+
+- A list method on a growing table with no `.limit(…)`, or a request schema that doesn't extend `ZPageApiRequest`
+- `pageSize` not capped by `MAX_PAGE_SIZE`; defaults set in the DAL instead of the Repo
+- An `orderBy` without the trailing `asc(<table>.id)` tie-break (rows repeat or vanish between pages)
+- Keyset/cursor pagination, or a total count computed in the list query
+
+**Examples:**
+
+```
+- ❌ await tx.select().from(conversations).where(eq(conversations.companyId, params.companyId));
+- ✅ .orderBy(orderExpr, asc(conversations.id)).limit(params.pageSize).offset((params.pageNo - 1) * params.pageSize)
+```
+
+**Fix:** Mirror `ChatbotUsersDAL.getChatbotUsers` and add a `get<Feature>Count` method.
+
+---
+
+### 3.18 Where Clauses [INFO]
+
+**Rule:** One condition: `.where(eq(…))`. Two or more: a `conditions` array built before the query (optional ones pushed with `if`), then `.where(and(...conditions))`, the same shape for select, update and delete. Golden: `ChatbotsDAL.ts`.
+
+**Violations:**
+
+- Inline `.where(and(eq(…), eq(…)))`
+- `.where(() => { … })` callback (drizzle `1.0.0-rc.4` accepts it on select only, so update/delete would differ)
+- Optional filters written as inline ternaries (`x ? eq(…) : undefined`)
+
+**Examples:**
+
+```
+- ❌ .where(and(eq(chatbots.publicId, params.publicId), eq(chatbots.companyId, params.companyId)))
+- ✅ const conditions = [eq(chatbots.publicId, params.publicId), eq(chatbots.companyId, params.companyId)];
+     if (params.status !== null) conditions.push(eq(chatbots.status, params.status));
+     … .where(and(...conditions))
+```
+
+**Fix:** Move the conditions into an array before the query.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -996,5 +1041,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses)
 Maintainer: hatiprithwish

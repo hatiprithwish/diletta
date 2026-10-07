@@ -69,12 +69,14 @@ export default class ChatbotsDAL {
     const response: Schemas.ChatbotDALResponse = { isSuccess: false };
 
     try {
+      const conditions = [
+        eq(chatbots.publicId, params.publicId),
+        eq(chatbots.companyId, params.companyId),
+      ];
       const [chatbot] = await tx
         .select()
         .from(chatbots)
-        .where(
-          and(eq(chatbots.publicId, params.publicId), eq(chatbots.companyId, params.companyId)),
-        )
+        .where(and(...conditions))
         .limit(1);
 
       if (!chatbot) {
@@ -142,6 +144,10 @@ export default class ChatbotsDAL {
 
     try {
       const now = new Date();
+      const conditions = [
+        eq(chatbots.publicId, params.publicId),
+        eq(chatbots.companyId, params.companyId),
+      ];
       const [chatbotResponse] = await tx
         .update(chatbots)
         .set({
@@ -150,9 +156,7 @@ export default class ChatbotsDAL {
           status: params.status ?? undefined,
           updatedAt: now,
         })
-        .where(
-          and(eq(chatbots.publicId, params.publicId), eq(chatbots.companyId, params.companyId)),
-        )
+        .where(and(...conditions))
         .returning();
 
       if (!chatbotResponse) {
@@ -192,11 +196,13 @@ export default class ChatbotsDAL {
     const response: Schemas.ApiResponse = { isSuccess: false };
 
     try {
+      const conditions = [
+        eq(chatbots.publicId, params.publicId),
+        eq(chatbots.companyId, params.companyId),
+      ];
       const [deleted] = await tx
         .delete(chatbots)
-        .where(
-          and(eq(chatbots.publicId, params.publicId), eq(chatbots.companyId, params.companyId)),
-        )
+        .where(and(...conditions))
         .returning({ id: chatbots.id });
 
       if (!deleted) {
@@ -237,10 +243,11 @@ export default class ChatbotsDAL {
 
     try {
       const now = new Date();
+      const conditions = [eq(chatbots.companyId, params.companyId), eq(chatbots.isDefault, true)];
       await tx
         .update(chatbots)
         .set({ isDefault: false, updatedAt: now })
-        .where(and(eq(chatbots.companyId, params.companyId), eq(chatbots.isDefault, true)));
+        .where(and(...conditions));
 
       response.isSuccess = true;
       response.message = "Default chatbot cleared successfully";
@@ -267,12 +274,14 @@ export default class ChatbotsDAL {
 
     try {
       const now = new Date();
+      const conditions = [
+        eq(chatbots.publicId, params.publicId),
+        eq(chatbots.companyId, params.companyId),
+      ];
       const [chatbotResponse] = await tx
         .update(chatbots)
         .set({ isDefault: true, updatedAt: now })
-        .where(
-          and(eq(chatbots.publicId, params.publicId), eq(chatbots.companyId, params.companyId)),
-        )
+        .where(and(...conditions))
         .returning();
 
       if (!chatbotResponse) {
