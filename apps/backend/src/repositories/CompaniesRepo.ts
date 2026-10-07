@@ -3,17 +3,20 @@ import Constants from "@/config/Constants";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import CompanyKeyProvider from "@/providers/companyKey";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenancy-root Repo. Creating and listing companies are operator actions across companies, so they
 // run in withPlatform; reading or editing one company runs in withTenant on that company (pattern rule 3.15).
 // companyId is the internal companies.id, resolved server-side; never from the client.
 export default class CompaniesRepo {
+  private env: Env;
   private db: NodePgDatabase;
   private dal: CompaniesDAL;
 
   constructor(env: Env) {
+    this.env = env;
     this.db = getDbClient(env);
     this.dal = new CompaniesDAL();
   }
@@ -37,6 +40,20 @@ export default class CompaniesRepo {
   ): Promise<Schemas.CreateCompanyApiResponse> {
     return await withPlatform(this.db, async (tx) => {
       const result = await this.dal.createCompany(tx, { name: params.company.name });
+      if (!result.isSuccess || !result.company) {
+        return this.withCompanyResponse(result);
+      }
+
+      // DEV_NOTE: Transactional flow — a company never exists without its encryption key (version 1), so a failed
+      // key rolls the company back too
+      const companyKey = await CompanyKeyProvider.createCompanyKey(this.env, tx, {
+        companyId: result.company.id,
+        version: 1,
+      });
+      if (!companyKey.isSuccess) {
+        throw new TenantRollbackError(companyKey.message);
+      }
+
       return this.withCompanyResponse(result);
     });
   }

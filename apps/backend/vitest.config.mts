@@ -39,6 +39,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
+      "@app/crypto": path.resolve(import.meta.dirname, "../../packages/crypto/src/index.ts"),
       "@app/schemas": path.resolve(import.meta.dirname, "../../packages/schemas/src/index.ts"),
       "pg-protocol": pgProtocolCjs,
       "pg-cloudflare": pgCloudflareCjs,

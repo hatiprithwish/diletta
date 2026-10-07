@@ -7,7 +7,7 @@ import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import getDbClient from "@/db/dbClient";
-import { companies } from "@/db/tables";
+import { companies, companyEncryptionKeys } from "@/db/tables";
 import withTenant from "@/db/withTenant";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 // Declare env type for this test suite
@@ -58,6 +58,17 @@ afterAll(async () => {
   const publicIds = createdPublicIds.filter(Boolean);
   if (publicIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    // DEV_NOTE: createCompany adds the company's encryption key in the same transaction
+    const rows = await ownerDb
+      .select({ id: companies.id })
+      .from(companies)
+      .where(inArray(companies.publicId, publicIds));
+    const companyIds = rows.map((row) => row.id);
+    if (companyIds.length > 0) {
+      await ownerDb
+        .delete(companyEncryptionKeys)
+        .where(inArray(companyEncryptionKeys.companyId, companyIds));
+    }
     await ownerDb.delete(companies).where(inArray(companies.publicId, publicIds));
   });
 });
