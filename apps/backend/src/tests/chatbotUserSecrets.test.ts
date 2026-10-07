@@ -70,7 +70,11 @@ async function createCompany(): Promise<string> {
   return companyId;
 }
 
-async function createConnection(ownerDb: NodePgDatabase, companyId: string): Promise<string> {
+async function createConnection(
+  ownerDb: NodePgDatabase,
+  companyId: string,
+  credentialScope = Schemas.CompanyConnectionCredentialScopeIntEnum.ChatbotUser,
+): Promise<string> {
   const [row] = await ownerDb
     .insert(companyConnections)
     .values({
@@ -80,7 +84,7 @@ async function createConnection(ownerDb: NodePgDatabase, companyId: string): Pro
       baseUrl: "https://host.example.com/api",
       authType: Schemas.CompanyConnectionAuthTypeEnum.Oauth2Authcode,
       authConfig: { tokenUrl: "https://host.example.com/token" },
-      credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.ChatbotUser,
+      credentialScope,
       jwtIssuer: `https://${crypto.randomUUID()}.example.com`,
       allowedOrigins: ["https://app.example.com"],
     })
@@ -214,6 +218,16 @@ describe("ChatbotUserSecretsRepo", () => {
       (await repo.getDecryptedChatbotUserSecret({ companyId: companyA, publicId })).secret,
     ).toEqual(credential("second"));
 
+    // An expired access token still decrypts: the refresh token inside is what renews it
+    await repo.updateChatbotUserSecret({
+      companyId: companyA,
+      publicId,
+      chatbotUserSecret: { expiresAt: new Date("2020-01-01T00:00:00.000Z") },
+    });
+    expect(
+      (await repo.getDecryptedChatbotUserSecret({ companyId: companyA, publicId })).secret,
+    ).toEqual(credential("second"));
+
     const needsReauth = await repo.updateChatbotUserSecret({
       companyId: companyA,
       publicId,
@@ -222,9 +236,12 @@ describe("ChatbotUserSecretsRepo", () => {
     expect(needsReauth.chatbotUserSecret?.chatbotUserSecretStatusLabel).toBe(
       Schemas.ChatbotUserSecretStatusLabelEnum.NeedsReauth,
     );
-    expect(
-      (await repo.getDecryptedChatbotUserSecret({ companyId: companyA, publicId })).secret,
-    ).toEqual(credential("second"));
+
+    // A credential that needs re-auth is never handed out until the user signs in again
+    expect(await repo.getDecryptedChatbotUserSecret({ companyId: companyA, publicId })).toEqual({
+      isSuccess: false,
+      message: "Chatbot user secret is not active",
+    });
   });
 
   it("keeps one credential per chatbot user and connection", async () => {
@@ -267,6 +284,21 @@ describe("ChatbotUserSecretsRepo", () => {
         chatbotUserSecret: undefined,
       });
     }
+    // Only a connection scoped to chatbot users takes a per-user credential
+    let companyScopedConnection = "";
+    await withOwnerDb(async (ownerDb) => {
+      companyScopedConnection = await createConnection(
+        ownerDb,
+        companyA,
+        Schemas.CompanyConnectionCredentialScopeIntEnum.Company,
+      );
+    });
+    expect(await create(chatbotUserA, companyScopedConnection)).toEqual({
+      isSuccess: false,
+      message: "Connection doesn't take chatbot user secrets",
+      chatbotUserSecret: undefined,
+    });
+
     for (const connectionId of ["0", connectionB]) {
       expect(await create(chatbotUserA, connectionId)).toEqual({
         isSuccess: false,

@@ -11,6 +11,7 @@ import { companies, companyConnections, companyEncryptionKeys, companySecrets } 
 import withTenant from "@/db/withTenant";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
+import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -64,7 +65,11 @@ async function createCompany(): Promise<string> {
   return companyId;
 }
 
-async function createConnection(ownerDb: NodePgDatabase, companyId: string): Promise<string> {
+async function createConnection(
+  ownerDb: NodePgDatabase,
+  companyId: string,
+  credentialScope = Schemas.CompanyConnectionCredentialScopeIntEnum.Company,
+): Promise<string> {
   const [row] = await ownerDb
     .insert(companyConnections)
     .values({
@@ -74,7 +79,7 @@ async function createConnection(ownerDb: NodePgDatabase, companyId: string): Pro
       baseUrl: "https://host.example.com/api",
       authType: Schemas.CompanyConnectionAuthTypeEnum.ApiKeyHeader,
       authConfig: { header: "X-Api-Key" },
-      credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.Company,
+      credentialScope,
       jwtIssuer: `https://${crypto.randomUUID()}.example.com`,
       allowedOrigins: ["https://app.example.com"],
     })
@@ -209,9 +214,31 @@ describe("CompanySecretsRepo", () => {
       Schemas.CompanySecretStatusLabelEnum.Revoked,
     );
     expect(revoked.companySecret?.lastFourChars).toBe("2222");
-    expect((await repo.getDecryptedCompanySecret({ companyId: companyA, publicId })).secret).toBe(
-      "g-replaced-2222",
-    );
+
+    // A revoked secret is never handed out again
+    expect(await repo.getDecryptedCompanySecret({ companyId: companyA, publicId })).toEqual({
+      isSuccess: false,
+      message: "Company secret is not active",
+    });
+  });
+
+  it("keeps none of a short secret in plaintext", async () => {
+    const repo = new CompanySecretsRepo(env);
+    const created = await repo.createCompanySecret({
+      companyId: companyB,
+      connectionId: null,
+      companySecret: modelKey(Schemas.ModelProviderEnum.Google, "short-k1"),
+    });
+    expect(created.isSuccess).toBe(true);
+    expect(created.companySecret?.lastFourChars).toBe("");
+    expect(JSON.stringify(created)).not.toContain("k1");
+
+    const replaced = await repo.updateCompanySecret({
+      companyId: companyB,
+      publicId: created.companySecret?.publicId ?? "",
+      companySecret: { secret: "short-k2" },
+    });
+    expect(replaced.companySecret?.lastFourChars).toBe("");
   });
 
   it("allows one active model key per provider", async () => {
@@ -269,6 +296,46 @@ describe("CompanySecretsRepo", () => {
       companySecret: apiKey,
     });
     expect(clash.message).toBe("Active secret of this type already exists for this connection");
+
+    // A model key never has a connection; every other type needs one
+    const modelKeyOnConnection = await repo.createCompanySecret({
+      companyId: companyA,
+      connectionId: connectionA,
+      companySecret: modelKey(Schemas.ModelProviderEnum.Google, "g-on-connection"),
+    });
+    expect(modelKeyOnConnection).toEqual({
+      isSuccess: false,
+      message: "A model key can't belong to a connection",
+    });
+    const apiKeyWithoutConnection = await repo.createCompanySecret({
+      companyId: companyA,
+      connectionId: null,
+      companySecret: apiKey,
+    });
+    expect(apiKeyWithoutConnection).toEqual({
+      isSuccess: false,
+      message: "A connection is required for this secret type",
+    });
+
+    // Only a company-scoped connection takes a company credential
+    let perUserConnection = "";
+    await withOwnerDb(async (ownerDb) => {
+      perUserConnection = await createConnection(
+        ownerDb,
+        companyA,
+        Schemas.CompanyConnectionCredentialScopeIntEnum.ChatbotUser,
+      );
+    });
+    const wrongScope = await repo.createCompanySecret({
+      companyId: companyA,
+      connectionId: perUserConnection,
+      companySecret: apiKey,
+    });
+    expect(wrongScope).toEqual({
+      isSuccess: false,
+      message: "Connection doesn't take company secrets",
+      companySecret: undefined,
+    });
 
     // DEV_NOTE: identity ids start at 1, so 0 never references a connection
     for (const connectionId of ["0", connectionB]) {
@@ -392,13 +459,19 @@ describe("CompanySecretsRepo", () => {
       companyId = row?.id ?? "";
     });
     createdCompanyIds.push(companyId);
+    const plaintext = `g-no-key-${crypto.randomUUID()}`;
+    vi.mocked(AppLogger.error).mockClear();
 
     const created = await new CompanySecretsRepo(env).createCompanySecret({
       companyId,
       connectionId: null,
-      companySecret: modelKey(Schemas.ModelProviderEnum.Google, "g-no-key"),
+      companySecret: modelKey(Schemas.ModelProviderEnum.Google, plaintext),
     });
     expect(created).toEqual({ isSuccess: false, message: "Active encryption key not found" });
+
+    // DEV_NOTE: The failed key lookup is logged, and the plaintext must not be anywhere in it
+    expect(AppLogger.error).toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(AppLogger.error).mock.calls)).not.toContain(plaintext);
   });
 
   it("requires a provider for a model key, and only for one", () => {

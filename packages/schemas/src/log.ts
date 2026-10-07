@@ -59,9 +59,9 @@ export enum LogAction {
   // Company encryption keys
   CreateCompanyEncryptionKey = "CreateCompanyEncryptionKey",
   GetCompanyEncryptionKeyDetails = "GetCompanyEncryptionKeyDetails",
+  GetActiveCompanyEncryptionKey = "GetActiveCompanyEncryptionKey",
   ListCompanyEncryptionKeys = "ListCompanyEncryptionKeys",
   MarkCompanyEncryptionKeyRetiring = "MarkCompanyEncryptionKeyRetiring",
-  RotateCompanyEncryptionKey = "RotateCompanyEncryptionKey",
 
   // Company secrets
   CreateCompanySecret = "CreateCompanySecret",

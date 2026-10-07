@@ -5,6 +5,8 @@ export default class Constants {
     /clerk_id/i,
     /^master_?key(_?v\d+)?$/i,
     /display_?name/i,
+    // DEV_NOTE: Backstop for decrypted values (logtape's defaults already cover secret, key, token, credential)
+    /plaintext/i,
   ];
 
   static readonly APP_NAME = "diletta-worker" as const;

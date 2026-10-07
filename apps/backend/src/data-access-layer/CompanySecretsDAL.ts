@@ -57,13 +57,28 @@ export default class CompanySecretsDAL {
           eq(companyConnections.companyId, params.companyId),
         ];
         const [connection] = await tx
-          .select({ id: companyConnections.id })
+          .select({ credentialScope: companyConnections.credentialScope })
           .from(companyConnections)
           .where(and(...connectionConditions))
           .limit(1);
 
         if (!connection) {
           const message = "Company connection not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateCompanySecret,
+            message,
+            metadata,
+          });
+          response.message = message;
+          return response;
+        }
+
+        // DEV_NOTE: Only a company-scoped connection takes a company credential (credential_scope)
+        if (
+          connection.credentialScope !== Schemas.CompanyConnectionCredentialScopeIntEnum.Company
+        ) {
+          const message = "Connection doesn't take company secrets";
           AppLogger.error({
             category: Schemas.LogCategory.DAL,
             action: Schemas.LogAction.CreateCompanySecret,

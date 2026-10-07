@@ -146,7 +146,7 @@ export default class CompanyEncryptionKeysDAL {
         const message = "Active encryption key not found";
         AppLogger.error({
           category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.GetCompanyEncryptionKeyDetails,
+          action: Schemas.LogAction.GetActiveCompanyEncryptionKey,
           message,
           metadata: params,
         });
@@ -161,7 +161,7 @@ export default class CompanyEncryptionKeysDAL {
       const message = "Unknown error in fetching active encryption key";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.GetCompanyEncryptionKeyDetails,
+        action: Schemas.LogAction.GetActiveCompanyEncryptionKey,
         message,
         error,
         metadata: params,

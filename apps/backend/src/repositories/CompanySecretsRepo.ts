@@ -5,8 +5,10 @@ import withTenant from "@/db/withTenant";
 import CompanyKeyProvider from "@/providers/companyKey";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: Number of trailing characters kept in plaintext for display (last_four_chars)
+// DEV_NOTE: Trailing characters kept in plaintext for display (last_four_chars), and only for a secret long enough
+// that they reveal a small part of it. A shorter secret is stored with an empty last_four_chars.
 const VISIBLE_SECRET_CHARS = 4;
+const MIN_LENGTH_TO_SHOW_CHARS = 12;
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
 // companyId and connectionId are internal ids, resolved server-side; never from the client. The secret is
@@ -44,6 +46,10 @@ export default class CompanySecretsRepo {
     };
   }
 
+  private visibleChars(secret: string): string {
+    return secret.length >= MIN_LENGTH_TO_SHOW_CHARS ? secret.slice(-VISIBLE_SECRET_CHARS) : "";
+  }
+
   private withCompanySecretResponse(
     result: Schemas.CompanySecretDALResponse,
   ): Schemas.GetCompanySecretApiResponse {
@@ -62,16 +68,23 @@ export default class CompanySecretsRepo {
   ): Promise<Schemas.CreateCompanySecretApiResponse> {
     return await withTenant(this.db, params.companyId, async (tx) => {
       const { companySecret } = params;
+      // DEV_NOTE: Mirrors CHK_company_secrets_connection_id, checked before anything is encrypted
+      const isModelKey = companySecret.type === Schemas.CompanySecretTypeIntEnum.ModelKey;
+      if (isModelKey !== (params.connectionId === null)) {
+        return {
+          isSuccess: false,
+          message: isModelKey
+            ? "A model key can't belong to a connection"
+            : "A connection is required for this secret type",
+        };
+      }
+
       const encrypted = await CompanyKeyProvider.encryptValue(this.env, tx, {
         companyId: params.companyId,
         column: Schemas.EncryptedColumnEnum.CompanySecret,
         plaintext: companySecret.secret,
       });
-      if (
-        !encrypted.isSuccess ||
-        !encrypted.encryptedValue ||
-        encrypted.encryptionKeyVersion === undefined
-      ) {
+      if (!encrypted.isSuccess) {
         return { isSuccess: false, message: encrypted.message };
       }
 
@@ -83,7 +96,7 @@ export default class CompanySecretsRepo {
         encryptedSecret: encrypted.encryptedValue.ciphertext,
         iv: encrypted.encryptedValue.iv,
         encryptionKeyVersion: encrypted.encryptionKeyVersion,
-        lastFourChars: companySecret.secret.slice(-VISIBLE_SECRET_CHARS),
+        lastFourChars: this.visibleChars(companySecret.secret),
         expiresAt: companySecret.expiresAt ?? null,
       });
       return this.withCompanySecretResponse(result);
@@ -128,11 +141,7 @@ export default class CompanySecretsRepo {
           column: Schemas.EncryptedColumnEnum.CompanySecret,
           plaintext: companySecret.secret,
         });
-        if (
-          !encrypted.isSuccess ||
-          !encrypted.encryptedValue ||
-          encrypted.encryptionKeyVersion === undefined
-        ) {
+        if (!encrypted.isSuccess) {
           return { isSuccess: false, message: encrypted.message };
         }
         encryptedValue = encrypted.encryptedValue;
@@ -145,7 +154,8 @@ export default class CompanySecretsRepo {
         encryptedSecret: encryptedValue?.ciphertext ?? null,
         iv: encryptedValue?.iv ?? null,
         encryptionKeyVersion,
-        lastFourChars: companySecret.secret?.slice(-VISIBLE_SECRET_CHARS) ?? null,
+        lastFourChars:
+          companySecret.secret === undefined ? null : this.visibleChars(companySecret.secret),
         expiresAt: companySecret.expiresAt ?? null,
         status: companySecret.status ?? null,
       });
@@ -154,7 +164,8 @@ export default class CompanySecretsRepo {
   }
 
   // DEV_NOTE: Server-side only. Decrypts with the row's own encryption_key_version, so it reads values written
-  // before a rotation too. Never return this response from a route.
+  // before a rotation too. Only an active secret is handed out: an invalid or revoked one is never used again
+  // until it is set active (after its value is replaced and validated). expiresAt is left to the caller. Never return this response from a route.
   async getDecryptedCompanySecret(params: {
     companyId: string;
     publicId: string;
@@ -166,6 +177,10 @@ export default class CompanySecretsRepo {
       }
 
       const { companySecret } = result;
+      if (companySecret.status !== Schemas.CompanySecretStatusIntEnum.Active) {
+        return { isSuccess: false, message: "Company secret is not active" };
+      }
+
       const decrypted = await CompanyKeyProvider.decryptValue(this.env, tx, {
         companyId: params.companyId,
         column: Schemas.EncryptedColumnEnum.CompanySecret,

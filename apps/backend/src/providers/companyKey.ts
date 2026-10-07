@@ -86,7 +86,10 @@ export default class CompanyKeyProvider {
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string; column: Schemas.EncryptedColumnEnum; plaintext: string },
   ): Promise<Schemas.CompanyEncryptValueResponse> {
-    const activeKey = await CompanyKeyProvider.getActiveCompanyKey(env, tx, params);
+    // DEV_NOTE: Only companyId goes down: the DAL logs its params on failure, and they must never hold the plaintext
+    const activeKey = await CompanyKeyProvider.getActiveCompanyKey(env, tx, {
+      companyId: params.companyId,
+    });
     if (!activeKey.isSuccess || !activeKey.companyKey || activeKey.version === undefined) {
       return { isSuccess: false, message: activeKey.message };
     }

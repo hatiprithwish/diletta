@@ -55,7 +55,7 @@ export enum ModelProviderEnum {
 
 // Create Company Secret Body
 // DEV_NOTE: secret is the plaintext the admin pastes. The Repo encrypts it under the company key straight away;
-// it is never stored, logged or returned as-is (only its last four characters are kept for display).
+// it is never stored, logged or returned as-is (only the last four characters of a long secret are kept for display).
 export const ZCompanySecretBase = z.object({
   type: z.enum(CompanySecretTypeIntEnum),
   provider: z.enum(ModelProviderEnum).nullable(),

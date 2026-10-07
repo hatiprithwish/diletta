@@ -52,13 +52,31 @@ export default class ChatbotUserSecretsDAL {
         eq(companyConnections.companyId, params.companyId),
       ];
       const [connection] = await tx
-        .select({ authType: companyConnections.authType })
+        .select({
+          authType: companyConnections.authType,
+          credentialScope: companyConnections.credentialScope,
+        })
         .from(companyConnections)
         .where(and(...connectionConditions))
         .limit(1);
 
       if (!connection) {
         const message = "Company connection not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateChatbotUserSecret,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      // DEV_NOTE: Only a connection scoped to chatbot users takes a per-user credential (credential_scope)
+      if (
+        connection.credentialScope !== Schemas.CompanyConnectionCredentialScopeIntEnum.ChatbotUser
+      ) {
+        const message = "Connection doesn't take chatbot user secrets";
         AppLogger.error({
           category: Schemas.LogCategory.DAL,
           action: Schemas.LogAction.CreateChatbotUserSecret,

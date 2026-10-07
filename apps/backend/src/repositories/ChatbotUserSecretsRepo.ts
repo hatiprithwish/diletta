@@ -66,11 +66,7 @@ export default class ChatbotUserSecretsRepo {
         column: Schemas.EncryptedColumnEnum.ChatbotUserSecret,
         plaintext: JSON.stringify(chatbotUserSecret.secret),
       });
-      if (
-        !encrypted.isSuccess ||
-        !encrypted.encryptedValue ||
-        encrypted.encryptionKeyVersion === undefined
-      ) {
+      if (!encrypted.isSuccess) {
         return { isSuccess: false, message: encrypted.message };
       }
 
@@ -128,11 +124,7 @@ export default class ChatbotUserSecretsRepo {
           column: Schemas.EncryptedColumnEnum.ChatbotUserSecret,
           plaintext: JSON.stringify(chatbotUserSecret.secret),
         });
-        if (
-          !encrypted.isSuccess ||
-          !encrypted.encryptedValue ||
-          encrypted.encryptionKeyVersion === undefined
-        ) {
+        if (!encrypted.isSuccess) {
           return { isSuccess: false, message: encrypted.message };
         }
         encryptedValue = encrypted.encryptedValue;
@@ -154,7 +146,9 @@ export default class ChatbotUserSecretsRepo {
   }
 
   // DEV_NOTE: Server-side only. Decrypts with the row's own encryption_key_version, then checks the JSON shape.
-  // Never return this response from a route.
+  // Only an active credential is handed out (needs re-auth or revoked: the user signs in again). expiresAt is not
+  // checked: an expired access token still carries the refresh token the AuthStrategy needs. Never return this
+  // response from a route.
   async getDecryptedChatbotUserSecret(params: {
     companyId: string;
     publicId: string;
@@ -166,6 +160,10 @@ export default class ChatbotUserSecretsRepo {
       }
 
       const { chatbotUserSecret } = result;
+      if (chatbotUserSecret.status !== Schemas.ChatbotUserSecretStatusIntEnum.Active) {
+        return { isSuccess: false, message: "Chatbot user secret is not active" };
+      }
+
       const decrypted = await CompanyKeyProvider.decryptValue(this.env, tx, {
         companyId: params.companyId,
         column: Schemas.EncryptedColumnEnum.ChatbotUserSecret,

@@ -51,7 +51,13 @@ export interface DecryptValueResponse extends ApiResponse {
   plaintext?: string;
 }
 
-// Value encrypted under a company's active key, with the version to store next to it
-export interface CompanyEncryptValueResponse extends EncryptValueResponse {
-  encryptionKeyVersion?: number;
-}
+// Value encrypted under a company's active key, with the version to store next to it.
+// DEV_NOTE: A union, so one isSuccess check narrows to the ciphertext, iv and version together
+export type CompanyEncryptValueResponse =
+  | {
+      isSuccess: true;
+      message?: string;
+      encryptedValue: EncryptedValue;
+      encryptionKeyVersion: number;
+    }
+  | { isSuccess: false; message?: string };
