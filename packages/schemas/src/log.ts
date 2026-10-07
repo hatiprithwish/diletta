@@ -20,6 +20,24 @@ export enum LogAction {
   WithTenant = "WithTenant",
   WithPlatform = "WithPlatform",
 
+  // Companies
+  CreateCompany = "CreateCompany",
+  GetCompanyDetails = "GetCompanyDetails",
+  ListCompanies = "ListCompanies",
+  UpdateCompany = "UpdateCompany",
+
+  // Chatbot users
+  CreateChatbotUser = "CreateChatbotUser",
+  GetChatbotUserDetails = "GetChatbotUserDetails",
+  ListChatbotUsers = "ListChatbotUsers",
+  UpdateChatbotUser = "UpdateChatbotUser",
+
+  // Company connections
+  CreateCompanyConnection = "CreateCompanyConnection",
+  GetCompanyConnectionDetails = "GetCompanyConnectionDetails",
+  ListCompanyConnections = "ListCompanyConnections",
+  UpdateCompanyConnection = "UpdateCompanyConnection",
+
   // Chatbots
   CreateChatbot = "CreateChatbot",
   GetChatbotDetails = "GetChatbotDetails",

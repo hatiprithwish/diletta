@@ -1,3 +1,5 @@
+import z from "zod";
+
 export enum CompanyConnectionEnvironmentIntEnum {
   Production = 1,
   Staging = 2,
@@ -77,4 +79,62 @@ export const COMPANY_CONNECTION_STATUS_LABEL_MAP: Record<
 > = {
   [CompanyConnectionStatusIntEnum.Active]: CompanyConnectionStatusLabelEnum.Active,
   [CompanyConnectionStatusIntEnum.Disabled]: CompanyConnectionStatusLabelEnum.Disabled,
+};
+
+// DEV_NOTE: auth_type is a text column (no Status Enum Pattern): the value names the AuthStrategy (M3-2)
+export enum CompanyConnectionAuthTypeEnum {
+  JwtForward = "jwt_forward",
+  ApiKeyHeader = "api_key_header",
+  Oauth2Cc = "oauth2_cc",
+  Oauth2Authcode = "oauth2_authcode",
+  HmacSigned = "hmac_signed",
+}
+
+// Create Company Connection Body
+// DEV_NOTE: authConfig and resetOp are any JSON until their shapes land: authConfig per auth type with the
+// AuthStrategy (M3-2), resetOp with the tool op schemas (M3-1)
+export const ZCompanyConnectionBase = z.object({
+  environment: z.enum(CompanyConnectionEnvironmentIntEnum),
+  adapterType: z.enum(CompanyConnectionAdapterTypeIntEnum),
+  baseUrl: z.url().nullable(),
+  authType: z.enum(CompanyConnectionAuthTypeEnum),
+  authConfig: z.json(),
+  credentialScope: z.enum(CompanyConnectionCredentialScopeIntEnum),
+  jwtIssuer: z.url(),
+  allowedOrigins: z.array(z.url()),
+  resetOp: z.json().nullable(),
+});
+export type CompanyConnectionBase = z.infer<typeof ZCompanyConnectionBase>;
+
+// Whole Company Connection Body — DB shape (enums stored as integers)
+// DEV_NOTE: id, companyId, createdBy and updatedBy are internal bigint ids — used by DAL/Repo only, NEVER sent to a client.
+// auth_type is untyped text and the jsonb columns are untyped in the DB, so the row reads them as such.
+export const ZCompanyConnection = ZCompanyConnectionBase.extend({
+  id: z.string(),
+  publicId: z.string(),
+  companyId: z.string(),
+  authType: z.string(),
+  authConfig: z.unknown(),
+  resetOp: z.unknown(),
+  status: z.enum(CompanyConnectionStatusIntEnum),
+  createdBy: z.string().nullable(),
+  updatedBy: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+export type CompanyConnection = z.infer<typeof ZCompanyConnection>;
+
+// API response shape — includes both int and label for every enum; internal ids are structurally omitted
+export type CompanyConnectionWithStatus = Omit<
+  CompanyConnection,
+  "id" | "companyId" | "createdBy" | "updatedBy"
+> & {
+  companyConnectionStatus: CompanyConnectionStatusIntEnum;
+  companyConnectionStatusLabel: CompanyConnectionStatusLabelEnum;
+  companyConnectionEnvironment: CompanyConnectionEnvironmentIntEnum;
+  companyConnectionEnvironmentLabel: CompanyConnectionEnvironmentLabelEnum;
+  companyConnectionAdapterType: CompanyConnectionAdapterTypeIntEnum;
+  companyConnectionAdapterTypeLabel: CompanyConnectionAdapterTypeLabelEnum;
+  companyConnectionCredentialScope: CompanyConnectionCredentialScopeIntEnum;
+  companyConnectionCredentialScopeLabel: CompanyConnectionCredentialScopeLabelEnum;
 };
