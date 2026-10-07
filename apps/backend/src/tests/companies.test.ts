@@ -77,7 +77,8 @@ describe("CompaniesRepo", () => {
     expect(created.company?.companyStatus).toBe(Schemas.CompanyStatusIntEnum.Active);
     expect(created.company?.companyStatusLabel).toBe(Schemas.CompanyStatusLabelEnum.Active);
 
-    const listed = await repo.getCompanies();
+    // DEV_NOTE: The list spans every company on the shared staging branch, so look among the newest page
+    const listed = await repo.getCompanies({ pageSize: Schemas.MAX_PAGE_SIZE });
     expect(listed.isSuccess).toBe(true);
     expect(listed.companies?.some((company) => company.publicId === publicId)).toBe(true);
     expect(listed.companies?.every((company) => !("id" in company))).toBe(true);
@@ -99,6 +100,34 @@ describe("CompaniesRepo", () => {
     expect(paused.isSuccess).toBe(true);
     expect(paused.company?.isReadOnly).toBe(true);
     expect(paused.company?.companyStatusLabel).toBe(Schemas.CompanyStatusLabelEnum.Paused);
+  });
+
+  it("pages the operator list and counts every company", async () => {
+    const repo = new CompaniesRepo(env);
+    await createCompany(repo, `Test company ${crypto.randomUUID()}`);
+    await createCompany(repo, `Test company ${crypto.randomUUID()}`);
+
+    const counted = await repo.getCompaniesCount();
+    expect(counted.isSuccess).toBe(true);
+    expect(counted.totalRecords ?? 0).toBeGreaterThanOrEqual(2);
+
+    const pageOf = (pageNo: number) =>
+      repo.getCompanies({
+        pageNo,
+        pageSize: 1,
+        sortColumn: Schemas.CompanySortColumn.CreatedAt,
+        sortDirection: Schemas.SortDirection.Asc,
+      });
+    const first = await pageOf(1);
+    const second = await pageOf(2);
+    expect(first.companies).toHaveLength(1);
+    expect(second.companies).toHaveLength(1);
+    expect(first.companies?.[0]?.publicId).not.toBe(second.companies?.[0]?.publicId);
+
+    expect(
+      Schemas.ZGetCompaniesApiRequest.safeParse({ pageSize: Schemas.MAX_PAGE_SIZE + 1 }).success,
+    ).toBe(false);
+    expect(Schemas.ZGetCompaniesApiRequest.safeParse({ sortColumn: "id" }).success).toBe(false);
   });
 
   it("keeps status out of what a company admin can edit", () => {

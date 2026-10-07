@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { ZChatbotUserBase } from "./ChatbotUsersCommon";
+import { ZChatbotUserBase, ZChatbotUserSortColumn } from "./ChatbotUsersCommon";
+import { ZPageApiRequest } from "../common";
 
 export const ZCreateChatbotUserApiRequest = z.object({
   chatbotUser: ZChatbotUserBase.partial({ displayName: true }),
@@ -13,3 +14,9 @@ export const ZUpdateChatbotUserApiRequest = z.object({
   }),
 });
 export type UpdateChatbotUserApiRequest = z.infer<typeof ZUpdateChatbotUserApiRequest>;
+
+// DEV_NOTE: A company can have any number of chatbot users, so the list is paged
+export const ZGetChatbotUsersApiRequest = ZPageApiRequest.extend({
+  sortColumn: ZChatbotUserSortColumn.nullable().optional(),
+});
+export type GetChatbotUsersApiRequest = z.infer<typeof ZGetChatbotUsersApiRequest>;

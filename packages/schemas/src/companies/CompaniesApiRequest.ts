@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { CompanyStatusIntEnum, ZCompanyBase } from "./CompaniesCommon";
+import { CompanyStatusIntEnum, ZCompanyBase, ZCompanySortColumn } from "./CompaniesCommon";
+import { ZPageApiRequest } from "../common";
 
 export const ZCreateCompanyApiRequest = z.object({
   company: ZCompanyBase,
@@ -22,3 +23,9 @@ export const ZUpdateCompanyStatusApiRequest = z.object({
   }),
 });
 export type UpdateCompanyStatusApiRequest = z.infer<typeof ZUpdateCompanyStatusApiRequest>;
+
+// DEV_NOTE: Operator list across every company, so it is paged
+export const ZGetCompaniesApiRequest = ZPageApiRequest.extend({
+  sortColumn: ZCompanySortColumn.nullable().optional(),
+});
+export type GetCompaniesApiRequest = z.infer<typeof ZGetCompaniesApiRequest>;

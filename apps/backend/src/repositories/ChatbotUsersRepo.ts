@@ -1,8 +1,9 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import Constants from "@/config/Constants";
 import ChatbotUsersDAL from "@/data-access-layer/ChatbotUsersDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
-import type * as Schemas from "@app/schemas";
+import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
 // companyId is the internal companies.id, resolved server-side; never from the client.
@@ -50,15 +51,29 @@ export default class ChatbotUsersRepo {
     });
   }
 
-  async getChatbotUsers(params: {
-    companyId: string;
-  }): Promise<Schemas.GetChatbotUsersApiResponse> {
+  async getChatbotUsers(
+    params: Schemas.GetChatbotUsersApiRequest & { companyId: string },
+  ): Promise<Schemas.GetChatbotUsersApiResponse> {
     return await withTenant(this.db, params.companyId, async (tx) => {
-      const { chatbotUsers, ...rest } = await this.dal.getChatbotUsers(tx, params);
+      const { chatbotUsers, ...rest } = await this.dal.getChatbotUsers(tx, {
+        companyId: params.companyId,
+        pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
+        pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
+        sortColumn: params.sortColumn ?? Schemas.ChatbotUserSortColumn.CreatedAt,
+        sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
+      });
       return {
         ...rest,
         chatbotUsers: chatbotUsers?.map((chatbotUser) => this.withoutInternalIds(chatbotUser)),
       };
+    });
+  }
+
+  async getChatbotUsersCount(params: {
+    companyId: string;
+  }): Promise<Schemas.GetChatbotUsersCountApiResponse> {
+    return await withTenant(this.db, params.companyId, async (tx) => {
+      return await this.dal.getChatbotUsersCount(tx, params);
     });
   }
 

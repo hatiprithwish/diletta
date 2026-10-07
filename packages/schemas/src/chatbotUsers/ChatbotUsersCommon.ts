@@ -1,5 +1,13 @@
 import z from "zod";
 
+export enum ChatbotUserSortColumn {
+  CreatedAt = "createdAt",
+  HostUserId = "hostUserId",
+  DisplayName = "displayName",
+}
+
+export const ZChatbotUserSortColumn = z.enum(ChatbotUserSortColumn);
+
 // Create Chatbot User Body
 // DEV_NOTE: hostUserId is the host JWT sub — the client-facing id of a chatbot user (no publicId)
 export const ZChatbotUserBase = z.object({

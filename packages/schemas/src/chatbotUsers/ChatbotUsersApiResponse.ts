@@ -1,5 +1,5 @@
 import type { PublicChatbotUser } from "./ChatbotUsersCommon";
-import type { ApiResponse } from "../common";
+import type { ApiResponse, TotalRecordsResponse } from "../common";
 
 export interface CreateChatbotUserApiResponse extends ApiResponse {
   chatbotUser?: PublicChatbotUser;
@@ -16,3 +16,5 @@ export interface GetChatbotUsersApiResponse extends ApiResponse {
 export interface UpdateChatbotUserApiResponse extends ApiResponse {
   chatbotUser?: PublicChatbotUser;
 }
+
+export type GetChatbotUsersCountApiResponse = TotalRecordsResponse;

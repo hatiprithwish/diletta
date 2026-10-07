@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, count, desc, eq } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies } from "@/db/tables";
@@ -85,11 +85,30 @@ export default class CompaniesDAL {
     return response;
   }
 
-  async getCompanies(tx: NodePgTransaction<EmptyRelations>) {
+  async getCompanies(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompaniesDALRequest,
+  ) {
     const response: Schemas.CompaniesDALResponse = { isSuccess: false };
 
     try {
-      const companiesResponse = await tx.select().from(companies);
+      const sortColumnMap = {
+        [Schemas.CompanySortColumn.CreatedAt]: companies.createdAt,
+        [Schemas.CompanySortColumn.Name]: companies.name,
+        [Schemas.CompanySortColumn.Status]: companies.status,
+      };
+      const sortCol = sortColumnMap[params.sortColumn];
+      const orderExpr =
+        params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
+      const offset = (params.pageNo - 1) * params.pageSize;
+
+      const companiesResponse = await tx
+        .select()
+        .from(companies)
+        // DEV_NOTE: id breaks ties (same status or created_at), so rows never repeat or go missing between pages
+        .orderBy(orderExpr, asc(companies.id))
+        .limit(params.pageSize)
+        .offset(offset);
 
       response.isSuccess = true;
       response.message = "Companies fetched successfully";
@@ -99,6 +118,30 @@ export default class CompaniesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.ListCompanies,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getCompaniesCount(tx: NodePgTransaction<EmptyRelations>) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const [result] = await tx.select({ count: count() }).from(companies);
+
+      response.isSuccess = true;
+      response.message = "Companies counted successfully";
+      response.totalRecords = result?.count ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting companies";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountCompanies,
         message,
         error,
       });

@@ -18,6 +18,14 @@ export const COMPANY_STATUS_LABEL_MAP: Record<CompanyStatusIntEnum, CompanyStatu
   [CompanyStatusIntEnum.Churned]: CompanyStatusLabelEnum.Churned,
 };
 
+export enum CompanySortColumn {
+  CreatedAt = "createdAt",
+  Name = "name",
+  Status = "status",
+}
+
+export const ZCompanySortColumn = z.enum(CompanySortColumn);
+
 // Create Company Body
 export const ZCompanyBase = z.object({
   name: z.string().trim().min(1),

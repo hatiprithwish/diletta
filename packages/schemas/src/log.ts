@@ -24,12 +24,14 @@ export enum LogAction {
   CreateCompany = "CreateCompany",
   GetCompanyDetails = "GetCompanyDetails",
   ListCompanies = "ListCompanies",
+  CountCompanies = "CountCompanies",
   UpdateCompany = "UpdateCompany",
 
   // Chatbot users
   CreateChatbotUser = "CreateChatbotUser",
   GetChatbotUserDetails = "GetChatbotUserDetails",
   ListChatbotUsers = "ListChatbotUsers",
+  CountChatbotUsers = "CountChatbotUsers",
   UpdateChatbotUser = "UpdateChatbotUser",
 
   // Company connections

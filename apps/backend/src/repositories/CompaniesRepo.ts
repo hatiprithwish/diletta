@@ -1,4 +1,5 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import Constants from "@/config/Constants";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
@@ -40,10 +41,23 @@ export default class CompaniesRepo {
     });
   }
 
-  async getCompanies(): Promise<Schemas.GetCompaniesApiResponse> {
+  async getCompanies(
+    params: Schemas.GetCompaniesApiRequest,
+  ): Promise<Schemas.GetCompaniesApiResponse> {
     return await withPlatform(this.db, async (tx) => {
-      const { companies, ...rest } = await this.dal.getCompanies(tx);
+      const { companies, ...rest } = await this.dal.getCompanies(tx, {
+        pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
+        pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
+        sortColumn: params.sortColumn ?? Schemas.CompanySortColumn.CreatedAt,
+        sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
+      });
       return { ...rest, companies: companies?.map((company) => this.withStatusLabel(company)) };
+    });
+  }
+
+  async getCompaniesCount(): Promise<Schemas.GetCompaniesCountApiResponse> {
+    return await withPlatform(this.db, async (tx) => {
+      return await this.dal.getCompaniesCount(tx);
     });
   }
 

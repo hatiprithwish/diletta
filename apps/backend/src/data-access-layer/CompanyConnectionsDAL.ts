@@ -83,15 +83,14 @@ export default class CompanyConnectionsDAL {
     const response: Schemas.CompanyConnectionDALResponse = { isSuccess: false };
 
     try {
+      const conditions = [
+        eq(companyConnections.publicId, params.publicId),
+        eq(companyConnections.companyId, params.companyId),
+      ];
       const [companyConnection] = await tx
         .select()
         .from(companyConnections)
-        .where(
-          and(
-            eq(companyConnections.publicId, params.publicId),
-            eq(companyConnections.companyId, params.companyId),
-          ),
-        )
+        .where(and(...conditions))
         .limit(1);
 
       if (!companyConnection) {
@@ -162,6 +161,10 @@ export default class CompanyConnectionsDAL {
 
     try {
       const now = new Date();
+      const conditions = [
+        eq(companyConnections.publicId, params.publicId),
+        eq(companyConnections.companyId, params.companyId),
+      ];
       const [companyConnectionResponse] = await tx
         .update(companyConnections)
         .set({
@@ -173,12 +176,7 @@ export default class CompanyConnectionsDAL {
           status: params.status ?? undefined,
           updatedAt: now,
         })
-        .where(
-          and(
-            eq(companyConnections.publicId, params.publicId),
-            eq(companyConnections.companyId, params.companyId),
-          ),
-        )
+        .where(and(...conditions))
         .returning();
 
       if (!companyConnectionResponse) {
