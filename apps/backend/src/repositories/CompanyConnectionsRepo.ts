@@ -111,7 +111,6 @@ export default class CompanyConnectionsRepo {
         authConfig: companyConnection.authConfig ?? null,
         jwtIssuer: companyConnection.jwtIssuer ?? null,
         allowedOrigins: companyConnection.allowedOrigins ?? null,
-        resetOp: companyConnection.resetOp ?? null,
         status: companyConnection.status ?? null,
       });
       return this.withCompanyConnectionResponse(result);

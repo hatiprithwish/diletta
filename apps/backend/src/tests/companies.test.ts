@@ -5,7 +5,10 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
+import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
+import getDbClient from "@/db/dbClient";
 import { companies } from "@/db/tables";
+import withTenant from "@/db/withTenant";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -84,27 +87,60 @@ describe("CompaniesRepo", () => {
     expect(fetched.company?.name).toBe(name);
 
     // Partial update: omitted name is left unchanged
-    const paused = await repo.updateCompany({
+    const readOnly = await repo.updateCompany({ companyId, company: { isReadOnly: true } });
+    expect(readOnly.isSuccess).toBe(true);
+    expect(readOnly.company?.name).toBe(name);
+    expect(readOnly.company?.isReadOnly).toBe(true);
+
+    const paused = await repo.updateCompanyStatus({
       companyId,
-      company: { status: Schemas.CompanyStatusIntEnum.Paused, isReadOnly: true },
+      company: { status: Schemas.CompanyStatusIntEnum.Paused },
     });
     expect(paused.isSuccess).toBe(true);
-    expect(paused.company?.name).toBe(name);
     expect(paused.company?.isReadOnly).toBe(true);
     expect(paused.company?.companyStatusLabel).toBe(Schemas.CompanyStatusLabelEnum.Paused);
   });
 
-  it("only reaches its own row as a tenant", async () => {
+  it("keeps status out of what a company admin can edit", () => {
+    const parsed = Schemas.ZUpdateCompanyApiRequest.parse({
+      company: { name: "Renamed", status: Schemas.CompanyStatusIntEnum.Active },
+    });
+    expect(parsed.company).toEqual({ name: "Renamed" });
+  });
+
+  it("never reads or writes another company's row inside a tenant transaction", async () => {
     const repo = new CompaniesRepo(env);
     const companyA = await createCompany(repo, `Test company A ${crypto.randomUUID()}`);
     const companyB = await createCompany(repo, `Test company B ${crypto.randomUUID()}`);
+    const nameB = companyB.created.company?.name;
 
-    const fetched = await repo.getCompanyDetails({ companyId: companyB.companyId });
-    expect(fetched.company?.publicId).toBe(companyB.publicId);
+    // DEV_NOTE: The Repo always passes the tenant's own id, so the DAL is called directly inside company A's
+    // transaction with B's id. Only RLS stops it: the DAL's id filter alone would match B's row.
+    const db = getDbClient(env);
+    const dal = new CompaniesDAL();
+    try {
+      const read = await withTenant(db, companyA.companyId, (tx) =>
+        dal.getCompanyDetails(tx, { companyId: companyB.companyId }),
+      );
+      expect(read).toEqual({ isSuccess: false, message: "Company not found" });
 
-    await repo.updateCompany({ companyId: companyB.companyId, company: { name: "Renamed B" } });
-    const untouched = await repo.getCompanyDetails({ companyId: companyA.companyId });
-    expect(untouched.company?.name).toBe(companyA.created.company?.name);
+      const updated = await withTenant(db, companyA.companyId, (tx) =>
+        dal.updateCompany(tx, {
+          companyId: companyB.companyId,
+          name: "Hijacked",
+          status: null,
+          isReadOnly: true,
+        }),
+      );
+      expect(updated).toEqual({ isSuccess: false, message: "Company not found" });
+    } finally {
+      await db.$client.end();
+    }
+
+    const untouched = await repo.getCompanyDetails({ companyId: companyB.companyId });
+    expect(untouched.isSuccess).toBe(true);
+    expect(untouched.company?.name).toBe(nameB);
+    expect(untouched.company?.isReadOnly).toBe(false);
   });
 
   it("returns not found for a company that does not exist", async () => {
@@ -115,5 +151,15 @@ describe("CompaniesRepo", () => {
 
     const updated = await repo.updateCompany({ companyId: "0", company: { name: "Ghost" } });
     expect(updated).toEqual({ isSuccess: false, message: "Company not found", company: undefined });
+
+    const statusUpdated = await repo.updateCompanyStatus({
+      companyId: "0",
+      company: { status: Schemas.CompanyStatusIntEnum.Churned },
+    });
+    expect(statusUpdated).toEqual({
+      isSuccess: false,
+      message: "Company not found",
+      company: undefined,
+    });
   });
 });

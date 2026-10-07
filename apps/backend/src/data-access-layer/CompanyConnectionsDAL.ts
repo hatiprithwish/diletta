@@ -170,7 +170,6 @@ export default class CompanyConnectionsDAL {
           authConfig: params.authConfig ?? undefined,
           jwtIssuer: params.jwtIssuer ?? undefined,
           allowedOrigins: params.allowedOrigins ?? undefined,
-          resetOp: params.resetOp ?? undefined,
           status: params.status ?? undefined,
           updatedAt: now,
         })

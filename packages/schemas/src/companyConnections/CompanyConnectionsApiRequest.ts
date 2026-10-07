@@ -17,14 +17,14 @@ export const ZCreateCompanyConnectionApiRequest = z.object({
 export type CreateCompanyConnectionApiRequest = z.infer<typeof ZCreateCompanyConnectionApiRequest>;
 
 // DEV_NOTE: environment, adapter, auth type and credential scope are fixed once created: company secrets and
-// tools are bound to them. Change those by creating a new connection.
+// tools are bound to them. Change those by creating a new connection. resetOp is set on create only: with
+// "null = unchanged" an update could never clear it, so changing it arrives with the eval reset flow (M5-2).
 export const ZUpdateCompanyConnectionApiRequest = z.object({
   companyConnection: ZCompanyConnectionBase.pick({
     baseUrl: true,
     authConfig: true,
     jwtIssuer: true,
     allowedOrigins: true,
-    resetOp: true,
   })
     .extend({
       status: z.enum(CompanyConnectionStatusIntEnum),

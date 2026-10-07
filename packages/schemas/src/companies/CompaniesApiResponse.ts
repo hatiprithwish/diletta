@@ -16,3 +16,7 @@ export interface GetCompaniesApiResponse extends ApiResponse {
 export interface UpdateCompanyApiResponse extends ApiResponse {
   company?: CompanyWithStatus;
 }
+
+export interface UpdateCompanyStatusApiResponse extends ApiResponse {
+  company?: CompanyWithStatus;
+}

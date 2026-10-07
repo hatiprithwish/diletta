@@ -61,8 +61,23 @@ export default class CompaniesRepo {
       const result = await this.dal.updateCompany(tx, {
         companyId: params.companyId,
         name: params.company.name ?? null,
-        status: params.company.status ?? null,
+        status: null,
         isReadOnly: params.company.isReadOnly ?? null,
+      });
+      return this.withCompanyResponse(result);
+    });
+  }
+
+  // DEV_NOTE: Operator only (pause, churn, reactivate). Still withTenant: it changes one known company (rule 3.15).
+  async updateCompanyStatus(
+    params: Schemas.UpdateCompanyStatusApiRequest & { companyId: string },
+  ): Promise<Schemas.UpdateCompanyStatusApiResponse> {
+    return await withTenant(this.db, params.companyId, async (tx) => {
+      const result = await this.dal.updateCompany(tx, {
+        companyId: params.companyId,
+        name: null,
+        status: params.company.status,
+        isReadOnly: null,
       });
       return this.withCompanyResponse(result);
     });

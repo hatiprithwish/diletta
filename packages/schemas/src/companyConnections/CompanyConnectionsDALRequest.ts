@@ -13,9 +13,6 @@ export type GetCompanyConnectionsDALRequest = Pick<CompanyConnection, "companyId
 // DEV_NOTE: Only client-editable fields. updatedAt is set by the DAL.
 export type UpdateCompanyConnectionDALRequest = FindCompanyConnectionDALRequest &
   NullableDALFields<
-    Pick<
-      CompanyConnectionBase,
-      "baseUrl" | "authConfig" | "jwtIssuer" | "allowedOrigins" | "resetOp"
-    > &
+    Pick<CompanyConnectionBase, "baseUrl" | "authConfig" | "jwtIssuer" | "allowedOrigins"> &
       Pick<CompanyConnection, "status">
   >;

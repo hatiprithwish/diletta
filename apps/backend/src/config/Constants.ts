@@ -1,5 +1,11 @@
 export default class Constants {
-  static readonly APP_REDACT_FIELDS = [/clerkId/i, /clerk_id/i, /^master_?key(_?v\d+)?$/i];
+  // DEV_NOTE: display_name is chatbot-user PII (erased on request), so it never reaches a log
+  static readonly APP_REDACT_FIELDS = [
+    /clerkId/i,
+    /clerk_id/i,
+    /^master_?key(_?v\d+)?$/i,
+    /display_?name/i,
+  ];
 
   static readonly APP_NAME = "diletta-worker" as const;
 

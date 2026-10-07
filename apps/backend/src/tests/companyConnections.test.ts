@@ -217,6 +217,29 @@ describe("CompanyConnectionsRepo", () => {
     });
   });
 
+  it("accepts only https for the issuer and base URL, exact origins, and an object auth config", () => {
+    const parse = (overrides: Record<string, unknown>) =>
+      Schemas.ZCreateCompanyConnectionApiRequest.safeParse({
+        companyConnection: { ...connectionInput(), ...overrides },
+      }).success;
+
+    expect(parse({})).toBe(true);
+    expect(parse({ jwtIssuer: "http://issuer.example.com" })).toBe(false);
+    expect(parse({ baseUrl: "http://host.example.com/api" })).toBe(false);
+    expect(parse({ allowedOrigins: ["https://app.example.com:8443"] })).toBe(true);
+    expect(parse({ allowedOrigins: ["https://app.example.com/"] })).toBe(false);
+    expect(parse({ allowedOrigins: ["https://app.example.com/widget"] })).toBe(false);
+    expect(parse({ allowedOrigins: ["https://app.example.com?x=1"] })).toBe(false);
+    expect(parse({ allowedOrigins: ["not a url"] })).toBe(false);
+    expect(parse({ authConfig: null })).toBe(false);
+    expect(parse({ authConfig: ["header"] })).toBe(false);
+
+    const update = Schemas.ZUpdateCompanyConnectionApiRequest.safeParse({
+      companyConnection: { authConfig: null },
+    });
+    expect(update.success).toBe(false);
+  });
+
   it("requires a base URL unless the adapter is host-executed", () => {
     const missing = Schemas.ZCreateCompanyConnectionApiRequest.safeParse({
       companyConnection: connectionInput({ baseUrl: null }),

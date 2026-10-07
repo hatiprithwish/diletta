@@ -14,8 +14,31 @@ import {
   redactByField,
   redactByPattern,
 } from "@logtape/redaction";
+import { DrizzleQueryError } from "drizzle-orm";
 import type * as Schemas from "@app/schemas";
 import { AsyncLocalStorage } from "node:async_hooks";
+
+// DEV_NOTE: A DrizzleQueryError's message and stack carry every bound value of the failed query (names, config
+// JSON, PII), and a pg error's message and detail can quote values too. Field redaction can't see inside those
+// strings, so a query error is logged as its SQL text plus the pg error's code and object names only.
+export function toLoggableError(error: unknown): unknown {
+  if (!(error instanceof DrizzleQueryError)) return error;
+  return { name: error.name, query: error.query, cause: describeQueryErrorCause(error.cause) };
+}
+
+function describeQueryErrorCause(cause: unknown) {
+  if (typeof cause !== "object" || cause === null) return undefined;
+  // DEV_NOTE: pg DatabaseError (SQLSTATE) or a socket error (ECONNRESET…): the code and names say enough
+  if ("code" in cause && typeof cause.code === "string") {
+    return {
+      code: cause.code,
+      constraint: "constraint" in cause ? cause.constraint : undefined,
+      table: "table" in cause ? cause.table : undefined,
+      column: "column" in cause ? cause.column : undefined,
+    };
+  }
+  return cause instanceof Error ? { name: cause.name } : undefined;
+}
 
 function consoleFormatterWithProps(record: LogRecord): readonly unknown[] {
   const base = defaultConsoleFormatter(record);
@@ -107,7 +130,7 @@ export default class AppLogger {
       category: params.category,
       action: params.action,
       metadata: params.metadata,
-      error: params.error,
+      error: toLoggableError(params.error),
     });
   }
 }

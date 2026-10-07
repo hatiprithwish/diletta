@@ -90,18 +90,28 @@ export enum CompanyConnectionAuthTypeEnum {
   HmacSigned = "hmac_signed",
 }
 
+// DEV_NOTE: Host API calls and the issuer's signing keys (JWKS) must not travel in plaintext, or anyone on the
+// path could read host data or swap the keys and forge host JWTs. OIDC also requires an https issuer.
+const ZHttpsUrl = z.url({ protocol: /^https$/ });
+
+// DEV_NOTE: A browser Origin header is scheme://host[:port] only, so a stored path, query or trailing slash
+// could never match it. Only exact origins are accepted.
+const ZOrigin = z.url().refine((value) => URL.canParse(value) && new URL(value).origin === value, {
+  message: "Must be an origin (scheme://host[:port]) with no path",
+});
+
 // Create Company Connection Body
-// DEV_NOTE: authConfig and resetOp are any JSON until their shapes land: authConfig per auth type with the
-// AuthStrategy (M3-2), resetOp with the tool op schemas (M3-1)
+// DEV_NOTE: authConfig is a JSON object and resetOp any JSON until their shapes land: authConfig per auth type
+// with the AuthStrategy (M3-2), resetOp with the tool op schemas (M3-1)
 export const ZCompanyConnectionBase = z.object({
   environment: z.enum(CompanyConnectionEnvironmentIntEnum),
   adapterType: z.enum(CompanyConnectionAdapterTypeIntEnum),
-  baseUrl: z.url().nullable(),
+  baseUrl: ZHttpsUrl.nullable(),
   authType: z.enum(CompanyConnectionAuthTypeEnum),
-  authConfig: z.json(),
+  authConfig: z.record(z.string(), z.json()),
   credentialScope: z.enum(CompanyConnectionCredentialScopeIntEnum),
-  jwtIssuer: z.url(),
-  allowedOrigins: z.array(z.url()),
+  jwtIssuer: ZHttpsUrl,
+  allowedOrigins: z.array(ZOrigin),
   resetOp: z.json().nullable(),
 });
 export type CompanyConnectionBase = z.infer<typeof ZCompanyConnectionBase>;
