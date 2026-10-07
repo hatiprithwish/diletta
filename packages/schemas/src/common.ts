@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+// DEV_NOTE: A bytea column. pg reads it as a Node Buffer, whose ArrayBuffer may be shared, so the type keeps
+// ArrayBufferLike (z.instanceof(Uint8Array) would narrow it to ArrayBuffer and reject a Buffer).
+export const ZBytes = z.custom<Uint8Array>((value) => value instanceof Uint8Array, {
+  message: "Must be bytes",
+});
+
 export interface ApiResponse {
   isSuccess: boolean;
   message?: string;

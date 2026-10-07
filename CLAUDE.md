@@ -26,6 +26,7 @@
 | RLS migration        | `apps/backend/src/db/migrations/*_rls_policies/`     |
 | DAL                  | `apps/backend/src/data-access-layer/ChatbotsDAL.ts`  |
 | Repository           | `apps/backend/src/repositories/ChatbotsRepo.ts`      |
+| Provider → DAL       | `apps/backend/src/providers/companyKey.ts`           |
 | Schemas              | `packages/schemas/src/chatbots/`                     |
 | Tenant tests         | `apps/backend/src/tests/chatbots.test.ts`            |
 | RLS tests            | `apps/backend/src/tests/rls.test.ts`                 |
@@ -37,9 +38,9 @@ Chatbots is the tenant golden example (M0-5). It has no routes yet: the Clerk ad
 
 ## Stack
 
-Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, Neon Postgres via Hyperdrive) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app) · `packages/ui` (`@app/ui`: shadcn components, `cn`, Tailwind preset `@app/ui/globals.css` with the lime theme, light + dark).
+Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, Neon Postgres via Hyperdrive) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app) · `packages/ui` (`@app/ui`: shadcn components, `cn`, Tailwind preset `@app/ui/globals.css` with the lime theme, light + dark) · `packages/crypto` (`@app/crypto`: envelope encryption on WebCrypto AES-256-GCM, pure functions, no DB or logger).
 
-Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/crypto`, `packages/adapter`, `evals/` (Python harness). Don't create them outside their task.
+Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/adapter`, `evals/` (Python harness). Don't create them outside their task.
 
 **Approved packages — don't introduce alternatives:** routing `@tanstack/react-router`+`react-start` · server state `@tanstack/react-query` · client state `zustand` · forms `@tanstack/react-form` (not react-hook-form) · validation `zod` v4 · UI `shadcn/ui` (style `radix-vega`) + Tailwind v4 + `cn` (shadcn's clsx/tailwind-merge replacement) · icons `@phosphor-icons/react` · auth `@clerk/tanstack-react-start` (web) / `@clerk/backend` (worker) · HTTP `hono` v4 + `@hono/zod-validator` · ORM `drizzle-orm` + `drizzle-kit` pinned to `1.0.0-rc.4` (for `bigint` string mode) + `pg` (node-postgres) on Hyperdrive · logging `@logtape/logtape` via `AppLogger` (never `console.log`) · errors Sentry · tests Vitest + RTL.
 
@@ -64,6 +65,8 @@ Before using any third-party API: check the installed version in `package.json`,
 - **Public ID Pattern** (every table, except the append-only/derived `activity_log`, `event_outbox`, `activity_rollups`, `eval_results`, `knowledge_chunks`; `admins` and `chatbot_users` use `clerk_user_id` / `host_user_id`): `id` is internal-only — joins and references, never sent to or accepted from a client. `publicId` (`Utility.generatePublicId()`, unique-indexed) is client-facing — every route param, API response, and frontend reference uses it instead. DAL generates it on insert and finds rows by it; API response types structurally omit `id` and every other internal id (`companyId`, `<verb>_by`), e.g. `Omit<Chatbot, "id" | "companyId" | "createdBy" | "updatedBy">`. See `ChatbotsCommon.ts` / `ChatbotsDAL.ts` / `ChatbotsRepo.ts`.
 - **DAL**: tenant DALs hold no db. Every method takes `tx` from `withTenant` first and filters on `companyId`. Non-tenant DALs (`UsersDAL`) hold `private db` from a ctor taking `env`. Every method inits `{ isSuccess: false }`, try/catch, `AppLogger.error` with `LogCategory`/`LogAction` on failure. Where: one condition `.where(eq(…))`; two or more go in a `conditions` array built before the query (optional ones via `if (x) conditions.push(…)`), then `.where(and(...conditions))`. No inline `and(…)`, no `.where(() => …)` callback (drizzle accepts it on select only).
 - **Repo**: thin. Maps API shapes to DAL params; business logic lives here, not in the DAL. Tenant Repos hold `private db = getDbClient(env)` and open one `withTenant` per method.
+- **Provider → DAL**: a provider in `providers/` may call a DAL directly when several Repos share the step (e.g. `CompanyKeyProvider` reads `company_encryption_keys`). It takes the Repo's `tx` and never opens a transaction or builds a query itself; it returns `{ isSuccess, message }` and never throws. See `providers/companyKey.ts`.
+- **Encryption** (`encrypted_*` columns): only through `CompanyKeyProvider.encryptValue` / `decryptValue` (company key create/rotate: `CompanyKeyProvider.createCompanyKey`, `CompanyEncryptionKeysRepo`), which use `@app/crypto`. Store `encryption_key_version` and `iv` with the ciphertext and decrypt with the row's version. Plaintext is encrypted in the Repo before the DAL; it never reaches a DAL param, a log or a route response (`getDecrypted*` responses are server-side only). Ciphertext, iv and key bytes stay out of log metadata.
 - **Pagination** (any list that grows without bound): request extends `ZPageApiRequest` (`common.ts`) with a `<Feature>SortColumn` enum; Repo fills defaults (`Constants.DEFAULT_PAGE_NO`/`DEFAULT_PAGE_SIZE`, `createdAt` desc); DAL maps the sort column, then `.orderBy(expr, asc(<table>.id)).limit(pageSize).offset((pageNo - 1) * pageSize)`. Totals come from a separate `get<Feature>Count` returning `TotalRecordsResponse`. No cursors. See `ChatbotUsersDAL.ts`.
 - **Routes**: `checkAuth` first, then `zValidator`. `c.get("clerkUserId")` for the user. 201/200/404/500.
 - **Frontend `-data.ts`**: `Queries` class with hierarchical keys (`keys.all()` invalidates every detail). `setQueryData` on update, `removeQueries` on delete, `mutateAsync` when the caller must await, `mutate` otherwise. Every mutation needs a non-empty `onError` (toast).
@@ -135,6 +138,7 @@ Before using any third-party API: check the installed version in `package.json`,
 - A schema change without immediately running `db:generate`
 - A mutation with an absent or empty `onError`
 - Logging or persisting the host bearer token; calling a model provider outside the router
+- From M1-5: `crypto.subtle` on company data outside `@app/crypto`; a plaintext secret in a DAL param, log or route response
 - From M0-5: a tenant query outside `withTenant` (or `withPlatform` for cross-company work)
 - From M1-3: code under test on the owner connection; a table without its `diletta_app` grant and RLS policies; `withPlatform` for one company's data
 - `npm`/`yarn` — `pnpm` always

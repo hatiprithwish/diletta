@@ -44,5 +44,5 @@ The master key is versioned, never overwritten: `company_encryption_keys.master_
 1. Create `diletta-master-key-v2-<env>` as above and back it up.
 2. Add a `MASTER_KEY_V2` binding to `env.staging` and `env.production` in `wrangler.jsonc`, and `MASTER_KEY_V2` to `.dev.vars.example` (local gets the staging v2 value).
 3. Run `pnpm --filter backend generate-types`, add `case 2` to `MasterKeyProvider.getSource`, and set `Constants.CURRENT_MASTER_KEY_VERSION = 2`.
-4. Re-wrap every company key from v1 to v2 (`packages/crypto`, M1-5).
+4. Re-wrap every company key from v1 to v2: `EnvelopeCrypto.rewrapCompanyKey(v1, v2, encrypted_key, CryptoContext.companyKey(company_id, version))` (`packages/crypto`), then set `master_key_version = 2` on the row. The company key itself is unchanged, so no `encrypted_*` column is touched. The sweep job across companies is not built yet; build it on this function.
 5. When no `company_encryption_keys` row has `master_key_version = 1`, remove the v1 binding, the `case 1`, and the v1 secret.

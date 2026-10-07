@@ -19,6 +19,7 @@ These rules are mandatory per CLAUDE.md.
 - Routes importing directly from DAL
 - Repo building queries with Drizzle (`select`/`insert`/`update`/`delete`/`sql`). Allowed in a Repo: `import type { NodePgDatabase } from "drizzle-orm/node-postgres"`, `getDbClient` and `withTenant` from `@/db/` (see `ChatbotsRepo.ts`)
 - Durable Objects, Queue consumers or Cron handlers calling a DAL directly (they go through a Repo)
+- A provider (`apps/backend/src/providers/`) that calls a DAL without the caller's `tx`, opens `withTenant`/`withPlatform` itself, or builds a Drizzle query. Allowed: a provider calling a DAL with the Repo's `tx` when several Repos share the step (golden: `providers/companyKey.ts`)
 - Web components importing directly from worker DAL/Repo
 
 **Detection:**
@@ -34,7 +35,7 @@ File: apps/web/src/**/*.tsx
 - ✅ Use apiClient through -data.ts query/mutation hooks
 ```
 
-**Fix:** Route files should only import Repo. Repo imports DAL plus `getDbClient` / `withTenant` to open the transaction. Only the DAL builds queries.
+**Fix:** Route files should only import Repo. Repo imports DAL plus `getDbClient` / `withTenant` to open the transaction, and may call a provider that uses a DAL inside that transaction. Only the DAL builds queries.
 
 ---
 
@@ -954,6 +955,42 @@ withPlatform\(
 
 ---
 
+### 3.19 Envelope Encryption Through @app/crypto [CRITICAL]
+
+**Rule:** `encrypted_*` columns are written and read only through `CompanyKeyProvider.encryptValue` / `decryptValue` (`apps/backend/src/providers/companyKey.ts`), which use `@app/crypto` (`packages/crypto`). Company keys are created only by `CompanyKeyProvider.createCompanyKey` and rotated only by `CompanyEncryptionKeysRepo.rotateCompanyEncryptionKey`. The Repo encrypts before the DAL: plaintext never reaches a DAL param, a log or a route response, and the row stores `iv` + `encryption_key_version` next to the ciphertext.
+
+**Violations:**
+
+- `crypto.subtle.encrypt` / `decrypt` / `importKey` on company data outside `packages/crypto` (`masterKey.ts` imports the master key only)
+- A DAL request type or DAL param carrying a plaintext secret, or a DAL writing `encrypted_*` without `iv` and `encryption_key_version`
+- Decrypting with the active key instead of the row's `encryption_key_version`
+- A `getDecrypted*` / `Decrypted*Response` returned from a route, or an API response type that keeps `encrypted*`, `iv` or `encryptionKeyVersion`
+- `encryptedSecret`, `encryptedKey`, `iv`, a plaintext secret or a `CryptoKey` in `AppLogger` metadata (strip them: `const { encryptedSecret: _e, iv: _iv, ...metadata } = params`)
+- A new encrypted column without an `EncryptedColumnEnum` entry (its value is the AES-GCM additional data; changing an existing value breaks every stored ciphertext)
+- `packages/crypto` importing a logger, a DB client or `env`, or throwing instead of returning `{ isSuccess, message }`
+
+**Detection Pattern:**
+
+```regex
+crypto\.subtle\.(encrypt|decrypt)\((?!.*packages/crypto)
+metadata:\s*\{[^}]*\b(encryptedSecret|encryptedKey|iv|plaintext)\b
+```
+
+**Examples:**
+
+```
+- ❌ await crypto.subtle.encrypt({ name: "AES-GCM", iv }, companyKey, data); // in a Repo
+- ❌ await this.dal.createCompanySecret(tx, { ..., secret: params.companySecret.secret });
+- ❌ return c.json(await repo.getDecryptedCompanySecret(params), 200);
+- ✅ const encrypted = await CompanyKeyProvider.encryptValue(this.env, tx, { companyId, column, plaintext });
+     await this.dal.createCompanySecret(tx, { ..., encryptedSecret: encrypted.encryptedValue.ciphertext,
+       iv: encrypted.encryptedValue.iv, encryptionKeyVersion: encrypted.encryptionKeyVersion });
+```
+
+**Fix:** Mirror `CompanySecretsRepo`: encrypt through `CompanyKeyProvider` in the Repo's transaction, pass only ciphertext to the DAL, decrypt with the row's version, and keep `getDecrypted*` server-side.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1041,5 +1078,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption)
 Maintainer: hatiprithwish

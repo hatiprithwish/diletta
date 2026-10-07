@@ -51,4 +51,27 @@ export enum LogAction {
 
   // Crypto
   ReadMasterKey = "ReadMasterKey",
+  CreateCompanyKey = "CreateCompanyKey",
+  UnwrapCompanyKey = "UnwrapCompanyKey",
+  EncryptValue = "EncryptValue",
+  DecryptValue = "DecryptValue",
+
+  // Company encryption keys
+  CreateCompanyEncryptionKey = "CreateCompanyEncryptionKey",
+  GetCompanyEncryptionKeyDetails = "GetCompanyEncryptionKeyDetails",
+  ListCompanyEncryptionKeys = "ListCompanyEncryptionKeys",
+  MarkCompanyEncryptionKeyRetiring = "MarkCompanyEncryptionKeyRetiring",
+  RotateCompanyEncryptionKey = "RotateCompanyEncryptionKey",
+
+  // Company secrets
+  CreateCompanySecret = "CreateCompanySecret",
+  GetCompanySecretDetails = "GetCompanySecretDetails",
+  ListCompanySecrets = "ListCompanySecrets",
+  UpdateCompanySecret = "UpdateCompanySecret",
+
+  // Chatbot user secrets
+  CreateChatbotUserSecret = "CreateChatbotUserSecret",
+  GetChatbotUserSecretDetails = "GetChatbotUserSecretDetails",
+  ListChatbotUserSecrets = "ListChatbotUserSecrets",
+  UpdateChatbotUserSecret = "UpdateChatbotUserSecret",
 }
