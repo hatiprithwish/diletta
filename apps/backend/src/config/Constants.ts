@@ -36,4 +36,23 @@ export default class Constants {
   // wrangler.jsonc triggers.crons exactly.
   static readonly OUTBOX_SWEEP_CRON = "* * * * *";
   static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
+
+  // DEV_NOTE: Widget auth (M2-1). The first WebSocket message must carry the companion JWT within the timeout. A token
+  // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of
+  // slack for clock drift between the host and us.
+  static readonly WIDGET_AUTH_TIMEOUT_MS = 10_000;
+  static readonly WIDGET_JWT_MAX_LENGTH = 8192;
+  static readonly WIDGET_JWT_MAX_LIFETIME_SECONDS = 300;
+  static readonly WIDGET_JWT_CLOCK_SKEW_SECONDS = 30;
+  // DEV_NOTE: RSA keys shorter than 2048 bits are rejected (RFC 7518 §3.3)
+  static readonly WIDGET_JWT_MIN_RSA_MODULUS_BYTES = 256;
+
+  // DEV_NOTE: Issuer JWKS ({iss}/.well-known/jwks.json) cached in the JWKS_CACHE KV namespace. A token with a kid the
+  // cached set lacks forces one refetch (the host rotated its keys), at most once per JWKS_REFETCH_MIN_INTERVAL_MS
+  // per issuer. The fetch is capped in time and size; JWKS_CACHE_TTL_SECONDS must be ≥ 60 (KV minimum).
+  static readonly JWKS_CACHE_KEY_PREFIX = "jwks:";
+  static readonly JWKS_CACHE_TTL_SECONDS = 3600;
+  static readonly JWKS_REFETCH_MIN_INTERVAL_MS = 60_000;
+  static readonly JWKS_FETCH_TIMEOUT_MS = 5_000;
+  static readonly JWKS_MAX_BYTES = 64 * 1024;
 }

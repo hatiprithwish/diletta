@@ -94,6 +94,12 @@ export enum CompanyConnectionAuthTypeEnum {
 // path could read host data or swap the keys and forge host JWTs. OIDC also requires an https issuer.
 const ZHttpsUrl = z.url({ protocol: /^https$/ });
 
+// DEV_NOTE: A JWT issuer is matched exactly against the token's iss and the JWKS URL is built as
+// {iss}/.well-known/jwks.json, so a query or fragment would put the path inside them and fetch the wrong URL
+const ZJwtIssuer = ZHttpsUrl.refine((value) => !value.includes("?") && !value.includes("#"), {
+  message: "Issuer must have no query or fragment",
+});
+
 // DEV_NOTE: A browser Origin header is scheme://host[:port] only, so a stored path, query or trailing slash
 // could never match it. Only exact origins are accepted.
 const ZOrigin = z.url().refine((value) => URL.canParse(value) && new URL(value).origin === value, {
@@ -110,7 +116,7 @@ export const ZCompanyConnectionBase = z.object({
   authType: z.enum(CompanyConnectionAuthTypeEnum),
   authConfig: z.record(z.string(), z.json()),
   credentialScope: z.enum(CompanyConnectionCredentialScopeIntEnum),
-  jwtIssuer: ZHttpsUrl,
+  jwtIssuer: ZJwtIssuer,
   allowedOrigins: z.array(ZOrigin),
   resetOp: z.json().nullable(),
 });

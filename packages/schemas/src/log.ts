@@ -10,6 +10,7 @@ export enum LogCategory {
   Authz = "Authz",
   Partition = "Partition",
   Cron = "Cron",
+  Widget = "Widget",
 }
 
 export enum LogAction {
@@ -49,6 +50,7 @@ export enum LogAction {
   GetCompanyConnectionDetails = "GetCompanyConnectionDetails",
   ListCompanyConnections = "ListCompanyConnections",
   UpdateCompanyConnection = "UpdateCompanyConnection",
+  GetCompanyConnectionByIssuer = "GetCompanyConnectionByIssuer",
 
   // Chatbots
   CreateChatbot = "CreateChatbot",
@@ -58,6 +60,13 @@ export enum LogAction {
   DeleteChatbot = "DeleteChatbot",
   ClearDefaultChatbot = "ClearDefaultChatbot",
   SetDefaultChatbot = "SetDefaultChatbot",
+  GetDefaultChatbot = "GetDefaultChatbot",
+
+  // Widget auth
+  DecodeWidgetJwt = "DecodeWidgetJwt",
+  GetJwks = "GetJwks",
+  VerifyWidgetJwt = "VerifyWidgetJwt",
+  AuthenticateWidget = "AuthenticateWidget",
 
   // Crypto
   ReadMasterKey = "ReadMasterKey",

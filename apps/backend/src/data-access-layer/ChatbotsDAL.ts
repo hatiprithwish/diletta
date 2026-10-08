@@ -110,6 +110,51 @@ export default class ChatbotsDAL {
     return response;
   }
 
+  async getDefaultChatbot(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindDefaultChatbotDALRequest,
+  ) {
+    const response: Schemas.ChatbotDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(chatbots.companyId, params.companyId), eq(chatbots.isDefault, true)];
+      const [chatbot] = await tx
+        .select()
+        .from(chatbots)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!chatbot) {
+        const message = "Default chatbot not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetDefaultChatbot,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Default chatbot fetched successfully";
+      response.chatbot = chatbot;
+    } catch (error) {
+      const message = "Unknown error in fetching default chatbot";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDefaultChatbot,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getChatbots(tx: NodePgTransaction<EmptyRelations>, params: Schemas.GetChatbotsDALRequest) {
     const response: Schemas.ChatbotsDALResponse = { isSuccess: false };
 

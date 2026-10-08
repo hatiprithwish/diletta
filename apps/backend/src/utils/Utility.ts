@@ -15,6 +15,25 @@ export default class Utility {
     return publicIdAlphabet();
   }
 
+  // DEV_NOTE: base64url without padding (RFC 4648 §5), as JWTs and JWKs encode their parts. null when the input
+  // isn't base64url, so a malformed token is a rejection, not an exception.
+  static decodeBase64Url(encoded: string): Uint8Array<ArrayBuffer> | null {
+    if (!/^[A-Za-z0-9_-]*$/.test(encoded) || encoded.length % 4 === 1) {
+      return null;
+    }
+    try {
+      const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+      const binary = atob(base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "="));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    } catch {
+      return null;
+    }
+  }
+
   // DEV_NOTE: Drizzle wraps the pg error (DrizzleQueryError.cause), so walk the cause chain. Checked by shape,
   // not instanceof: pg-protocol can load twice (worker bundle vs test alias). Lets a DAL name a clash with
   // a row RLS hides from it (a unique index spanning companies) instead of returning an unknown error.

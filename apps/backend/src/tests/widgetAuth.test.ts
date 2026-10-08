@@ -1,0 +1,782 @@
+import { env, createExecutionContext } from "cloudflare:test";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { inArray } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import * as Schemas from "@app/schemas";
+import { chatbots, companies, companyConnections } from "@/db/tables";
+import worker from "@/index";
+import JwksProvider from "@/providers/jwks";
+import WidgetJwtProvider from "@/providers/widgetJwt";
+import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
+import Constants from "@/config/Constants";
+import Utility from "@/utils/Utility";
+// Declare env type for this test suite
+declare module "cloudflare:test" {
+  interface ProvidedEnv extends Env {}
+}
+
+// Mock logger to avoid logtape init overhead in tests
+vi.mock("@/providers/logger", () => ({
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  configureLogger: vi.fn().mockResolvedValue(undefined),
+  disposeLogger: vi.fn().mockResolvedValue(undefined),
+  withRequestContext: vi.fn().mockImplementation((_id, next) => next()),
+}));
+
+// DEV_NOTE: A short auth timeout, so the "no first message" test doesn't wait the real 10s
+vi.mock("@/config/Constants", async (importOriginal) => {
+  const actual = await importOriginal<{ default: typeof Constants }>();
+  Object.defineProperty(actual.default, "WIDGET_AUTH_TIMEOUT_MS", { value: 300 });
+  return actual;
+});
+
+// DEV_NOTE: Tests hit the Neon staging branch; the Repo runs as diletta_app (HYPERDRIVE), so RLS applies. Fixtures and
+// cleanup run as the owner. Keys are generated per run, and each issuer's JWKS is seeded straight into the
+// JWKS_CACHE KV (miniflare), so only the JWKS fetch tests reach fetch, through a spy.
+const ownerDatabaseUrl =
+  "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
+
+const ORIGIN = "https://app.example.com";
+const randomIssuer = () => `https://${crypto.randomUUID()}.example.com`;
+
+const issuers = {
+  active: randomIssuer(),
+  disabled: randomIssuer(),
+  paused: randomIssuer(),
+  churned: randomIssuer(),
+  noChatbot: randomIssuer(),
+  fetchOk: randomIssuer(),
+  fetchDown: randomIssuer(),
+};
+
+const companyIds: string[] = [];
+let companyA = "";
+let defaultChatbotA: { publicId: string; name: string } = { publicId: "", name: "" };
+let secondChatbotA = "";
+let pausedChatbotA = "";
+let chatbotOfB = "";
+
+interface TestKey {
+  kid: string;
+  alg: Schemas.WidgetJwtAlgorithmEnum;
+  privateKey: CryptoKey;
+  jwk: Schemas.Jwk;
+}
+
+let rsaKey: TestKey;
+let ecKey: TestKey;
+let otherRsaKey: TestKey; // same kid as rsaKey, different key pair: a forged signature
+let weakRsaKey: TestKey; // 1024-bit modulus
+
+async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
+  const pool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });
+  try {
+    await run(drizzle({ client: pool }));
+  } finally {
+    await pool.end();
+  }
+}
+
+function base64Url(bytes: ArrayBuffer | Uint8Array): string {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let binary = "";
+  for (const byte of view) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+const encodeJson = (value: unknown) => base64Url(new TextEncoder().encode(JSON.stringify(value)));
+
+async function createKey(
+  alg: Schemas.WidgetJwtAlgorithmEnum,
+  kid: string,
+  modulusLength = 2048,
+): Promise<TestKey> {
+  const pair = (await crypto.subtle.generateKey(
+    alg === Schemas.WidgetJwtAlgorithmEnum.RS256
+      ? {
+          name: "RSASSA-PKCS1-v1_5",
+          modulusLength,
+          publicExponent: new Uint8Array([1, 0, 1]),
+          hash: "SHA-256",
+        }
+      : { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const publicJwk = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JsonWebKey;
+  return {
+    kid,
+    alg,
+    privateKey: pair.privateKey,
+    jwk: Schemas.ZJwk.parse({ ...publicJwk, kid, alg, use: "sig" }),
+  };
+}
+
+function claimsFor(issuer: string, overrides: Record<string, unknown> = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    iss: issuer,
+    sub: "host-user-1",
+    aud: Schemas.WIDGET_JWT_AUDIENCE,
+    iat: now,
+    exp: now + 120,
+    roles: ["editor"],
+    name: "Ada",
+    ...overrides,
+  };
+}
+
+async function signToken(
+  key: TestKey,
+  claims: Record<string, unknown>,
+  headerOverrides: Record<string, unknown> = {},
+): Promise<string> {
+  const header = { alg: key.alg, kid: key.kid, typ: "JWT", ...headerOverrides };
+  const signingInput = `${encodeJson(header)}.${encodeJson(claims)}`;
+  const signature = await crypto.subtle.sign(
+    key.alg === Schemas.WidgetJwtAlgorithmEnum.RS256
+      ? { name: "RSASSA-PKCS1-v1_5" }
+      : { name: "ECDSA", hash: "SHA-256" },
+    key.privateKey,
+    new TextEncoder().encode(signingInput),
+  );
+  return `${signingInput}.${base64Url(signature)}`;
+}
+
+async function seedJwks(issuer: string, keys: Schemas.Jwk[], fetchedAt = Date.now()) {
+  await env.JWKS_CACHE.put(
+    `${Constants.JWKS_CACHE_KEY_PREFIX}${issuer}`,
+    JSON.stringify({ keys, fetchedAt }),
+    { expirationTtl: Constants.JWKS_CACHE_TTL_SECONDS },
+  );
+}
+
+// DEV_NOTE: Answers the JWKS URL of each listed issuer; any other fetch fails the test loudly
+function mockJwksFetch(responses: Record<string, () => Response>) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    for (const [issuer, respond] of Object.entries(responses)) {
+      if (url === JwksProvider.getJwksUrl(issuer)) return respond();
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+}
+
+const jwksResponse = (keys: Schemas.Jwk[]) =>
+  new Response(JSON.stringify({ keys }), { headers: { "Content-Type": "application/json" } });
+
+beforeAll(async () => {
+  [rsaKey, ecKey, otherRsaKey, weakRsaKey] = await Promise.all([
+    createKey(Schemas.WidgetJwtAlgorithmEnum.RS256, "rs-1"),
+    createKey(Schemas.WidgetJwtAlgorithmEnum.ES256, "es-1"),
+    createKey(Schemas.WidgetJwtAlgorithmEnum.RS256, "rs-1"),
+    createKey(Schemas.WidgetJwtAlgorithmEnum.RS256, "rs-weak", 1024),
+  ]);
+
+  await withOwnerDb(async (ownerDb) => {
+    const created = await ownerDb
+      .insert(companies)
+      .values([
+        { publicId: Utility.generatePublicId(), name: `Widget A ${crypto.randomUUID()}` },
+        { publicId: Utility.generatePublicId(), name: `Widget B ${crypto.randomUUID()}` },
+        {
+          publicId: Utility.generatePublicId(),
+          name: `Widget paused ${crypto.randomUUID()}`,
+          status: Schemas.CompanyStatusIntEnum.Paused,
+        },
+        {
+          publicId: Utility.generatePublicId(),
+          name: `Widget churned ${crypto.randomUUID()}`,
+          status: Schemas.CompanyStatusIntEnum.Churned,
+        },
+        { publicId: Utility.generatePublicId(), name: `Widget no bot ${crypto.randomUUID()}` },
+      ])
+      .returning({ id: companies.id });
+    const [a, b, paused, churned, noChatbot] = created.map((row) => row.id) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    companyA = a;
+    companyIds.push(a, b, paused, churned, noChatbot);
+
+    const bots = await ownerDb
+      .insert(chatbots)
+      .values([
+        { publicId: Utility.generatePublicId(), companyId: a, name: "A default", isDefault: true },
+        { publicId: Utility.generatePublicId(), companyId: a, name: "A second" },
+        {
+          publicId: Utility.generatePublicId(),
+          companyId: a,
+          name: "A paused",
+          status: Schemas.ChatbotStatusIntEnum.Paused,
+        },
+        { publicId: Utility.generatePublicId(), companyId: b, name: "B default", isDefault: true },
+        { publicId: Utility.generatePublicId(), companyId: paused, name: "P", isDefault: true },
+        { publicId: Utility.generatePublicId(), companyId: churned, name: "C", isDefault: true },
+      ])
+      .returning({ publicId: chatbots.publicId, name: chatbots.name });
+    defaultChatbotA = bots[0]!;
+    secondChatbotA = bots[1]!.publicId;
+    pausedChatbotA = bots[2]!.publicId;
+    chatbotOfB = bots[3]!.publicId;
+
+    const connection = (
+      companyId: string,
+      jwtIssuer: string,
+      status = Schemas.CompanyConnectionStatusIntEnum.Active,
+    ) => ({
+      publicId: Utility.generatePublicId(),
+      companyId,
+      environment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+      baseUrl: "https://host.example.com/api",
+      authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
+      authConfig: {},
+      credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
+      jwtIssuer,
+      allowedOrigins: [ORIGIN],
+      status,
+    });
+    await ownerDb
+      .insert(companyConnections)
+      .values([
+        connection(a, issuers.active),
+        connection(a, issuers.disabled, Schemas.CompanyConnectionStatusIntEnum.Disabled),
+        connection(paused, issuers.paused),
+        connection(churned, issuers.churned),
+        connection(noChatbot, issuers.noChatbot),
+        connection(a, issuers.fetchOk),
+        connection(a, issuers.fetchDown),
+      ]);
+  });
+});
+
+afterAll(async () => {
+  if (companyIds.length === 0) return;
+  await withOwnerDb(async (ownerDb) => {
+    await ownerDb
+      .delete(companyConnections)
+      .where(inArray(companyConnections.companyId, companyIds));
+    await ownerDb.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
+    await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
+  });
+});
+
+beforeEach(async () => {
+  const keys = [rsaKey.jwk, ecKey.jwk, weakRsaKey.jwk];
+  await Promise.all(
+    [issuers.active, issuers.disabled, issuers.paused, issuers.churned, issuers.noChatbot].map(
+      (issuer) => seedJwks(issuer, keys),
+    ),
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("WidgetJwtProvider.decode", () => {
+  it("decodes a well-formed token without trusting it", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    const result = WidgetJwtProvider.decode(token);
+    expect(result.isSuccess).toBe(true);
+    expect(result.jwt?.header).toMatchObject({ alg: "RS256", kid: "rs-1" });
+    expect(result.jwt?.claims.iss).toBe(issuers.active);
+  });
+
+  it("rejects alg none and HS256", async () => {
+    const claims = encodeJson(claimsFor(issuers.active));
+    const none = `${encodeJson({ alg: "none", kid: "rs-1" })}.${claims}.`;
+    const hs256 = `${encodeJson({ alg: "HS256", kid: "rs-1" })}.${claims}.${base64Url(new Uint8Array(32))}`;
+    expect(WidgetJwtProvider.decode(none).isSuccess).toBe(false);
+    expect(WidgetJwtProvider.decode(hs256).isSuccess).toBe(false);
+  });
+
+  it("rejects a token without kid", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active), { kid: undefined });
+    expect(WidgetJwtProvider.decode(token).isSuccess).toBe(false);
+  });
+
+  it("rejects a token without sub or iat", async () => {
+    const noSub = await signToken(rsaKey, claimsFor(issuers.active, { sub: undefined }));
+    const noIat = await signToken(rsaKey, claimsFor(issuers.active, { iat: undefined }));
+    expect(WidgetJwtProvider.decode(noSub).isSuccess).toBe(false);
+    expect(WidgetJwtProvider.decode(noIat).isSuccess).toBe(false);
+  });
+
+  it("rejects a token with a crit header", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active), { crit: ["exp"] });
+    expect(WidgetJwtProvider.decode(token).isSuccess).toBe(false);
+  });
+
+  it("keeps sub exactly as signed and rejects a blank one", async () => {
+    const padded = await signToken(rsaKey, claimsFor(issuers.active, { sub: " alice " }));
+    const blank = await signToken(rsaKey, claimsFor(issuers.active, { sub: "   " }));
+    expect(WidgetJwtProvider.decode(padded).jwt?.claims.sub).toBe(" alice ");
+    expect(WidgetJwtProvider.decode(blank).isSuccess).toBe(false);
+  });
+
+  it("rejects malformed and oversized tokens", () => {
+    expect(WidgetJwtProvider.decode("not-a-jwt").isSuccess).toBe(false);
+    expect(WidgetJwtProvider.decode("a.b.c").isSuccess).toBe(false);
+    expect(
+      WidgetJwtProvider.decode("x".repeat(Constants.WIDGET_JWT_MAX_LENGTH + 1)).isSuccess,
+    ).toBe(false);
+  });
+});
+
+describe("WidgetJwtProvider.checkClaims", () => {
+  const now = 1_800_000_000;
+  const claims = (overrides: Partial<Schemas.WidgetJwtClaims> = {}): Schemas.WidgetJwtClaims => ({
+    iss: issuers.active,
+    sub: "host-user-1",
+    aud: Schemas.WIDGET_JWT_AUDIENCE,
+    iat: now,
+    exp: now + 300,
+    ...overrides,
+  });
+
+  it("accepts a valid token, with aud as a string or an array", () => {
+    expect(WidgetJwtProvider.checkClaims(claims(), now).isSuccess).toBe(true);
+    expect(
+      WidgetJwtProvider.checkClaims(claims({ aud: ["other", Schemas.WIDGET_JWT_AUDIENCE] }), now)
+        .isSuccess,
+    ).toBe(true);
+  });
+
+  it("rejects the wrong audience", () => {
+    const result = WidgetJwtProvider.checkClaims(claims({ aud: "another-service" }), now);
+    expect(result.isSuccess).toBe(false);
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("rejects an expired token, allowing the clock skew", () => {
+    const skew = Constants.WIDGET_JWT_CLOCK_SKEW_SECONDS;
+    const expiring = claims({ iat: now - 200, exp: now - 10 });
+    expect(WidgetJwtProvider.checkClaims(expiring, now).isSuccess).toBe(true);
+    expect(WidgetJwtProvider.checkClaims(expiring, now - 10 + skew).isSuccess).toBe(false);
+  });
+
+  it("rejects a token issued in the future", () => {
+    const skew = Constants.WIDGET_JWT_CLOCK_SKEW_SECONDS;
+    const result = WidgetJwtProvider.checkClaims(
+      claims({ iat: now + skew + 1, exp: now + skew + 60 }),
+      now,
+    );
+    expect(result.isSuccess).toBe(false);
+  });
+
+  it("honours nbf, allowing the clock skew", () => {
+    const skew = Constants.WIDGET_JWT_CLOCK_SKEW_SECONDS;
+    expect(WidgetJwtProvider.checkClaims(claims({ nbf: now - 10 }), now).isSuccess).toBe(true);
+    expect(WidgetJwtProvider.checkClaims(claims({ nbf: now + skew }), now).isSuccess).toBe(true);
+    expect(WidgetJwtProvider.checkClaims(claims({ nbf: now + skew + 1 }), now).isSuccess).toBe(
+      false,
+    );
+  });
+
+  it("rejects a lifetime over 5 minutes, or exp not after iat", () => {
+    expect(WidgetJwtProvider.checkClaims(claims({ exp: now + 301 }), now).isSuccess).toBe(false);
+    expect(WidgetJwtProvider.checkClaims(claims({ exp: now }), now).isSuccess).toBe(false);
+  });
+});
+
+describe("JwksProvider", () => {
+  it("builds the JWKS URL from the issuer", () => {
+    expect(JwksProvider.getJwksUrl("https://auth.example.com/")).toBe(
+      "https://auth.example.com/.well-known/jwks.json",
+    );
+    expect(JwksProvider.getJwksUrl("https://auth.example.com/tenant")).toBe(
+      "https://auth.example.com/tenant/.well-known/jwks.json",
+    );
+  });
+
+  it("fetches an uncached JWKS once, then serves it from KV", async () => {
+    const issuer = randomIssuer();
+    const fetchSpy = mockJwksFetch({ [issuer]: () => jwksResponse([rsaKey.jwk]) });
+
+    const first = await JwksProvider.getJwks(env, issuer);
+    const second = await JwksProvider.getJwks(env, issuer);
+
+    expect(first.isSuccess).toBe(true);
+    expect(second.jwks?.keys[0]?.kid).toBe("rs-1");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails when the issuer's JWKS endpoint errors or returns no key set", async () => {
+    const down = randomIssuer();
+    const garbage = randomIssuer();
+    mockJwksFetch({
+      [down]: () => new Response("unavailable", { status: 503 }),
+      [garbage]: () => new Response(JSON.stringify({ nope: true })),
+    });
+
+    expect((await JwksProvider.getJwks(env, down)).isSuccess).toBe(false);
+    expect((await JwksProvider.getJwks(env, garbage)).isSuccess).toBe(false);
+  });
+
+  it("refuses a JWKS over the size cap, declared or streamed", async () => {
+    const declared = randomIssuer();
+    const streamed = randomIssuer();
+    // DEV_NOTE: No Content-Length and no end: the body streams 16 KB chunks forever, so only a reader that counts
+    // bytes and cancels past the cap returns at all
+    let isCancelled = false;
+    const chunk = new Uint8Array(16 * 1024).fill(0x20);
+    mockJwksFetch({
+      [declared]: () =>
+        new Response(JSON.stringify({ keys: [] }), {
+          headers: { "Content-Length": String(Constants.JWKS_MAX_BYTES + 1) },
+        }),
+      [streamed]: () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              isCancelled = true;
+            },
+          }),
+        ),
+    });
+
+    const declaredResult = await JwksProvider.getJwks(env, declared);
+    const streamedResult = await JwksProvider.getJwks(env, streamed);
+    expect(declaredResult.isSuccess).toBe(false);
+    expect(declaredResult.message).toBe("Issuer JWKS is too large");
+    expect(streamedResult.isSuccess).toBe(false);
+    expect(streamedResult.message).toBe("Issuer JWKS is too large");
+    expect(isCancelled).toBe(true);
+  });
+
+  it("skips a refetch within the minimum interval and refetches after it", async () => {
+    const fresh = randomIssuer();
+    const stale = randomIssuer();
+    await seedJwks(fresh, [rsaKey.jwk]);
+    await seedJwks(stale, [rsaKey.jwk], Date.now() - Constants.JWKS_REFETCH_MIN_INTERVAL_MS - 1);
+    const fetchSpy = mockJwksFetch({ [stale]: () => jwksResponse([rsaKey.jwk, ecKey.jwk]) });
+
+    const skipped = await JwksProvider.refreshJwks(env, fresh);
+    const refetched = await JwksProvider.refreshJwks(env, stale);
+
+    expect(skipped.jwks?.keys).toHaveLength(1);
+    expect(refetched.jwks?.keys).toHaveLength(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("company connection jwtIssuer", () => {
+  it("rejects an issuer with a query or fragment", () => {
+    const issuer = Schemas.ZCompanyConnectionBase.shape.jwtIssuer;
+    expect(issuer.safeParse("https://auth.example.com/tenant").success).toBe(true);
+    expect(issuer.safeParse("https://auth.example.com/?tenant=a").success).toBe(false);
+    expect(issuer.safeParse("https://auth.example.com/#a").success).toBe(false);
+  });
+});
+
+describe("WidgetAuthRepo.authenticate", () => {
+  const authenticate = (
+    token: string,
+    options: { origin?: string | null; chatbotPublicId?: string | null } = {},
+  ) =>
+    new WidgetAuthRepo(env).authenticate({
+      token,
+      origin: options.origin === undefined ? ORIGIN : options.origin,
+      chatbotPublicId: options.chatbotPublicId ?? null,
+    });
+
+  it("accepts an RS256 token and resolves the default chatbot", async () => {
+    const result = await authenticate(await signToken(rsaKey, claimsFor(issuers.active)));
+
+    expect(result.isSuccess).toBe(true);
+    expect(result.identity).toMatchObject({
+      companyId: companyA,
+      chatbotPublicId: defaultChatbotA.publicId,
+      chatbotName: defaultChatbotA.name,
+      hostUserId: "host-user-1",
+      displayName: "Ada",
+      roles: ["editor"],
+    });
+  });
+
+  it("accepts an ES256 token and resolves the chatbot the embed names", async () => {
+    const result = await authenticate(await signToken(ecKey, claimsFor(issuers.active)), {
+      chatbotPublicId: secondChatbotA,
+    });
+
+    expect(result.isSuccess).toBe(true);
+    expect(result.identity?.chatbotPublicId).toBe(secondChatbotA);
+  });
+
+  it("rejects a bad signature", async () => {
+    // DEV_NOTE: Signed by another key under the issuer's kid, and a valid token whose claims were swapped afterwards
+    const forged = await signToken(otherRsaKey, claimsFor(issuers.active));
+    const [header, , signature] = (await signToken(ecKey, claimsFor(issuers.active))).split(".");
+    const tampered = `${header}.${encodeJson(claimsFor(issuers.active, { sub: "someone-else" }))}.${signature}`;
+
+    expect((await authenticate(forged)).failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+    expect((await authenticate(tampered)).failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("rejects an expired token", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = await signToken(
+      rsaKey,
+      claimsFor(issuers.active, { iat: now - 400, exp: now - 120 }),
+    );
+
+    const result = await authenticate(token);
+    expect(result.isSuccess).toBe(false);
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("rejects a wrong-audience token", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active, { aud: "another-service" }));
+
+    const result = await authenticate(token);
+    expect(result.isSuccess).toBe(false);
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("rejects an alg none token", async () => {
+    const token = `${encodeJson({ alg: "none", kid: "rs-1" })}.${encodeJson(claimsFor(issuers.active))}.`;
+    expect((await authenticate(token)).failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("rejects a key published for another algorithm under the token's kid", async () => {
+    const token = await signToken(ecKey, claimsFor(issuers.active), { alg: "RS256" });
+    expect((await authenticate(token)).failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("rejects an RSA key under 2048 bits", async () => {
+    const token = await signToken(weakRsaKey, claimsFor(issuers.active));
+    expect((await authenticate(token)).failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  });
+
+  it("refetches the JWKS once for an unknown kid, then rejects", async () => {
+    const unknown = await createKey(Schemas.WidgetJwtAlgorithmEnum.RS256, "rs-unknown");
+    await seedJwks(
+      issuers.active,
+      [rsaKey.jwk],
+      Date.now() - Constants.JWKS_REFETCH_MIN_INTERVAL_MS - 1,
+    );
+    const fetchSpy = mockJwksFetch({ [issuers.active]: () => jwksResponse([rsaKey.jwk]) });
+
+    const result = await authenticate(await signToken(unknown, claimsFor(issuers.active)));
+
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a key the host rotated in, found by the refetch", async () => {
+    const rotated = await createKey(Schemas.WidgetJwtAlgorithmEnum.ES256, "es-rotated");
+    await seedJwks(
+      issuers.active,
+      [rsaKey.jwk],
+      Date.now() - Constants.JWKS_REFETCH_MIN_INTERVAL_MS - 1,
+    );
+    mockJwksFetch({ [issuers.active]: () => jwksResponse([rsaKey.jwk, rotated.jwk]) });
+
+    const result = await authenticate(await signToken(rotated, claimsFor(issuers.active)));
+    expect(result.isSuccess).toBe(true);
+  });
+
+  it("rejects an unregistered issuer without fetching its JWKS", async () => {
+    const fetchSpy = mockJwksFetch({});
+    const result = await authenticate(await signToken(rsaKey, claimsFor(randomIssuer())));
+
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("fetches and caches an uncached issuer's JWKS", async () => {
+    const fetchSpy = mockJwksFetch({ [issuers.fetchOk]: () => jwksResponse([rsaKey.jwk]) });
+
+    const first = await authenticate(await signToken(rsaKey, claimsFor(issuers.fetchOk)));
+    const second = await authenticate(await signToken(rsaKey, claimsFor(issuers.fetchOk)));
+
+    expect(first.isSuccess).toBe(true);
+    expect(second.isSuccess).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails as a server error when the issuer's JWKS can't be read", async () => {
+    mockJwksFetch({ [issuers.fetchDown]: () => new Response("down", { status: 500 }) });
+    const result = await authenticate(await signToken(rsaKey, claimsFor(issuers.fetchDown)));
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.ServerError);
+  });
+
+  it("answers Unauthorized to an unsigned probe, whatever the issuer, connection or origin", async () => {
+    // DEV_NOTE: A forged token must not tell a registered issuer, a disabled connection or an allowed origin apart
+    const probe = (issuer: string) => signToken(otherRsaKey, claimsFor(issuer));
+    const results = await Promise.all([
+      authenticate(await probe(randomIssuer())),
+      authenticate(await probe(issuers.active)),
+      authenticate(await probe(issuers.disabled)),
+      authenticate(await probe(issuers.active), { origin: "https://evil.example.com" }),
+      authenticate(await probe(issuers.paused)),
+    ]);
+    for (const result of results) {
+      expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+    }
+  });
+
+  it("rejects a disabled connection", async () => {
+    const result = await authenticate(await signToken(rsaKey, claimsFor(issuers.disabled)));
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Forbidden);
+  });
+
+  it("rejects an origin the connection doesn't allow, or none", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    expect((await authenticate(token, { origin: "https://evil.example.com" })).failure).toBe(
+      Schemas.WidgetAuthFailureEnum.Forbidden,
+    );
+    expect((await authenticate(token, { origin: `${ORIGIN}/` })).failure).toBe(
+      Schemas.WidgetAuthFailureEnum.Forbidden,
+    );
+    expect((await authenticate(token, { origin: null })).failure).toBe(
+      Schemas.WidgetAuthFailureEnum.Forbidden,
+    );
+  });
+
+  it("rejects paused and churned companies", async () => {
+    const paused = await authenticate(await signToken(rsaKey, claimsFor(issuers.paused)));
+    const churned = await authenticate(await signToken(rsaKey, claimsFor(issuers.churned)));
+    expect(paused.failure).toBe(Schemas.WidgetAuthFailureEnum.Forbidden);
+    expect(churned.failure).toBe(Schemas.WidgetAuthFailureEnum.Forbidden);
+  });
+
+  it("rejects a paused chatbot", async () => {
+    const result = await authenticate(await signToken(rsaKey, claimsFor(issuers.active)), {
+      chatbotPublicId: pausedChatbotA,
+    });
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Forbidden);
+  });
+
+  it("can't reach another company's chatbot", async () => {
+    const result = await authenticate(await signToken(rsaKey, claimsFor(issuers.active)), {
+      chatbotPublicId: chatbotOfB,
+    });
+    expect(result.isSuccess).toBe(false);
+    expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.NotFound);
+    expect(result.identity).toBeUndefined();
+  });
+
+  it("answers not found for an unknown chatbot or a company with no default", async () => {
+    const unknown = await authenticate(await signToken(rsaKey, claimsFor(issuers.active)), {
+      chatbotPublicId: Utility.generatePublicId(),
+    });
+    const noDefault = await authenticate(await signToken(rsaKey, claimsFor(issuers.noChatbot)));
+    expect(unknown.failure).toBe(Schemas.WidgetAuthFailureEnum.NotFound);
+    expect(noDefault.failure).toBe(Schemas.WidgetAuthFailureEnum.NotFound);
+  });
+});
+
+describe("GET /widget/ws", () => {
+  async function openSocket(options: { query?: string; origin?: string | null } = {}) {
+    const headers: Record<string, string> = { Upgrade: "websocket" };
+    const origin = options.origin === undefined ? ORIGIN : options.origin;
+    if (origin !== null) headers["Origin"] = origin;
+
+    const response = await worker.fetch(
+      new Request(`http://localhost/widget/ws${options.query ?? ""}`, { headers }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(101);
+    const socket = response.webSocket!;
+    socket.accept();
+
+    const messages: Schemas.WidgetServerMessage[] = [];
+    let onMessage: (() => void) | undefined;
+    socket.addEventListener("message", (event) => {
+      messages.push(JSON.parse(event.data as string));
+      onMessage?.();
+    });
+    const closed = new Promise<number>((resolve) => {
+      socket.addEventListener("close", (event) => resolve(event.code));
+    });
+    const nextMessage = () =>
+      new Promise<Schemas.WidgetServerMessage>((resolve) => {
+        const take = () => {
+          const message = messages.shift();
+          if (message) resolve(message);
+          else onMessage = take;
+        };
+        take();
+      });
+
+    return { socket, closed, nextMessage };
+  }
+
+  it("answers 426 without a WebSocket upgrade", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/widget/ws"),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(426);
+  });
+
+  it("authenticates with the token as the first message", async () => {
+    const { socket, nextMessage } = await openSocket();
+    socket.send(
+      JSON.stringify({ type: "auth", token: await signToken(rsaKey, claimsFor(issuers.active)) }),
+    );
+
+    expect(await nextMessage()).toEqual({
+      type: "auth_ok",
+      chatbot: { publicId: defaultChatbotA.publicId, name: defaultChatbotA.name },
+    });
+
+    socket.send(JSON.stringify({ type: "something-else" }));
+    expect(await nextMessage()).toEqual({ type: "error", message: "Unsupported message" });
+    socket.close(1000);
+  });
+
+  it("closes 4401 on a bad token", async () => {
+    const { socket, closed } = await openSocket();
+    const now = Math.floor(Date.now() / 1000);
+    const expired = await signToken(
+      rsaKey,
+      claimsFor(issuers.active, { iat: now - 400, exp: now - 120 }),
+    );
+    socket.send(JSON.stringify({ type: "auth", token: expired }));
+    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.Unauthorized);
+  });
+
+  it("closes 4403 on an origin the connection doesn't allow", async () => {
+    const { socket, closed } = await openSocket({ origin: "https://evil.example.com" });
+    socket.send(
+      JSON.stringify({ type: "auth", token: await signToken(rsaKey, claimsFor(issuers.active)) }),
+    );
+    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.Forbidden);
+  });
+
+  it("closes 4404 on a chatbot of another company", async () => {
+    const { socket, closed } = await openSocket({ query: `?chatbot=${chatbotOfB}` });
+    socket.send(
+      JSON.stringify({ type: "auth", token: await signToken(rsaKey, claimsFor(issuers.active)) }),
+    );
+    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.NotFound);
+  });
+
+  it("closes 4400 when the first message isn't an auth message", async () => {
+    const first = await openSocket();
+    first.socket.send("not json");
+    expect(await first.closed).toBe(Schemas.WidgetCloseCodeEnum.BadRequest);
+
+    const second = await openSocket();
+    second.socket.send(JSON.stringify({ type: "message", text: "hi" }));
+    expect(await second.closed).toBe(Schemas.WidgetCloseCodeEnum.BadRequest);
+  });
+
+  it("closes 4408 when no auth message arrives in time", async () => {
+    const { closed } = await openSocket();
+    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.AuthTimeout);
+  });
+});

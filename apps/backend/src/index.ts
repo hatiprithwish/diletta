@@ -7,6 +7,7 @@ import AuthRoutes from "@/routes/AuthRoutes";
 import AdminsRoutes from "@/routes/AdminsRoutes";
 import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
 import CompaniesRoutes from "@/routes/CompaniesRoutes";
+import WidgetRoutes from "@/routes/WidgetRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
@@ -48,6 +49,7 @@ app.route("/auth", AuthRoutes);
 app.route("/dashboard", AdminsRoutes);
 app.route("/dashboard/chatbots", ChatbotsRoutes);
 app.route("/operator/companies", CompaniesRoutes);
+app.route("/widget", WidgetRoutes);
 
 export default {
   fetch(req: Request, env: Env, ctx: ExecutionContext) {
