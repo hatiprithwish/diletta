@@ -19,22 +19,22 @@
 
 ### Golden files
 
-| Layer                | File                                                 |
-| -------------------- | ---------------------------------------------------- |
-| Tenant transaction   | `apps/backend/src/db/withTenant.ts`                  |
-| Platform transaction | `apps/backend/src/db/withPlatform.ts`                |
-| RLS migration        | `apps/backend/src/db/migrations/*_rls_policies/`     |
-| DAL                  | `apps/backend/src/data-access-layer/ChatbotsDAL.ts`  |
-| Repository           | `apps/backend/src/repositories/ChatbotsRepo.ts`      |
-| Provider → DAL       | `apps/backend/src/providers/companyKey.ts`           |
-| Schemas              | `packages/schemas/src/chatbots/`                     |
-| Tenant tests         | `apps/backend/src/tests/chatbots.test.ts`            |
-| RLS tests            | `apps/backend/src/tests/rls.test.ts`                 |
-| Routes               | `apps/backend/src/routes/UserRoutes.ts` (until M1-8) |
-| Frontend data layer  | none yet: first dashboard page sets it (M4)          |
-| Frontend page        | none yet: first dashboard page sets it (M4)          |
+| Layer                | File                                                |
+| -------------------- | --------------------------------------------------- |
+| Tenant transaction   | `apps/backend/src/db/withTenant.ts`                 |
+| Platform transaction | `apps/backend/src/db/withPlatform.ts`               |
+| RLS migration        | `apps/backend/src/db/migrations/*_rls_policies/`    |
+| DAL                  | `apps/backend/src/data-access-layer/ChatbotsDAL.ts` |
+| Repository           | `apps/backend/src/repositories/ChatbotsRepo.ts`     |
+| Provider → DAL       | `apps/backend/src/providers/companyKey.ts`          |
+| Schemas              | `packages/schemas/src/chatbots/`                    |
+| Tenant tests         | `apps/backend/src/tests/chatbots.test.ts`           |
+| RLS tests            | `apps/backend/src/tests/rls.test.ts`                |
+| Routes               | `apps/backend/src/routes/ChatbotsRoutes.ts`         |
+| Frontend data layer  | none yet: first dashboard page sets it (M4)         |
+| Frontend page        | none yet: first dashboard page sets it (M4)         |
 
-Chatbots is the tenant golden example (M0-5). It has no routes yet: the Clerk admin → company lookup arrives with M1-8, which adds the first tenant route and replaces the Routes row. Until a frontend golden exists, follow the Conventions below and flag anything they don't cover.
+Chatbots is the tenant golden example (M0-5), and since M1-8 also for routes. Operator routes follow `CompaniesRoutes.ts`. Until a frontend golden exists, follow the Conventions below and flag anything they don't cover.
 
 ## Stack
 
@@ -68,7 +68,8 @@ Before using any third-party API: check the installed version in `package.json`,
 - **Provider → DAL**: a provider in `providers/` may call a DAL directly when several Repos share the step (e.g. `CompanyKeyProvider` reads `company_encryption_keys`). It takes the Repo's `tx` and never opens a transaction or builds a query itself; it returns `{ isSuccess, message }` and never throws. See `providers/companyKey.ts`.
 - **Encryption** (`encrypted_*` columns): only through `CompanyKeyProvider.encryptValue` / `decryptValue` (company key create/rotate: `CompanyKeyProvider.createCompanyKey`, `CompanyEncryptionKeysRepo`), which use `@app/crypto`. Store `encryption_key_version` and `iv` with the ciphertext and decrypt with the row's version. Plaintext is encrypted in the Repo before the DAL; it never reaches a DAL param, a log or a route response (`getDecrypted*` responses are server-side only). Ciphertext, iv and key bytes stay out of log metadata.
 - **Pagination** (any list that grows without bound): request extends `ZPageApiRequest` (`common.ts`) with a `<Feature>SortColumn` enum; Repo fills defaults (`Constants.DEFAULT_PAGE_NO`/`DEFAULT_PAGE_SIZE`, `createdAt` desc); DAL maps the sort column, then `.orderBy(expr, asc(<table>.id)).limit(pageSize).offset((pageNo - 1) * pageSize)`. Totals come from a separate `get<Feature>Count` returning `TotalRecordsResponse`. No cursors. See `ChatbotUsersDAL.ts`.
-- **Routes**: `checkAuth` first, then `zValidator`. `c.get("clerkUserId")` for the user. 201/200/404/500.
+- **Routes**: `checkAuth` → `authorizeCompany(action)` (`/dashboard/*`) or `authorizePlatform(action)` (`/operator/*`) → `zValidator` → handler. Authorizing before validating means an unauthorized call gets 403, not 400. `c.get("companyId")` is the tenant key (from the signed-in admin, never the client). 201/200/403/404/500. Only `GET /dashboard/me` runs without an authorize middleware.
+- **Authz (M1-8)**: one `can(admin, action, resource)` (`packages/schemas/src/authz/`) for every dashboard and operator action. A new action goes in `AuthzActionEnum` (and in `OPERATOR_ONLY_ACTIONS` if a company admin must never perform it). Roles are derived from `admins.company_id`: NULL = operator, set = company admin. No role column. Company admins are created on first sign-in from Clerk invite metadata (`companyPublicId`); operators are added by hand only (`docs/runbooks/operators.md`). Never create an `admins` row with no company from code.
 - **Frontend `-data.ts`**: `Queries` class with hierarchical keys (`keys.all()` invalidates every detail). `setQueryData` on update, `removeQueries` on delete, `mutateAsync` when the caller must await, `mutate` otherwise. Every mutation needs a non-empty `onError` (toast).
 - **Frontend pages**: `useAuth()` at page level, explicit loading/error states, all requests through `apiClient`.
 - **Routes needing user data** live under `_authenticated/` — always.
@@ -142,6 +143,7 @@ Before using any third-party API: check the installed version in `package.json`,
 - From M1-5: `crypto.subtle` on company data outside `@app/crypto`; a plaintext secret in a DAL param, log or route response
 - From M0-5: a tenant query outside `withTenant` (or `withPlatform` for cross-company work)
 - From M1-3: code under test on the owner connection; a table without its `diletta_app` grant and RLS policies; `withPlatform` for one company's data
+- From M1-8: a `/dashboard/*` or `/operator/*` route without `authorizeCompany` / `authorizePlatform` (except `GET /dashboard/me`); app code inserting an `admins` row with no company
 - `npm`/`yarn` — `pnpm` always
 
 ## Commands

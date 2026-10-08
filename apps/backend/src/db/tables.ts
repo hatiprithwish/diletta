@@ -17,24 +17,6 @@ const tsvector = t.customType<{ data: string }>({
   },
 });
 
-export const users = table(
-  "users",
-  {
-    id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
-    publicId: t.text("public_id").notNull(),
-    clerkId: t.text("clerk_id").notNull(),
-    email: t.text().notNull(),
-    role: t.text().$type<Schemas.UserRoleEnum>().notNull(),
-    createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    t.uniqueIndex("UNQ_users_public_id").on(table.publicId),
-    t.uniqueIndex("UNQ_users_clerk_id").on(table.clerkId),
-    t.uniqueIndex("UNQ_users_email").on(table.email),
-  ],
-);
-
 // DEV_NOTE: Tenancy root. companies.id is the tenant key that withTenant puts in app.company_id.
 export const companies = table(
   "companies",

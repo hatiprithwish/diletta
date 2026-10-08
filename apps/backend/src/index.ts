@@ -4,7 +4,9 @@ import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
 import { configureLogger, disposeLogger, withRequestContext } from "@/providers/logger";
 import AuthRoutes from "@/routes/AuthRoutes";
-import UsersRoutes from "@/routes/UserRoutes";
+import AdminsRoutes from "@/routes/AdminsRoutes";
+import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
+import CompaniesRoutes from "@/routes/CompaniesRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
@@ -42,7 +44,9 @@ app.use(
 );
 
 app.route("/auth", AuthRoutes);
-app.route("/users", UsersRoutes);
+app.route("/dashboard", AdminsRoutes);
+app.route("/dashboard/chatbots", ChatbotsRoutes);
+app.route("/operator/companies", CompaniesRoutes);
 
 export default {
   fetch(req: Request, env: Env, ctx: ExecutionContext) {

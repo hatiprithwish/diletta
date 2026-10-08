@@ -7,16 +7,21 @@ export enum LogCategory {
   Crypto = "Crypto",
   Relay = "Relay",
   Queue = "Queue",
+  Authz = "Authz",
 }
 
 export enum LogAction {
   // Auth
   VerifyToken = "VerifyToken",
-  SyncClerkUser = "SyncClerkUser",
   SignOut = "SignOut",
+  GetClerkAdminProfile = "GetClerkAdminProfile",
+  Authorize = "Authorize",
 
-  // User
-  GetUserDetails = "GetUserDetails",
+  // Admins
+  GetAdminByClerkUserId = "GetAdminByClerkUserId",
+  CreateAdmin = "CreateAdmin",
+  GetAdminContext = "GetAdminContext",
+  GetMe = "GetMe",
 
   // Tenant transactions
   WithTenant = "WithTenant",
@@ -25,6 +30,7 @@ export enum LogAction {
   // Companies
   CreateCompany = "CreateCompany",
   GetCompanyDetails = "GetCompanyDetails",
+  GetCompanyByPublicId = "GetCompanyByPublicId",
   ListCompanies = "ListCompanies",
   CountCompanies = "CountCompanies",
   UpdateCompany = "UpdateCompany",

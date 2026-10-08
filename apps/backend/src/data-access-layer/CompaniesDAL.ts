@@ -85,6 +85,39 @@ export default class CompaniesDAL {
     return response;
   }
 
+  // DEV_NOTE: Pre-tenant lookup (withPlatform): resolves the company named in a Clerk invite, so the admin can be
+  // created inside withTenant on it. A lookup — no row is a normal answer (isSuccess, no company).
+  async getCompanyByPublicId(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindCompanyByPublicIdDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [company] = await tx
+        .select()
+        .from(companies)
+        .where(eq(companies.publicId, params.publicId))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = company ? "Company fetched successfully" : "Company not found";
+      response.company = company;
+    } catch (error) {
+      const message = "Unknown error in fetching company";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyByPublicId,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getCompanies(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetCompaniesDALRequest,

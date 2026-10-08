@@ -26,10 +26,11 @@ export const ZSortDirection = z.enum(SortDirection);
 export const MAX_PAGE_SIZE = 100;
 
 // DEV_NOTE: Page-number pagination for lists that grow without bound. Every field is optional; the Repo fills
-// the defaults. A list request extends this with its own sortColumn enum.
+// the defaults. A list request extends this with its own sortColumn enum. Lists are GET routes validated with
+// zValidator("query", …), where every value arrives as a string, so the numbers are coerced.
 export const ZPageApiRequest = z.object({
-  pageNo: z.number().int().min(1).nullable().optional(),
-  pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).nullable().optional(),
+  pageNo: z.coerce.number().int().min(1).nullable().optional(),
+  pageSize: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).nullable().optional(),
   sortDirection: ZSortDirection.nullable().optional(),
 });
 export type PageApiRequest = z.infer<typeof ZPageApiRequest>;
