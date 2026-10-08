@@ -27,4 +27,13 @@ export default class Constants {
   static readonly OUTBOX_MAX_ATTEMPTS = 5;
   static readonly OUTBOX_PUBLISHED_RETENTION_DAYS = 3;
   static readonly OUTBOX_LAST_ERROR_MAX_LENGTH = 500;
+
+  // DEV_NOTE: activity_log partition maintenance (M1-9): the current UTC month plus this many after it must always
+  // have a partition. The SQL function caps creation at 12 months ahead.
+  static readonly ACTIVITY_LOG_PARTITION_MONTHS_AHEAD = 3;
+
+  // DEV_NOTE: Cron expressions, matched against controller.cron in scheduled(). Each must equal its entry in
+  // wrangler.jsonc triggers.crons exactly.
+  static readonly OUTBOX_SWEEP_CRON = "* * * * *";
+  static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
 }

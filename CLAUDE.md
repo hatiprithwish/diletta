@@ -83,7 +83,8 @@ Before using any third-party API: check the installed version in `package.json`,
 - `created_at` and `updated_at`: `t.timestamp(..., { withTimezone: true }).notNull().defaultNow()` (append-only/derived tables above: no `updated_at`). DAL sets `updatedAt` on update. Status/type ints: `t.smallint()`.
 - No DB foreign keys: the DAL checks references. Index every reference column.
 - `halfvec` columns and HNSW indexes go in `tables.ts` (`t.halfvec("embedding", { dimensions: 1024 })`, `.using("hnsw", col.op("halfvec_cosine_ops"))`). RLS policies, partitions and extensions live in custom SQL migrations (`pnpm --filter backend db:generate:sql <name>`) in the same `src/db/migrations` journal as drizzle-kit output, so ordering is guaranteed.
-- `activity_log` is partitioned by month (`*_partition_activity_log` migration), so its primary key is `(id, created_at)`. Monthly partitions exist through 2027-12, then rows land in `activity_log_default`; add months ahead of time.
+- `activity_log` is partitioned by month (`*_partition_activity_log` migration), so its primary key is `(id, created_at)`. A daily Cron (`ActivityLogPartitionsCron` → `ActivityLogPartitionsRepo`) keeps the current UTC month and the next 3 partitioned, and alerts if a month is missing or `activity_log_default` holds rows (it must stay empty). Runbook: `docs/runbooks/activity-log-partitions.md`.
+- `diletta_app` never gets DDL rights. Where the worker needs an owner action, it calls a `SECURITY DEFINER` function owned by the owner role that does one fixed thing, validates its arguments, sets `search_path = pg_catalog, public, pg_temp`, and is `REVOKE`d from `PUBLIC` and granted `EXECUTE` to `diletta_app` only. See `*_activity_log_partition_maintenance`.
 - Every new migration folder gets a hand-written `down.sql` that reverses it (`--> statement-breakpoint` between statements). `db:rollback` runs it and removes the journal row.
 - `dbClient.ts` builds a client per request from `env.HYPERDRIVE.connectionString`; never cache a client across requests.
 - Environments: staging and production only. Two Neon branches (`staging`, `production`), each behind its own Hyperdrive config. Local dev and tests use the staging branch via `apps/backend/.env`; never point local at production. Tests must clean up the rows they create.
@@ -143,6 +144,7 @@ Before using any third-party API: check the installed version in `package.json`,
 - From M1-5: `crypto.subtle` on company data outside `@app/crypto`; a plaintext secret in a DAL param, log or route response
 - From M0-5: a tenant query outside `withTenant` (or `withPlatform` for cross-company work)
 - From M1-3: code under test on the owner connection; a table without its `diletta_app` grant and RLS policies; `withPlatform` for one company's data
+- From M1-9: DDL rights or an owner connection string for the worker; a `SECURITY DEFINER` function without a fixed `search_path`, or executable by `PUBLIC`
 - From M1-8: a `/dashboard/*` or `/operator/*` route without `authorizeCompany` / `authorizePlatform` (except `GET /dashboard/me`); app code inserting an `admins` row with no company
 - `npm`/`yarn` — `pnpm` always
 

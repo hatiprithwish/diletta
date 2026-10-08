@@ -61,7 +61,7 @@ Order matters. If Hyperdrive switches to `diletta_app` before the role can log i
 
 ## What can't run as diletta_app
 
-- DDL: `CREATE`/`ALTER`/`DROP` of any kind, including new `activity_log` partitions (M1-9).
+- DDL: `CREATE`/`ALTER`/`DROP` of any kind. New `activity_log` partitions are created only through the `SECURITY DEFINER` function `create_activity_log_partition` (M1-9, [activity-log-partitions.md](activity-log-partitions.md)).
 - The `drizzle` schema (migrations journal).
 - `activity_log_*` partitions directly. The app reaches them only through `activity_log`, where the policies apply.
 - A new table, until its migration grants it to `diletta_app` and adds its RLS policies.

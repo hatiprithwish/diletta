@@ -5,3 +5,13 @@ import type { ApiResponse } from "../common";
 export interface ActivityLogDALResponse extends ApiResponse {
   activityLog?: ActivityLog;
 }
+
+// DEV_NOTE: wasCreated = false when the month's partition already existed
+export interface ActivityLogPartitionDALResponse extends ApiResponse {
+  partitionName?: string;
+  wasCreated?: boolean;
+}
+
+export interface ActivityLogDefaultPartitionDALResponse extends ApiResponse {
+  hasRows?: boolean;
+}

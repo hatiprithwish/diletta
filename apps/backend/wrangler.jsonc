@@ -39,9 +39,10 @@
     ],
   },
   // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows.
-  // triggers is inherited by every env.
+  // Daily 03:00 UTC: activity_log partition maintenance (M1-9). scheduled() matches these strings against
+  // Constants.OUTBOX_SWEEP_CRON / ACTIVITY_LOG_PARTITIONS_CRON; change both together. triggers is inherited by every env.
   "triggers": {
-    "crons": ["* * * * *"],
+    "crons": ["* * * * *", "0 3 * * *"],
   },
   "env": {
     "staging": {

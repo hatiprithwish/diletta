@@ -2,13 +2,14 @@ import { honoLogger } from "@logtape/hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
-import { configureLogger, disposeLogger, withRequestContext } from "@/providers/logger";
+import AppLogger, { configureLogger, disposeLogger, withRequestContext } from "@/providers/logger";
 import AuthRoutes from "@/routes/AuthRoutes";
 import AdminsRoutes from "@/routes/AdminsRoutes";
 import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
 import CompaniesRoutes from "@/routes/CompaniesRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
+import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
 import consumeEvents from "@/queues/EventsConsumer";
 
@@ -54,9 +55,24 @@ export default {
     return app.fetch(req, env, ctx);
   },
 
-  // DEV_NOTE: One cron (every minute, wrangler.jsonc): the outbox relay sweep + purge
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    await runOutboxSweep(env);
+  // DEV_NOTE: Two crons (wrangler.jsonc), told apart by controller.cron: every minute the outbox relay sweep + purge,
+  // daily the activity_log partition maintenance
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    switch (controller.cron) {
+      case Constants.OUTBOX_SWEEP_CRON:
+        await runOutboxSweep(env);
+        break;
+      case Constants.ACTIVITY_LOG_PARTITIONS_CRON:
+        await runActivityLogPartitions(env);
+        break;
+      default:
+        AppLogger.error({
+          category: Schemas.LogCategory.Cron,
+          action: Schemas.LogAction.DispatchCron,
+          message: "No job for this cron expression",
+          metadata: { cron: controller.cron },
+        });
+    }
     ctx.waitUntil(disposeLogger());
   },
 
