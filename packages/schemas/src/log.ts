@@ -5,6 +5,8 @@ export enum LogCategory {
   Middleware = "Middleware",
   DB = "DB",
   Crypto = "Crypto",
+  Relay = "Relay",
+  Queue = "Queue",
 }
 
 export enum LogAction {
@@ -74,4 +76,19 @@ export enum LogAction {
   GetChatbotUserSecretDetails = "GetChatbotUserSecretDetails",
   ListChatbotUserSecrets = "ListChatbotUserSecrets",
   UpdateChatbotUserSecret = "UpdateChatbotUserSecret",
+
+  // Activity log + outbox
+  CreateActivityLog = "CreateActivityLog",
+  CreateEventOutbox = "CreateEventOutbox",
+  GetEventOutboxByDedupeKey = "GetEventOutboxByDedupeKey",
+  LockEventOutboxDedupeKey = "LockEventOutboxDedupeKey",
+  LockPendingEventOutboxes = "LockPendingEventOutboxes",
+  MarkEventOutboxesPublished = "MarkEventOutboxesPublished",
+  SetEventOutboxLastError = "SetEventOutboxLastError",
+  MarkEventOutboxAttemptFailed = "MarkEventOutboxAttemptFailed",
+  DeletePublishedEventOutboxes = "DeletePublishedEventOutboxes",
+  RelayEvents = "RelayEvents",
+  SweepPendingEvents = "SweepPendingEvents",
+  PurgePublishedEvents = "PurgePublishedEvents",
+  ConsumeEvent = "ConsumeEvent",
 }

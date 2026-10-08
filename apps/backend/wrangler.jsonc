@@ -1,5 +1,8 @@
 {
-  "name": "diletta-worker",
+  // DEV_NOTE: The top level is local dev and tests only; CI deploys with --env staging / --env production. Its name
+  // and queues are deliberately not deployable targets: a stray `wrangler deploy` without --env can't overwrite the
+  // production worker or take over a remote queue's consumer (the -local queues don't exist remotely, so it fails).
+  "name": "diletta-worker-local",
   "main": "src/index.ts",
   // DEV_NOTE: keep it up to date with the current date.
   "compatibility_date": "2026-05-22",
@@ -22,6 +25,24 @@
       "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
     },
   ],
+  // DEV_NOTE: Outbox relay target (M1-6). Local dev and tests run miniflare's simulated queue; local-only names.
+  "queues": {
+    "producers": [{ "binding": "EVENTS_QUEUE", "queue": "diletta-events-local" }],
+    "consumers": [
+      {
+        "queue": "diletta-events-local",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "diletta-events-local-dlq",
+      },
+    ],
+  },
+  // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows.
+  // triggers is inherited by every env.
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
   "env": {
     "staging": {
       "name": "diletta-worker-staging",
@@ -40,6 +61,20 @@
           "secret_name": "diletta-master-key-v1-staging",
         },
       ],
+      // DEV_NOTE: Outbox relay target (M1-6). The worker produces and consumes its own events; messages past
+      // max_retries land in the DLQ. Bindings don't inherit, so each env declares its own.
+      "queues": {
+        "producers": [{ "binding": "EVENTS_QUEUE", "queue": "diletta-events-staging" }],
+        "consumers": [
+          {
+            "queue": "diletta-events-staging",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "diletta-events-staging-dlq",
+          },
+        ],
+      },
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
       },
@@ -67,6 +102,20 @@
           "secret_name": "diletta-master-key-v1-production",
         },
       ],
+      // DEV_NOTE: Outbox relay target (M1-6). The worker produces and consumes its own events; messages past
+      // max_retries land in the DLQ. Bindings don't inherit, so each env declares its own.
+      "queues": {
+        "producers": [{ "binding": "EVENTS_QUEUE", "queue": "diletta-events-production" }],
+        "consumers": [
+          {
+            "queue": "diletta-events-production",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "diletta-events-production-dlq",
+          },
+        ],
+      },
       "vars": {
         "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
       },
