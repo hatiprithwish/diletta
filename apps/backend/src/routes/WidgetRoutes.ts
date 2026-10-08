@@ -39,14 +39,27 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
   // first one is being verified get an error, not a second verification.
   let state: "pending" | "verifying" | "authenticated" | "closed" = "pending";
 
+  // DEV_NOTE: The client can disconnect at any moment, including between a verification finishing and its close event
+  // arriving, and send / close on a socket that is already closing throw. Both are guarded so they never throw into
+  // the verification promise chain; a failed send means the socket is gone.
   const send = (message: Schemas.WidgetServerMessage) => {
-    if (state !== "closed") server.send(JSON.stringify(message));
+    if (state === "closed") return;
+    try {
+      server.send(JSON.stringify(message));
+    } catch {
+      state = "closed";
+      clearTimeout(authTimer);
+    }
   };
   const close = (code: Schemas.WidgetCloseCodeEnum) => {
     if (state === "closed") return;
     state = "closed";
     clearTimeout(authTimer);
-    server.close(code, CLOSE_REASON[code]);
+    try {
+      server.close(code, CLOSE_REASON[code]);
+    } catch {
+      // DEV_NOTE: Already closing or closed by the client: nothing left to close
+    }
   };
 
   // DEV_NOTE: Guards the first message only. Once it arrives the timer stops: verification is bounded by the JWKS

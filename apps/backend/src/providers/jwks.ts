@@ -78,14 +78,14 @@ export default class JwksProvider {
         return response;
       }
 
-      const body = await fetched.text();
-      if (body.length > Constants.JWKS_MAX_BYTES) {
+      const body = await JwksProvider.readCappedBody(fetched);
+      if (body === null) {
         const message = "Issuer JWKS is too large";
         AppLogger.error({
           category: Schemas.LogCategory.Widget,
           action: Schemas.LogAction.GetJwks,
           message,
-          metadata: { issuer, url, length: body.length },
+          metadata: { issuer, url, maxBytes: Constants.JWKS_MAX_BYTES },
         });
         response.message = message;
         return response;
@@ -123,6 +123,40 @@ export default class JwksProvider {
     }
 
     return response;
+  }
+
+  // DEV_NOTE: Reads at most JWKS_MAX_BYTES, counted in bytes as they arrive: a declared Content-Length over the cap is
+  // refused before reading, and an undeclared or understated one is cut off (stream cancelled) once the cap is
+  // passed, so an issuer can't make the worker buffer an unbounded body. null = over the cap.
+  private static async readCappedBody(fetched: Response): Promise<string | null> {
+    const declared = Number(fetched.headers.get("Content-Length"));
+    if (Number.isFinite(declared) && declared > Constants.JWKS_MAX_BYTES) {
+      await fetched.body?.cancel();
+      return null;
+    }
+    if (!fetched.body) return "";
+
+    const reader = fetched.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > Constants.JWKS_MAX_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(bytes);
   }
 
   // DEV_NOTE: A KV write failure doesn't fail the sign-in: the fetched keys are still good, the next sign-in fetches

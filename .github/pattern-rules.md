@@ -1073,7 +1073,7 @@ SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
 
 ### 3.22 Widget Identity Only From a Verified Companion JWT [CRITICAL]
 
-**Rule:** The widget authenticates in-band: its first WebSocket message is `{ type: "auth", token }` (never a token in the URL, a query param or a header), and nothing else is handled until `WidgetAuthRepo.authenticate` succeeds. That method is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required) → issuer → `company_connections` row (`withPlatform`) → connection active and `Origin` in its `allowed_origins` → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `iat`, lifetime ≤ 5 min → company active and the chatbot active, in `withTenant`. The identity carries internal ids and stays server-side; the widget gets only a close code (`WidgetCloseCodeEnum`) or `auth_ok` with the chatbot's `publicId`. The token is never logged or stored.
+**Rule:** The widget authenticates in-band: its first WebSocket message is `{ type: "auth", token }` (never a token in the URL, a query param or a header), and nothing else is handled until `WidgetAuthRepo.authenticate` succeeds. That method is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required; `crit` rejected) → issuer → `company_connections` row (`withPlatform`) → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer, body capped in bytes while streaming) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `nbf`, `iat`, lifetime ≤ 5 min → connection active and `Origin` in its `allowed_origins` → company active and the chatbot active, in `withTenant`. Every failure before the signature and claims pass is `Unauthorized` (4401), so the close code never tells an unsigned token whether an issuer is registered or an origin allowed. Claims are validated, never transformed (no `.trim()` on `sub`). The identity carries internal ids and stays server-side; the widget gets only a close code (`WidgetCloseCodeEnum`) or `auth_ok` with the chatbot's `publicId`. The token is never logged or stored.
 
 **Violations:**
 
@@ -1083,6 +1083,8 @@ SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
 - Adding `none`, `HS*` or any symmetric algorithm to the allowlist, or picking the verify algorithm from the JWK instead of the pinned header `alg`
 - Importing a JWK with its private members, as extractable, or with usages beyond `["verify"]`
 - A second widget auth path that skips `WidgetAuthRepo.authenticate` (the Conversation DO from M2-2 calls the same method)
+- A check that answers anything but `Unauthorized` before the signature and claims pass (an issuer, connection-status or origin oracle)
+- Reading a JWKS (or any fetched body) without a byte cap enforced while streaming (`await res.text()` before a length check)
 - Logging the token, or telling the widget which check failed
 
 **Detection Pattern:**

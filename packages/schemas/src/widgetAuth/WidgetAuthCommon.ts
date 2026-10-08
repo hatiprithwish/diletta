@@ -46,22 +46,30 @@ export const WIDGET_AUTH_FAILURE_CLOSE_CODE_MAP: Record<
 };
 
 // JOSE header of the companion JWT. kid is required: it picks the key out of the issuer's JWKS.
+// DEV_NOTE: crit names header extensions the verifier must understand (RFC 7515 §4.1.11). We understand none, so a
+// token that sets it is rejected rather than having the member silently stripped.
 export const ZWidgetJwtHeader = z.object({
   alg: z.enum(WidgetJwtAlgorithmEnum),
   kid: z.string().min(1),
   typ: z.string().optional(),
+  crit: z.never({ message: "No critical header extensions are supported" }).optional(),
 });
 export type WidgetJwtHeader = z.infer<typeof ZWidgetJwtHeader>;
 
-// DEV_NOTE: Companion JWT claims {sub, roles, exp ≤ 5m} signed by the host backend. iss picks the
+// DEV_NOTE: Companion JWT claims {sub, roles, exp ≤ 5m} signed by the host backend. nbf is optional and honoured. iss picks the
 // company_connections row, so a company claim is ignored. aud may be a string or an array (RFC 7519 §4.1.3).
 // name becomes chatbot_users.display_name (PII, never logged).
 export const ZWidgetJwtClaims = z.object({
   iss: z.string().min(1),
-  sub: z.string().trim().min(1),
+  // DEV_NOTE: Validated, never transformed: hostUserId must be exactly the signed value
+  sub: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, { message: "sub must not be blank" }),
   aud: z.union([z.string(), z.array(z.string())]),
   exp: z.number().int(),
   iat: z.number().int(),
+  nbf: z.number().int().optional(),
   roles: z.array(z.string()).optional(),
   name: z.string().optional(),
 });

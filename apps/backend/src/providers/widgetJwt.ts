@@ -131,7 +131,7 @@ export default class WidgetJwtProvider {
     return response;
   }
 
-  // DEV_NOTE: Times are seconds since the epoch (NumericDate). nowSeconds is a parameter so tests can pin the clock.
+  // DEV_NOTE: Times are seconds since the epoch (NumericDate); exp, nbf and iat each get the clock skew. nowSeconds is a parameter so tests can pin the clock.
   static checkClaims(
     claims: Schemas.WidgetJwtClaims,
     nowSeconds: number = Math.floor(Date.now() / 1000),
@@ -149,6 +149,12 @@ export default class WidgetJwtProvider {
     }
     if (claims.exp + skew <= nowSeconds) {
       return WidgetJwtProvider.rejectToken(response, "Token has expired", metadata);
+    }
+    if (claims.nbf !== undefined && claims.nbf - skew > nowSeconds) {
+      return WidgetJwtProvider.rejectToken(response, "Token is not valid yet", {
+        ...metadata,
+        nbf: claims.nbf,
+      });
     }
     if (claims.iat - skew > nowSeconds) {
       return WidgetJwtProvider.rejectToken(response, "Token is issued in the future", metadata);

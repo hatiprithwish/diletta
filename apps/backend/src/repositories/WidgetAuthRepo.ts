@@ -11,13 +11,15 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Widget identity (M2-1). Verifies the companion JWT from the widget's first WebSocket message and resolves
 // who is calling, in an order where nothing untrusted is acted on:
-//   1. decode: alg allowlist (RS256 / ES256), kid, claim shapes. Nothing in the token is trusted yet.
+//   1. decode: alg allowlist (RS256 / ES256), kid, no crit, claim shapes. Nothing in the token is trusted yet.
 //   2. iss → company_connections row in withPlatform (no company is known yet, pattern rule 3.15). Only a registered
 //      issuer gets past here, so the JWKS fetch never targets a URL no company registered.
-//   3. connection active, and the upgrade's Origin in its allowed_origins.
-//   4. signature against the issuer's JWKS (KV-cached), then aud / exp / iat / lifetime.
+//   3. signature against the issuer's JWKS (KV-cached), then aud / exp / nbf / iat / lifetime.
+//   4. connection active, and the upgrade's Origin in its allowed_origins.
 //   5. withTenant on the connection's company: company active (paused and churned companies' widgets are off), then
 //      the chatbot (the embed's publicId, else the default) must exist and be active.
+// Every failure in 1–3 is Unauthorized, so only a validly signed token can see Forbidden / NotFound: the close code
+// never reveals to an outsider whether an issuer is registered or which origins it allows.
 // The identity carries internal ids and stays server-side; M2-2's Conversation DO runs the same method.
 export default class WidgetAuthRepo {
   private env: Env;
@@ -63,20 +65,6 @@ export default class WidgetAuthRepo {
       connectionPublicId: connection.publicId,
     };
 
-    if (connection.status !== Schemas.CompanyConnectionStatusIntEnum.Active) {
-      return this.reject(
-        Schemas.WidgetAuthFailureEnum.Forbidden,
-        "Connection is disabled",
-        connectionMetadata,
-      );
-    }
-    if (params.origin === null || !connection.allowedOrigins.includes(params.origin)) {
-      return this.reject(Schemas.WidgetAuthFailureEnum.Forbidden, "Origin is not allowed", {
-        ...connectionMetadata,
-        origin: params.origin,
-      });
-    }
-
     const signature = await WidgetJwtProvider.verifySignature(this.env, connection.jwtIssuer, jwt);
     if (!signature.isSuccess) {
       return this.reject(
@@ -93,6 +81,22 @@ export default class WidgetAuthRepo {
         claims.message,
         connectionMetadata,
       );
+    }
+
+    // DEV_NOTE: Only after the signature and claims pass. Before that every failure is Unauthorized (4401), so a
+    // made-up token can't tell a registered issuer, a disabled connection or an allowed origin from anything else.
+    if (connection.status !== Schemas.CompanyConnectionStatusIntEnum.Active) {
+      return this.reject(
+        Schemas.WidgetAuthFailureEnum.Forbidden,
+        "Connection is disabled",
+        connectionMetadata,
+      );
+    }
+    if (params.origin === null || !connection.allowedOrigins.includes(params.origin)) {
+      return this.reject(Schemas.WidgetAuthFailureEnum.Forbidden, "Origin is not allowed", {
+        ...connectionMetadata,
+        origin: params.origin,
+      });
     }
 
     const resolved: Schemas.WidgetChatbotResponse = await withTenant(

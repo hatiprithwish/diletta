@@ -308,6 +308,18 @@ describe("WidgetJwtProvider.decode", () => {
     expect(WidgetJwtProvider.decode(noIat).isSuccess).toBe(false);
   });
 
+  it("rejects a token with a crit header", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active), { crit: ["exp"] });
+    expect(WidgetJwtProvider.decode(token).isSuccess).toBe(false);
+  });
+
+  it("keeps sub exactly as signed and rejects a blank one", async () => {
+    const padded = await signToken(rsaKey, claimsFor(issuers.active, { sub: " alice " }));
+    const blank = await signToken(rsaKey, claimsFor(issuers.active, { sub: "   " }));
+    expect(WidgetJwtProvider.decode(padded).jwt?.claims.sub).toBe(" alice ");
+    expect(WidgetJwtProvider.decode(blank).isSuccess).toBe(false);
+  });
+
   it("rejects malformed and oversized tokens", () => {
     expect(WidgetJwtProvider.decode("not-a-jwt").isSuccess).toBe(false);
     expect(WidgetJwtProvider.decode("a.b.c").isSuccess).toBe(false);
@@ -358,6 +370,15 @@ describe("WidgetJwtProvider.checkClaims", () => {
     expect(result.isSuccess).toBe(false);
   });
 
+  it("honours nbf, allowing the clock skew", () => {
+    const skew = Constants.WIDGET_JWT_CLOCK_SKEW_SECONDS;
+    expect(WidgetJwtProvider.checkClaims(claims({ nbf: now - 10 }), now).isSuccess).toBe(true);
+    expect(WidgetJwtProvider.checkClaims(claims({ nbf: now + skew }), now).isSuccess).toBe(true);
+    expect(WidgetJwtProvider.checkClaims(claims({ nbf: now + skew + 1 }), now).isSuccess).toBe(
+      false,
+    );
+  });
+
   it("rejects a lifetime over 5 minutes, or exp not after iat", () => {
     expect(WidgetJwtProvider.checkClaims(claims({ exp: now + 301 }), now).isSuccess).toBe(false);
     expect(WidgetJwtProvider.checkClaims(claims({ exp: now }), now).isSuccess).toBe(false);
@@ -398,6 +419,40 @@ describe("JwksProvider", () => {
     expect((await JwksProvider.getJwks(env, garbage)).isSuccess).toBe(false);
   });
 
+  it("refuses a JWKS over the size cap, declared or streamed", async () => {
+    const declared = randomIssuer();
+    const streamed = randomIssuer();
+    // DEV_NOTE: No Content-Length and no end: the body streams 16 KB chunks forever, so only a reader that counts
+    // bytes and cancels past the cap returns at all
+    let isCancelled = false;
+    const chunk = new Uint8Array(16 * 1024).fill(0x20);
+    mockJwksFetch({
+      [declared]: () =>
+        new Response(JSON.stringify({ keys: [] }), {
+          headers: { "Content-Length": String(Constants.JWKS_MAX_BYTES + 1) },
+        }),
+      [streamed]: () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              isCancelled = true;
+            },
+          }),
+        ),
+    });
+
+    const declaredResult = await JwksProvider.getJwks(env, declared);
+    const streamedResult = await JwksProvider.getJwks(env, streamed);
+    expect(declaredResult.isSuccess).toBe(false);
+    expect(declaredResult.message).toBe("Issuer JWKS is too large");
+    expect(streamedResult.isSuccess).toBe(false);
+    expect(streamedResult.message).toBe("Issuer JWKS is too large");
+    expect(isCancelled).toBe(true);
+  });
+
   it("skips a refetch within the minimum interval and refetches after it", async () => {
     const fresh = randomIssuer();
     const stale = randomIssuer();
@@ -411,6 +466,15 @@ describe("JwksProvider", () => {
     expect(skipped.jwks?.keys).toHaveLength(1);
     expect(refetched.jwks?.keys).toHaveLength(2);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("company connection jwtIssuer", () => {
+  it("rejects an issuer with a query or fragment", () => {
+    const issuer = Schemas.ZCompanyConnectionBase.shape.jwtIssuer;
+    expect(issuer.safeParse("https://auth.example.com/tenant").success).toBe(true);
+    expect(issuer.safeParse("https://auth.example.com/?tenant=a").success).toBe(false);
+    expect(issuer.safeParse("https://auth.example.com/#a").success).toBe(false);
   });
 });
 
@@ -544,6 +608,21 @@ describe("WidgetAuthRepo.authenticate", () => {
     mockJwksFetch({ [issuers.fetchDown]: () => new Response("down", { status: 500 }) });
     const result = await authenticate(await signToken(rsaKey, claimsFor(issuers.fetchDown)));
     expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.ServerError);
+  });
+
+  it("answers Unauthorized to an unsigned probe, whatever the issuer, connection or origin", async () => {
+    // DEV_NOTE: A forged token must not tell a registered issuer, a disabled connection or an allowed origin apart
+    const probe = (issuer: string) => signToken(otherRsaKey, claimsFor(issuer));
+    const results = await Promise.all([
+      authenticate(await probe(randomIssuer())),
+      authenticate(await probe(issuers.active)),
+      authenticate(await probe(issuers.disabled)),
+      authenticate(await probe(issuers.active), { origin: "https://evil.example.com" }),
+      authenticate(await probe(issuers.paused)),
+    ]);
+    for (const result of results) {
+      expect(result.failure).toBe(Schemas.WidgetAuthFailureEnum.Unauthorized);
+    }
   });
 
   it("rejects a disabled connection", async () => {
