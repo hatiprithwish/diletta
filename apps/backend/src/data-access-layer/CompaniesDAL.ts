@@ -64,6 +64,7 @@ export default class CompaniesDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -75,6 +76,45 @@ export default class CompaniesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetCompanyDetails,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Pre-tenant lookup (withPlatform): resolves the company named in a Clerk invite, so the admin can be
+  // created inside withTenant on it. An unknown publicId (a stale invite) is not logged as an error.
+  async getCompanyByPublicId(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindCompanyByPublicIdDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [company] = await tx
+        .select()
+        .from(companies)
+        .where(eq(companies.publicId, params.publicId))
+        .limit(1);
+
+      if (!company) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Company fetched successfully";
+      response.company = company;
+    } catch (error) {
+      const message = "Unknown error in fetching company";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyByPublicId,
         message,
         error,
         metadata: params,
@@ -180,6 +220,7 @@ export default class CompaniesDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 

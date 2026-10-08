@@ -654,7 +654,7 @@ describe("app role and catalog", () => {
     expect(tenantTables).toEqual(FIXTURES.map((fixture) => fixture.name).sort());
   });
 
-  it("forces RLS with policies on every table the app can reach, except users, and grants no partition", async () => {
+  it("forces RLS with policies on every table the app can reach and grants no partition", async () => {
     const { rows } = await appDb.execute<{
       name: string;
       isPartition: boolean;
@@ -681,20 +681,19 @@ describe("app role and catalog", () => {
     }
 
     for (const table of rows.filter((row) => !row.isPartition)) {
-      const expected =
-        table.name === "users"
-          ? { isGranted: true, hasRls: false }
-          : { isGranted: true, hasRls: true, isForced: true, hasPolicies: true };
-      const actual =
-        table.name === "users"
-          ? { isGranted: table.isGranted, hasRls: table.hasRls }
-          : {
-              isGranted: table.isGranted,
-              hasRls: table.hasRls,
-              isForced: table.isForced,
-              hasPolicies: table.policyCount >= 2,
-            };
-      expect({ name: table.name, ...actual }).toEqual({ name: table.name, ...expected });
+      expect({
+        name: table.name,
+        isGranted: table.isGranted,
+        hasRls: table.hasRls,
+        isForced: table.isForced,
+        hasPolicies: table.policyCount >= 2,
+      }).toEqual({
+        name: table.name,
+        isGranted: true,
+        hasRls: true,
+        isForced: true,
+        hasPolicies: true,
+      });
     }
   });
 });

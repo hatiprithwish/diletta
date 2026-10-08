@@ -3,6 +3,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { useEffect, useRef } from "react";
 import { Button } from "@app/ui/components/button";
 import { apiClient } from "@/providers/apiClient";
+import type * as Schemas from "@app/schemas";
 
 export const Route = createFileRoute("/_authenticated")({
   component: AuthenticatedLayout,
@@ -10,13 +11,16 @@ export const Route = createFileRoute("/_authenticated")({
 
 function AuthenticatedLayout() {
   const { isSignedIn, isLoaded, getToken } = useAuth();
-  const syncedRef = useRef(false);
+  const meRequestedRef = useRef(false);
 
+  // DEV_NOTE: /dashboard/me creates the admin on first sign-in from the Clerk invite, so it runs once per session
+  // before any dashboard call. A 403 (not invited) is handled on the server; the "No access" screen comes with the
+  // dashboard shell (M4-1), which reads /dashboard/me through its own query.
   useEffect(() => {
-    if (!isSignedIn || syncedRef.current) return;
-    syncedRef.current = true;
-    apiClient("/users/clerk-sync", getToken, { method: "POST" }).catch(() => {
-      // Non-fatal — user may already exist; errors logged on server
+    if (!isSignedIn || meRequestedRef.current) return;
+    meRequestedRef.current = true;
+    apiClient<Schemas.GetMeApiResponse>("/dashboard/me", getToken).catch(() => {
+      // Non-fatal here — the server logs failures, and every dashboard route answers 403 until the admin exists
     });
   }, [isSignedIn, getToken]);
 

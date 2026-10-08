@@ -127,10 +127,10 @@ File: apps/web/src/**/*.tsx
 **Detection:**
 
 ```
-File: apps/backend/src/routes/UserRoutes.ts (golden file)
-- ✅ import UsersRepo from "@/repositories/UsersRepo"
+File: apps/backend/src/routes/ChatbotsRoutes.ts (golden file)
+- ✅ import ChatbotsRepo from "@/repositories/ChatbotsRepo"
 - ✅ import * as Schemas from "@app/schemas"
-- ❌ import UsersRepo from "../../routes/../repositories/UsersRepo" (verbose relative)
+- ❌ import ChatbotsRepo from "../../routes/../repositories/ChatbotsRepo" (verbose relative)
 ```
 
 **Fix:** `@/` alias for backend layers, `@app/schemas` for cross-app schemas.
@@ -481,7 +481,7 @@ font-mono
 
 Rules from the dev plan's Architecture baseline and CLAUDE.md (Database, Runtime, Hard bans). Several need context beyond the diff: the enforcer may read the changed file and `apps/backend/src/db/tables.ts`, but flags only added or modified lines.
 
-**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case); tenants never match those rows, and tenants may read platform eval cases but not write them (`*_rls_policies` migration). `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: `users`. Golden files: `apps/backend/src/db/withTenant.ts`, `apps/backend/src/db/withPlatform.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
+**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case); tenants never match those rows, and tenants may read platform eval cases but not write them (`*_rls_policies` migration). `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: none (the scaffold `users` table was dropped in M1-8). Golden files: `apps/backend/src/db/withTenant.ts`, `apps/backend/src/db/withPlatform.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
 
 **RLS (M1-3):** the worker connects as `diletta_app`, which can't bypass RLS. Every tenant table and `companies` has RLS enabled and forced, with a tenant policy (`company_id` = `app.company_id`) and a platform policy (`app.is_platform` = `on`). The owner role (`DATABASE_URL`) is for migrations and test fixtures only. See `docs/runbooks/app-role.md`.
 
@@ -575,13 +575,13 @@ File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes
 
 ### 3.3 Tenant Key From the Server Only [CRITICAL]
 
-**Rule:** `companyId` is the internal `companies.id`, resolved server-side (dashboard: the signed-in admin's company from M1-8; widget: the JWT issuer → `company_connections` row from M2-1). It is never read from a client, and every tenant DAL query filters on it as defence in depth on top of RLS.
+**Rule:** `companyId` is the internal `companies.id`, resolved server-side (dashboard: `c.get("companyId")`, set by `authorizeCompany` from the signed-in admin; widget: the JWT issuer → `company_connections` row from M2-1). It is never read from a client, and every tenant DAL query filters on it as defence in depth on top of RLS.
 
 **Violations:**
 
 - `companyId` (or `company_id`) taken from `c.req.param()`, `c.req.query()`, `c.req.json()`, `c.req.valid(...)`, a WebSocket message, or a header
 - A `*ApiRequest.ts` schema with a `companyId` / `company_id` field
-- A tenant DAL `select` / `update` / `delete` whose `where` doesn't include `eq(<table>.companyId, params.companyId)`
+- A tenant DAL `select` / `update` / `delete` whose `where` doesn't include `eq(<table>.companyId, params.companyId)`, except the pre-tenant lookups that resolve the company in `withPlatform` (rule 3.15): `AdminsDAL.getAdminByClerkUserId`, `CompaniesDAL.getCompanyByPublicId`, and from M2-1 the JWT issuer lookup
 - A tenant DAL `insert` that doesn't set `companyId` from params
 
 **Examples:**
@@ -1001,6 +1001,42 @@ metadata:\s*\{[^}]*\b(encryptedSecret|encryptedKey|iv|plaintext)\b
 
 ---
 
+### 3.20 Every Dashboard and Operator Route Behind can() [CRITICAL]
+
+**Rule:** Every `/dashboard/*` and `/operator/*` handler runs `checkAuth`, then `authorizeCompany(action)` (company routes) or `authorizePlatform(action)` (operator routes), then `zValidator`. Those middlewares are the one `can(admin, action, resource)` check (`packages/schemas/src/authz/`). Each action is an `AuthzActionEnum` value; one a company admin must never perform is also in `OPERATOR_ONLY_ACTIONS`. The only exception is `GET /dashboard/me`, the sign-in check that provisions a company admin. Roles are derived from `admins.company_id` (NULL = operator); app code never creates an admin without a company. Operators are added by hand (`docs/runbooks/operators.md`).
+
+**Violations:**
+
+- A route in `apps/backend/src/routes/` mounted under `/dashboard` or `/operator` with no `authorizeCompany(` / `authorizePlatform(` in its chain (other than `GET /dashboard/me`)
+- `zValidator` before the authorize middleware (an unauthorized call would get 400 instead of 403)
+- An operator-only action (company create/list, tool manifest edits…) behind `authorizeCompany`, or missing from `OPERATOR_ONLY_ACTIONS`
+- A role check written by hand (`admin.companyId === null`, `role === "operator"`) in a route or Repo instead of `can()`; the role is derived once, in `AdminsRepo.toContext`
+- A route mapping every `isSuccess: false` to 404 instead of `isSuccess ? 200 : isNotFound ? 404 : 500`
+- A string literal action instead of `Schemas.AuthzActionEnum.*`
+- An `admins` insert with `companyId: null` (or no `companyId`) outside tests and the runbook
+- A role column added to `admins`
+
+**Detection Pattern:**
+
+```regex
+(Routes\.(get|post|put|patch|delete)\()|(\.insert\(admins\))
+```
+
+**Examples:**
+
+```
+- ❌ ChatbotsRoutes.get("/", checkAuth, async (c) => …)
+- ❌ ChatbotsRoutes.post("/", checkAuth, zValidator("json", …), authorizeCompany(…), …)
+- ❌ if (c.get("admin").role !== Schemas.AdminRoleEnum.Operator) return c.json(…, 403);
+- ✅ ChatbotsRoutes.post("/", checkAuth, authorizeCompany(Schemas.AuthzActionEnum.ChatbotCreate),
+       zValidator("json", Schemas.ZCreateChatbotApiRequest), async (c) => …)
+- ✅ CompaniesRoutes.get("/", checkAuth, authorizePlatform(Schemas.AuthzActionEnum.CompanyList), …)
+```
+
+**Fix:** Add the action to `AuthzActionEnum` (and `OPERATOR_ONLY_ACTIONS` if needed), then put the matching authorize middleware straight after `checkAuth`. Golden: `ChatbotsRoutes.ts` (company), `CompaniesRoutes.ts` (operator).
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1088,5 +1124,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped)
 Maintainer: hatiprithwish

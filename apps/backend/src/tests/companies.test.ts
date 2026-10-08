@@ -162,7 +162,7 @@ describe("CompaniesRepo", () => {
       const read = await withTenant(db, companyA.companyId, (tx) =>
         dal.getCompanyDetails(tx, { companyId: companyB.companyId }),
       );
-      expect(read).toEqual({ isSuccess: false, message: "Company not found" });
+      expect(read).toEqual({ isSuccess: false, message: "Company not found", isNotFound: true });
 
       const updated = await withTenant(db, companyA.companyId, (tx) =>
         dal.updateCompany(tx, {
@@ -172,7 +172,7 @@ describe("CompaniesRepo", () => {
           isReadOnly: true,
         }),
       );
-      expect(updated).toEqual({ isSuccess: false, message: "Company not found" });
+      expect(updated).toEqual({ isSuccess: false, message: "Company not found", isNotFound: true });
     } finally {
       await db.$client.end();
     }
@@ -187,10 +187,20 @@ describe("CompaniesRepo", () => {
     const repo = new CompaniesRepo(env);
     // DEV_NOTE: identity ids start at 1, so 0 never references a company
     const fetched = await repo.getCompanyDetails({ companyId: "0" });
-    expect(fetched).toEqual({ isSuccess: false, message: "Company not found", company: undefined });
+    expect(fetched).toEqual({
+      isSuccess: false,
+      message: "Company not found",
+      isNotFound: true,
+      company: undefined,
+    });
 
     const updated = await repo.updateCompany({ companyId: "0", company: { name: "Ghost" } });
-    expect(updated).toEqual({ isSuccess: false, message: "Company not found", company: undefined });
+    expect(updated).toEqual({
+      isSuccess: false,
+      message: "Company not found",
+      isNotFound: true,
+      company: undefined,
+    });
 
     const statusUpdated = await repo.updateCompanyStatus({
       companyId: "0",
@@ -199,6 +209,7 @@ describe("CompaniesRepo", () => {
     expect(statusUpdated).toEqual({
       isSuccess: false,
       message: "Company not found",
+      isNotFound: true,
       company: undefined,
     });
   });

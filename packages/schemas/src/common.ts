@@ -6,9 +6,12 @@ export const ZBytes = z.custom<Uint8Array>((value) => value instanceof Uint8Arra
   message: "Must be bytes",
 });
 
+// DEV_NOTE: isNotFound is set (with isSuccess false) only when the row doesn't exist, so a route can answer 404
+// for it and 500 for every other failure: isSuccess ? 200 : isNotFound ? 404 : 500.
 export interface ApiResponse {
   isSuccess: boolean;
   message?: string;
+  isNotFound?: boolean;
 }
 
 export type NullableDALFields<T> = {
@@ -26,10 +29,11 @@ export const ZSortDirection = z.enum(SortDirection);
 export const MAX_PAGE_SIZE = 100;
 
 // DEV_NOTE: Page-number pagination for lists that grow without bound. Every field is optional; the Repo fills
-// the defaults. A list request extends this with its own sortColumn enum.
+// the defaults. A list request extends this with its own sortColumn enum. Lists are GET routes validated with
+// zValidator("query", …), where every value arrives as a string, so the numbers are coerced.
 export const ZPageApiRequest = z.object({
-  pageNo: z.number().int().min(1).nullable().optional(),
-  pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).nullable().optional(),
+  pageNo: z.coerce.number().int().min(1).nullable().optional(),
+  pageSize: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).nullable().optional(),
   sortDirection: ZSortDirection.nullable().optional(),
 });
 export type PageApiRequest = z.infer<typeof ZPageApiRequest>;
