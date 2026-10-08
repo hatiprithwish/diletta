@@ -8,6 +8,7 @@ export * from "./chatbotUserSecrets";
 export * from "./chatbotUsers";
 export * from "./companyConnections";
 export * from "./chatbotConfigs";
+export * from "./configSpec";
 export * from "./toolDefinitions";
 export * from "./evalRuns";
 export * from "./qualityIssues";

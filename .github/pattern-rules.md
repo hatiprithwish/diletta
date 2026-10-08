@@ -794,8 +794,11 @@ env\.AI\.run\(
 - Adding, removing, renaming or retyping a field in a config spec or tool op schema without bumping `schema_version`
 - A `schema_version` bump without an upgrader registered for the previous version, or without a test for it
 - Config spec or tool op shapes defined outside `packages/schemas`
+- Editing a released `ZConfigSpecV<n>` instead of adding `ZConfigSpecV<n+1>` (the stored rows at version n still parse with it)
+- Parsing a `chatbot_configs.body` with `ZConfigSpec*.parse` / `safeParse` outside `packages/schemas` instead of `loadConfigSpec` (skips the upgrade from the row's `schema_version`)
+- A change to a schema in `JSON_SCHEMA_EXPORTS` (`packages/schemas/src/jsonSchemaExports.ts`) without the regenerated `evals/schemas/*.json` in the same PR, or a hand edit to a file in `evals/schemas/`
 
-**Fix:** Bump `schema_version`, register the upgrader, and add an upgrade test.
+**Fix:** Bump `schema_version`, register the upgrader, and add an upgrade test. Run `pnpm --filter @app/schemas schema:export` and commit `evals/schemas/`.
 
 ---
 
