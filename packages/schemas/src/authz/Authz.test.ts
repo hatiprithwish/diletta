@@ -47,17 +47,4 @@ describe("can", () => {
       expect(can(adminOfA, action, { companyId: null })).toBe(false);
     }
   });
-
-  it("refuses a company admin whose row has lost its company", () => {
-    // DEV_NOTE: A malformed context (company admin role, no company) must never match a null resource
-    const broken: AdminContext = {
-      adminId: "3",
-      companyId: null,
-      role: AdminRoleEnum.CompanyAdmin,
-    };
-    for (const action of Object.values(AuthzActionEnum)) {
-      expect(can(broken, action, { companyId: null })).toBe(false);
-      expect(can(broken, action, { companyId: "10" })).toBe(false);
-    }
-  });
 });

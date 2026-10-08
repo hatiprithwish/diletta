@@ -8,10 +8,11 @@ import type AppContext from "@/config/AppContext";
 const AdminsRoutes = new Hono<AppContext>();
 
 AdminsRoutes.get("/me", checkAuth, async (c) => {
-  const clerkUserId = c.get("clerkUserId");
-
   const repo = new AdminsRepo(c.env);
-  const response = await repo.getMe({ clerkUserId });
+  const response = await repo.getMe({
+    clerkUserId: c.get("clerkUserId"),
+    sessionEmail: c.get("clerkEmail"),
+  });
 
   if (!response.isSuccess) {
     return c.json(response, 500);

@@ -8,3 +8,9 @@ export type FindAdminByClerkUserIdDALRequest = Pick<Admin, "clerkUserId">;
 export type CreateAdminDALRequest = Pick<Admin, "clerkUserId" | "email" | "name"> & {
   companyId: string;
 };
+
+// DEV_NOTE: Keeps admins.email in step with the Clerk session's email. companyId null = an operator's own row
+// (withPlatform); set = a company admin's row (withTenant on that company).
+export type UpdateAdminEmailDALRequest = Pick<Admin, "companyId" | "email"> & {
+  adminId: Admin["id"];
+};

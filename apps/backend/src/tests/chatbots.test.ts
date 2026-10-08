@@ -101,10 +101,19 @@ describe("ChatbotsRepo (tenant golden)", () => {
     expect(deleted.isSuccess).toBe(true);
 
     const missing = await repo.getChatbotDetails({ companyId: companyA, publicId });
-    expect(missing).toEqual({ isSuccess: false, message: "Chatbot not found", chatbot: undefined });
+    expect(missing).toEqual({
+      isSuccess: false,
+      message: "Chatbot not found",
+      isNotFound: true,
+      chatbot: undefined,
+    });
 
     const deletedAgain = await repo.deleteChatbot({ companyId: companyA, publicId });
-    expect(deletedAgain).toEqual({ isSuccess: false, message: "Chatbot not found" });
+    expect(deletedAgain).toEqual({
+      isSuccess: false,
+      message: "Chatbot not found",
+      isNotFound: true,
+    });
   });
 
   it("never reads or writes another company's chatbot", async () => {

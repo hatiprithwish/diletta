@@ -41,8 +41,30 @@ export default class ClerkProvider {
     } catch (error) {
       const message = "Unknown error in fetching Clerk user";
       AppLogger.error({
-        category: Schemas.LogCategory.Middleware,
+        category: Schemas.LogCategory.Authz,
         action: Schemas.LogAction.GetClerkAdminProfile,
+        message,
+        error,
+        metadata: { clerkUserId },
+      });
+      return { isSuccess: false, message };
+    }
+  }
+
+  // DEV_NOTE: An invite is used once. After the admin is created, companyPublicId is removed from the Clerk user
+  // (Clerk merges metadata; null deletes the key), so deleting the admins row later really revokes access instead
+  // of the next /dashboard/me re-provisioning from the same metadata. Never throws.
+  static async consumeInvite(env: Env, clerkUserId: string): Promise<Schemas.ApiResponse> {
+    try {
+      await ClerkProvider.getClerkClient(env).users.updateUserMetadata(clerkUserId, {
+        publicMetadata: { [COMPANY_PUBLIC_ID_METADATA_KEY]: null },
+      });
+      return { isSuccess: true };
+    } catch (error) {
+      const message = "Unknown error in consuming Clerk invite";
+      AppLogger.error({
+        category: Schemas.LogCategory.Authz,
+        action: Schemas.LogAction.ConsumeClerkInvite,
         message,
         error,
         metadata: { clerkUserId },

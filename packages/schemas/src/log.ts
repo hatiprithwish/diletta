@@ -15,13 +15,13 @@ export enum LogAction {
   VerifyToken = "VerifyToken",
   SignOut = "SignOut",
   GetClerkAdminProfile = "GetClerkAdminProfile",
+  ConsumeClerkInvite = "ConsumeClerkInvite",
   Authorize = "Authorize",
 
   // Admins
   GetAdminByClerkUserId = "GetAdminByClerkUserId",
   CreateAdmin = "CreateAdmin",
-  GetAdminContext = "GetAdminContext",
-  GetMe = "GetMe",
+  UpdateAdminEmail = "UpdateAdminEmail",
 
   // Tenant transactions
   WithTenant = "WithTenant",

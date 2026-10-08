@@ -22,12 +22,11 @@ export const ZAdmin = z.object({
 export type Admin = z.infer<typeof ZAdmin>;
 
 // DEV_NOTE: Server-side only — the signed-in admin as the auth middleware sees it, and the subject of can().
-// Carries internal ids, so it never goes into an API response.
-export interface AdminContext {
-  adminId: Admin["id"];
-  companyId: Admin["companyId"];
-  role: AdminRoleEnum;
-}
+// Carries internal ids, so it never goes into an API response. A union on role, so checking the role also
+// narrows companyId (operator: null, company admin: string) and a company admin without a company can't exist.
+export type AdminContext =
+  | { adminId: Admin["id"]; role: AdminRoleEnum.Operator; companyId: null }
+  | { adminId: Admin["id"]; role: AdminRoleEnum.CompanyAdmin; companyId: string };
 
 // API response shape — internal ids structurally omitted; the company is identified by its publicId
 export type AdminProfile = Omit<Admin, "id" | "companyId"> & {

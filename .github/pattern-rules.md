@@ -1010,7 +1010,8 @@ metadata:\s*\{[^}]*\b(encryptedSecret|encryptedKey|iv|plaintext)\b
 - A route in `apps/backend/src/routes/` mounted under `/dashboard` or `/operator` with no `authorizeCompany(` / `authorizePlatform(` in its chain (other than `GET /dashboard/me`)
 - `zValidator` before the authorize middleware (an unauthorized call would get 400 instead of 403)
 - An operator-only action (company create/list, tool manifest edits…) behind `authorizeCompany`, or missing from `OPERATOR_ONLY_ACTIONS`
-- A role check written by hand (`admin.companyId === null`, `role === "operator"`) in a route or Repo instead of `can()`
+- A role check written by hand (`admin.companyId === null`, `role === "operator"`) in a route or Repo instead of `can()`; the role is derived once, in `AdminsRepo.toContext`
+- A route mapping every `isSuccess: false` to 404 instead of `isSuccess ? 200 : isNotFound ? 404 : 500`
 - A string literal action instead of `Schemas.AuthzActionEnum.*`
 - An `admins` insert with `companyId: null` (or no `companyId`) outside tests and the runbook
 - A role column added to `admins`

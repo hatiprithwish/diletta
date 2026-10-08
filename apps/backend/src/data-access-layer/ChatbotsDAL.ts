@@ -88,6 +88,7 @@ export default class ChatbotsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -168,6 +169,7 @@ export default class ChatbotsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -214,6 +216,7 @@ export default class ChatbotsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -293,6 +296,7 @@ export default class ChatbotsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 

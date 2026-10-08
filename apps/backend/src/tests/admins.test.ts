@@ -25,9 +25,32 @@ vi.mock("@/providers/logger", () => ({
   withRequestContext: vi.fn().mockImplementation((_id, next) => next()),
 }));
 
-// DEV_NOTE: Clerk is never called from tests; each case sets the profile (invite metadata) it needs
+// DEV_NOTE: Clerk stand-in with state: invites maps a Clerk user to the companyPublicId in their publicMetadata.
+// getAdminProfile reads it and consumeInvite removes it, as the real provider does on the Clerk user.
+const clerk = vi.hoisted(() => ({
+  invites: new Map<string, string>(),
+  isConsumeFailing: false,
+}));
+
 vi.mock("@/providers/clerk", () => ({
-  default: { getAdminProfile: vi.fn(), getClerkClient: vi.fn() },
+  default: {
+    getClerkClient: vi.fn(),
+    getAdminProfile: vi.fn(async (_env: unknown, clerkUserId: string) => ({
+      isSuccess: true,
+      profile: {
+        email: "invitee@example.com",
+        name: "Invited Admin",
+        companyPublicId: clerk.invites.get(clerkUserId) ?? null,
+      },
+    })),
+    consumeInvite: vi.fn(async (_env: unknown, clerkUserId: string) => {
+      if (clerk.isConsumeFailing) {
+        return { isSuccess: false, message: "Unknown error in consuming Clerk invite" };
+      }
+      clerk.invites.delete(clerkUserId);
+      return { isSuccess: true };
+    }),
+  },
 }));
 
 // DEV_NOTE: Tests hit the Neon staging branch. The Repo runs as diletta_app (HYPERDRIVE), so RLS applies;
@@ -36,9 +59,18 @@ const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 let companyA = { id: "", publicId: "" };
 let companyB = { id: "", publicId: "" };
+let churnedCompany = { id: "", publicId: "" };
+let pausedCompany = { id: "", publicId: "" };
 const operatorClerkUserId = `user_op_${crypto.randomUUID()}`;
 const adminAClerkUserId = `user_a_${crypto.randomUUID()}`;
-const createdClerkUserIds = [operatorClerkUserId, adminAClerkUserId];
+const churnedAdminClerkUserId = `user_c_${crypto.randomUUID()}`;
+const pausedAdminClerkUserId = `user_p_${crypto.randomUUID()}`;
+const createdClerkUserIds = [
+  operatorClerkUserId,
+  adminAClerkUserId,
+  churnedAdminClerkUserId,
+  pausedAdminClerkUserId,
+];
 
 async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   const pool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });
@@ -55,19 +87,16 @@ function newClerkUserId() {
   return clerkUserId;
 }
 
-function mockInvite(companyPublicId: string | null) {
-  vi.mocked(ClerkProvider.getAdminProfile).mockResolvedValue({
-    isSuccess: true,
-    profile: { email: "invitee@example.com", name: "Invited Admin", companyPublicId },
-  });
-}
-
 async function getAdminRows(clerkUserId: string) {
   let rows: Schemas.Admin[] = [];
   await withOwnerDb(async (ownerDb) => {
     rows = await ownerDb.select().from(admins).where(eq(admins.clerkUserId, clerkUserId));
   });
   return rows;
+}
+
+async function getMe(clerkUserId: string, sessionEmail = "") {
+  return await new AdminsRepo(env).getMe({ clerkUserId, sessionEmail });
 }
 
 beforeAll(async () => {
@@ -77,26 +106,45 @@ beforeAll(async () => {
       .values([
         { publicId: Utility.generatePublicId(), name: `Admins company A ${crypto.randomUUID()}` },
         { publicId: Utility.generatePublicId(), name: `Admins company B ${crypto.randomUUID()}` },
+        {
+          publicId: Utility.generatePublicId(),
+          name: `Admins churned ${crypto.randomUUID()}`,
+          status: Schemas.CompanyStatusIntEnum.Churned,
+        },
+        {
+          publicId: Utility.generatePublicId(),
+          name: `Admins paused ${crypto.randomUUID()}`,
+          status: Schemas.CompanyStatusIntEnum.Paused,
+        },
       ])
       .returning({ id: companies.id, publicId: companies.publicId });
     companyA = created[0]!;
     companyB = created[1]!;
+    churnedCompany = created[2]!;
+    pausedCompany = created[3]!;
 
     await ownerDb.insert(admins).values([
       { clerkUserId: operatorClerkUserId, companyId: null, email: "op@example.com" },
       { clerkUserId: adminAClerkUserId, companyId: companyA.id, email: "a@example.com" },
+      { clerkUserId: churnedAdminClerkUserId, companyId: churnedCompany.id },
+      { clerkUserId: pausedAdminClerkUserId, companyId: pausedCompany.id },
     ]);
   });
 });
 
 beforeEach(() => {
-  vi.mocked(ClerkProvider.getAdminProfile).mockReset();
+  clerk.invites.clear();
+  clerk.isConsumeFailing = false;
+  vi.mocked(ClerkProvider.getAdminProfile).mockClear();
+  vi.mocked(ClerkProvider.consumeInvite).mockClear();
 });
 
 afterAll(async () => {
   await withOwnerDb(async (ownerDb) => {
     await ownerDb.delete(admins).where(inArray(admins.clerkUserId, createdClerkUserIds));
-    const companyIds = [companyA.id, companyB.id].filter(Boolean);
+    const companyIds = [companyA.id, companyB.id, churnedCompany.id, pausedCompany.id].filter(
+      Boolean,
+    );
     if (companyIds.length > 0) {
       await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
     }
@@ -120,18 +168,36 @@ describe("AdminsRepo.getAdminContext", () => {
 
   it("answers with no admin for an unknown Clerk user, and never provisions", async () => {
     const clerkUserId = newClerkUserId();
-    mockInvite(companyA.publicId);
+    clerk.invites.set(clerkUserId, companyA.publicId);
 
     const result = await new AdminsRepo(env).getAdminContext({ clerkUserId });
-    expect(result).toEqual({ isSuccess: true, message: "Admin not found", admin: undefined });
+    expect(result).toEqual({ isSuccess: true, message: "Admin not found" });
     expect(ClerkProvider.getAdminProfile).not.toHaveBeenCalled();
     expect(await getAdminRows(clerkUserId)).toHaveLength(0);
+  });
+
+  it("gives no access to an admin of a churned company", async () => {
+    const result = await new AdminsRepo(env).getAdminContext({
+      clerkUserId: churnedAdminClerkUserId,
+    });
+    expect(result).toEqual({
+      isSuccess: true,
+      message: "Company has churned",
+      admin: undefined,
+    });
+  });
+
+  it("keeps access for an admin of a paused company", async () => {
+    const result = await new AdminsRepo(env).getAdminContext({
+      clerkUserId: pausedAdminClerkUserId,
+    });
+    expect(result.admin?.companyId).toBe(pausedCompany.id);
   });
 });
 
 describe("AdminsRepo.getMe", () => {
   it("returns an existing company admin with their company and no internal ids", async () => {
-    const result = await new AdminsRepo(env).getMe({ clerkUserId: adminAClerkUserId });
+    const result = await getMe(adminAClerkUserId);
     expect(result.isSuccess).toBe(true);
     expect(result.admin).toMatchObject({
       clerkUserId: adminAClerkUserId,
@@ -145,17 +211,17 @@ describe("AdminsRepo.getMe", () => {
   });
 
   it("returns an existing operator with no company", async () => {
-    const result = await new AdminsRepo(env).getMe({ clerkUserId: operatorClerkUserId });
+    const result = await getMe(operatorClerkUserId);
     expect(result.isSuccess).toBe(true);
     expect(result.admin?.role).toBe(Schemas.AdminRoleEnum.Operator);
     expect(result.admin?.company).toBeNull();
   });
 
-  it("creates a company admin on first sign-in from the Clerk invite", async () => {
+  it("creates a company admin on first sign-in and consumes the invite", async () => {
     const clerkUserId = newClerkUserId();
-    mockInvite(companyB.publicId);
+    clerk.invites.set(clerkUserId, companyB.publicId);
 
-    const result = await new AdminsRepo(env).getMe({ clerkUserId });
+    const result = await getMe(clerkUserId);
     expect(result.isSuccess).toBe(true);
     expect(result.admin).toMatchObject({
       clerkUserId,
@@ -164,6 +230,7 @@ describe("AdminsRepo.getMe", () => {
       role: Schemas.AdminRoleEnum.CompanyAdmin,
       company: { publicId: companyB.publicId },
     });
+    expect(clerk.invites.has(clerkUserId)).toBe(false);
 
     const rows = await getAdminRows(clerkUserId);
     expect(rows).toHaveLength(1);
@@ -171,17 +238,49 @@ describe("AdminsRepo.getMe", () => {
 
     // Second sign-in reads the row; Clerk isn't asked again
     vi.mocked(ClerkProvider.getAdminProfile).mockClear();
-    const again = await new AdminsRepo(env).getMe({ clerkUserId });
+    const again = await getMe(clerkUserId);
     expect(again.admin?.company?.publicId).toBe(companyB.publicId);
     expect(ClerkProvider.getAdminProfile).not.toHaveBeenCalled();
   });
 
+  it("really revokes access when the admins row is deleted", async () => {
+    const clerkUserId = newClerkUserId();
+    clerk.invites.set(clerkUserId, companyA.publicId);
+    expect((await getMe(clerkUserId)).admin).toBeDefined();
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.delete(admins).where(eq(admins.clerkUserId, clerkUserId));
+    });
+
+    // DEV_NOTE: The invite was consumed on first sign-in, so the next load can't re-provision from it
+    const after = await getMe(clerkUserId);
+    expect(after).toEqual({ isSuccess: true, message: "No dashboard access" });
+    expect(await getAdminRows(clerkUserId)).toHaveLength(0);
+  });
+
+  it("creates no row and keeps the invite when Clerk can't consume it", async () => {
+    const clerkUserId = newClerkUserId();
+    clerk.invites.set(clerkUserId, companyA.publicId);
+    clerk.isConsumeFailing = true;
+
+    const result = await getMe(clerkUserId);
+    expect(result).toEqual({
+      isSuccess: false,
+      message: "Unknown error in consuming Clerk invite",
+    });
+    expect(await getAdminRows(clerkUserId)).toHaveLength(0);
+    expect(clerk.invites.get(clerkUserId)).toBe(companyA.publicId);
+
+    // The next load retries and succeeds
+    clerk.isConsumeFailing = false;
+    expect((await getMe(clerkUserId)).admin?.company?.publicId).toBe(companyA.publicId);
+  });
+
   it("creates one row when two first sign-ins race", async () => {
     const clerkUserId = newClerkUserId();
-    mockInvite(companyA.publicId);
+    clerk.invites.set(clerkUserId, companyA.publicId);
 
-    const repo = new AdminsRepo(env);
-    const results = await Promise.all([repo.getMe({ clerkUserId }), repo.getMe({ clerkUserId })]);
+    const results = await Promise.all([getMe(clerkUserId), getMe(clerkUserId)]);
     for (const result of results) {
       expect(result.isSuccess).toBe(true);
       expect(result.admin?.company?.publicId).toBe(companyA.publicId);
@@ -191,9 +290,8 @@ describe("AdminsRepo.getMe", () => {
 
   it("gives no access, and creates nothing, without invite metadata", async () => {
     const clerkUserId = newClerkUserId();
-    mockInvite(null);
 
-    const result = await new AdminsRepo(env).getMe({ clerkUserId });
+    const result = await getMe(clerkUserId);
     expect(result).toEqual({ isSuccess: true, message: "No dashboard access" });
     // DEV_NOTE: The key case — a sign-in with no company must never become an operator row
     expect(await getAdminRows(clerkUserId)).toHaveLength(0);
@@ -201,27 +299,60 @@ describe("AdminsRepo.getMe", () => {
 
   it("gives no access when the invite names a company that doesn't exist", async () => {
     const clerkUserId = newClerkUserId();
-    mockInvite(Utility.generatePublicId());
+    clerk.invites.set(clerkUserId, Utility.generatePublicId());
 
-    const result = await new AdminsRepo(env).getMe({ clerkUserId });
+    const result = await getMe(clerkUserId);
     expect(result).toEqual({ isSuccess: true, message: "No dashboard access" });
     expect(await getAdminRows(clerkUserId)).toHaveLength(0);
   });
 
+  it("gives no access, and creates nothing, for an invite to a churned company", async () => {
+    const clerkUserId = newClerkUserId();
+    clerk.invites.set(clerkUserId, churnedCompany.publicId);
+
+    const result = await getMe(clerkUserId);
+    expect(result).toEqual({ isSuccess: true, message: "Company has churned" });
+    expect(await getAdminRows(clerkUserId)).toHaveLength(0);
+    expect(ClerkProvider.consumeInvite).not.toHaveBeenCalled();
+  });
+
+  it("gives an existing admin of a churned company no access", async () => {
+    const result = await getMe(churnedAdminClerkUserId);
+    expect(result).toEqual({ isSuccess: true, message: "Company has churned" });
+  });
+
   it("fails without creating a row when Clerk can't be reached", async () => {
     const clerkUserId = newClerkUserId();
-    vi.mocked(ClerkProvider.getAdminProfile).mockResolvedValue({
+    vi.mocked(ClerkProvider.getAdminProfile).mockResolvedValueOnce({
       isSuccess: false,
       message: "Unknown error in fetching Clerk user",
     });
 
-    const result = await new AdminsRepo(env).getMe({ clerkUserId });
+    const result = await getMe(clerkUserId);
     expect(result).toEqual({ isSuccess: false, message: "Unknown error in fetching Clerk user" });
     expect(await getAdminRows(clerkUserId)).toHaveLength(0);
   });
+
+  it("updates the stored email from the session, for company admins and operators", async () => {
+    const clerkUserId = newClerkUserId();
+    clerk.invites.set(clerkUserId, companyB.publicId);
+    await getMe(clerkUserId);
+
+    const changed = await getMe(clerkUserId, "changed@example.com");
+    expect(changed.admin?.email).toBe("changed@example.com");
+    expect((await getAdminRows(clerkUserId))[0]?.email).toBe("changed@example.com");
+
+    // An empty session email (claim not configured) leaves the stored one
+    const unchanged = await getMe(clerkUserId, "");
+    expect(unchanged.admin?.email).toBe("changed@example.com");
+
+    const operator = await getMe(operatorClerkUserId, "op-new@example.com");
+    expect(operator.admin?.email).toBe("op-new@example.com");
+    expect((await getAdminRows(operatorClerkUserId))[0]?.email).toBe("op-new@example.com");
+  });
 });
 
-describe("AdminsDAL.createAdmin (cross-company, as diletta_app)", () => {
+describe("AdminsDAL (cross-company, as diletta_app)", () => {
   it("never moves an admin of company A into company B", async () => {
     const dal = new AdminsDAL();
     const result = await withTenant(getDbClient(env), companyB.id, async (tx) => {
@@ -276,7 +407,20 @@ describe("AdminsDAL.createAdmin (cross-company, as diletta_app)", () => {
         return await dal.getAdminByClerkUserId(tx, { clerkUserId: adminAClerkUserId });
       },
     );
-    expect(result.isSuccess).toBe(true);
-    expect(result.admin).toBeUndefined();
+    expect(result).toEqual({ isSuccess: false, message: "Admin not found", isNotFound: true });
+  });
+
+  it("can't update company A's admin email from inside company B", async () => {
+    const [adminA] = await getAdminRows(adminAClerkUserId);
+    const dal = new AdminsDAL();
+    const result = await withTenant(getDbClient(env), companyB.id, async (tx) => {
+      return await dal.updateAdminEmail(tx, {
+        adminId: adminA!.id,
+        companyId: companyB.id,
+        email: "hijacked@example.com",
+      });
+    });
+    expect(result.isSuccess).toBe(false);
+    expect((await getAdminRows(adminAClerkUserId))[0]?.email).toBe("a@example.com");
   });
 });

@@ -34,7 +34,7 @@ ChatbotsRoutes.get(
       publicId: c.req.param("publicId"),
     });
 
-    return c.json(response, response.isSuccess ? 200 : 404);
+    return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
   },
 );
 
@@ -67,7 +67,7 @@ ChatbotsRoutes.patch(
       publicId: c.req.param("publicId"),
     });
 
-    return c.json(response, response.isSuccess ? 200 : 404);
+    return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
   },
 );
 

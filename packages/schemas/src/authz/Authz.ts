@@ -22,5 +22,5 @@ export function can(
     return true;
   }
 
-  return admin.companyId !== null && admin.companyId === resource.companyId;
+  return admin.companyId === resource.companyId;
 }

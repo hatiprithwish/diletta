@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { admins, companies } from "@/db/tables";
@@ -7,10 +7,9 @@ import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. getAdminByClerkUserId is the Clerk admin → company lookup: the Repo
 // runs it in withPlatform before any company is known, so it filters on clerk_user_id alone (pattern rule 3.15).
-// createAdmin runs in withTenant on the admin's company and sets companyId from params.
+// createAdmin runs in withTenant on the admin's company and sets companyId from params. An unknown Clerk user is
+// not an error worth logging (any signed-in Clerk user can ask), so the not-found path doesn't log.
 export default class AdminsDAL {
-  // DEV_NOTE: A lookup — no row is a normal answer (isSuccess, no admin), so the caller can tell
-  // "not an admin" (403) from a failed query (500).
   async getAdminByClerkUserId(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindAdminByClerkUserIdDALRequest,
@@ -24,8 +23,14 @@ export default class AdminsDAL {
         .where(eq(admins.clerkUserId, params.clerkUserId))
         .limit(1);
 
+      if (!admin) {
+        response.message = "Admin not found";
+        response.isNotFound = true;
+        return response;
+      }
+
       response.isSuccess = true;
-      response.message = admin ? "Admin fetched successfully" : "Admin not found";
+      response.message = "Admin fetched successfully";
       response.admin = admin;
     } catch (error) {
       const message = "Unknown error in fetching admin";
@@ -114,6 +119,57 @@ export default class AdminsDAL {
         message,
         error,
         metadata: { clerkUserId: params.clerkUserId, companyId: params.companyId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async updateAdminEmail(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateAdminEmailDALRequest,
+  ) {
+    const response: Schemas.AdminDALResponse = { isSuccess: false };
+
+    try {
+      // DEV_NOTE: An operator's row has no company, so it is matched with IS NULL (in withPlatform)
+      const conditions = [
+        eq(admins.id, params.adminId),
+        params.companyId === null
+          ? isNull(admins.companyId)
+          : eq(admins.companyId, params.companyId),
+      ];
+      const [admin] = await tx
+        .update(admins)
+        .set({ email: params.email, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      if (!admin) {
+        const message = "Admin not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.UpdateAdminEmail,
+          message,
+          metadata: { adminId: params.adminId, companyId: params.companyId },
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Admin email updated successfully";
+      response.admin = admin;
+    } catch (error) {
+      const message = "Unknown error in updating admin email";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateAdminEmail,
+        message,
+        error,
+        metadata: { adminId: params.adminId, companyId: params.companyId },
       });
       response.message = message;
     }

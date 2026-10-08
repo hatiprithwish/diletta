@@ -7,6 +7,7 @@ import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import { admins, chatbots, companies, companyEncryptionKeys } from "@/db/tables";
 import worker from "@/index";
+import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -41,6 +42,7 @@ vi.mock("@/providers/clerk", () => ({
       isSuccess: true,
       profile: { email: null, name: null, companyPublicId: null },
     }),
+    consumeInvite: async () => ({ isSuccess: true }),
   },
 }));
 
@@ -52,8 +54,10 @@ const operator = `user_op_${crypto.randomUUID()}`;
 const adminA = `user_a_${crypto.randomUUID()}`;
 const adminB = `user_b_${crypto.randomUUID()}`;
 const stranger = `user_x_${crypto.randomUUID()}`;
+const churnedAdmin = `user_c_${crypto.randomUUID()}`;
 let companyA = "";
 let companyB = "";
+let churnedCompany = "";
 let chatbotOfB = "";
 const createdCompanyPublicIds: string[] = [];
 
@@ -93,15 +97,22 @@ beforeAll(async () => {
       .values([
         { publicId: Utility.generatePublicId(), name: `Auth company A ${crypto.randomUUID()}` },
         { publicId: Utility.generatePublicId(), name: `Auth company B ${crypto.randomUUID()}` },
+        {
+          publicId: Utility.generatePublicId(),
+          name: `Auth churned ${crypto.randomUUID()}`,
+          status: Schemas.CompanyStatusIntEnum.Churned,
+        },
       ])
       .returning({ id: companies.id });
     companyA = created[0]!.id;
     companyB = created[1]!.id;
+    churnedCompany = created[2]!.id;
 
     await ownerDb.insert(admins).values([
       { clerkUserId: operator, companyId: null },
       { clerkUserId: adminA, companyId: companyA },
       { clerkUserId: adminB, companyId: companyB },
+      { clerkUserId: churnedAdmin, companyId: churnedCompany },
     ]);
 
     const [chatbot] = await ownerDb
@@ -114,9 +125,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await withOwnerDb(async (ownerDb) => {
-    await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminA, adminB]));
+    await ownerDb
+      .delete(admins)
+      .where(inArray(admins.clerkUserId, [operator, adminA, adminB, churnedAdmin]));
 
-    const companyIds = [companyA, companyB].filter(Boolean);
+    const companyIds = [companyA, companyB, churnedCompany].filter(Boolean);
     const publicIds = createdCompanyPublicIds.filter(Boolean);
     if (publicIds.length > 0) {
       const createdByOperator = await ownerDb
@@ -231,6 +244,34 @@ describe("dashboard routes (company admin)", () => {
     const untouched = await call("GET", `/dashboard/chatbots/${chatbotOfB}`, { as: adminB });
     expect(untouched.status).toBe(200);
     expect((untouched.body.chatbot as Schemas.ChatbotWithStatus).name).toBe("B's bot");
+  });
+
+  it("answers 403 to an admin of a churned company", async () => {
+    expect((await call("GET", "/dashboard/me", { as: churnedAdmin })).status).toBe(403);
+    expect((await call("GET", "/dashboard/chatbots", { as: churnedAdmin })).status).toBe(403);
+  });
+
+  it("answers 500, not 404, when reading or updating a chatbot fails", async () => {
+    const failure = { isSuccess: false, message: "Unknown error in fetching chatbot" };
+    const getSpy = vi
+      .spyOn(ChatbotsRepo.prototype, "getChatbotDetails")
+      .mockResolvedValueOnce(failure);
+    const updateSpy = vi
+      .spyOn(ChatbotsRepo.prototype, "updateChatbot")
+      .mockResolvedValueOnce(failure);
+    try {
+      expect((await call("GET", `/dashboard/chatbots/${chatbotOfB}`, { as: adminB })).status).toBe(
+        500,
+      );
+      const updated = await call("PATCH", `/dashboard/chatbots/${chatbotOfB}`, {
+        as: adminB,
+        body: { chatbot: { name: "B's bot" } },
+      });
+      expect(updated.status).toBe(500);
+    } finally {
+      getSpy.mockRestore();
+      updateSpy.mockRestore();
+    }
   });
 
   it("validates the body only after authorizing", async () => {

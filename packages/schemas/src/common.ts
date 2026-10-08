@@ -6,9 +6,12 @@ export const ZBytes = z.custom<Uint8Array>((value) => value instanceof Uint8Arra
   message: "Must be bytes",
 });
 
+// DEV_NOTE: isNotFound is set (with isSuccess false) only when the row doesn't exist, so a route can answer 404
+// for it and 500 for every other failure: isSuccess ? 200 : isNotFound ? 404 : 500.
 export interface ApiResponse {
   isSuccess: boolean;
   message?: string;
+  isNotFound?: boolean;
 }
 
 export type NullableDALFields<T> = {
