@@ -33,3 +33,17 @@ describe("Utility.isUniqueViolation", () => {
     expect(Utility.isUniqueViolation(outer, "UNQ_a")).toBe(false);
   });
 });
+
+describe("Utility.decodeBase64Url", () => {
+  it("decodes unpadded base64url, including - and _", () => {
+    expect(Array.from(Utility.decodeBase64Url("-_8") ?? [])).toEqual([0xfb, 0xff]);
+    expect(new TextDecoder().decode(Utility.decodeBase64Url("aGk") ?? new Uint8Array())).toBe("hi");
+    expect(Utility.decodeBase64Url("")?.byteLength).toBe(0);
+  });
+
+  it("returns null for input that isn't base64url", () => {
+    expect(Utility.decodeBase64Url("a+b/")).toBeNull();
+    expect(Utility.decodeBase64Url("aGk=")).toBeNull();
+    expect(Utility.decodeBase64Url("a")).toBeNull();
+  });
+});

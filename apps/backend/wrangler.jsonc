@@ -25,6 +25,9 @@
       "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
     },
   ],
+  // DEV_NOTE: Issuer JWKS cache for widget auth (M2-1). Local dev and tests run miniflare's simulated KV; the id is
+  // the staging namespace's but is never reached locally.
+  "kv_namespaces": [{ "binding": "JWKS_CACHE", "id": "749e76846f42489bb8445fbd3728c160" }], // diletta-jwks-staging
   // DEV_NOTE: Outbox relay target (M1-6). Local dev and tests run miniflare's simulated queue; local-only names.
   "queues": {
     "producers": [{ "binding": "EVENTS_QUEUE", "queue": "diletta-events-local" }],
@@ -53,6 +56,8 @@
           "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
         },
       ],
+      // DEV_NOTE: Issuer JWKS cache for widget auth (M2-1). Bindings don't inherit, so each env declares its own.
+      "kv_namespaces": [{ "binding": "JWKS_CACHE", "id": "749e76846f42489bb8445fbd3728c160" }], // diletta-jwks-staging
       // DEV_NOTE: Envelope-encryption master key (docs/runbooks/master-key.md). Bindings don't inherit,
       // so each env declares its own. Local reads MASTER_KEY_V1 from .dev.vars instead.
       "secrets_store_secrets": [
@@ -94,6 +99,8 @@
           "id": "eae07e9a1dfb486a83ef1f5fe7ee7b51", // diletta-production
         },
       ],
+      // DEV_NOTE: Issuer JWKS cache for widget auth (M2-1). Bindings don't inherit, so each env declares its own.
+      "kv_namespaces": [{ "binding": "JWKS_CACHE", "id": "d510278f9d2c46a4aa5e87c42ab10509" }], // diletta-jwks-production
       // DEV_NOTE: Envelope-encryption master key (docs/runbooks/master-key.md). Bindings don't inherit,
       // so each env declares its own. Local reads MASTER_KEY_V1 from .dev.vars instead.
       "secrets_store_secrets": [

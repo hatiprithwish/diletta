@@ -8,6 +8,10 @@ export type CreateCompanyConnectionDALRequest = CompanyConnectionBase &
 // Params to find a company connection by its public ID within one company
 export type FindCompanyConnectionDALRequest = Pick<CompanyConnection, "publicId" | "companyId">;
 
+// DEV_NOTE: Pre-tenant lookup (widget auth, withPlatform): the token's iss picks the row before any company is
+// known, so this is the one connection request without companyId
+export type FindCompanyConnectionByIssuerDALRequest = Pick<CompanyConnection, "jwtIssuer">;
+
 export type GetCompanyConnectionsDALRequest = Pick<CompanyConnection, "companyId">;
 
 // DEV_NOTE: Only client-editable fields. updatedAt is set by the DAL.

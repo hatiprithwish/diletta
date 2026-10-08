@@ -309,7 +309,7 @@ eRegister goes live when every box below is ticked.
 **Open questions** (each blocks the task named)
 
 - [ ] Host token in Workflows for large commits: fresh token per step, or cap bulk size and skip Workflows in v1? (M3-4, review item #2)
-- [ ] JWT algorithm pinning: which algorithms eRegister signs with (M2-1, review item #7)
+- [x] JWT algorithm pinning: which algorithms eRegister signs with (M2-1, review item #7) — RS256 and ES256 only, `kid` required; `none` and HS\* rejected. Confirm eRegister signs with one of the two before M7.
 - [x] Drizzle on Postgres (from the scaffold): which parts go to raw-SQL migrations beyond RLS, partitions and halfvec? (M0-2) — anything drizzle-kit can't express (RLS policies, partitions, extensions, `halfvec` columns and indexes) goes in a custom migration (`db:generate:sql`) in the same journal as drizzle-kit output.
 - [ ] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7)
 - [ ] Approval expiry and undo window default values (M3-4, M3-7)

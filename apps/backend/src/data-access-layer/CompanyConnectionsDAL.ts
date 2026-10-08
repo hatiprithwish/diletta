@@ -123,6 +123,46 @@ export default class CompanyConnectionsDAL {
     return response;
   }
 
+  // DEV_NOTE: The JWT issuer → connection lookup (widget auth). Runs in withPlatform because no company is known
+  // yet, so it is the one method here that doesn't filter on companyId (pattern rule 3.3). jwt_issuer is unique
+  // across companies, so at most one row matches.
+  async getCompanyConnectionByIssuer(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindCompanyConnectionByIssuerDALRequest,
+  ) {
+    const response: Schemas.CompanyConnectionDALResponse = { isSuccess: false };
+
+    try {
+      const [companyConnection] = await tx
+        .select()
+        .from(companyConnections)
+        .where(eq(companyConnections.jwtIssuer, params.jwtIssuer))
+        .limit(1);
+
+      if (!companyConnection) {
+        response.message = "Company connection not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Company connection fetched successfully";
+      response.companyConnection = companyConnection;
+    } catch (error) {
+      const message = "Unknown error in fetching company connection by issuer";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyConnectionByIssuer,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getCompanyConnections(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetCompanyConnectionsDALRequest,

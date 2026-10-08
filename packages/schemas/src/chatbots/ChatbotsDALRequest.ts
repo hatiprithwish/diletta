@@ -7,6 +7,9 @@ export type CreateChatbotDALRequest = ChatbotBase & Pick<Chatbot, "companyId">;
 // Params to find a chatbot by its public ID within one company
 export type FindChatbotDALRequest = Pick<Chatbot, "publicId" | "companyId">;
 
+// The company's default chatbot (the widget loads it when the embed names no chatbot)
+export type FindDefaultChatbotDALRequest = Pick<Chatbot, "companyId">;
+
 export type GetChatbotsDALRequest = Pick<Chatbot, "companyId">;
 
 // DEV_NOTE: Only client-editable fields. updatedAt is set by the DAL.

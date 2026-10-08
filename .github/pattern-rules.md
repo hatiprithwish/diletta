@@ -575,13 +575,13 @@ File: apps/backend/src/tests/*.test.ts → a set_config(…, false) match passes
 
 ### 3.3 Tenant Key From the Server Only [CRITICAL]
 
-**Rule:** `companyId` is the internal `companies.id`, resolved server-side (dashboard: `c.get("companyId")`, set by `authorizeCompany` from the signed-in admin; widget: the JWT issuer → `company_connections` row from M2-1). It is never read from a client, and every tenant DAL query filters on it as defence in depth on top of RLS.
+**Rule:** `companyId` is the internal `companies.id`, resolved server-side (dashboard: `c.get("companyId")`, set by `authorizeCompany` from the signed-in admin; widget: the verified JWT's issuer → `company_connections` row in `WidgetAuthRepo.authenticate`). It is never read from a client, and every tenant DAL query filters on it as defence in depth on top of RLS.
 
 **Violations:**
 
 - `companyId` (or `company_id`) taken from `c.req.param()`, `c.req.query()`, `c.req.json()`, `c.req.valid(...)`, a WebSocket message, or a header
 - A `*ApiRequest.ts` schema with a `companyId` / `company_id` field
-- A tenant DAL `select` / `update` / `delete` whose `where` doesn't include `eq(<table>.companyId, params.companyId)`, except the pre-tenant lookups that resolve the company in `withPlatform` (rule 3.15): `AdminsDAL.getAdminByClerkUserId`, `CompaniesDAL.getCompanyByPublicId`, and from M2-1 the JWT issuer lookup
+- A tenant DAL `select` / `update` / `delete` whose `where` doesn't include `eq(<table>.companyId, params.companyId)`, except the pre-tenant lookups that resolve the company in `withPlatform` (rule 3.15): `AdminsDAL.getAdminByClerkUserId`, `CompaniesDAL.getCompanyByPublicId` and `CompanyConnectionsDAL.getCompanyConnectionByIssuer`
 - A tenant DAL `insert` that doesn't set `companyId` from params
 
 **Examples:**
@@ -1071,6 +1071,39 @@ SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
 
 ---
 
+### 3.22 Widget Identity Only From a Verified Companion JWT [CRITICAL]
+
+**Rule:** The widget authenticates in-band: its first WebSocket message is `{ type: "auth", token }` (never a token in the URL, a query param or a header), and nothing else is handled until `WidgetAuthRepo.authenticate` succeeds. That method is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required) → issuer → `company_connections` row (`withPlatform`) → connection active and `Origin` in its `allowed_origins` → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `iat`, lifetime ≤ 5 min → company active and the chatbot active, in `withTenant`. The identity carries internal ids and stays server-side; the widget gets only a close code (`WidgetCloseCodeEnum`) or `auth_ok` with the chatbot's `publicId`. The token is never logged or stored.
+
+**Violations:**
+
+- Reading the companion JWT from a URL, query string or header, or accepting widget messages before `auth_ok`
+- Trusting a decoded claim (`iss`, `sub`, `roles`, a `company` claim) before the signature and claims checks pass, other than `iss` to find the connection row
+- Fetching a JWKS (or any URL built from a token) for an issuer with no `company_connections` row, or with `redirect` other than `"error"`
+- Adding `none`, `HS*` or any symmetric algorithm to the allowlist, or picking the verify algorithm from the JWK instead of the pinned header `alg`
+- Importing a JWK with its private members, as extractable, or with usages beyond `["verify"]`
+- A second widget auth path that skips `WidgetAuthRepo.authenticate` (the Conversation DO from M2-2 calls the same method)
+- Logging the token, or telling the widget which check failed
+
+**Detection Pattern:**
+
+```regex
+alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=
+```
+
+**Examples:**
+
+```
+- ❌ new WebSocket(`${url}?token=${jwt}`)
+- ❌ const claims = JSON.parse(atob(token.split(".")[1])); companyId = claims.company;
+- ❌ await fetch(`${claims.iss}/.well-known/jwks.json`) // before the issuer lookup
+- ✅ const result = await new WidgetAuthRepo(env).authenticate({ token, origin, chatbotPublicId });
+```
+
+**Fix:** Send the token as the first message and route it through `WidgetAuthRepo.authenticate`; map `failure` with `WIDGET_AUTH_FAILURE_CLOSE_CODE_MAP`. See `routes/WidgetRoutes.ts`, `providers/widgetJwt.ts`, `providers/jwks.ts`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1158,5 +1191,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named)
 Maintainer: hatiprithwish

@@ -6,7 +6,7 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
 // companyId is the internal companies.id, resolved server-side; never from the client.
-// The JWT issuer → connection lookup is cross-company (withPlatform) and arrives with widget auth (M2-1).
+// The JWT issuer → connection lookup is cross-company (withPlatform) and lives in WidgetAuthRepo.authenticate.
 export default class CompanyConnectionsRepo {
   private db: NodePgDatabase;
   private dal: CompanyConnectionsDAL;
