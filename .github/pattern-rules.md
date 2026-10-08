@@ -1037,6 +1037,40 @@ metadata:\s*\{[^}]*\b(encryptedSecret|encryptedKey|iv|plaintext)\b
 
 ---
 
+### 3.21 Owner Rights Only Through SECURITY DEFINER Functions [CRITICAL]
+
+**Rule:** `diletta_app` never runs DDL and the worker never holds an owner connection string. When the worker needs an owner action (today: `activity_log` partitions, M1-9), a custom SQL migration adds a `SECURITY DEFINER` function, owned by the owner role, that does one fixed thing and validates its arguments. It sets `search_path = pg_catalog, public, pg_temp` (and `timezone` when it does date arithmetic), is `REVOKE`d from `PUBLIC`, and grants `EXECUTE` to `diletta_app` only. Its `down.sql` drops it. The DAL calls it inside the Repo's transaction like any other query.
+
+**Violations:**
+
+- `GRANT CREATE`, table ownership or membership in the owner role for `diletta_app`
+- A second database URL with the owner role in `wrangler.jsonc`, a secret, or `Env`
+- A `SECURITY DEFINER` function with no `SET search_path`, or one that includes a user-writable schema ahead of `pg_catalog`
+- A `SECURITY DEFINER` function without `REVOKE ALL ON FUNCTION … FROM PUBLIC`, or granted to any role other than `diletta_app`
+- A function that runs caller-supplied SQL or table names (`EXECUTE` built from an argument without `format('%I' / '%L')` and a whitelist), or returns row data the app's grants wouldn't let it read
+- A grant on an `activity_log_*` partition (the app reaches them only through `activity_log`)
+
+**Detection Pattern:**
+
+```regex
+SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
+```
+
+**Examples:**
+
+```
+- ❌ GRANT CREATE ON SCHEMA public TO diletta_app;
+- ❌ CREATE FUNCTION run_ddl(p_sql text) … SECURITY DEFINER AS $$ BEGIN EXECUTE p_sql; END $$;
+- ✅ CREATE FUNCTION "create_activity_log_partition"("p_month_start" timestamptz) … SECURITY DEFINER
+       SET search_path = pg_catalog, public, pg_temp SET timezone = 'UTC' AS $$ … $$;
+     REVOKE ALL ON FUNCTION "create_activity_log_partition"(timestamptz) FROM PUBLIC;
+     GRANT EXECUTE ON FUNCTION "create_activity_log_partition"(timestamptz) TO diletta_app;
+```
+
+**Fix:** Mirror `apps/backend/src/db/migrations/*_activity_log_partition_maintenance/`. Test the grants, the argument checks and that `diletta_app` still can't run the DDL itself (`activityLogPartitions.test.ts`).
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1124,5 +1158,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions)
 Maintainer: hatiprithwish

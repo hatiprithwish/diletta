@@ -8,6 +8,8 @@ export enum LogCategory {
   Relay = "Relay",
   Queue = "Queue",
   Authz = "Authz",
+  Partition = "Partition",
+  Cron = "Cron",
 }
 
 export enum LogAction {
@@ -97,4 +99,12 @@ export enum LogAction {
   SweepPendingEvents = "SweepPendingEvents",
   PurgePublishedEvents = "PurgePublishedEvents",
   ConsumeEvent = "ConsumeEvent",
+
+  // Activity log partitions
+  CreateActivityLogPartition = "CreateActivityLogPartition",
+  GetActivityLogDefaultHasRows = "GetActivityLogDefaultHasRows",
+  EnsureActivityLogPartitions = "EnsureActivityLogPartitions",
+
+  // Cron
+  DispatchCron = "DispatchCron",
 }

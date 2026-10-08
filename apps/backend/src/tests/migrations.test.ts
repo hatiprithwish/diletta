@@ -190,10 +190,14 @@ describe("activity_log partitions", () => {
     expect(partitions).toContain("activity_log_y2026m10");
     expect(partitions).toContain("activity_log_y2027m12");
     expect(partitions).toContain("activity_log_default");
-    expect(partitions).toHaveLength(16);
+    // DEV_NOTE: 15 months + default from the migration; the partition Cron (M1-9) adds months from 2027-10
+    expect(partitions.length).toBeGreaterThanOrEqual(16);
   });
 
   it("routes rows to the month partition, and past the last month to default", async () => {
+    // DEV_NOTE: activity_log_default must stay empty (the partition Cron alerts on any row there, M1-9), so the
+    // rows are written and read in one transaction that rolls back. Uncommitted, they're never visible to anyone else.
+    class RollbackRoutingCheck extends Error {}
     const values = (createdAt: Date) => ({
       companyId,
       actorType: Schemas.ActivityLogActorTypeIntEnum.System,
@@ -201,18 +205,26 @@ describe("activity_log partitions", () => {
       entityAction: "started",
       createdAt,
     });
-    await db
-      .insert(activityLog)
-      .values([values(new Date("2027-03-15T12:00:00Z")), values(new Date("2030-01-01T00:00:00Z"))]);
+    let routedTo: string[] = [];
 
-    const { rows } = await db.execute<{ partition: string }>(sql`
-      select tableoid::regclass::text as partition
-      from activity_log where company_id = ${companyId} order by created_at
-    `);
-    expect(rows.map((row) => row.partition)).toEqual([
-      "activity_log_y2027m03",
-      "activity_log_default",
-    ]);
+    await expect(
+      db.transaction(async (tx) => {
+        await tx
+          .insert(activityLog)
+          .values([
+            values(new Date("2027-03-15T12:00:00Z")),
+            values(new Date("2030-01-01T00:00:00Z")),
+          ]);
+        const { rows } = await tx.execute<{ partition: string }>(sql`
+          select tableoid::regclass::text as partition
+          from activity_log where company_id = ${companyId} order by created_at
+        `);
+        routedTo = rows.map((row) => row.partition);
+        throw new RollbackRoutingCheck();
+      }),
+    ).rejects.toBeInstanceOf(RollbackRoutingCheck);
+
+    expect(routedTo).toEqual(["activity_log_y2027m03", "activity_log_default"]);
   });
 });
 
