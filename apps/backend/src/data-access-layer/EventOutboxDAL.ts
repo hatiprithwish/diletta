@@ -56,8 +56,8 @@ export default class EventOutboxDAL {
       response.message = "Event outbox created successfully";
       response.eventOutbox = eventOutboxResponse;
     } catch (error) {
-      // DEV_NOTE: Only a concurrent writer of the same event gets here (the provider checks the key first); the
-      // failed insert has aborted the transaction, so the caller rolls back.
+      // DEV_NOTE: Backstop only: the provider holds the dedupe-key lock and checks the key first, so a writer that
+      // skips that step is the only way here. The failed insert has aborted the transaction, so the caller rolls back.
       const message = Utility.isUniqueViolation(error, DEDUPE_KEY_CONSTRAINT)
         ? "Event already recorded"
         : "Unknown error in creating event outbox";
@@ -112,6 +112,37 @@ export default class EventOutboxDAL {
     return response;
   }
 
+  // DEV_NOTE: Transaction-scoped advisory lock on the dedupe key, released at COMMIT/ROLLBACK. A concurrent writer of
+  // the same event waits here until the first one ends, then its dedupe check sees the committed row (READ COMMITTED
+  // reads a fresh snapshot per statement) instead of failing on the unique index. Different keys rarely share a hash;
+  // a clash only makes two writers wait on each other.
+  async lockEventOutboxDedupeKey(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.LockEventOutboxDedupeKeyDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const lockKey = `event_outbox:${params.companyId}:${params.dedupeKey}`;
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+      response.isSuccess = true;
+      response.message = "Dedupe key locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking event outbox dedupe key";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockEventOutboxDedupeKey,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: FOR UPDATE SKIP LOCKED: a row another relay or sweep holds is skipped, not waited on, so two relays
   // never publish the same row at once. The locks hold until the Repo's transaction ends (after the send and mark).
   async lockPendingEventOutboxes(
@@ -123,6 +154,8 @@ export default class EventOutboxDAL {
     try {
       const conditions = [eq(eventOutbox.status, Schemas.EventOutboxStatusIntEnum.Pending)];
       if (params.companyId !== null) conditions.push(eq(eventOutbox.companyId, params.companyId));
+      if (params.companyIds !== null)
+        conditions.push(inArray(eventOutbox.companyId, params.companyIds));
       if (params.outboxIds !== null) conditions.push(inArray(eventOutbox.id, params.outboxIds));
       if (params.createdBefore !== null)
         conditions.push(lt(eventOutbox.createdAt, params.createdBefore));
@@ -195,6 +228,43 @@ export default class EventOutboxDAL {
     return response;
   }
 
+  async setEventOutboxLastError(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.SetEventOutboxLastErrorDALRequest,
+  ) {
+    const response: Schemas.EventOutboxesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        inArray(eventOutbox.id, params.outboxIds),
+        eq(eventOutbox.status, Schemas.EventOutboxStatusIntEnum.Pending),
+      ];
+      if (params.companyId !== null) conditions.push(eq(eventOutbox.companyId, params.companyId));
+
+      const eventOutboxes = await tx
+        .update(eventOutbox)
+        .set({ lastError: params.lastError })
+        .where(and(...conditions))
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Event outbox last error recorded successfully";
+      response.eventOutboxes = eventOutboxes;
+    } catch (error) {
+      const message = "Unknown error in recording event outbox last error";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.SetEventOutboxLastError,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Returns every updated row; the Repo alerts on the ones that reached Failed
   async markEventOutboxAttemptFailed(
     tx: NodePgTransaction<EmptyRelations>,
@@ -248,6 +318,8 @@ export default class EventOutboxDAL {
         eq(eventOutbox.status, Schemas.EventOutboxStatusIntEnum.Published),
         lt(eventOutbox.publishedAt, params.publishedBefore),
       ];
+      if (params.companyIds !== null)
+        conditions.push(inArray(eventOutbox.companyId, params.companyIds));
       const deleted = await tx
         .delete(eventOutbox)
         .where(and(...conditions))

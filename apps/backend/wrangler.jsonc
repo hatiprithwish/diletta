@@ -1,5 +1,8 @@
 {
-  "name": "diletta-worker",
+  // DEV_NOTE: The top level is local dev and tests only; CI deploys with --env staging / --env production. Its name
+  // and queues are deliberately not deployable targets: a stray `wrangler deploy` without --env can't overwrite the
+  // production worker or take over a remote queue's consumer (the -local queues don't exist remotely, so it fails).
+  "name": "diletta-worker-local",
   "main": "src/index.ts",
   // DEV_NOTE: keep it up to date with the current date.
   "compatibility_date": "2026-05-22",
@@ -22,16 +25,16 @@
       "id": "fd1f535077964b0782517cca25e7c988", // diletta-staging
     },
   ],
-  // DEV_NOTE: Outbox relay target (M1-6). Local dev and tests run miniflare's simulated queue under the staging names.
+  // DEV_NOTE: Outbox relay target (M1-6). Local dev and tests run miniflare's simulated queue; local-only names.
   "queues": {
-    "producers": [{ "binding": "EVENTS_QUEUE", "queue": "diletta-events-staging" }],
+    "producers": [{ "binding": "EVENTS_QUEUE", "queue": "diletta-events-local" }],
     "consumers": [
       {
-        "queue": "diletta-events-staging",
+        "queue": "diletta-events-local",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "max_retries": 3,
-        "dead_letter_queue": "diletta-events-staging-dlq",
+        "dead_letter_queue": "diletta-events-local-dlq",
       },
     ],
   },

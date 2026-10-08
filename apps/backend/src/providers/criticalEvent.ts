@@ -19,7 +19,16 @@ export default class CriticalEventProvider {
     params: Schemas.CriticalEventBase & { companyId: string },
   ): Promise<Schemas.RecordCriticalEventResponse> {
     // DEV_NOTE: Dedupe — a retried step that already recorded this event writes nothing new and still succeeds,
-    // so the caller's change commits. A concurrent writer of the same key loses on the unique index instead.
+    // so the caller's change commits. The key lock makes a concurrent repeat wait for the first writer's commit and
+    // then take the same no-op path; if the first writer rolls back, the repeat records the event itself.
+    const keyLock = await CriticalEventProvider.eventOutboxDAL.lockEventOutboxDedupeKey(tx, {
+      companyId: params.companyId,
+      dedupeKey: params.dedupeKey,
+    });
+    if (!keyLock.isSuccess) {
+      return { isSuccess: false, message: keyLock.message };
+    }
+
     const existing = await CriticalEventProvider.eventOutboxDAL.findEventOutboxByDedupeKey(tx, {
       companyId: params.companyId,
       dedupeKey: params.dedupeKey,

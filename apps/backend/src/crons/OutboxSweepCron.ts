@@ -8,7 +8,7 @@ import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 export default async function runOutboxSweep(env: Env): Promise<void> {
   const repo = new EventOutboxRepo(env);
 
-  const swept = await repo.sweepPendingEvents();
+  const swept = await repo.sweepPendingEvents({ companyIds: null });
   if (swept.publishedCount || swept.failedCount) {
     AppLogger.info({
       category: Schemas.LogCategory.Relay,
@@ -18,7 +18,7 @@ export default async function runOutboxSweep(env: Env): Promise<void> {
     });
   }
 
-  const purged = await repo.purgePublishedEvents();
+  const purged = await repo.purgePublishedEvents({ companyIds: null });
   if (purged.deletedCount) {
     AppLogger.info({
       category: Schemas.LogCategory.Relay,

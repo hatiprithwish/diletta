@@ -13,7 +13,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // DEV_NOTE: Outbox relay. Writers record a critical event with CriticalEventProvider inside their own withTenant
 // (or recordCriticalEvent here, when the event is the only write); after the commit they relay its outboxId with
-// relayEvents in waitUntil. The Cron sweep publishes whatever that relay missed (a killed isolate, a failed send),
+// relayEvents in waitUntil. The Cron sweep publishes whatever that relay missed (a killed isolate, a Queue outage),
 // and purges published rows. Each publish locks its rows FOR UPDATE SKIP LOCKED, sends them, and marks them
 // published in one transaction, so a row is handed to the Queue by one relay at a time. A relay that dies between
 // the send and the commit leaves the row pending and it is sent again: delivery is at-least-once, and consumers
@@ -55,6 +55,7 @@ export default class EventOutboxRepo {
     return await withTenant(this.db, params.companyId, async (tx) => {
       return await this.publishPendingEvents(tx, {
         companyId: params.companyId,
+        companyIds: null,
         outboxIds: params.outboxIds,
         createdBefore: null,
         limit: params.outboxIds.length,
@@ -63,8 +64,11 @@ export default class EventOutboxRepo {
   }
 
   // DEV_NOTE: Cron sweep across companies: pending rows older than OUTBOX_SWEEP_MIN_AGE_MS, oldest first, one
-  // transaction per batch. Stops at the first failed batch (the Queue is likely down) and resumes next minute.
-  async sweepPendingEvents(): Promise<Schemas.RelayEventsResponse> {
+  // transaction per batch. Stops when the Queue is unavailable (or the DB fails) and resumes next minute. companyIds
+  // limits it to some companies (tests on the shared staging branch); the Cron passes null.
+  async sweepPendingEvents(params: {
+    companyIds: string[] | null;
+  }): Promise<Schemas.RelayEventsResponse> {
     const createdBefore = new Date(Date.now() - Constants.OUTBOX_SWEEP_MIN_AGE_MS);
     let publishedCount = 0;
     let failedCount = 0;
@@ -73,6 +77,7 @@ export default class EventOutboxRepo {
       const result: Schemas.RelayEventsResponse = await withPlatform(this.db, async (tx) => {
         return await this.publishPendingEvents(tx, {
           companyId: null,
+          companyIds: params.companyIds,
           outboxIds: null,
           createdBefore,
           limit: Constants.OUTBOX_BATCH_SIZE,
@@ -97,14 +102,19 @@ export default class EventOutboxRepo {
   }
 
   // DEV_NOTE: Published rows older than the retention window. Pending and Failed rows stay for the sweep and the
-  // relay-failure runbook.
-  async purgePublishedEvents(): Promise<Schemas.PurgePublishedEventsResponse> {
+  // relay-failure runbook. companyIds as in sweepPendingEvents.
+  async purgePublishedEvents(params: {
+    companyIds: string[] | null;
+  }): Promise<Schemas.PurgePublishedEventsResponse> {
     const publishedBefore = new Date(
       Date.now() - Constants.OUTBOX_PUBLISHED_RETENTION_DAYS * DAY_MS,
     );
 
     return await withPlatform(this.db, async (tx) => {
-      return await this.dal.deletePublishedEventOutboxes(tx, { publishedBefore });
+      return await this.dal.deletePublishedEventOutboxes(tx, {
+        publishedBefore,
+        companyIds: params.companyIds,
+      });
     });
   }
 
@@ -120,30 +130,16 @@ export default class EventOutboxRepo {
       return { isSuccess: true, message: "No pending events", publishedCount: 0, failedCount: 0 };
     }
 
-    const outboxIds = locked.eventOutboxes.map((row) => row.id);
+    const rows = locked.eventOutboxes;
     try {
-      await this.queue.sendBatch(
-        locked.eventOutboxes.map((row) => ({
-          body: {
-            outboxId: row.id,
-            companyId: row.companyId,
-            activityLogId: row.activityLogId,
-            eventType: row.eventType,
-            dedupeKey: row.dedupeKey,
-          },
-        })),
-      );
-    } catch (error) {
-      return await this.recordFailedAttempt(tx, {
-        companyId: params.companyId,
-        outboxIds,
-        error,
-      });
+      await this.queue.sendBatch(rows.map((row) => ({ body: this.toMessage(row) })));
+    } catch (batchError) {
+      return await this.sendOneByOne(tx, { companyId: params.companyId, rows, batchError });
     }
 
     const published = await this.dal.markEventOutboxesPublished(tx, {
       companyId: params.companyId,
-      outboxIds,
+      outboxIds: rows.map((row) => row.id),
     });
     if (!published.isSuccess || !published.eventOutboxes) {
       return { isSuccess: false, message: published.message };
@@ -157,37 +153,120 @@ export default class EventOutboxRepo {
     };
   }
 
-  // DEV_NOTE: The rows stay pending for the next sweep until OUTBOX_MAX_ATTEMPTS, then move to Failed. A Failed row
-  // is never retried automatically, so it alerts (error log → Sentry, M6-6).
-  private async recordFailedAttempt(
-    tx: NodePgTransaction<EmptyRelations>,
-    params: { companyId: string | null; outboxIds: string[]; error: unknown },
-  ): Promise<Schemas.RelayEventsResponse> {
-    const message = "Events could not be published";
-    AppLogger.error({
-      category: Schemas.LogCategory.Relay,
-      action: Schemas.LogAction.RelayEvents,
-      message,
-      error: params.error,
-      metadata: { companyId: params.companyId, outboxIds: params.outboxIds },
-    });
+  private toMessage(row: Schemas.EventOutbox): Schemas.EventOutboxMessage {
+    return {
+      outboxId: row.id,
+      companyId: row.companyId,
+      activityLogId: row.activityLogId,
+      eventType: row.eventType,
+      dedupeKey: row.dedupeKey,
+    };
+  }
 
-    const lastError = (
-      params.error instanceof Error ? params.error.message : String(params.error)
-    ).slice(0, Constants.OUTBOX_LAST_ERROR_MAX_LENGTH);
-    const attempted = await this.dal.markEventOutboxAttemptFailed(tx, {
-      companyId: params.companyId,
-      outboxIds: params.outboxIds,
-      lastError,
-      maxAttempts: Constants.OUTBOX_MAX_ATTEMPTS,
+  // DEV_NOTE: A failed sendBatch doesn't say which message it choked on, so each row is retried on its own.
+  // - None sent: the Queue itself is failing (an outage). Rows stay pending with lastError and no attempt counted, so
+  //   an outage of any length never turns events into Failed; the sweep stops and retries next minute.
+  // - Some sent: the rest were rejected for themselves (e.g. too large). Healthy rows publish; each rejected row
+  //   counts an attempt and moves to Failed at OUTBOX_MAX_ATTEMPTS, so it can't hold the batch back for long.
+  private async sendOneByOne(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyId: string | null; rows: Schemas.EventOutbox[]; batchError: unknown },
+  ): Promise<Schemas.RelayEventsResponse> {
+    const results = await Promise.allSettled(
+      params.rows.map((row) => this.queue.send(this.toMessage(row))),
+    );
+    const sentIds: string[] = [];
+    const rejected: { outboxId: string; error: unknown }[] = [];
+    results.forEach((result, index) => {
+      const outboxId = params.rows[index]?.id ?? "";
+      if (result.status === "fulfilled") sentIds.push(outboxId);
+      else rejected.push({ outboxId, error: result.reason });
     });
-    if (!attempted.isSuccess || !attempted.eventOutboxes) {
+    const outboxIds = params.rows.map((row) => row.id);
+
+    if (sentIds.length === 0) {
+      const message = "Queue unavailable, events left pending";
+      AppLogger.error({
+        category: Schemas.LogCategory.Relay,
+        action: Schemas.LogAction.RelayEvents,
+        message,
+        error: params.batchError,
+        metadata: { companyId: params.companyId, outboxIds },
+      });
+
+      const recorded = await this.dal.setEventOutboxLastError(tx, {
+        companyId: params.companyId,
+        outboxIds,
+        lastError: this.toLastError(params.batchError),
+      });
+      if (!recorded.isSuccess) {
+        return { isSuccess: false, message: recorded.message };
+      }
+      return { isSuccess: false, message, publishedCount: 0, failedCount: outboxIds.length };
+    }
+
+    const published = await this.dal.markEventOutboxesPublished(tx, {
+      companyId: params.companyId,
+      outboxIds: sentIds,
+    });
+    if (!published.isSuccess || !published.eventOutboxes) {
+      return { isSuccess: false, message: published.message };
+    }
+
+    const attempted = await this.recordFailedAttempts(tx, {
+      companyId: params.companyId,
+      rejected,
+    });
+    if (!attempted.isSuccess) {
       return { isSuccess: false, message: attempted.message };
     }
 
-    const failedRows = attempted.eventOutboxes.filter(
-      (row) => row.status === Schemas.EventOutboxStatusIntEnum.Failed,
-    );
+    return {
+      isSuccess: true,
+      message: "Events published, some rejected by the Queue",
+      publishedCount: published.eventOutboxes.length,
+      failedCount: rejected.length,
+    };
+  }
+
+  // DEV_NOTE: The rows stay pending for the next sweep until OUTBOX_MAX_ATTEMPTS, then move to Failed. A Failed row
+  // is never retried automatically, so it alerts (error log → Sentry, M6-6). Rows are grouped by error message, so
+  // each keeps its own lastError.
+  private async recordFailedAttempts(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyId: string | null; rejected: { outboxId: string; error: unknown }[] },
+  ): Promise<Schemas.ApiResponse> {
+    const byError = new Map<string, string[]>();
+    for (const { outboxId, error } of params.rejected) {
+      const lastError = this.toLastError(error);
+      byError.set(lastError, [...(byError.get(lastError) ?? []), outboxId]);
+    }
+
+    const failedRows: Schemas.EventOutbox[] = [];
+    for (const [lastError, outboxIds] of byError) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Relay,
+        action: Schemas.LogAction.RelayEvents,
+        message: "Events rejected by the Queue",
+        metadata: { companyId: params.companyId, outboxIds, lastError },
+      });
+
+      const attempted = await this.dal.markEventOutboxAttemptFailed(tx, {
+        companyId: params.companyId,
+        outboxIds,
+        lastError,
+        maxAttempts: Constants.OUTBOX_MAX_ATTEMPTS,
+      });
+      if (!attempted.isSuccess || !attempted.eventOutboxes) {
+        return { isSuccess: false, message: attempted.message };
+      }
+      failedRows.push(
+        ...attempted.eventOutboxes.filter(
+          (row) => row.status === Schemas.EventOutboxStatusIntEnum.Failed,
+        ),
+      );
+    }
+
     if (failedRows.length > 0) {
       AppLogger.error({
         category: Schemas.LogCategory.Relay,
@@ -203,6 +282,13 @@ export default class EventOutboxRepo {
       });
     }
 
-    return { isSuccess: false, message, publishedCount: 0, failedCount: params.outboxIds.length };
+    return { isSuccess: true, message: "Failed attempts recorded successfully" };
+  }
+
+  private toLastError(error: unknown): string {
+    return (error instanceof Error ? error.message : String(error)).slice(
+      0,
+      Constants.OUTBOX_LAST_ERROR_MAX_LENGTH,
+    );
   }
 }

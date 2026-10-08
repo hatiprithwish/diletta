@@ -19,8 +19,8 @@ export default class Constants {
   static readonly CURRENT_MASTER_KEY_VERSION = 1;
 
   // DEV_NOTE: Outbox relay (M1-6). The Cron sweep picks pending rows older than the min age, so it never races the
-  // after-commit relay of a row just written; a send that fails OUTBOX_MAX_ATTEMPTS times moves the row to Failed
-  // and alerts. Published rows are purged after the retention window, which also ends their dedupe window.
+  // after-commit relay of a row just written; a row the Queue rejects OUTBOX_MAX_ATTEMPTS times moves to Failed and
+  // alerts (a Queue outage counts no attempts). Published rows are purged after the retention window, which also ends their dedupe window.
   static readonly OUTBOX_SWEEP_MIN_AGE_MS = 60_000;
   static readonly OUTBOX_BATCH_SIZE = 100; // sendBatch caps at 100 messages
   static readonly OUTBOX_SWEEP_MAX_BATCHES = 10;
