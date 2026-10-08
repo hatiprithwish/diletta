@@ -1,32 +1,30 @@
 import { z } from "zod";
-import { ZConfigSpecV1, type ConfigSpecV1, type ConfigSpecV1Input } from "./ConfigSpecV1";
+import { ZConfigSpecV1 } from "./ConfigSpecV1";
 
 // DEV_NOTE: chatbot_configs.schema_version says which spec parses a row's body. New rows are always written at
-// CURRENT_CONFIG_SCHEMA_VERSION; older rows are upgraded on read (loadConfigSpec), never rewritten in place.
-// Bumping the version (pattern rule 3.12): add ZConfigSpecV<n+1>, point the aliases below at it, register
-// defineConfigSpecUpgrader(ZConfigSpecV<n>, …) under key n, add an upgrade test, run
-// `pnpm --filter @app/schemas schema:export`.
-export const CURRENT_CONFIG_SCHEMA_VERSION = 1;
-
-export const ZConfigSpec = ZConfigSpecV1;
-export type ConfigSpecInput = ConfigSpecV1Input;
-export type ConfigSpec = ConfigSpecV1;
+// the registry's currentVersion; older rows are upgraded on read (loadConfigSpec), never rewritten in place.
+// The version, the current schema and the upgraders are one unit, so a bump can't leave one behind.
+// Bumping the version (pattern rule 3.12): add ZConfigSpecV<n+1>, set currentVersion / currentSchema below,
+// register defineConfigSpecUpgrader(ZConfigSpecV<n>, …) under key n, add an upgrade test, update
+// ConfigSpecDefaults.ts for any new defaulted field, run `pnpm --filter @app/schemas schema:export`.
+export interface ConfigSpecRegistry<TCurrent extends z.ZodType = z.ZodType> {
+  currentVersion: number;
+  // Parses a stored body at currentVersion
+  currentSchema: TCurrent;
+  // Keyed by the version a body is upgraded FROM; one entry for every version below currentVersion
+  upgraders: Record<number, ConfigSpecUpgrader>;
+}
 
 export type ConfigSpecUpgradeResult =
   | { isSuccess: true; body: unknown }
   | { isSuccess: false; message: string };
 
-// Validates a body against the spec of the version it was stored at, then returns the next version's input
+// Validates a body against the spec of the version it was stored at, then returns the next version's body
 export type ConfigSpecUpgrader = (body: unknown) => ConfigSpecUpgradeResult;
 
-export interface ConfigSpecRegistry {
-  currentVersion: number;
-  // Keyed by the version a body is upgraded FROM; one entry for every version below currentVersion
-  upgraders: Record<number, ConfigSpecUpgrader>;
-}
-
-// DEV_NOTE: The upgrade function receives the parsed (defaults-filled) body of its own version, typed by that
-// version's schema, so no upgrader ever handles an invalid old body.
+// DEV_NOTE: The upgrade function receives the parsed stored body of its own version, typed by that version's
+// schema, so no upgrader handles an invalid old body. Stored bodies carry no platform defaults (an omitted field
+// stays omitted), so an upgrader never turns an old default into a company value; return omitted fields omitted.
 export function defineConfigSpecUpgrader<TFrom extends z.ZodType>(
   fromSchema: TFrom,
   upgrade: (body: z.output<TFrom>) => unknown,
@@ -40,7 +38,15 @@ export function defineConfigSpecUpgrader<TFrom extends z.ZodType>(
   };
 }
 
-export const CONFIG_SPEC_REGISTRY: ConfigSpecRegistry = {
-  currentVersion: CURRENT_CONFIG_SCHEMA_VERSION,
+export const CONFIG_SPEC_REGISTRY: ConfigSpecRegistry<typeof ZConfigSpecV1> = {
+  currentVersion: 1,
+  currentSchema: ZConfigSpecV1,
   upgraders: {},
 };
+
+export const CURRENT_CONFIG_SCHEMA_VERSION = CONFIG_SPEC_REGISTRY.currentVersion;
+
+// The stored body at the current version: what a client sends (Input) and what is stored (trimmed, no defaults)
+export const ZConfigSpecBody = CONFIG_SPEC_REGISTRY.currentSchema;
+export type ConfigSpecBodyInput = z.input<typeof ZConfigSpecBody>;
+export type ConfigSpecBody = z.output<typeof ZConfigSpecBody>;

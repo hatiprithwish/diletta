@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { ModelProviderEnum } from "../companySecrets";
 import {
   ApprovalRuleApprovalEnum,
-  CONFIG_SPEC_V1_DEFAULTS,
   ModelTierEnum,
   ZConfigSpecV1,
   type ConfigSpecV1Input,
@@ -62,30 +61,30 @@ function issuePaths(body: unknown): string[] {
 }
 
 describe("ZConfigSpecV1 valid bodies", () => {
-  it("fills every platform default into a minimal body", () => {
+  // DEV_NOTE: The versioned schema is the stored shape. Parsing must never add a field the body omitted, or a
+  // stored / upgraded body would freeze today's platform defaults as company values (ConfigSpecDefaults.ts).
+  it("parses a minimal body without adding any omitted field", () => {
     const result = ZConfigSpecV1.safeParse(minimalBody());
 
     expect(result.success).toBe(true);
-    expect(result.data?.limits).toEqual(CONFIG_SPEC_V1_DEFAULTS.limits);
-    expect(result.data?.attachments).toEqual(CONFIG_SPEC_V1_DEFAULTS.attachments);
-    expect(result.data?.knowledge.topK).toBe(CONFIG_SPEC_V1_DEFAULTS.knowledgeTopK);
+    expect(result.data).toEqual(minimalBody());
   });
 
-  it("keeps company overrides and defaults only the omitted fields", () => {
+  it("keeps a full body as given, company overrides included", () => {
     const result = ZConfigSpecV1.safeParse(fullBody());
 
     expect(result.success).toBe(true);
-    expect(result.data?.limits).toEqual({
-      ...CONFIG_SPEC_V1_DEFAULTS.limits,
-      maxStepsPerTurn: 20,
-      turnCostCapUsd: 1.25,
-    });
-    expect(result.data?.attachments).toEqual({
-      ...CONFIG_SPEC_V1_DEFAULTS.attachments,
-      isImageUploadEnabled: true,
-    });
-    expect(result.data?.knowledge.topK).toBe(8);
-    expect(result.data?.widget.launcherLabel).toBe("Ask about your registers");
+    expect(result.data).toEqual(fullBody());
+  });
+
+  it("trims text", () => {
+    const body = minimalBody();
+    body.widget.greeting = "  Hi there  ";
+    body.persona.instructions = "\n Help with registers. \n";
+
+    const result = ZConfigSpecV1.safeParse(body);
+    expect(result.data?.widget.greeting).toBe("Hi there");
+    expect(result.data?.persona.instructions).toBe("Help with registers.");
   });
 });
 
@@ -183,5 +182,32 @@ describe("ZConfigSpecV1 invalid bodies are rejected", () => {
         ],
       }),
     ).toContain("approvalRules.0.tools.0");
+  });
+
+  it.each([
+    ["maxStepsPerTurn", 51],
+    ["maxTokensPerTurn", 1_000_001],
+    ["turnTimeoutSeconds", 901],
+    ["turnCostCapUsd", 100.01],
+    ["conversationTurnsPerHour", 601],
+    ["conversationCostCapUsd", 1_000.01],
+    ["userMessagesPerMinute", 61],
+    ["userDailyCostCapUsd", 1_000.01],
+  ])("rejects limits.%s above its maximum (%s)", (field, value) => {
+    expect(issuePaths({ ...minimalBody(), limits: { [field]: value } })).toContain(
+      `limits.${field}`,
+    );
+  });
+
+  it("rejects attachments and topK above their maximum", () => {
+    expect(issuePaths({ ...minimalBody(), attachments: { maxImagesPerMessage: 11 } })).toContain(
+      "attachments.maxImagesPerMessage",
+    );
+    expect(
+      issuePaths({ ...minimalBody(), attachments: { maxImageBytes: 20 * 1024 * 1024 + 1 } }),
+    ).toContain("attachments.maxImageBytes");
+    expect(issuePaths({ ...minimalBody(), knowledge: { sourceIds: [], topK: 21 } })).toContain(
+      "knowledge.topK",
+    );
   });
 });

@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { ModelProviderEnum } from "../companySecrets";
 
-// DEV_NOTE: The body of a chatbot_configs row at schema_version 1. A frozen shape: a breaking change adds
-// ZConfigSpecV2 and an upgrader from this version (ConfigSpecRegistry), it never edits this file. Strict objects,
-// so a misspelt or stale key is rejected instead of silently dropped. Enums are strings, not the Status Enum
-// Pattern: the body is jsonb that admins read and evals/ consumes as JSON Schema, not an int column.
+// DEV_NOTE: The stored body of a chatbot_configs row at schema_version 1. A frozen shape: a breaking change adds
+// ZConfigSpecV2 and an upgrader from this version (ConfigSpecRegistry), it never edits this file. It describes
+// what is stored, so it has no defaults: an omitted limit / attachment / topK means "use the platform default",
+// applied only on load (ConfigSpecDefaults.ts, unversioned). Strict objects, so a misspelt or stale key is
+// rejected instead of silently dropped. Enums are strings, not the Status Enum Pattern: the body is jsonb that
+// admins read and evals/ consumes as JSON Schema, not an int column.
 
 export enum ApprovalRuleApprovalEnum {
   Auto = "auto",
@@ -17,27 +19,6 @@ export enum ModelTierEnum {
   Mid = "mid",
   Top = "top",
 }
-
-// DEV_NOTE: Platform defaults for limits and attachments ("platform defaults → company"). A body that omits a
-// field gets the default when it is loaded; the dashboard only stores what the company overrides.
-export const CONFIG_SPEC_V1_DEFAULTS = {
-  limits: {
-    maxStepsPerTurn: 12,
-    maxTokensPerTurn: 32_000,
-    turnTimeoutSeconds: 120,
-    turnCostCapUsd: 0.5,
-    conversationTurnsPerHour: 60,
-    conversationCostCapUsd: 5,
-    userMessagesPerMinute: 10,
-    userDailyCostCapUsd: 10,
-  },
-  attachments: {
-    isImageUploadEnabled: false,
-    maxImagesPerMessage: 3,
-    maxImageBytes: 5 * 1024 * 1024,
-  },
-  knowledgeTopK: 5,
-} as const;
 
 const ZName = z.string().trim().min(1).max(100);
 
@@ -85,7 +66,7 @@ export const ZConfigRoutingV1 = z.strictObject({
 // [] = the bot searches no knowledge.
 export const ZConfigKnowledgeV1 = z.strictObject({
   sourceIds: z.array(z.string().trim().min(1).max(64)).max(200),
-  topK: z.number().int().min(1).max(20).default(CONFIG_SPEC_V1_DEFAULTS.knowledgeTopK),
+  topK: z.number().int().min(1).max(20).optional(),
 });
 
 export const ZConfigWidgetV1 = z.strictObject({
@@ -94,56 +75,28 @@ export const ZConfigWidgetV1 = z.strictObject({
   launcherLabel: z.string().trim().min(1).max(40).optional(),
 });
 
-const ZPositiveUsd = z.number().positive().max(100_000);
+const ZCount = (max: number) => z.number().int().min(1).max(max);
+const ZUsd = (max: number) => z.number().positive().max(max);
 
-// DEV_NOTE: Checked before the next model call (BudgetDO and the Conversation DO). Company spending_budget is a
-// companies column, not part of the bot config.
+// DEV_NOTE: Checked before the next model call (BudgetDO and the Conversation DO). Every field is optional (an
+// omitted one gets the platform default on load) and bounded, because the runtime trusts these values. Company
+// spending_budget is a companies column, not part of the bot config, and stays the outer wall.
 export const ZConfigLimitsV1 = z.strictObject({
-  maxStepsPerTurn: z.number().int().min(1).default(CONFIG_SPEC_V1_DEFAULTS.limits.maxStepsPerTurn),
-  maxTokensPerTurn: z
-    .number()
-    .int()
-    .min(1)
-    .default(CONFIG_SPEC_V1_DEFAULTS.limits.maxTokensPerTurn),
-  turnTimeoutSeconds: z
-    .number()
-    .int()
-    .min(1)
-    .default(CONFIG_SPEC_V1_DEFAULTS.limits.turnTimeoutSeconds),
-  turnCostCapUsd: ZPositiveUsd.default(CONFIG_SPEC_V1_DEFAULTS.limits.turnCostCapUsd),
-  conversationTurnsPerHour: z
-    .number()
-    .int()
-    .min(1)
-    .default(CONFIG_SPEC_V1_DEFAULTS.limits.conversationTurnsPerHour),
-  conversationCostCapUsd: ZPositiveUsd.default(
-    CONFIG_SPEC_V1_DEFAULTS.limits.conversationCostCapUsd,
-  ),
-  userMessagesPerMinute: z
-    .number()
-    .int()
-    .min(1)
-    .default(CONFIG_SPEC_V1_DEFAULTS.limits.userMessagesPerMinute),
-  userDailyCostCapUsd: ZPositiveUsd.default(CONFIG_SPEC_V1_DEFAULTS.limits.userDailyCostCapUsd),
+  maxStepsPerTurn: ZCount(50).optional(),
+  maxTokensPerTurn: ZCount(1_000_000).optional(),
+  turnTimeoutSeconds: ZCount(900).optional(),
+  turnCostCapUsd: ZUsd(100).optional(),
+  conversationTurnsPerHour: ZCount(600).optional(),
+  conversationCostCapUsd: ZUsd(1_000).optional(),
+  userMessagesPerMinute: ZCount(60).optional(),
+  userDailyCostCapUsd: ZUsd(1_000).optional(),
 });
 
 // Image uploads only: stored in R2 via files and fed to the model as untrusted content
 export const ZConfigAttachmentsV1 = z.strictObject({
-  isImageUploadEnabled: z
-    .boolean()
-    .default(CONFIG_SPEC_V1_DEFAULTS.attachments.isImageUploadEnabled),
-  maxImagesPerMessage: z
-    .number()
-    .int()
-    .min(1)
-    .max(10)
-    .default(CONFIG_SPEC_V1_DEFAULTS.attachments.maxImagesPerMessage),
-  maxImageBytes: z
-    .number()
-    .int()
-    .min(1)
-    .max(20 * 1024 * 1024)
-    .default(CONFIG_SPEC_V1_DEFAULTS.attachments.maxImageBytes),
+  isImageUploadEnabled: z.boolean().optional(),
+  maxImagesPerMessage: ZCount(10).optional(),
+  maxImageBytes: ZCount(20 * 1024 * 1024).optional(),
 });
 
 function addDuplicateIssues(
@@ -165,8 +118,6 @@ function addDuplicateIssues(
   });
 }
 
-// DEV_NOTE: limits and attachments use prefault, not default: zod v4 returns a default as-is, while a prefault
-// is parsed, so an omitted section still gets every field default filled in.
 export const ZConfigSpecV1 = z
   .strictObject({
     persona: ZConfigPersonaV1,
@@ -176,8 +127,8 @@ export const ZConfigSpecV1 = z
     routing: ZConfigRoutingV1,
     knowledge: ZConfigKnowledgeV1,
     widget: ZConfigWidgetV1,
-    limits: ZConfigLimitsV1.prefault({}),
-    attachments: ZConfigAttachmentsV1.prefault({}),
+    limits: ZConfigLimitsV1.optional(),
+    attachments: ZConfigAttachmentsV1.optional(),
   })
   .superRefine((spec, ctx) => {
     addDuplicateIssues(
@@ -213,6 +164,6 @@ export const ZConfigSpecV1 = z
     });
   });
 
-// Stored / dashboard-edited shape (defaults optional) and loaded shape (defaults filled)
+// What a client sends, and the normalised stored body (text trimmed); neither has platform defaults filled in
 export type ConfigSpecV1Input = z.input<typeof ZConfigSpecV1>;
 export type ConfigSpecV1 = z.output<typeof ZConfigSpecV1>;

@@ -213,7 +213,6 @@
           }
         },
         "topK": {
-          "default": 5,
           "type": "integer",
           "minimum": 1,
           "maximum": 20
@@ -254,76 +253,63 @@
       "additionalProperties": false
     },
     "limits": {
-      "default": {},
       "type": "object",
       "properties": {
         "maxStepsPerTurn": {
-          "default": 12,
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991
+          "maximum": 50
         },
         "maxTokensPerTurn": {
-          "default": 32000,
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991
+          "maximum": 1000000
         },
         "turnTimeoutSeconds": {
-          "default": 120,
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991
+          "maximum": 900
         },
         "turnCostCapUsd": {
-          "default": 0.5,
           "type": "number",
           "exclusiveMinimum": 0,
-          "maximum": 100000
+          "maximum": 100
         },
         "conversationTurnsPerHour": {
-          "default": 60,
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991
+          "maximum": 600
         },
         "conversationCostCapUsd": {
-          "default": 5,
           "type": "number",
           "exclusiveMinimum": 0,
-          "maximum": 100000
+          "maximum": 1000
         },
         "userMessagesPerMinute": {
-          "default": 10,
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991
+          "maximum": 60
         },
         "userDailyCostCapUsd": {
-          "default": 10,
           "type": "number",
           "exclusiveMinimum": 0,
-          "maximum": 100000
+          "maximum": 1000
         }
       },
       "additionalProperties": false
     },
     "attachments": {
-      "default": {},
       "type": "object",
       "properties": {
         "isImageUploadEnabled": {
-          "default": false,
           "type": "boolean"
         },
         "maxImagesPerMessage": {
-          "default": 3,
           "type": "integer",
           "minimum": 1,
           "maximum": 10
         },
         "maxImageBytes": {
-          "default": 5242880,
           "type": "integer",
           "minimum": 1,
           "maximum": 20971520
