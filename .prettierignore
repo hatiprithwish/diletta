@@ -5,3 +5,4 @@ build
 .wrangler
 pnpm-lock.yaml
 docs/design/pages
+evals/schemas

@@ -9,14 +9,19 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "lint": "eslint src",
-    "lint:fix": "eslint src --fix",
-    "typecheck": "tsc --noEmit"
+    "lint": "eslint src scripts",
+    "lint:fix": "eslint src scripts --fix",
+    "test": "pnpm typecheck && vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
+    "schema:export": "tsx scripts/exportJsonSchema.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "@types/node": "^25.9.5",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
   }
 }

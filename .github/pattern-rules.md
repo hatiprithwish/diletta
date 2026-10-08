@@ -794,8 +794,13 @@ env\.AI\.run\(
 - Adding, removing, renaming or retyping a field in a config spec or tool op schema without bumping `schema_version`
 - A `schema_version` bump without an upgrader registered for the previous version, or without a test for it
 - Config spec or tool op shapes defined outside `packages/schemas`
+- Editing a released `ZConfigSpecV<n>` instead of adding `ZConfigSpecV<n+1>` (the stored rows at version n still parse with it)
+- Parsing a `chatbot_configs.body` with `ZConfigSpec*.parse` / `safeParse` outside `packages/schemas` instead of `loadConfigSpec` (read) or `normalizeConfigBody` (write); the first skips the upgrade from the row's `schema_version`
+- Writing a `loadConfigSpec` result (`spec`) back to `chatbot_configs.body` instead of `normalizeConfigBody`'s `body`: it freezes today's platform defaults into the row
+- `.default()` / `.prefault()` in a versioned `ZConfigSpecV<n>`: platform defaults go in `ConfigSpecDefaults.ts`, applied on load only
+- A change to a schema in `JSON_SCHEMA_EXPORTS` (`packages/schemas/src/jsonSchemaExports.ts`) without the regenerated `evals/schemas/*.json` in the same PR, or a hand edit to a file in `evals/schemas/`
 
-**Fix:** Bump `schema_version`, register the upgrader, and add an upgrade test.
+**Fix:** Bump `schema_version`, register the upgrader, and add an upgrade test. Run `pnpm --filter @app/schemas schema:export` and commit `evals/schemas/`.
 
 ---
 
@@ -1083,5 +1088,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export)
 Maintainer: hatiprithwish

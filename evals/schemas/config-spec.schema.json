@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "persona": {
+      "type": "object",
+      "properties": {
+        "instructions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        }
+      },
+      "required": [
+        "instructions"
+      ],
+      "additionalProperties": false
+    },
+    "procedures": {
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "whenToUse": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "steps": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "name",
+          "whenToUse",
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tools": {
+      "maxItems": 200,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "approvalRules": {
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "tools": {
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "approval": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "required",
+              "blocked"
+            ]
+          }
+        },
+        "required": [
+          "roles",
+          "tools",
+          "approval"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "routing": {
+      "type": "object",
+      "properties": {
+        "small": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "google",
+                "openai",
+                "anthropic"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "provider",
+            "model"
+          ],
+          "additionalProperties": false
+        },
+        "mid": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "google",
+                "openai",
+                "anthropic"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "provider",
+            "model"
+          ],
+          "additionalProperties": false
+        },
+        "top": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "google",
+                "openai",
+                "anthropic"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "provider",
+            "model"
+          ],
+          "additionalProperties": false
+        },
+        "defaultTier": {
+          "type": "string",
+          "enum": [
+            "small",
+            "mid",
+            "top"
+          ]
+        }
+      },
+      "required": [
+        "small",
+        "mid",
+        "top",
+        "defaultTier"
+      ],
+      "additionalProperties": false
+    },
+    "knowledge": {
+      "type": "object",
+      "properties": {
+        "sourceIds": {
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "topK": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
+      },
+      "required": [
+        "sourceIds"
+      ],
+      "additionalProperties": false
+    },
+    "widget": {
+      "type": "object",
+      "properties": {
+        "greeting": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "suggestions": {
+          "maxItems": 3,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "launcherLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "greeting",
+        "suggestions"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "maxStepsPerTurn": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "maxTokensPerTurn": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "turnTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 900
+        },
+        "turnCostCapUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "conversationTurnsPerHour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        },
+        "conversationCostCapUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "userMessagesPerMinute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "userDailyCostCapUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    },
+    "attachments": {
+      "type": "object",
+      "properties": {
+        "isImageUploadEnabled": {
+          "type": "boolean"
+        },
+        "maxImagesPerMessage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "maxImageBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20971520
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "persona",
+    "procedures",
+    "tools",
+    "approvalRules",
+    "routing",
+    "knowledge",
+    "widget"
+  ],
+  "additionalProperties": false,
+  "title": "ConfigSpec",
+  "description": "chatbot_configs.body at schema_version 1"
+}

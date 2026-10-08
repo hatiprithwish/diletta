@@ -40,7 +40,7 @@ Chatbots is the tenant golden example (M0-5). It has no routes yet: the Clerk ad
 
 Monorepo (pnpm workspaces): `apps/web` (TanStack Start, React 19, Cloudflare Workers, Clerk) · `apps/backend` (Hono, Drizzle, Neon Postgres via Hyperdrive) · `packages/schemas` (Zod schemas + types, source of truth for all types — never duplicate one in an app) · `packages/ui` (`@app/ui`: shadcn components, `cn`, Tailwind preset `@app/ui/globals.css` with the lime theme, light + dark) · `packages/crypto` (`@app/crypto`: envelope encryption on WebCrypto AES-256-GCM, pure functions, no DB or logger).
 
-Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/adapter`, `evals/` (Python harness). Don't create them outside their task.
+Planned, not yet created: `apps/widget` (chat widget, Shadow DOM), `packages/adapter`, `evals/` (Python harness). Don't create them outside their task. Until M5, `evals/` holds only `evals/schemas/`: JSON Schema generated from `packages/schemas` (`pnpm --filter @app/schemas schema:export`), never edited by hand.
 
 **Approved packages — don't introduce alternatives:** routing `@tanstack/react-router`+`react-start` · server state `@tanstack/react-query` · client state `zustand` · forms `@tanstack/react-form` (not react-hook-form) · validation `zod` v4 · UI `shadcn/ui` (style `radix-vega`) + Tailwind v4 + `cn` (shadcn's clsx/tailwind-merge replacement) · icons `@phosphor-icons/react` · auth `@clerk/tanstack-react-start` (web) / `@clerk/backend` (worker) · HTTP `hono` v4 + `@hono/zod-validator` · ORM `drizzle-orm` + `drizzle-kit` pinned to `1.0.0-rc.4` (for `bigint` string mode) + `pg` (node-postgres) on Hyperdrive · logging `@logtape/logtape` via `AppLogger` (never `console.log`) · errors Sentry · tests Vitest + RTL.
 
@@ -103,6 +103,7 @@ Before using any third-party API: check the installed version in `package.json`,
 - Model calls only through the model router, on the company's own key via AI Gateway. No direct provider SDK calls.
 - Never log or persist the host bearer token. It lives in Durable Object memory only.
 - Config spec and tool ops are Zod schemas in `packages/schemas`. Changing a shape = bump `schema_version` + add an upgrader.
+- Config spec (`packages/schemas/src/configSpec/`): reads go through `loadConfigSpec({ schemaVersion, body })` (upgrade from the row's version, validate, then fill in today's platform defaults; the result is never written back). Writes go through `normalizeConfigBody(body)`: store its `body` at its `schemaVersion`, and compute `body_hash` over that body with sorted keys. Both return `{ isSuccess, message }` and never throw. Stored bodies hold only what the company set; platform defaults live in `ConfigSpecDefaults.ts`, unversioned, so changing a default value needs no bump. A shape change adds `ZConfigSpecV<n+1>` (never edit a released version, and give it no `.default()`), updates `currentVersion` / `currentSchema` and registers `defineConfigSpecUpgrader(ZConfigSpecV<n>, …)` under `n` in `ConfigSpecRegistry.ts` with a test, and reruns `schema:export` so `evals/schemas/` matches (the drift test in `jsonSchemaExports.test.ts` fails until it does).
 
 ## UI
 
