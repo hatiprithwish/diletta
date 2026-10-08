@@ -27,7 +27,7 @@ Not installed yet. Latest on npm (2026-10-04): `@cloudflare/think` 0.20.0, `agen
 
 ## How Diletta uses it
 
-- The Conversation DO extends Think (M2-2). `getModel()` asks the model router (M2-3) for the model; it never builds a provider client itself.
+- The Conversation DO extends Think (M2-2). `getModel()` returns `ModelRouterRepo.getModel(...)`'s `model` (an AI SDK v7 `LanguageModel`, already wrapped to write `model_calls`); it never builds a provider client itself. A `failure`, or a `ModelUnavailableError` thrown from the call, shows the widget "Temporarily unavailable". `ai@7` is pinned to satisfy Think's `ai ^7` peer.
 - Agent state (`setState`, `this.sql`, message history) is persisted to SQLite and survives hibernation. Never put the host bearer token there; keep it in a plain class field (see `durable-objects.md`).
 - `turn_id` (ULID) is minted per turn in the DO and written to messages, tool calls and model calls.
 - Approval-paused turns park instead of failing across eviction; the action engine's durable pause (M3-4) builds on that.

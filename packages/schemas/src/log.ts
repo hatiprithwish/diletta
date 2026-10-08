@@ -11,6 +11,7 @@ export enum LogCategory {
   Partition = "Partition",
   Cron = "Cron",
   Widget = "Widget",
+  ModelRouter = "ModelRouter",
 }
 
 export enum LogAction {
@@ -87,12 +88,27 @@ export enum LogAction {
   GetCompanySecretDetails = "GetCompanySecretDetails",
   ListCompanySecrets = "ListCompanySecrets",
   UpdateCompanySecret = "UpdateCompanySecret",
+  GetActiveModelKey = "GetActiveModelKey",
 
   // Chatbot user secrets
   CreateChatbotUserSecret = "CreateChatbotUserSecret",
   GetChatbotUserSecretDetails = "GetChatbotUserSecretDetails",
   ListChatbotUserSecrets = "ListChatbotUserSecrets",
   UpdateChatbotUserSecret = "UpdateChatbotUserSecret",
+
+  // Model calls
+  CreateModelCall = "CreateModelCall",
+
+  // Quality issues
+  LockOpenSystemQualityIssue = "LockOpenSystemQualityIssue",
+  GetOpenSystemQualityIssue = "GetOpenSystemQualityIssue",
+  CreateSystemQualityIssue = "CreateSystemQualityIssue",
+
+  // Model router
+  GetModel = "GetModel",
+  CreateGatewayModel = "CreateGatewayModel",
+  RecordModelCall = "RecordModelCall",
+  HandleModelKeyFailure = "HandleModelKeyFailure",
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",

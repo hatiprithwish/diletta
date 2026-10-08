@@ -739,12 +739,16 @@ FOREIGN KEY
 
 ### 3.10 Model Calls Only Through the Router [CRITICAL]
 
-**Rule:** Every LLM call goes through the model router (M2-3) on the company's own key via AI Gateway. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
+**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`) may mark a company key Invalid, never a gateway error. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
 
 **Violations:**
 
-- Importing a provider SDK outside the model router: `openai`, `@anthropic-ai/sdk`, `@google/genai`, `@google/generative-ai`, `@mistralai/*`, `cohere-ai`, `groq-sdk`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, or any other `@ai-sdk/<provider>`
-- `fetch` to a provider API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, …) or to `gateway.ai.cloudflare.com` outside the router
+- Importing a provider SDK anywhere but `providers/aiGateway.ts`: `openai`, `@anthropic-ai/sdk`, `@google/genai`, `@google/generative-ai`, `@mistralai/*`, `cohere-ai`, `groq-sdk`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, or any other `@ai-sdk/<provider>`
+- `fetch` to a provider API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, …) or to `gateway.ai.cloudflare.com` outside `providers/aiGateway.ts`
+- A model call that skips the router's middleware (no `model_calls` row), or a cost computed outside `computeModelCallCostUsd`
+- A fallback price (0 or a default) for a model missing from `MODEL_PRICES`
+- Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape
+- Logging the decrypted company key or the gateway token, or passing either anywhere but the provider SDK settings
 - `env.AI.run(...)` with a non-embedding model, or anywhere except knowledge ingestion/search
 - A Think `getModel()` that builds a provider client itself instead of asking the router
 - A provider API key read from `env` (platform key) for a company's model call
@@ -757,7 +761,16 @@ api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|gateway
 env\.AI\.run\(
 ```
 
-**Fix:** Call the model router; it decrypts the company key, sets AI Gateway metadata and handles the key-failure path.
+**Examples:**
+
+```
+- ❌ import { createAnthropic } from "@ai-sdk/anthropic"; // in a DO or a Repo
+- ❌ getModel() { return createOpenAI({ apiKey: env.OPENAI_KEY })("gpt-6-sol"); }
+- ❌ const cost = MODEL_PRICES[provider][model]?.inputUsdPerMTok ?? 0;
+- ✅ const routed = await new ModelRouterRepo(env, ctx).getModel({ companyId, …, routing: spec.routing });
+```
+
+**Fix:** Call `ModelRouterRepo.getModel`; it prices the model, decrypts the company key, sets AI Gateway metadata, records `model_calls` and handles the key-failure path (`docs/runbooks/ai-gateway.md`).
 
 ---
 
@@ -1193,5 +1206,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules)
 Maintainer: hatiprithwish

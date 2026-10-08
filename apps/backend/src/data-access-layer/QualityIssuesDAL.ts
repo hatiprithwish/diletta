@@ -1,0 +1,163 @@
+import { and, asc, eq, sql } from "drizzle-orm";
+import type { EmptyRelations } from "drizzle-orm";
+import type { NodePgTransaction } from "drizzle-orm/node-postgres";
+import { companies, conversations, qualityIssues } from "@/db/tables";
+import * as Schemas from "@app/schemas";
+import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
+
+// DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
+// and every query filters on companyId (defence in depth on top of RLS). M2-3 needs the system issues only (the
+// model router's key-failure path); user (M2-8) and admin issues add their own methods.
+export default class QualityIssuesDAL {
+  // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type), held until the Repo's transaction ends.
+  // Two calls that hit the same failure at once take turns, so the second sees the first one's open issue instead
+  // of opening a duplicate (there is no unique index to catch it: dismissed and fixed issues of the same type stay).
+  async lockOpenSystemQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindOpenSystemQualityIssueDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const lockKey = `quality_issue:system:${params.companyId}:${params.issueType}`;
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+      response.isSuccess = true;
+      response.message = "Open system quality issue locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking open system quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockOpenSystemQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The oldest open system issue of the type, if any. isSuccess with no qualityIssue = none open.
+  async getOpenSystemQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindOpenSystemQualityIssueDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.System),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+        eq(qualityIssues.issueType, params.issueType),
+      ];
+      const [qualityIssue] = await tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...conditions))
+        .orderBy(asc(qualityIssues.createdAt), asc(qualityIssues.id))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = qualityIssue
+        ? "Open system quality issue fetched successfully"
+        : "No open system quality issue";
+      response.qualityIssue = qualityIssue;
+    } catch (error) {
+      const message = "Unknown error in fetching open system quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetOpenSystemQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async createSystemQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateSystemQualityIssueDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+    // DEV_NOTE: note is free text, so it stays out of the log
+    const { note: _note, ...metadata } = params;
+
+    try {
+      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing
+      const [company] = await tx
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, params.companyId))
+        .limit(1);
+
+      if (!company) {
+        const message = "Company not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateSystemQualityIssue,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const conversationConditions = [
+        eq(conversations.id, params.conversationId),
+        eq(conversations.companyId, params.companyId),
+      ];
+      const [conversation] = await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(...conversationConditions))
+        .limit(1);
+
+      if (!conversation) {
+        const message = "Conversation not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateSystemQualityIssue,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const [qualityIssueResponse] = await tx
+        .insert(qualityIssues)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: params.companyId,
+          conversationId: params.conversationId,
+          source: Schemas.QualityIssueSourceIntEnum.System,
+          issueType: params.issueType,
+          note: params.note,
+        })
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "System quality issue created successfully";
+      response.qualityIssue = qualityIssueResponse;
+    } catch (error) {
+      const message = "Unknown error in creating system quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateSystemQualityIssue,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+}

@@ -1,0 +1,14 @@
+import type { QualityIssue } from "./QualityIssuesCommon";
+
+// DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
+// A system issue (source = System) opens with no feedbackId, createdBy or evalCaseId: the CHECKs on the table
+// reject anything else for that source. The DAL generates publicId and checks the conversation exists.
+export type CreateSystemQualityIssueDALRequest = Pick<
+  QualityIssue,
+  "companyId" | "conversationId" | "issueType" | "note"
+>;
+
+// Params to find the company's open system issue of one type, and to serialise the writers that open one
+export type FindOpenSystemQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
+  issueType: NonNullable<QualityIssue["issueType"]>;
+};

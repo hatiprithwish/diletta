@@ -8,8 +8,12 @@
   "compatibility_date": "2026-05-22",
   // DEV_NOTE: nodejs_compat flag is needed for using AsyncLocalStorage.
   "compatibility_flags": ["nodejs_compat"],
+  // DEV_NOTE: AI Gateway for the model router (M2-3, docs/runbooks/ai-gateway.md). Local dev uses the staging gateway;
+  // AI_GATEWAY_TOKEN comes from .dev.vars locally and from a Secrets Store binding in each env.
   "vars": {
     "ALLOWED_CORS_ORIGIN": "http://localhost:3000",
+    "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
+    "AI_GATEWAY_NAME": "diletta-staging",
   },
   "observability": {
     "logs": {
@@ -66,6 +70,12 @@
           "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
           "secret_name": "diletta-master-key-v1-staging",
         },
+        // DEV_NOTE: AI Gateway token (cf-aig-authorization) for the model router (M2-3, docs/runbooks/ai-gateway.md)
+        {
+          "binding": "AI_GATEWAY_TOKEN",
+          "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
+          "secret_name": "diletta-aig-token-staging",
+        },
       ],
       // DEV_NOTE: Outbox relay target (M1-6). The worker produces and consumes its own events; messages past
       // max_retries land in the DLQ. Bindings don't inherit, so each env declares its own.
@@ -83,6 +93,8 @@
       },
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
+        "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
+        "AI_GATEWAY_NAME": "diletta-staging",
       },
       "observability": {
         "logs": {
@@ -109,6 +121,12 @@
           "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
           "secret_name": "diletta-master-key-v1-production",
         },
+        // DEV_NOTE: AI Gateway token (cf-aig-authorization) for the model router (M2-3, docs/runbooks/ai-gateway.md)
+        {
+          "binding": "AI_GATEWAY_TOKEN",
+          "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
+          "secret_name": "diletta-aig-token-production",
+        },
       ],
       // DEV_NOTE: Outbox relay target (M1-6). The worker produces and consumes its own events; messages past
       // max_retries land in the DLQ. Bindings don't inherit, so each env declares its own.
@@ -126,6 +144,8 @@
       },
       "vars": {
         "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
+        "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
+        "AI_GATEWAY_NAME": "diletta-production",
       },
       "observability": {
         "logs": {

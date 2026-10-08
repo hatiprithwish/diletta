@@ -174,6 +174,58 @@ export default class CompanySecretsDAL {
     return response;
   }
 
+  // DEV_NOTE: The model router's key lookup. Only an active row: an invalid or revoked key is never used again until
+  // an admin replaces it. isNotFound when the company has no active key for the provider.
+  async getActiveModelKey(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindActiveModelKeyDALRequest,
+  ) {
+    const response: Schemas.CompanySecretDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.type, Schemas.CompanySecretTypeIntEnum.ModelKey),
+        eq(companySecrets.provider, params.provider),
+        eq(companySecrets.status, Schemas.CompanySecretStatusIntEnum.Active),
+      ];
+      const [companySecret] = await tx
+        .select()
+        .from(companySecrets)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!companySecret) {
+        const message = "No active model key for this provider";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetActiveModelKey,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Active model key fetched successfully";
+      response.companySecret = companySecret;
+    } catch (error) {
+      const message = "Unknown error in fetching active model key";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActiveModelKey,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Not paged: one row per provider or connection credential, so a company has a handful
   async getCompanySecrets(
     tx: NodePgTransaction<EmptyRelations>,

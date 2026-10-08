@@ -18,6 +18,7 @@ export * from "./conversations";
 export * from "./messages";
 export * from "./toolCalls";
 export * from "./modelCalls";
+export * from "./modelRouter";
 export * from "./feedback";
 export * from "./changeRequests";
 export * from "./knowledgeSources";

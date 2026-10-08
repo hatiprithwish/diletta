@@ -1,5 +1,5 @@
 import type { NullableDALFields } from "../common";
-import type { CompanySecret } from "./CompanySecretsCommon";
+import type { CompanySecret, ModelProviderEnum } from "./CompanySecretsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // The secret arrives already encrypted by the Repo; plaintext never reaches the DAL.
@@ -28,3 +28,8 @@ export type UpdateCompanySecretDALRequest = FindCompanySecretDALRequest &
       iv: Uint8Array;
     }
   >;
+
+// Params to find a company's active model key for one provider (at most one: UNQ_company_secrets_company_id_provider_active)
+export type FindActiveModelKeyDALRequest = Pick<CompanySecret, "companyId"> & {
+  provider: ModelProviderEnum;
+};
