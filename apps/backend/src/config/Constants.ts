@@ -33,7 +33,7 @@ export default class Constants {
   static readonly ACTIVITY_LOG_PARTITION_MONTHS_AHEAD = 3;
 
   // DEV_NOTE: Cron expressions, matched against controller.cron in scheduled(). Each must equal its entry in
-  // wrangler.jsonc triggers.crons exactly.
+  // wrangler.jsonc triggers.crons exactly. The every-minute one also runs the model_calls usage backfill.
   static readonly OUTBOX_SWEEP_CRON = "* * * * *";
   static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
 
@@ -55,4 +55,12 @@ export default class Constants {
   static readonly JWKS_REFETCH_MIN_INTERVAL_MS = 60_000;
   static readonly JWKS_FETCH_TIMEOUT_MS = 5_000;
   static readonly JWKS_MAX_BYTES = 64 * 1024;
+
+  // DEV_NOTE: Model call usage backfill (M2-3). A model_calls row whose call ended without usage (stream cut or
+  // cancelled, connection lost) is Pending; the per-minute Cron reads its AI Gateway log once the row is older than the
+  // min age (the log is written after the call), and gives up (Unknown + error log) once it is older than the max age.
+  static readonly MODEL_CALL_BACKFILL_MIN_AGE_MS = 60_000;
+  static readonly MODEL_CALL_BACKFILL_MAX_AGE_MS = 60 * 60_000;
+  static readonly MODEL_CALL_BACKFILL_BATCH_SIZE = 50;
+  static readonly AI_GATEWAY_LOG_FETCH_TIMEOUT_MS = 5_000;
 }

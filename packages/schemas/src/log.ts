@@ -89,6 +89,7 @@ export enum LogAction {
   ListCompanySecrets = "ListCompanySecrets",
   UpdateCompanySecret = "UpdateCompanySecret",
   GetActiveModelKey = "GetActiveModelKey",
+  InvalidateModelKey = "InvalidateModelKey",
 
   // Chatbot user secrets
   CreateChatbotUserSecret = "CreateChatbotUserSecret",
@@ -98,17 +99,22 @@ export enum LogAction {
 
   // Model calls
   CreateModelCall = "CreateModelCall",
+  GetPendingModelCalls = "GetPendingModelCalls",
+  SettleModelCallUsage = "SettleModelCallUsage",
+  BackfillModelCallUsage = "BackfillModelCallUsage",
 
   // Quality issues
   LockOpenSystemQualityIssue = "LockOpenSystemQualityIssue",
   GetOpenSystemQualityIssue = "GetOpenSystemQualityIssue",
   CreateSystemQualityIssue = "CreateSystemQualityIssue",
+  UpdateQualityIssueNote = "UpdateQualityIssueNote",
 
   // Model router
   GetModel = "GetModel",
   CreateGatewayModel = "CreateGatewayModel",
   RecordModelCall = "RecordModelCall",
   HandleModelKeyFailure = "HandleModelKeyFailure",
+  GetGatewayLogUsage = "GetGatewayLogUsage",
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",

@@ -12511,7 +12511,7 @@
       "x": 3310,
       "y": 5071.25,
       "width": 540,
-      "height": 620.5,
+      "height": 653.0,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "#ffffff",
@@ -12528,8 +12528,8 @@
         "type": 3
       },
       "seed": 1544270864,
-      "version": 14,
-      "versionNonce": 1322837012,
+      "version": 15,
+      "versionNonce": 208317821,
       "isDeleted": false,
       "boundElements": [
         {
@@ -12549,7 +12549,7 @@
           "type": "arrow"
         }
       ],
-      "updated": 1791217365960,
+      "updated": 1791484124442,
       "link": null,
       "locked": false
     },
@@ -12708,7 +12708,7 @@
       "x": 3322,
       "y": 5157.75,
       "width": 468.0,
-      "height": 520.0,
+      "height": 552.5,
       "angle": 0,
       "strokeColor": "#343a40",
       "backgroundColor": "transparent",
@@ -12723,15 +12723,15 @@
       "frameId": null,
       "roundness": null,
       "seed": 683180148,
-      "version": 14,
-      "versionNonce": 532641158,
+      "version": 15,
+      "versionNonce": 283257535,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1791217365960,
+      "updated": 1791484124442,
       "link": null,
       "locked": false,
-      "text": "id                     bigint PK\ncompany_id             bigint → companies\n*chatbot_id            bigint → chatbots null\n*chatbot_user_id       bigint → chatbot_users null\nconversation_id        bigint → conversations null\neval_run_id            bigint → eval_runs null\n*turn_id               text null (ULID from Conversation DO)\n*task_type             text (route.intent, qa.answer…,\n                       eval.judge = grader call,\n                       knowledge.embed, search.embed,\n                       search.rerank, doc_gap.embed)\n*tier                  smallint 1 small 2 mid 3 top\n                       4 embed (embed + rerank)\nprovider               text\nmodel                  text\n*gateway_log_id        text (AI Gateway log)\ninput_tokens           int\n*output_tokens         int null (none for embed/rerank)\ncached_tokens          int\n*cost_usd              numeric(12,6)\nlatency_ms             int\n*was_escalated         bool\nerror_code             text\ncreated_at             timestamptz NN\n*public_id             text UQ\n*updated_at            timestamptz NN\n*every model call (chat, judge, embed, rerank) goes via\n*  AI Gateway → one row here = source of truth for spend\n*conversation_id + eval_run_id both null = background\n*  job (indexing, clustering)\n*every call on the company's key, except tier 4\n*  (Workers AI embed / rerank = the only platform cost)",
-      "originalText": "id                     bigint PK\ncompany_id             bigint → companies\n*chatbot_id            bigint → chatbots null\n*chatbot_user_id       bigint → chatbot_users null\nconversation_id        bigint → conversations null\neval_run_id            bigint → eval_runs null\n*turn_id               text null (ULID from Conversation DO)\n*task_type             text (route.intent, qa.answer…,\n                       eval.judge = grader call,\n                       knowledge.embed, search.embed,\n                       search.rerank, doc_gap.embed)\n*tier                  smallint 1 small 2 mid 3 top\n                       4 embed (embed + rerank)\nprovider               text\nmodel                  text\n*gateway_log_id        text (AI Gateway log)\ninput_tokens           int\n*output_tokens         int null (none for embed/rerank)\ncached_tokens          int\n*cost_usd              numeric(12,6)\nlatency_ms             int\n*was_escalated         bool\nerror_code             text\ncreated_at             timestamptz NN\n*public_id             text UQ\n*updated_at            timestamptz NN\n*every model call (chat, judge, embed, rerank) goes via\n*  AI Gateway → one row here = source of truth for spend\n*conversation_id + eval_run_id both null = background\n*  job (indexing, clustering)\n*every call on the company's key, except tier 4\n*  (Workers AI embed / rerank = the only platform cost)",
+      "text": "id                     bigint PK\ncompany_id             bigint → companies\n*chatbot_id            bigint → chatbots null\n*chatbot_user_id       bigint → chatbot_users null\nconversation_id        bigint → conversations null\neval_run_id            bigint → eval_runs null\n*turn_id               text null (ULID from Conversation DO)\n*task_type             text (route.intent, qa.answer…,\n                       eval.judge = grader call,\n                       knowledge.embed, search.embed,\n                       search.rerank, doc_gap.embed)\n*tier                  smallint 1 small 2 mid 3 top\n                       4 embed (embed + rerank)\nprovider               text\nmodel                  text\n*gateway_log_id        text (AI Gateway log)\ninput_tokens           int\n*output_tokens         int null (none for embed/rerank)\ncached_tokens          int\n*cost_usd              numeric(12,6)\nlatency_ms             int\n*was_escalated         bool\nerror_code             text\n*usage_status          smallint 1 reported 2 pending\n                       3 backfilled 4 unknown\ncreated_at             timestamptz NN\n*public_id             text UQ\n*updated_at            timestamptz NN\n*every model call (chat, judge, embed, rerank) goes via\n*  AI Gateway → one row here = source of truth for spend\n*conversation_id + eval_run_id both null = background\n*  job (indexing, clustering)\n*every call on the company's key, except tier 4\n*  (Workers AI embed / rerank = the only platform cost)",
+      "originalText": "id                     bigint PK\ncompany_id             bigint → companies\n*chatbot_id            bigint → chatbots null\n*chatbot_user_id       bigint → chatbot_users null\nconversation_id        bigint → conversations null\neval_run_id            bigint → eval_runs null\n*turn_id               text null (ULID from Conversation DO)\n*task_type             text (route.intent, qa.answer…,\n                       eval.judge = grader call,\n                       knowledge.embed, search.embed,\n                       search.rerank, doc_gap.embed)\n*tier                  smallint 1 small 2 mid 3 top\n                       4 embed (embed + rerank)\nprovider               text\nmodel                  text\n*gateway_log_id        text (AI Gateway log)\ninput_tokens           int\n*output_tokens         int null (none for embed/rerank)\ncached_tokens          int\n*cost_usd              numeric(12,6)\nlatency_ms             int\n*was_escalated         bool\nerror_code             text\n*usage_status          smallint 1 reported 2 pending\n                       3 backfilled 4 unknown\ncreated_at             timestamptz NN\n*public_id             text UQ\n*updated_at            timestamptz NN\n*every model call (chat, judge, embed, rerank) goes via\n*  AI Gateway → one row here = source of truth for spend\n*conversation_id + eval_run_id both null = background\n*  job (indexing, clustering)\n*every call on the company's key, except tier 4\n*  (Workers AI embed / rerank = the only platform cost)",
       "fontSize": 13,
       "fontFamily": 3,
       "textAlign": "left",

@@ -12,3 +12,8 @@ export type CreateSystemQualityIssueDALRequest = Pick<
 export type FindOpenSystemQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
   issueType: NonNullable<QualityIssue["issueType"]>;
 };
+
+// Params to replace a quality issue's note, found by its public ID within one company
+export type UpdateQualityIssueNoteDALRequest = Pick<QualityIssue, "companyId" | "publicId"> & {
+  note: string;
+};

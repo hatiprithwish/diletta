@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import {
   chatbotUsers,
   chatbots,
@@ -13,9 +14,10 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
-// DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
-// and every query filters on companyId (defence in depth on top of RLS). model_calls rows are written by the model
-// router only, once per call, and never updated.
+// DEV_NOTE: model_calls rows are written by the model router only, once per call. The only later change is the usage
+// backfill settling a Pending row (settleModelCallUsage). createModelCall and settleModelCallUsage are tenant methods
+// (the tx from withTenant, every query filtered on companyId on top of RLS); getPendingModelCalls is the backfill's
+// cross-company read and takes the tx from withPlatform.
 export default class ModelCallsDAL {
   async createModelCall(
     tx: NodePgTransaction<EmptyRelations>,
@@ -24,9 +26,53 @@ export default class ModelCallsDAL {
     const response: Schemas.ModelCallDALResponse = { isSuccess: false };
 
     try {
-      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing. Each optional reference is
-      // checked only when set (null = background job, or not an eval).
-      const notFound = await this.findMissingReference(tx, params);
+      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing. One round trip: the company row,
+      // with an EXISTS per optional reference that is set (null = background job, or not an eval). This runs per model
+      // call, so it stays one query.
+      const [references] = await tx
+        .select({
+          chatbot: this.referenceExists(
+            chatbots,
+            chatbots.id,
+            chatbots.companyId,
+            params.chatbotId,
+            params.companyId,
+          ),
+          chatbotUser: this.referenceExists(
+            chatbotUsers,
+            chatbotUsers.id,
+            chatbotUsers.companyId,
+            params.chatbotUserId,
+            params.companyId,
+          ),
+          conversation: this.referenceExists(
+            conversations,
+            conversations.id,
+            conversations.companyId,
+            params.conversationId,
+            params.companyId,
+          ),
+          evalRun: this.referenceExists(
+            evalRuns,
+            evalRuns.id,
+            evalRuns.companyId,
+            params.evalRunId,
+            params.companyId,
+          ),
+        })
+        .from(companies)
+        .where(eq(companies.id, params.companyId))
+        .limit(1);
+
+      const checks: [boolean, string][] = references
+        ? [
+            [references.chatbot, "Chatbot not found"],
+            [references.chatbotUser, "Chatbot user not found"],
+            [references.conversation, "Conversation not found"],
+            [references.evalRun, "Eval run not found"],
+          ]
+        : [[false, "Company not found"]];
+      const notFound = checks.find(([exists]) => !exists)?.[1] ?? null;
       if (notFound) {
         AppLogger.error({
           category: Schemas.LogCategory.DAL,
@@ -60,6 +106,7 @@ export default class ModelCallsDAL {
           latencyMs: params.latencyMs,
           wasEscalated: params.wasEscalated,
           errorCode: params.errorCode,
+          usageStatus: params.usageStatus,
         })
         .returning();
 
@@ -81,70 +128,114 @@ export default class ModelCallsDAL {
     return response;
   }
 
-  // DEV_NOTE: The first reference that doesn't resolve inside the company, as a message; null when all do
-  private async findMissingReference(
+  // DEV_NOTE: Platform read (withPlatform) for the backfill sweep: Pending rows across companies, oldest first, served
+  // by the IDX_model_calls_created_at_pending partial index
+  async getPendingModelCalls(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.CreateModelCallDALRequest,
-  ): Promise<string | null> {
-    const [company] = await tx
-      .select({ id: companies.id })
-      .from(companies)
-      .where(eq(companies.id, params.companyId))
-      .limit(1);
-    if (!company) return "Company not found";
+    params: Schemas.GetPendingModelCallsDALRequest,
+  ) {
+    const response: Schemas.ModelCallsDALResponse = { isSuccess: false };
 
-    if (params.chatbotId !== null) {
+    try {
       const conditions = [
-        eq(chatbots.id, params.chatbotId),
-        eq(chatbots.companyId, params.companyId),
+        eq(modelCalls.usageStatus, Schemas.ModelCallUsageStatusIntEnum.Pending),
+        lt(modelCalls.createdAt, params.createdBefore),
       ];
-      const [chatbot] = await tx
-        .select({ id: chatbots.id })
-        .from(chatbots)
+      if (params.companyIds) conditions.push(inArray(modelCalls.companyId, params.companyIds));
+      const modelCallsResponse = await tx
+        .select()
+        .from(modelCalls)
         .where(and(...conditions))
-        .limit(1);
-      if (!chatbot) return "Chatbot not found";
+        .orderBy(asc(modelCalls.createdAt), asc(modelCalls.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Pending model calls fetched successfully";
+      response.modelCalls = modelCallsResponse;
+    } catch (error) {
+      const message = "Unknown error in fetching pending model calls";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetPendingModelCalls,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
     }
 
-    if (params.chatbotUserId !== null) {
+    return response;
+  }
+
+  // DEV_NOTE: Settles a Pending row (Backfilled with its tokens and cost, or Unknown). Only a row still Pending is
+  // updated, so a second sweep never settles it twice; isNotFound when it is gone or already settled.
+  async settleModelCallUsage(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.SettleModelCallUsageDALRequest,
+  ) {
+    const response: Schemas.ModelCallDALResponse = { isSuccess: false };
+
+    try {
       const conditions = [
-        eq(chatbotUsers.id, params.chatbotUserId),
-        eq(chatbotUsers.companyId, params.companyId),
+        eq(modelCalls.publicId, params.publicId),
+        eq(modelCalls.companyId, params.companyId),
+        eq(modelCalls.usageStatus, Schemas.ModelCallUsageStatusIntEnum.Pending),
       ];
-      const [chatbotUser] = await tx
-        .select({ id: chatbotUsers.id })
-        .from(chatbotUsers)
+      const [modelCallResponse] = await tx
+        .update(modelCalls)
+        .set({
+          // DEV_NOTE: When a param is null, it's ignored
+          usageStatus: params.usageStatus,
+          inputTokens: params.inputTokens ?? undefined,
+          outputTokens: params.outputTokens ?? undefined,
+          costUsd: params.costUsd ?? undefined,
+          updatedAt: new Date(),
+        })
         .where(and(...conditions))
-        .limit(1);
-      if (!chatbotUser) return "Chatbot user not found";
+        .returning();
+
+      if (!modelCallResponse) {
+        const message = "Pending model call not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.SettleModelCallUsage,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Model call usage settled successfully";
+      response.modelCall = modelCallResponse;
+    } catch (error) {
+      const message = "Unknown error in settling model call usage";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.SettleModelCallUsage,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
     }
 
-    if (params.conversationId !== null) {
-      const conditions = [
-        eq(conversations.id, params.conversationId),
-        eq(conversations.companyId, params.companyId),
-      ];
-      const [conversation] = await tx
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(and(...conditions))
-        .limit(1);
-      if (!conversation) return "Conversation not found";
-    }
+    return response;
+  }
 
-    if (params.evalRunId !== null) {
-      const conditions = [
-        eq(evalRuns.id, params.evalRunId),
-        eq(evalRuns.companyId, params.companyId),
-      ];
-      const [evalRun] = await tx
-        .select({ id: evalRuns.id })
-        .from(evalRuns)
-        .where(and(...conditions))
-        .limit(1);
-      if (!evalRun) return "Eval run not found";
+  // DEV_NOTE: true when the reference is unset, else whether the row exists inside the company
+  private referenceExists(
+    table: PgTable,
+    idColumn: PgColumn,
+    companyIdColumn: PgColumn,
+    id: string | null,
+    companyId: string,
+  ): SQL<boolean> {
+    if (id === null) {
+      return sql<boolean>`true`;
     }
-
-    return null;
+    return sql<boolean>`exists (select 1 from ${table} where ${idColumn} = ${id} and ${companyIdColumn} = ${companyId})`;
   }
 }

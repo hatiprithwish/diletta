@@ -45,7 +45,8 @@
       },
     ],
   },
-  // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows.
+  // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows, and
+  // the model_calls usage backfill from AI Gateway logs (M2-3).
   // Daily 03:00 UTC: activity_log partition maintenance (M1-9). scheduled() matches these strings against
   // Constants.OUTBOX_SWEEP_CRON / ACTIVITY_LOG_PARTITIONS_CRON; change both together. triggers is inherited by every env.
   "triggers": {

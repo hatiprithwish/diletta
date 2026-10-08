@@ -13,13 +13,14 @@ Every chat model call goes through Cloudflare AI Gateway on the company's own pr
 - `AI_GATEWAY_ACCOUNT_ID` and `AI_GATEWAY_NAME` are plain vars in `apps/backend/wrangler.jsonc`, per env. Local dev uses the staging gateway, as it uses the staging database.
 - The Secrets Store is the account's `default_secrets_store` (id in `wrangler.jsonc`), shared with the master key under different names.
 - Code reads the token only in `AiGatewayProvider` (`apps/backend/src/providers/aiGateway.ts`). It never logs it.
+- One token per environment does two jobs, so it needs two permissions: **Account → AI Gateway → Run** (the `cf-aig-authorization` header on model calls) and **Account → AI Gateway → Read** (the usage backfill reads gateway logs through the Cloudflare API). Nothing else.
 
 ## Create a gateway and its token
 
 Do this once per environment (`staging`, then `production`).
 
 1. Cloudflare dashboard → **AI** → **AI Gateway** → **Create gateway**. Name it `diletta-staging` (or `diletta-production`). The name must match `AI_GATEWAY_NAME` for that env.
-2. In the gateway's **Settings**, turn on **Authenticated Gateway**, and create an authentication token there. Copy the token once; Cloudflare doesn't show it again.
+2. In the gateway's **Settings**, turn on **Authenticated Gateway**, and create an authentication token there with **AI Gateway → Run** and **AI Gateway → Read** on the account (no Workers AI permissions). Copy the token once; Cloudflare doesn't show it again. A token already created with Run only: edit it under **My Profile → API Tokens** and add **AI Gateway → Read**; the value doesn't change.
 3. Leave **Cache** off: answers depend on the conversation, the company's knowledge and its tools, never on the prompt alone.
 4. Store the token in the Secrets Store and the password manager (`diletta aig token (staging)` / `(production)`):
 
@@ -44,6 +45,16 @@ Gateways created from 2026-09-24 keep logs under Workers Logs retention; M6-1 se
 - A call shows in the gateway's **Logs** with `cf-aig-metadata` entries `companyId`, `chatbotId`, `conversationId` (or `evalRunId`), `turnId`, `taskType`, and a `model_calls` row whose `gateway_log_id` is that log's id.
 - Wrong or missing token: every call fails with the gateway's 401 (`error` is an array). The router records `http_401` in `model_calls.error_code` and leaves every company key alone: only a provider's own rejection marks a key Invalid.
 
+## Usage backfill
+
+A call that reached the provider but ended without usage (stream cut or cancelled, connection lost) was still billed, so its `model_calls` row is written **Pending** (`usage_status = 2`) instead of a silent $0. The per-minute Cron (`ModelCallUsageBackfillCron` → `ModelCallsRepo.backfillPendingUsage`) reads each Pending row's gateway log by `gateway_log_id` once the row is a minute old:
+
+- Log with token counts → **Backfilled** (3). `tokens_in` has no cache split, so it's priced at the full input price (an overcount, never an undercount).
+- No log or no counts yet → stays Pending. After 1 hour → **Unknown** (4) with an error log; cost stays 0 and the budget must not read it as free.
+- Lookup fails (API down, token without Read) → stays Pending and retries each minute until the hour is up.
+
+Many Unknown rows usually mean logging is off on the gateway (Collect Logs must stay on) or the token lacks **AI Gateway → Read**.
+
 ## Rotate the token
 
 1. Create a new token in the gateway's settings (the old one keeps working until deleted).
@@ -52,7 +63,7 @@ Gateways created from 2026-09-24 keep logs under Workers Logs retention; M6-1 se
 
 ## When a company's key fails
 
-A provider rejecting a company key (or no active key for the routed provider) marks the key Invalid, shows "Temporarily unavailable" in the widget and opens one System / Model error issue for the company (Quality page). The fix is on the company's side: an admin replaces the key in Settings › Model keys. No platform action is needed.
+Only the provider's own rejected-key answer counts: Anthropic 401 `authentication_error`, OpenAI 401, Google 400 `API_KEY_INVALID` or 401 `UNAUTHENTICATED`. Then the key is marked Invalid (only if it still holds the value the call used: a key the admin replaced or revoked meanwhile is left alone), the widget shows "Temporarily unavailable", and the company's one open System / Model error issue (Quality page) gets a line for that provider. A 403 (Anthropic `permission_error`, Google `PERMISSION_DENIED`) means the key is fine but can't use that model, or the API isn't enabled: the call fails, the key stays Active, no issue opens. The fix is on the company's side: an admin replaces the key in Settings › Model keys, or fixes the routing. No platform action is needed.
 
 ## Prices
 

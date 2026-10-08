@@ -635,9 +635,9 @@ export const modelCalls = table(
     conversationId: t.bigint("conversation_id", { mode: "string" }), // → conversations.id
     evalRunId: t.bigint("eval_run_id", { mode: "string" }), // → eval_runs.id
     turnId: t.text("turn_id"), // ULID from the Conversation DO
-    taskType: t.text("task_type").notNull(), // route.intent, qa.answer, eval.judge, knowledge.embed…
+    taskType: t.text("task_type").$type<Schemas.ModelTaskTypeEnum>().notNull(), // route.intent, qa.answer, eval.judge…
     tier: t.smallint().$type<Schemas.ModelCallTierIntEnum>().notNull(),
-    provider: t.text().notNull(),
+    provider: t.text().$type<Schemas.ModelProviderEnum>().notNull(),
     model: t.text().notNull(),
     gatewayLogId: t.text("gateway_log_id"),
     inputTokens: t.integer("input_tokens").notNull().default(0),
@@ -647,11 +647,23 @@ export const modelCalls = table(
     latencyMs: t.integer("latency_ms"),
     wasEscalated: t.boolean("was_escalated").notNull().default(false),
     errorCode: t.text("error_code"),
+    // DEV_NOTE: Where tokens and cost came from (ModelCallUsageStatusIntEnum). Pending rows are filled from the AI
+    // Gateway log by the per-minute Cron; Unknown means cost 0 is not a real price.
+    usageStatus: t
+      .smallint("usage_status")
+      .$type<Schemas.ModelCallUsageStatusIntEnum>()
+      .notNull()
+      .default(Schemas.ModelCallUsageStatusIntEnum.Reported),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     t.uniqueIndex("UNQ_model_calls_public_id").on(table.publicId),
+    // DEV_NOTE: The backfill sweep reads only Pending rows, oldest first; they are few and short-lived
+    t
+      .index("IDX_model_calls_created_at_pending")
+      .on(table.createdAt)
+      .where(sql`${table.usageStatus} = ${lit(Schemas.ModelCallUsageStatusIntEnum.Pending)}`),
     t.index("IDX_model_calls_company_id").on(table.companyId),
     t.index("IDX_model_calls_chatbot_id").on(table.chatbotId),
     t.index("IDX_model_calls_chatbot_user_id").on(table.chatbotUserId),

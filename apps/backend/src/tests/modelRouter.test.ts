@@ -25,6 +25,7 @@ import withTenant from "@/db/withTenant";
 import AiGatewayProvider from "@/providers/aiGateway";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
+import ModelCallsRepo from "@/repositories/ModelCallsRepo";
 import ModelRouterRepo, { ModelUnavailableError } from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -42,15 +43,16 @@ vi.mock("@/providers/logger", () => ({
 
 // DEV_NOTE: Tests hit the Neon staging branch with the real staging master key. Each scenario gets its own company
 // (created through CompaniesRepo, so it has a company key) with a chatbot, a chatbot user and a conversation inserted
-// as owner fixtures (the conversations DAL comes with M2-2), and its model key created through CompanySecretsRepo.
-// The router runs as diletta_app (HYPERDRIVE), so RLS applies. AI Gateway is never reached: fetch is replaced for
-// gateway URLs only, and records each request so the tests can check the URL, headers and body the router sent.
-// EVENTS_QUEUE is a recording fake. afterAll deletes every row this suite created.
+// as owner fixtures (the conversations DAL comes with M2-2), and its model keys created through CompanySecretsRepo.
+// The router and the backfill run as diletta_app (HYPERDRIVE), so RLS applies. AI Gateway and the Cloudflare API are
+// never reached: fetch is replaced for those two hosts only, and records each request so the tests can check the
+// URL, headers and body. EVENTS_QUEUE is a recording fake. afterAll deletes every row this suite created.
 const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 const createdCompanyIds: string[] = [];
 const GATEWAY_TOKEN = "test-gateway-token";
 const GATEWAY_URL = `https://gateway.ai.cloudflare.com/v1/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}`;
+const LOGS_URL = `https://api.cloudflare.com/client/v4/accounts/${env.AI_GATEWAY_ACCOUNT_ID}/ai-gateway/gateways/${env.AI_GATEWAY_NAME}/logs`;
 
 class RecordingQueue implements Queue<Schemas.EventOutboxMessage> {
   sent: Schemas.EventOutboxMessage[] = [];
@@ -147,7 +149,7 @@ async function createFixture(): Promise<Fixture> {
 async function addModelKey(
   companyId: string,
   provider: Schemas.ModelProviderEnum,
-  secret: string,
+  secret = `key-${crypto.randomUUID()}`,
 ): Promise<string> {
   const created = await new CompanySecretsRepo(env).createCompanySecret({
     companyId,
@@ -163,9 +165,17 @@ async function addModelKey(
   return created.companySecret.publicId;
 }
 
-const routing: Schemas.ConfigSpec["routing"] = {
+const anthropicRouting: Schemas.ConfigSpec["routing"] = {
   small: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-haiku-4-5" },
   mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-sonnet-5-5" },
+  top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-opus-5-5" },
+  defaultTier: Schemas.ModelTierEnum.Mid,
+};
+
+// DEV_NOTE: One tier per provider, to route through each
+const mixedRouting: Schemas.ConfigSpec["routing"] = {
+  small: { provider: Schemas.ModelProviderEnum.Google, model: "gemini-3.8-flash" },
+  mid: { provider: Schemas.ModelProviderEnum.OpenAI, model: "gpt-6-sol" },
   top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-opus-5-5" },
   defaultTier: Schemas.ModelTierEnum.Mid,
 };
@@ -183,31 +193,55 @@ function request(
     turnId: `01J${crypto.randomUUID().replace(/-/g, "").slice(0, 23).toUpperCase()}`,
     taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
     tier: null,
-    routing,
+    routing: anthropicRouting,
     ...overrides,
   };
 }
 
-// DEV_NOTE: Gateway stand-in. respond builds the answer for each gateway request; every other URL goes to the real
-// fetch untouched.
-interface GatewayRequest {
-  url: string;
-  headers: Headers;
-  body: Record<string, unknown>;
+async function routeOrThrow(
+  router: ModelRouterRepo,
+  params: Schemas.GetModelRequest,
+): Promise<Parameters<typeof generateText>[0]["model"]> {
+  const routed = await router.getModel(params);
+  if (!routed.isSuccess) throw new Error(`No model: ${routed.message}`);
+  return routed.model;
 }
-const gatewayRequests: GatewayRequest[] = [];
 
-function mockGateway(respond: (request: GatewayRequest) => Response) {
+// DEV_NOTE: Stand-in for AI Gateway (model calls) and the Cloudflare API (gateway logs). respond builds the answer
+// for each request to either host; every other URL goes to the real fetch untouched.
+interface MockedRequest {
+  url: string;
+  method: string;
+  headers: Headers;
+  body: Record<string, unknown> | null;
+  signal: AbortSignal | null;
+}
+const mockedRequests: MockedRequest[] = [];
+const gatewayRequests = () =>
+  mockedRequests.filter((mocked) => mocked.url.startsWith("https://gateway.ai.cloudflare.com/"));
+
+// DEV_NOTE: Reads the fetch arguments directly rather than through new Request(input, init): workerd's Request
+// rejects some init values real fetch accepts (redirect: "error")
+function mockCloudflare(respond: (request: MockedRequest) => Response | Promise<Response>) {
   const realFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const target = new Request(input, init);
-    if (!target.url.startsWith("https://gateway.ai.cloudflare.com/")) {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const isMocked =
+      url.startsWith("https://gateway.ai.cloudflare.com/") ||
+      url.startsWith("https://api.cloudflare.com/");
+    if (!isMocked) {
       return await realFetch(input, init);
     }
-    const body = (await target.json()) as Record<string, unknown>;
-    const recorded = { url: target.url, headers: target.headers, body };
-    gatewayRequests.push(recorded);
-    return respond(recorded);
+    const recorded: MockedRequest = {
+      url,
+      method: init?.method ?? "GET",
+      headers: new Headers(init?.headers),
+      body:
+        typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
+      signal: init?.signal ?? null,
+    };
+    mockedRequests.push(recorded);
+    return await respond(recorded);
   });
 }
 
@@ -231,42 +265,130 @@ const anthropicMessage = (model: string) =>
     { headers: { "cf-aig-log-id": "log-generate" } },
   );
 
-const anthropicStream = (model: string) => {
-  const events = [
+const sse = (event: Record<string, unknown> & { type: string }) =>
+  `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+
+const anthropicStreamHead = (model: string) => [
+  sse({
+    type: "message_start",
+    message: {
+      id: "msg_stream",
+      type: "message",
+      role: "assistant",
+      model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 800, output_tokens: 1 },
+    },
+  }),
+  sse({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+  sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Streamed" } }),
+];
+
+const anthropicStreamTail = [
+  sse({ type: "content_block_stop", index: 0 }),
+  sse({
+    type: "message_delta",
+    delta: { stop_reason: "end_turn", stop_sequence: null },
+    usage: { output_tokens: 50 },
+  }),
+  sse({ type: "message_stop" }),
+];
+
+const STREAM_HEADERS = { "content-type": "text/event-stream", "cf-aig-log-id": "log-stream" };
+
+const anthropicStream = (model: string) =>
+  new Response([...anthropicStreamHead(model), ...anthropicStreamTail].join(""), {
+    headers: STREAM_HEADERS,
+  });
+
+// DEV_NOTE: Sends the head of a stream, then either fails (connection lost) or stays open until the request is
+// aborted, when it fails with the abort reason as a real fetch body does
+function anthropicBrokenStream(
+  model: string,
+  end: "error" | "hang",
+  signal: AbortSignal | null = null,
+) {
+  const encoder = new TextEncoder();
+  let hasSentHead = false;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!hasSentHead) {
+        hasSentHead = true;
+        controller.enqueue(encoder.encode(anthropicStreamHead(model).join("")));
+        return;
+      }
+      if (end === "error") {
+        controller.error(new TypeError("Network connection lost"));
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", () => resolve());
+      });
+      controller.error(signal?.reason);
+    },
+  });
+  return new Response(body, { headers: STREAM_HEADERS });
+}
+
+const openAiResponse = (model: string) =>
+  Response.json(
     {
-      type: "message_start",
-      message: {
-        id: "msg_stream",
-        type: "message",
-        role: "assistant",
-        model,
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { input_tokens: 800, output_tokens: 1 },
+      id: "resp_test",
+      object: "response",
+      created_at: 1_760_000_000,
+      status: "completed",
+      model,
+      output: [
+        {
+          type: "message",
+          id: "msg_test",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Hello from OpenAI", annotations: [] }],
+        },
+      ],
+      usage: {
+        input_tokens: 1000,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 100,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 1100,
       },
     },
-    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Streamed" } },
-    { type: "content_block_stop", index: 0 },
-    {
-      type: "message_delta",
-      delta: { stop_reason: "end_turn", stop_sequence: null },
-      usage: { output_tokens: 50 },
-    },
-    { type: "message_stop" },
-  ];
-  const body = events
-    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  return new Response(body, {
-    headers: { "content-type": "text/event-stream", "cf-aig-log-id": "log-stream" },
-  });
-};
+    { headers: { "cf-aig-log-id": "log-openai" } },
+  );
 
-const anthropicKeyRejected = () =>
+const googleResponse = () =>
   Response.json(
-    { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } },
+    {
+      candidates: [
+        {
+          content: { parts: [{ text: "Hello from Gemini" }], role: "model" },
+          finishReason: "STOP",
+          index: 0,
+        },
+      ],
+      usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 100, totalTokenCount: 1100 },
+      modelVersion: "gemini-3.8-flash",
+    },
+    { headers: { "cf-aig-log-id": "log-google" } },
+  );
+
+const anthropicError = (status: number, type: string) =>
+  Response.json({ type: "error", error: { type, message: "provider said no" } }, { status });
+
+const openAiKeyRejected = () =>
+  Response.json(
+    {
+      error: {
+        message: "Incorrect API key",
+        type: "invalid_request_error",
+        code: "invalid_api_key",
+      },
+    },
     { status: 401 },
   );
 
@@ -308,7 +430,7 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  gatewayRequests.length = 0;
+  mockedRequests.length = 0;
 });
 
 afterAll(async () => {
@@ -339,22 +461,19 @@ describe("ModelRouterRepo.getModel", () => {
     const fixture = await createFixture();
     const apiKey = `sk-ant-${crypto.randomUUID()}`;
     await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic, apiKey);
-    mockGateway((gatewayRequest) => anthropicMessage(String(gatewayRequest.body.model)));
+    mockCloudflare((mocked) => anthropicMessage(String(mocked.body?.model)));
     const { ctx, settle } = createCtx();
     const params = request(fixture);
 
-    const routed = await new ModelRouterRepo(routerEnv(), ctx).getModel(params);
-    expect(routed.isSuccess).toBe(true);
-    if (!routed.model) throw new Error("No model");
-
-    const result = await generateText({ model: routed.model, prompt: "Hi" });
+    const model = await routeOrThrow(new ModelRouterRepo(routerEnv(), ctx), params);
+    const result = await generateText({ model, prompt: "Hi" });
     expect(result.text).toBe("Hello from the gateway");
     await settle();
 
-    expect(gatewayRequests).toHaveLength(1);
-    const [sent] = gatewayRequests;
+    expect(gatewayRequests()).toHaveLength(1);
+    const [sent] = gatewayRequests();
     expect(sent?.url).toBe(`${GATEWAY_URL}/anthropic/v1/messages`);
-    expect(sent?.body.model).toBe("claude-sonnet-5-5");
+    expect(sent?.body?.model).toBe("claude-sonnet-5-5");
     expect(sent?.headers.get("x-api-key")).toBe(apiKey);
     expect(sent?.headers.get("cf-aig-authorization")).toBe(`Bearer ${GATEWAY_TOKEN}`);
     expect(JSON.parse(sent?.headers.get("cf-aig-metadata") ?? "{}")).toEqual({
@@ -382,6 +501,7 @@ describe("ModelRouterRepo.getModel", () => {
       cachedTokens: 500,
       wasEscalated: false,
       errorCode: null,
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum.Reported,
     });
     // 1000 uncached × $2 + 500 cache reads × $0.1 + 200 output × $10, per 1M tokens
     expect(call?.costUsd).toBe("0.004050");
@@ -390,24 +510,19 @@ describe("ModelRouterRepo.getModel", () => {
 
   it("maps an explicit tier to its model and records a streamed call once the stream ends", async () => {
     const fixture = await createFixture();
-    await addModelKey(
-      fixture.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
-    );
-    mockGateway((gatewayRequest) => anthropicStream(String(gatewayRequest.body.model)));
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
     const { ctx, settle } = createCtx();
 
-    const routed = await new ModelRouterRepo(routerEnv(), ctx).getModel(
+    const model = await routeOrThrow(
+      new ModelRouterRepo(routerEnv(), ctx),
       request(fixture, { tier: Schemas.ModelTierEnum.Small }),
     );
-    if (!routed.model) throw new Error(`No model: ${routed.message}`);
-
-    const result = streamText({ model: routed.model, prompt: "Hi" });
+    const result = streamText({ model, prompt: "Hi" });
     expect(await result.text).toBe("Streamed");
     await settle();
 
-    expect(gatewayRequests[0]?.body.model).toBe("claude-haiku-4-5");
+    expect(gatewayRequests()[0]?.body?.model).toBe("claude-haiku-4-5");
     const [call] = await getModelCalls(fixture.companyId);
     expect(call).toMatchObject({
       tier: Schemas.ModelCallTierIntEnum.Small,
@@ -416,25 +531,79 @@ describe("ModelRouterRepo.getModel", () => {
       inputTokens: 800,
       outputTokens: 50,
       errorCode: null,
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum.Reported,
     });
     // 800 input × $1 + 50 output × $5, per 1M tokens
     expect(call?.costUsd).toBe("0.001050");
   });
 
+  it("routes OpenAI and Google tiers to their gateway endpoints with their own key headers", async () => {
+    const fixture = await createFixture();
+    const openAiKey = `sk-${crypto.randomUUID()}`;
+    const googleKey = `AIza${crypto.randomUUID()}`;
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.OpenAI, openAiKey);
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Google, googleKey);
+    mockCloudflare((mocked) =>
+      mocked.url.includes("/openai/")
+        ? openAiResponse(String(mocked.body?.model))
+        : googleResponse(),
+    );
+    const { ctx, settle } = createCtx();
+    const router = new ModelRouterRepo(routerEnv(), ctx);
+
+    const openAi = await generateText({
+      model: await routeOrThrow(router, request(fixture, { routing: mixedRouting })),
+      prompt: "Hi",
+    });
+    const google = await generateText({
+      model: await routeOrThrow(
+        router,
+        request(fixture, { routing: mixedRouting, tier: Schemas.ModelTierEnum.Small }),
+      ),
+      prompt: "Hi",
+    });
+    await settle();
+
+    expect(openAi.text).toBe("Hello from OpenAI");
+    expect(google.text).toBe("Hello from Gemini");
+    const [openAiRequest, googleRequest] = gatewayRequests();
+    expect(openAiRequest?.url).toBe(`${GATEWAY_URL}/openai/responses`);
+    expect(openAiRequest?.headers.get("authorization")).toBe(`Bearer ${openAiKey}`);
+    expect(googleRequest?.url).toBe(
+      `${GATEWAY_URL}/google-ai-studio/v1beta/models/gemini-3.8-flash:generateContent`,
+    );
+    expect(googleRequest?.headers.get("x-goog-api-key")).toBe(googleKey);
+    for (const sent of [openAiRequest, googleRequest]) {
+      expect(sent?.headers.get("cf-aig-authorization")).toBe(`Bearer ${GATEWAY_TOKEN}`);
+    }
+
+    const calls = await getModelCalls(fixture.companyId);
+    const byProvider = new Map(calls.map((call) => [call.provider, call]));
+    // 1000 input × $2 + 100 output × $10 (gpt-6-sol); 1000 × $1.5 + 100 × $7.5 (gemini-3.8-flash), per 1M
+    expect(byProvider.get(Schemas.ModelProviderEnum.OpenAI)).toMatchObject({
+      model: "gpt-6-sol",
+      tier: Schemas.ModelCallTierIntEnum.Mid,
+      costUsd: "0.003000",
+      gatewayLogId: "log-openai",
+    });
+    expect(byProvider.get(Schemas.ModelProviderEnum.Google)).toMatchObject({
+      model: "gemini-3.8-flash",
+      tier: Schemas.ModelCallTierIntEnum.Small,
+      costUsd: "0.002250",
+      gatewayLogId: "log-google",
+    });
+  });
+
   it("refuses a model missing from the price table before any key read or gateway call", async () => {
     const fixture = await createFixture();
-    await addModelKey(
-      fixture.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
-    );
-    mockGateway(() => anthropicMessage("unused"));
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare(() => anthropicMessage("unused"));
     const { ctx, settle } = createCtx();
 
     const routed = await new ModelRouterRepo(routerEnv(), ctx).getModel(
       request(fixture, {
         routing: {
-          ...routing,
+          ...anthropicRouting,
           mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-unlisted" },
         },
       }),
@@ -444,26 +613,127 @@ describe("ModelRouterRepo.getModel", () => {
     expect(routed.isSuccess).toBe(false);
     expect(routed.failure).toBe(Schemas.ModelRouterFailureEnum.ModelNotPriced);
     expect(routed.model).toBeUndefined();
-    expect(gatewayRequests).toHaveLength(0);
+    expect(gatewayRequests()).toHaveLength(0);
     expect(await getModelCalls(fixture.companyId)).toHaveLength(0);
     expect(await getQualityIssues(fixture.companyId)).toHaveLength(0);
+  });
+
+  it("answers ServerError without a gateway token, and opens no issue", async () => {
+    const fixture = await createFixture();
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    const { ctx, settle } = createCtx();
+
+    const routed = await new ModelRouterRepo(
+      { ...routerEnv(), AI_GATEWAY_TOKEN: "" },
+      ctx,
+    ).getModel(request(fixture));
+    await settle();
+
+    expect(routed.failure).toBe(Schemas.ModelRouterFailureEnum.ServerError);
+    expect(await getQualityIssues(fixture.companyId)).toHaveLength(0);
+  });
+});
+
+describe("ModelRouterRepo usage recording", () => {
+  it("records a stream cut mid-way as Pending with its error, never as a clean $0 call", async () => {
+    const fixture = await createFixture();
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare((mocked) => anthropicBrokenStream(String(mocked.body?.model), "error"));
+    const { ctx, settle } = createCtx();
+
+    const model = await routeOrThrow(new ModelRouterRepo(routerEnv(), ctx), request(fixture));
+    const result = streamText({ model, prompt: "Hi", onError: () => {} });
+    await result.consumeStream();
+    await settle();
+
+    const [call] = await getModelCalls(fixture.companyId);
+    expect(call?.usageStatus).toBe(Schemas.ModelCallUsageStatusIntEnum.Pending);
+    expect(call?.gatewayLogId).toBe("log-stream");
+    expect(call?.errorCode).not.toBeNull();
+    expect(call?.outputTokens).toBeNull();
+  });
+
+  it("records a stream the caller cancels as Pending and aborted", async () => {
+    const fixture = await createFixture();
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare((mocked) =>
+      anthropicBrokenStream(String(mocked.body?.model), "hang", mocked.signal),
+    );
+    const { ctx, settle } = createCtx();
+    const abort = new AbortController();
+
+    const model = await routeOrThrow(new ModelRouterRepo(routerEnv(), ctx), request(fixture));
+    const result = streamText({
+      model,
+      prompt: "Hi",
+      abortSignal: abort.signal,
+      onError: () => {},
+    });
+    for await (const part of result.fullStream) {
+      if (part.type === "text-delta") {
+        abort.abort();
+      }
+    }
+    await settle();
+
+    const [call] = await getModelCalls(fixture.companyId);
+    expect(call?.usageStatus).toBe(Schemas.ModelCallUsageStatusIntEnum.Pending);
+    expect(call?.errorCode).toBe("aborted");
+  });
+
+  it("records a call that never got an answer as Unknown, and one the provider refused as Reported at 0", async () => {
+    const fixture = await createFixture();
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    let answer: "drop" | "overloaded" = "drop";
+    mockCloudflare(() => {
+      if (answer === "drop") throw new TypeError("Network connection lost");
+      return anthropicError(529, "overloaded_error");
+    });
+    const { ctx, settle } = createCtx();
+    const router = new ModelRouterRepo(routerEnv(), ctx);
+
+    await expect(
+      generateText({
+        model: await routeOrThrow(router, request(fixture)),
+        prompt: "Hi",
+        maxRetries: 0,
+      }),
+    ).rejects.toThrow();
+    answer = "overloaded";
+    await expect(
+      generateText({
+        model: await routeOrThrow(router, request(fixture)),
+        prompt: "Hi",
+        maxRetries: 0,
+      }),
+    ).rejects.toThrow();
+    await settle();
+
+    const calls = await getModelCalls(fixture.companyId);
+    const dropped = calls.find((call) => call.errorCode !== "http_529");
+    const refused = calls.find((call) => call.errorCode === "http_529");
+    expect(dropped).toMatchObject({
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum.Unknown,
+      gatewayLogId: null,
+      costUsd: "0.000000",
+    });
+    expect(refused).toMatchObject({
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum.Reported,
+      costUsd: "0.000000",
+    });
   });
 });
 
 describe("ModelRouterRepo key-failure path", () => {
   it("answers a revoked key with KeyUnavailable and opens one system issue for the company", async () => {
     const fixture = await createFixture();
-    const keyPublicId = await addModelKey(
-      fixture.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
-    );
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
     await new CompanySecretsRepo(env).updateCompanySecret({
       companyId: fixture.companyId,
       publicId: keyPublicId,
       companySecret: { status: Schemas.CompanySecretStatusIntEnum.Revoked },
     });
-    mockGateway(() => anthropicMessage("unused"));
+    mockCloudflare(() => anthropicMessage("unused"));
     const { ctx, settle } = createCtx();
     const router = new ModelRouterRepo(routerEnv(), ctx);
 
@@ -475,7 +745,8 @@ describe("ModelRouterRepo key-failure path", () => {
       expect(routed.isSuccess).toBe(false);
       expect(routed.failure).toBe(Schemas.ModelRouterFailureEnum.KeyUnavailable);
     }
-    expect(gatewayRequests).toHaveLength(0);
+    expect(gatewayRequests()).toHaveLength(0);
+    expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Revoked);
 
     const issues = await getQualityIssues(fixture.companyId);
     expect(issues).toHaveLength(1);
@@ -529,19 +800,16 @@ describe("ModelRouterRepo key-failure path", () => {
 
   it("marks a key the provider rejects Invalid, opens the issue, and throws ModelUnavailableError", async () => {
     const fixture = await createFixture();
-    const keyPublicId = await addModelKey(
-      fixture.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
-    );
-    mockGateway(() => anthropicKeyRejected());
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare(() => anthropicError(401, "authentication_error"));
     const { ctx, settle } = createCtx();
     const router = new ModelRouterRepo(routerEnv(), ctx);
 
-    const routed = await router.getModel(request(fixture));
-    if (!routed.model) throw new Error(`No model: ${routed.message}`);
-
-    const failed = generateText({ model: routed.model, prompt: "Hi", maxRetries: 0 });
+    const failed = generateText({
+      model: await routeOrThrow(router, request(fixture)),
+      prompt: "Hi",
+      maxRetries: 0,
+    });
     await expect(failed).rejects.toBeInstanceOf(ModelUnavailableError);
     await expect(failed).rejects.toMatchObject({
       message: Schemas.MODEL_UNAVAILABLE_MESSAGE,
@@ -552,7 +820,12 @@ describe("ModelRouterRepo key-failure path", () => {
     expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Invalid);
     expect(await getQualityIssues(fixture.companyId)).toHaveLength(1);
     const [call] = await getModelCalls(fixture.companyId);
-    expect(call).toMatchObject({ errorCode: "http_401", inputTokens: 0, costUsd: "0.000000" });
+    expect(call).toMatchObject({
+      errorCode: "http_401",
+      inputTokens: 0,
+      costUsd: "0.000000",
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum.Reported,
+    });
 
     // DEV_NOTE: The next turn finds no active key and adds no second issue
     const next = await router.getModel(request(fixture));
@@ -561,20 +834,35 @@ describe("ModelRouterRepo key-failure path", () => {
     expect(await getQualityIssues(fixture.companyId)).toHaveLength(1);
   });
 
-  it("leaves the key alone when the gateway, not the provider, rejects the call", async () => {
+  it("leaves a key alone on a 403: the key is fine, the model or project isn't", async () => {
     const fixture = await createFixture();
-    const keyPublicId = await addModelKey(
-      fixture.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
-    );
-    mockGateway(() => gatewayUnauthorized());
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare(() => anthropicError(403, "permission_error"));
     const { ctx, settle } = createCtx();
 
-    const routed = await new ModelRouterRepo(routerEnv(), ctx).getModel(request(fixture));
-    if (!routed.model) throw new Error(`No model: ${routed.message}`);
+    const failed = generateText({
+      model: await routeOrThrow(new ModelRouterRepo(routerEnv(), ctx), request(fixture)),
+      prompt: "Hi",
+      maxRetries: 0,
+    });
+    await expect(failed).rejects.not.toBeInstanceOf(ModelUnavailableError);
+    await settle();
 
-    const failed = generateText({ model: routed.model, prompt: "Hi", maxRetries: 0 });
+    expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Active);
+    expect(await getQualityIssues(fixture.companyId)).toHaveLength(0);
+  });
+
+  it("leaves the key alone when the gateway, not the provider, rejects the call", async () => {
+    const fixture = await createFixture();
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare(() => gatewayUnauthorized());
+    const { ctx, settle } = createCtx();
+
+    const failed = generateText({
+      model: await routeOrThrow(new ModelRouterRepo(routerEnv(), ctx), request(fixture)),
+      prompt: "Hi",
+      maxRetries: 0,
+    });
     await expect(failed).rejects.not.toBeInstanceOf(ModelUnavailableError);
     await settle();
 
@@ -584,23 +872,202 @@ describe("ModelRouterRepo key-failure path", () => {
     expect(call?.errorCode).toBe("http_401");
   });
 
-  it("answers ServerError without a gateway token, and opens no issue", async () => {
+  it("never invalidates a key the admin replaced or revoked after the failing call started", async () => {
     const fixture = await createFixture();
-    await addModelKey(
-      fixture.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
+    const replacedKey = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    const revokedKey = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.OpenAI);
+    mockCloudflare((mocked) =>
+      mocked.url.includes("/openai/")
+        ? openAiKeyRejected()
+        : anthropicError(401, "authentication_error"),
     );
     const { ctx, settle } = createCtx();
+    const router = new ModelRouterRepo(routerEnv(), ctx);
+    const secretsRepo = new CompanySecretsRepo(env);
 
-    const routed = await new ModelRouterRepo(
-      { ...routerEnv(), AI_GATEWAY_TOKEN: "" },
-      ctx,
-    ).getModel(request(fixture));
+    // DEV_NOTE: Both models hold the old values; the admin changes each key before the call runs
+    const anthropicModel = await routeOrThrow(router, request(fixture));
+    const openAiModel = await routeOrThrow(router, request(fixture, { routing: mixedRouting }));
+    await secretsRepo.updateCompanySecret({
+      companyId: fixture.companyId,
+      publicId: replacedKey,
+      companySecret: { secret: `sk-ant-${crypto.randomUUID()}` },
+    });
+    await secretsRepo.updateCompanySecret({
+      companyId: fixture.companyId,
+      publicId: revokedKey,
+      companySecret: { status: Schemas.CompanySecretStatusIntEnum.Revoked },
+    });
+
+    for (const model of [anthropicModel, openAiModel]) {
+      await expect(generateText({ model, prompt: "Hi", maxRetries: 0 })).rejects.toBeInstanceOf(
+        ModelUnavailableError,
+      );
+    }
     await settle();
 
-    expect(routed.failure).toBe(Schemas.ModelRouterFailureEnum.ServerError);
+    expect(await getSecretStatus(replacedKey)).toBe(Schemas.CompanySecretStatusIntEnum.Active);
+    expect(await getSecretStatus(revokedKey)).toBe(Schemas.CompanySecretStatusIntEnum.Revoked);
     expect(await getQualityIssues(fixture.companyId)).toHaveLength(0);
+  });
+
+  it("opens one issue when key failures race, and adds each further provider to its note", async () => {
+    const fixture = await createFixture();
+    const { ctx, settle } = createCtx();
+    const router = new ModelRouterRepo(routerEnv(), ctx);
+
+    // DEV_NOTE: No keys at all: four Anthropic turns at once, then two OpenAI turns
+    const raced = await Promise.all(
+      Array.from({ length: 4 }, async () => await router.getModel(request(fixture))),
+    );
+    await router.getModel(request(fixture, { routing: mixedRouting }));
+    await router.getModel(request(fixture, { routing: mixedRouting }));
+    await settle();
+
+    for (const routed of raced) {
+      expect(routed.failure).toBe(Schemas.ModelRouterFailureEnum.KeyUnavailable);
+    }
+    const issues = await getQualityIssues(fixture.companyId);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.note).toContain("Anthropic");
+    expect(issues[0]?.note?.match(/OpenAI/g)).toHaveLength(1);
+  });
+
+  it("invalidates once and opens one issue when two calls on the same key are rejected at once", async () => {
+    const fixture = await createFixture();
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare(() => anthropicError(401, "authentication_error"));
+    const { ctx, settle } = createCtx();
+    const router = new ModelRouterRepo(routerEnv(), ctx);
+    const models = [
+      await routeOrThrow(router, request(fixture)),
+      await routeOrThrow(router, request(fixture)),
+    ];
+
+    const results = await Promise.allSettled(
+      models.map(async (model) => await generateText({ model, prompt: "Hi", maxRetries: 0 })),
+    );
+    await settle();
+
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+    }
+    expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Invalid);
+    expect(await getQualityIssues(fixture.companyId)).toHaveLength(1);
+  });
+});
+
+describe("ModelCallsRepo.backfillPendingUsage", () => {
+  async function insertPendingCall(
+    fixture: Fixture,
+    gatewayLogId: string | null,
+    ageMs: number,
+  ): Promise<string> {
+    const publicId = Utility.generatePublicId();
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.insert(modelCalls).values({
+        publicId,
+        companyId: fixture.companyId,
+        conversationId: fixture.conversationId,
+        taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
+        tier: Schemas.ModelCallTierIntEnum.Mid,
+        provider: Schemas.ModelProviderEnum.Anthropic,
+        model: "claude-sonnet-5-5",
+        gatewayLogId,
+        errorCode: "aborted",
+        usageStatus: Schemas.ModelCallUsageStatusIntEnum.Pending,
+        createdAt: new Date(Date.now() - ageMs),
+      });
+    });
+    return publicId;
+  }
+
+  async function getCall(publicId: string) {
+    return await withOwnerDb(async (ownerDb) => {
+      const [row] = await ownerDb
+        .select()
+        .from(modelCalls)
+        .where(eq(modelCalls.publicId, publicId));
+      return row;
+    });
+  }
+
+  it("fills Pending rows from the gateway log, waits for young or missing logs, and gives up after the window", async () => {
+    const fixture = await createFixture();
+    const minute = 60_000;
+    const withLog = await insertPendingCall(fixture, "log-found", 2 * minute);
+    const tooYoung = await insertPendingCall(fixture, "log-young", 10_000);
+    const notYetLogged = await insertPendingCall(fixture, "log-missing", 2 * minute);
+    const expired = await insertPendingCall(fixture, "log-missing", 2 * 60 * minute);
+    const noLogId = await insertPendingCall(fixture, null, 2 * minute);
+    mockCloudflare((mocked) =>
+      mocked.url.endsWith("/log-found")
+        ? Response.json({
+            success: true,
+            result: { id: "log-found", tokens_in: 1000, tokens_out: 100 },
+          })
+        : Response.json(
+            { success: false, errors: [{ code: 7003, message: "Not found" }] },
+            { status: 404 },
+          ),
+    );
+
+    const result = await new ModelCallsRepo(routerEnv()).backfillPendingUsage({
+      companyIds: [fixture.companyId],
+    });
+
+    expect(result).toMatchObject({
+      isSuccess: true,
+      backfilledCount: 1,
+      unknownCount: 2,
+      stillPendingCount: 1,
+    });
+    // 1000 input × $2 + 100 output × $10, per 1M (no cache split in the log: full input price)
+    expect(await getCall(withLog)).toMatchObject({
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum.Backfilled,
+      inputTokens: 1000,
+      outputTokens: 100,
+      costUsd: "0.003000",
+    });
+    expect((await getCall(tooYoung))?.usageStatus).toBe(
+      Schemas.ModelCallUsageStatusIntEnum.Pending,
+    );
+    expect((await getCall(notYetLogged))?.usageStatus).toBe(
+      Schemas.ModelCallUsageStatusIntEnum.Pending,
+    );
+    expect((await getCall(expired))?.usageStatus).toBe(Schemas.ModelCallUsageStatusIntEnum.Unknown);
+    expect((await getCall(noLogId))?.usageStatus).toBe(Schemas.ModelCallUsageStatusIntEnum.Unknown);
+
+    const logRequests = mockedRequests.filter((mocked) => mocked.url.startsWith(LOGS_URL));
+    expect(logRequests.map((mocked) => mocked.url.slice(LOGS_URL.length + 1)).sort()).toEqual([
+      "log-found",
+      "log-missing",
+      "log-missing",
+    ]);
+    for (const mocked of logRequests) {
+      expect(mocked.headers.get("authorization")).toBe(`Bearer ${GATEWAY_TOKEN}`);
+    }
+
+    // DEV_NOTE: A second sweep leaves settled rows alone
+    const again = await new ModelCallsRepo(routerEnv()).backfillPendingUsage({
+      companyIds: [fixture.companyId],
+    });
+    expect(again).toMatchObject({ backfilledCount: 0, unknownCount: 0, stillPendingCount: 1 });
+  });
+
+  it("keeps a row Pending while the log lookup fails", async () => {
+    const fixture = await createFixture();
+    const publicId = await insertPendingCall(fixture, "log-flaky", 2 * 60_000);
+    mockCloudflare(() => Response.json({ success: false }, { status: 503 }));
+
+    const result = await new ModelCallsRepo(routerEnv()).backfillPendingUsage({
+      companyIds: [fixture.companyId],
+    });
+
+    expect(result.stillPendingCount).toBe(1);
+    expect((await getCall(publicId))?.usageStatus).toBe(
+      Schemas.ModelCallUsageStatusIntEnum.Pending,
+    );
   });
 });
 
@@ -608,11 +1075,7 @@ describe("ModelRouterRepo tenancy (as diletta_app)", () => {
   it("never uses another company's key", async () => {
     const owner = await createFixture();
     const other = await createFixture();
-    await addModelKey(
-      owner.companyId,
-      Schemas.ModelProviderEnum.Anthropic,
-      `sk-ant-${crypto.randomUUID()}`,
-    );
+    await addModelKey(owner.companyId, Schemas.ModelProviderEnum.Anthropic);
     const { ctx, settle } = createCtx();
 
     const routed = await new ModelRouterRepo(routerEnv(), ctx).getModel(request(other));
@@ -646,6 +1109,7 @@ describe("ModelRouterRepo tenancy (as diletta_app)", () => {
         latencyMs: null,
         wasEscalated: false,
         errorCode: null,
+        usageStatus: Schemas.ModelCallUsageStatusIntEnum.Reported,
       });
     });
     expect(call.isSuccess).toBe(false);
@@ -684,6 +1148,41 @@ describe("ModelRouterRepo tenancy (as diletta_app)", () => {
     );
     expect(open.isSuccess).toBe(true);
     expect(open.qualityIssue).toBeUndefined();
+  });
+
+  it("settles only the company's own Pending rows", async () => {
+    const owner = await createFixture();
+    const other = await createFixture();
+    const publicId = Utility.generatePublicId();
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.insert(modelCalls).values({
+        publicId,
+        companyId: owner.companyId,
+        taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
+        tier: Schemas.ModelCallTierIntEnum.Mid,
+        provider: Schemas.ModelProviderEnum.Anthropic,
+        model: "claude-sonnet-5-5",
+        gatewayLogId: "log-owner",
+        usageStatus: Schemas.ModelCallUsageStatusIntEnum.Pending,
+      });
+    });
+
+    const settled: Schemas.ModelCallDALResponse = await withTenant(
+      getDbClient(env),
+      other.companyId,
+      async (tx) => {
+        return await new ModelCallsDAL().settleModelCallUsage(tx, {
+          companyId: other.companyId,
+          publicId,
+          usageStatus: Schemas.ModelCallUsageStatusIntEnum.Unknown,
+          inputTokens: null,
+          outputTokens: null,
+          costUsd: null,
+        });
+      },
+    );
+    expect(settled.isSuccess).toBe(false);
+    expect(settled.isNotFound).toBe(true);
   });
 });
 
@@ -725,12 +1224,24 @@ describe("AiGatewayProvider.isRejectedKeyError", () => {
     expect(
       AiGatewayProvider.isRejectedKeyError(
         Schemas.ModelProviderEnum.Google,
-        apiError(403, { error: { code: 403, status: "PERMISSION_DENIED" } }),
+        apiError(401, { error: { code: 401, status: "UNAUTHENTICATED" } }),
       ),
     ).toBe(true);
   });
 
-  it("ignores gateway errors, other statuses and non-HTTP errors", () => {
+  it("ignores 403s, gateway errors, other statuses and non-HTTP errors", () => {
+    expect(
+      AiGatewayProvider.isRejectedKeyError(
+        Schemas.ModelProviderEnum.Anthropic,
+        apiError(403, { type: "error", error: { type: "permission_error" } }),
+      ),
+    ).toBe(false);
+    expect(
+      AiGatewayProvider.isRejectedKeyError(
+        Schemas.ModelProviderEnum.Google,
+        apiError(403, { error: { code: 403, status: "PERMISSION_DENIED" } }),
+      ),
+    ).toBe(false);
     const gatewayBody = { success: false, error: [{ code: 2009, message: "Unauthorized" }] };
     for (const provider of Object.values(Schemas.ModelProviderEnum)) {
       expect(AiGatewayProvider.isRejectedKeyError(provider, apiError(401, gatewayBody))).toBe(

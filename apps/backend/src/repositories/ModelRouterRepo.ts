@@ -10,6 +10,7 @@ import CompanyKeyProvider from "@/providers/companyKey";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Thrown out of a model call when the provider rejected the company's key. The key is already marked
@@ -25,16 +26,24 @@ export class ModelUnavailableError extends Error {
   }
 }
 
+const ZERO_USAGE: Schemas.ModelCallUsage = {
+  inputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  outputTokens: 0,
+};
+
 // DEV_NOTE: The model router (M2-3), the only way to a chat model (pattern rule 3.10). getModel:
 //   1. tier (or the routing's defaultTier) → provider + model from the chatbot's config spec routing.
 //   2. the model must be in MODEL_PRICES, so every call can be costed; else ModelNotPriced.
-//   3. the company's active key for that provider, decrypted in withTenant through CompanyKeyProvider; no active
-//      key → the key-failure path, KeyUnavailable.
-//   4. AiGatewayProvider builds the provider-native model on AI Gateway with the key, the gateway token and
-//      cf-aig-metadata, wrapped in middleware that writes one model_calls row per call (tokens, cost, latency,
-//      gateway log id, error code) and runs the key-failure path when the provider rejects the key.
-// Key-failure path, one withTenant: the key (if any) is marked Invalid, and the company's System / ModelError issue
-// opens on the call's conversation unless one is already open, with its critical event. A call with no conversation
+//   3. the company's active key for that provider, decrypted in withTenant; no active key → the key-failure path,
+//      KeyUnavailable.
+//   4. AiGatewayProvider builds the provider-native model on AI Gateway, wrapped in recording middleware: one
+//      model_calls row per call (tokens, cost, latency, gateway log id, error code, usage status), and the key-failure
+//      path when the provider rejects the key.
+// Key-failure path, one withTenant: the key is marked Invalid if it still holds the value that was used, and the
+// company's open System / Model error issue gets this provider (a new issue on the call's conversation if none is
+// open, with its critical event; else the provider is added to the open issue's note). A call with no conversation
 // (background job) only invalidates the key. The outbox row is relayed after the commit.
 // Every response failure is shown to the widget as MODEL_UNAVAILABLE_MESSAGE; the reason is logged only.
 export default class ModelRouterRepo {
@@ -94,26 +103,23 @@ export default class ModelRouterRepo {
         }
 
         const { companySecret } = found;
-        const decrypted = await CompanyKeyProvider.decryptValue(this.env, tx, {
-          companyId: params.companyId,
-          column: Schemas.EncryptedColumnEnum.CompanySecret,
-          encryptedValue: { ciphertext: companySecret.encryptedSecret, iv: companySecret.iv },
-          encryptionKeyVersion: companySecret.encryptionKeyVersion,
-        });
-        if (!decrypted.isSuccess || decrypted.plaintext === undefined) {
-          return { isSuccess: false, message: decrypted.message };
-        }
-
+        const decrypted = await CompanyKeyProvider.decryptCompanySecret(
+          this.env,
+          tx,
+          companySecret,
+        );
         return {
-          isSuccess: true,
-          message: "Model key decrypted successfully",
-          secret: decrypted.plaintext,
-          companySecretPublicId: companySecret.publicId,
+          ...decrypted,
+          companySecret: {
+            publicId: companySecret.publicId,
+            iv: companySecret.iv,
+            encryptionKeyVersion: companySecret.encryptionKeyVersion,
+          },
         };
       },
     );
 
-    if (!key.isSuccess || key.secret === undefined) {
+    if (!key.isSuccess || key.secret === undefined || !key.companySecret) {
       if (!key.isNotFound) {
         return this.reject(
           Schemas.ModelRouterFailureEnum.ServerError,
@@ -125,7 +131,7 @@ export default class ModelRouterRepo {
         companyId: params.companyId,
         conversationId: params.conversationId,
         provider,
-        companySecretPublicId: null,
+        usedKey: null,
         reason: Schemas.ModelKeyFailureReasonEnum.NoActiveKey,
       });
       return this.reject(
@@ -135,76 +141,97 @@ export default class ModelRouterRepo {
       );
     }
 
-    const companySecretPublicId = key.companySecretPublicId ?? null;
-    const recordCall = (call: {
+    const created = await AiGatewayProvider.createModel(this.env, {
+      provider,
+      model,
+      apiKey: key.secret,
+      metadata: ModelRouterRepo.gatewayMetadata(params),
+      middleware: this.buildRecordingMiddleware({
+        request: params,
+        tier,
+        provider,
+        model,
+        price,
+        usedKey: key.companySecret,
+      }),
+    });
+    if (!created.isSuccess) {
+      return this.reject(
+        created.failure,
+        created.message ?? "Gateway model could not be created",
+        logMetadata,
+      );
+    }
+
+    return { isSuccess: true, message: "Model routed successfully", model: created.model };
+  }
+
+  // DEV_NOTE: Wraps every call of the routed model. A call that returns usage is Reported. A call the provider
+  // refused with an error status is Reported at 0 (providers don't bill a refusal). A call that reached the provider
+  // but ended without usage (stream cut or cancelled, connection lost) is Pending when it has a gateway log id, for
+  // the Cron backfill, else Unknown. A rejected key runs the key-failure path before the error reaches the caller, so
+  // the next turn already finds no active key.
+  private buildRecordingMiddleware(call: {
+    request: Schemas.GetModelRequest;
+    tier: Schemas.ModelTierEnum;
+    provider: Schemas.ModelProviderEnum;
+    model: string;
+    price: Schemas.ModelPrice;
+    usedKey: Pick<Schemas.CompanySecret, "publicId" | "iv" | "encryptionKeyVersion">;
+  }): LanguageModelMiddleware {
+    const record = (outcome: {
       usage: Schemas.ModelCallUsage | null;
       gatewayLogId: string | null;
-      latencyMs: number;
+      startedAt: number;
       errorCode: string | null;
     }) => {
+      const usageStatus = outcome.usage
+        ? Schemas.ModelCallUsageStatusIntEnum.Reported
+        : outcome.gatewayLogId
+          ? Schemas.ModelCallUsageStatusIntEnum.Pending
+          : Schemas.ModelCallUsageStatusIntEnum.Unknown;
       this.ctx.waitUntil(
-        this.recordModelCall({
-          companyId: params.companyId,
-          chatbotId: params.chatbotId,
-          chatbotUserId: params.chatbotUserId,
-          conversationId: params.conversationId,
-          evalRunId: params.evalRunId,
-          turnId: params.turnId,
-          taskType: params.taskType,
-          tier: Schemas.MODEL_TIER_CALL_TIER_MAP[tier],
-          provider,
-          model,
-          gatewayLogId: call.gatewayLogId,
-          inputTokens: call.usage?.inputTokens ?? 0,
-          outputTokens: call.usage ? call.usage.outputTokens : null,
-          cachedTokens: call.usage?.cacheReadTokens ?? 0,
-          costUsd: Schemas.computeModelCallCostUsd(
-            price,
-            call.usage ?? {
-              inputTokens: 0,
-              cacheReadTokens: 0,
-              cacheWriteTokens: 0,
-              outputTokens: 0,
-            },
-          ),
-          latencyMs: call.latencyMs,
-          wasEscalated: false,
-          errorCode: call.errorCode,
+        this.recordModelCall(call, {
+          usage: outcome.usage ?? ZERO_USAGE,
+          hasOutputTokens: outcome.usage !== null,
+          usageStatus,
+          gatewayLogId: outcome.gatewayLogId,
+          latencyMs: Date.now() - outcome.startedAt,
+          errorCode: outcome.errorCode,
         }),
       );
     };
 
-    // DEV_NOTE: A failed call is recorded too (no tokens, its error code). A key the provider rejects runs the
-    // key-failure path before the error reaches the caller, so the next turn already finds no active key.
     const onCallError = async (error: unknown, startedAt: number): Promise<unknown> => {
-      recordCall({
-        usage: null,
-        gatewayLogId: null,
-        latencyMs: Date.now() - startedAt,
+      record({
+        // DEV_NOTE: A refused call has nothing billed, so its zeros are real; anything else goes to the backfill
+        usage: AiGatewayProvider.isRefusedCall(error) ? ZERO_USAGE : null,
+        gatewayLogId: AiGatewayProvider.getGatewayLogIdFromError(error),
+        startedAt,
         errorCode: AiGatewayProvider.getErrorCode(error),
       });
-      if (!AiGatewayProvider.isRejectedKeyError(provider, error)) {
+      if (!AiGatewayProvider.isRejectedKeyError(call.provider, error)) {
         return error;
       }
       await this.handleKeyFailure({
-        companyId: params.companyId,
-        conversationId: params.conversationId,
-        provider,
-        companySecretPublicId,
+        companyId: call.request.companyId,
+        conversationId: call.request.conversationId,
+        provider: call.provider,
+        usedKey: call.usedKey,
         reason: Schemas.ModelKeyFailureReasonEnum.RejectedByProvider,
       });
       return new ModelUnavailableError(Schemas.ModelRouterFailureEnum.KeyUnavailable, error);
     };
 
-    const middleware: LanguageModelMiddleware = {
+    return {
       wrapGenerate: async ({ doGenerate }) => {
         const startedAt = Date.now();
         try {
           const result = await doGenerate();
-          recordCall({
-            usage: ModelRouterRepo.toModelCallUsage(result.usage),
+          record({
+            usage: AiGatewayProvider.toModelCallUsage(result.usage),
             gatewayLogId: AiGatewayProvider.getGatewayLogId(result.response?.headers),
-            latencyMs: Date.now() - startedAt,
+            startedAt,
             errorCode: null,
           });
           return result;
@@ -221,58 +248,45 @@ export default class ModelRouterRepo {
           throw await onCallError(error, startedAt);
         }
 
-        // DEV_NOTE: Usage arrives in the stream's finish part, so the row is written when the stream ends (or is
-        // cancelled), once. An error part mid-stream is recorded as the call's error code.
+        // DEV_NOTE: Usage arrives in the stream's finish part. The row is written once, when the stream ends, fails
+        // or is cancelled; without a finish part the call was still billed, so it goes to the backfill.
         let usage: Schemas.ModelCallUsage | null = null;
         let errorCode: string | null = null;
         const gatewayLogId = AiGatewayProvider.getGatewayLogId(streamResult.response?.headers);
-        const stream = ModelRouterRepo.observeStream(
+        const stream = Utility.observeStream(
           streamResult.stream,
           (part) => {
             if (part.type === "finish") {
-              usage = ModelRouterRepo.toModelCallUsage(part.usage);
+              usage = AiGatewayProvider.toModelCallUsage(part.usage);
             } else if (part.type === "error") {
               errorCode = AiGatewayProvider.getErrorCode(part.error);
             }
           },
-          (wasCancelled) => {
-            recordCall({
+          ({ wasCancelled, error }) => {
+            record({
               usage,
               gatewayLogId,
-              latencyMs: Date.now() - startedAt,
-              errorCode: errorCode ?? (wasCancelled ? "aborted" : null),
+              startedAt,
+              errorCode: error
+                ? AiGatewayProvider.getErrorCode(error)
+                : (errorCode ?? (wasCancelled ? "aborted" : null)),
             });
           },
         );
         return { ...streamResult, stream };
       },
     };
-
-    const created = await AiGatewayProvider.createModel(this.env, {
-      provider,
-      model,
-      apiKey: key.secret,
-      metadata: ModelRouterRepo.gatewayMetadata(params),
-      middleware,
-    });
-    if (!created.isSuccess || !created.model) {
-      return this.reject(
-        created.failure ?? Schemas.ModelRouterFailureEnum.ServerError,
-        created.message ?? "Gateway model could not be created",
-        logMetadata,
-      );
-    }
-
-    return { isSuccess: true, message: "Model routed successfully", model: created.model };
   }
 
   // DEV_NOTE: Key-failure path (see the class note). Never throws: a failure is logged and the caller still answers
-  // KeyUnavailable. The advisory lock serialises concurrent failures of one company, so only the first opens the issue.
+  // KeyUnavailable. usedKey is the exact value the failed call used (null when there was no active key): if the admin
+  // has replaced or revoked it since, the failure is stale and nothing changes. The advisory lock serialises
+  // concurrent failures of one company, so only the first opens the issue and each provider is added to it once.
   private async handleKeyFailure(params: {
     companyId: string;
     conversationId: string | null;
     provider: Schemas.ModelProviderEnum;
-    companySecretPublicId: string | null;
+    usedKey: Pick<Schemas.CompanySecret, "publicId" | "iv" | "encryptionKeyVersion"> | null;
     reason: Schemas.ModelKeyFailureReasonEnum;
   }): Promise<Schemas.HandleModelKeyFailureResponse> {
     const issueType = Schemas.QualityIssueTypeIntEnum.ModelError;
@@ -280,19 +294,16 @@ export default class ModelRouterRepo {
       this.db,
       params.companyId,
       async (tx) => {
-        if (params.companySecretPublicId !== null) {
-          const invalidated = await this.companySecretsDal.updateCompanySecret(tx, {
+        if (params.usedKey !== null) {
+          const invalidated = await this.companySecretsDal.invalidateModelKey(tx, {
             companyId: params.companyId,
-            publicId: params.companySecretPublicId,
-            status: Schemas.CompanySecretStatusIntEnum.Invalid,
-            encryptedSecret: null,
-            iv: null,
-            encryptionKeyVersion: null,
-            lastFourChars: null,
-            expiresAt: null,
+            ...params.usedKey,
           });
           if (!invalidated.isSuccess) {
             throw new TenantRollbackError(invalidated.message);
+          }
+          if (!invalidated.companySecret) {
+            return { isSuccess: true, message: "Model key changed since the call; nothing to do" };
           }
         }
 
@@ -318,15 +329,31 @@ export default class ModelRouterRepo {
         if (!open.isSuccess) {
           throw new TenantRollbackError(open.message);
         }
+
+        const providerNote = ModelRouterRepo.keyFailureNote(params.provider, params.reason);
         if (open.qualityIssue) {
-          return { isSuccess: true, message: "A system issue is already open" };
+          // DEV_NOTE: One open issue per company, listing every provider that failed, so fixing one key doesn't
+          // hide another that is still down
+          const currentNote = open.qualityIssue.note ?? "";
+          if (currentNote.includes(Schemas.MODEL_PROVIDER_LABEL_MAP[params.provider])) {
+            return { isSuccess: true, message: "A system issue for this provider is already open" };
+          }
+          const extended = await this.qualityIssuesDal.updateQualityIssueNote(tx, {
+            companyId: params.companyId,
+            publicId: open.qualityIssue.publicId,
+            note: currentNote ? `${currentNote}\n${providerNote}` : providerNote,
+          });
+          if (!extended.isSuccess) {
+            throw new TenantRollbackError(extended.message);
+          }
+          return { isSuccess: true, message: "Provider added to the open system issue" };
         }
 
         const created = await this.qualityIssuesDal.createSystemQualityIssue(tx, {
           companyId: params.companyId,
           conversationId: params.conversationId,
           issueType,
-          note: ModelRouterRepo.keyFailureNote(params.provider, params.reason),
+          note: providerNote,
         });
         if (!created.isSuccess || !created.qualityIssue) {
           throw new TenantRollbackError(created.message);
@@ -392,38 +419,97 @@ export default class ModelRouterRepo {
     return result;
   }
 
-  // DEV_NOTE: Runs in waitUntil, so it never throws: a failed write is logged and the call itself is unaffected
-  private async recordModelCall(params: Schemas.CreateModelCallDALRequest): Promise<void> {
-    const result = await withTenant(this.db, params.companyId, async (tx) => {
-      return await this.modelCallsDal.createModelCall(tx, params);
+  // DEV_NOTE: Runs in waitUntil, so it never throws: a failed write is logged and the call itself is unaffected.
+  // An Unknown row is logged as an error too: its cost of 0 isn't a real price.
+  private async recordModelCall(
+    call: {
+      request: Schemas.GetModelRequest;
+      tier: Schemas.ModelTierEnum;
+      provider: Schemas.ModelProviderEnum;
+      model: string;
+      price: Schemas.ModelPrice;
+    },
+    outcome: {
+      usage: Schemas.ModelCallUsage;
+      hasOutputTokens: boolean;
+      usageStatus: Schemas.ModelCallUsageStatusIntEnum;
+      gatewayLogId: string | null;
+      latencyMs: number;
+      errorCode: string | null;
+    },
+  ): Promise<void> {
+    const { request } = call;
+    const metadata = {
+      companyId: request.companyId,
+      conversationId: request.conversationId,
+      turnId: request.turnId,
+      provider: call.provider,
+      model: call.model,
+      errorCode: outcome.errorCode,
+    };
+
+    if (outcome.usageStatus === Schemas.ModelCallUsageStatusIntEnum.Unknown) {
+      AppLogger.error({
+        category: Schemas.LogCategory.ModelRouter,
+        action: Schemas.LogAction.RecordModelCall,
+        message: "Model call ended without usage or a gateway log id; its cost is unknown",
+        metadata,
+      });
+    }
+
+    const result = await withTenant(this.db, request.companyId, async (tx) => {
+      return await this.modelCallsDal.createModelCall(tx, {
+        companyId: request.companyId,
+        chatbotId: request.chatbotId,
+        chatbotUserId: request.chatbotUserId,
+        conversationId: request.conversationId,
+        evalRunId: request.evalRunId,
+        turnId: request.turnId,
+        taskType: request.taskType,
+        tier: Schemas.MODEL_TIER_CALL_TIER_MAP[call.tier],
+        provider: call.provider,
+        model: call.model,
+        gatewayLogId: outcome.gatewayLogId,
+        inputTokens: outcome.usage.inputTokens,
+        outputTokens: outcome.hasOutputTokens ? outcome.usage.outputTokens : null,
+        cachedTokens: outcome.usage.cacheReadTokens,
+        costUsd: Schemas.computeModelCallCostUsd(call.price, outcome.usage),
+        latencyMs: outcome.latencyMs,
+        // DEV_NOTE: The router never escalates on its own; the turn loop (M2-2) picks the tier and will pass this
+        // when it retries a turn on a higher tier
+        wasEscalated: false,
+        errorCode: outcome.errorCode,
+        usageStatus: outcome.usageStatus,
+      });
     });
     if (!result.isSuccess) {
       AppLogger.error({
         category: Schemas.LogCategory.ModelRouter,
         action: Schemas.LogAction.RecordModelCall,
         message: result.message ?? "Model call not recorded",
-        metadata: {
-          companyId: params.companyId,
-          conversationId: params.conversationId,
-          turnId: params.turnId,
-          provider: params.provider,
-          model: params.model,
-        },
+        metadata,
       });
     }
   }
 
+  // DEV_NOTE: A failure is logged once, here. A missing or rejected key is a warning: an expected state the system
+  // issue covers.
   private reject(
     failure: Schemas.ModelRouterFailureEnum,
     message: string,
     metadata: Record<string, unknown>,
   ): Schemas.GetModelResponse<LanguageModel> {
-    AppLogger.error({
+    const entry = {
       category: Schemas.LogCategory.ModelRouter,
       action: Schemas.LogAction.GetModel,
       message,
       metadata,
-    });
+    };
+    if (failure === Schemas.ModelRouterFailureEnum.KeyUnavailable) {
+      AppLogger.warn(entry);
+    } else {
+      AppLogger.error(entry);
+    }
     return { isSuccess: false, message, failure };
   }
 
@@ -445,6 +531,7 @@ export default class ModelRouterRepo {
     );
   }
 
+  // DEV_NOTE: One sentence per provider; the open issue's note gains a sentence for each provider that fails
   private static keyFailureNote(
     provider: Schemas.ModelProviderEnum,
     reason: Schemas.ModelKeyFailureReasonEnum,
@@ -453,60 +540,5 @@ export default class ModelRouterRepo {
     return reason === Schemas.ModelKeyFailureReasonEnum.NoActiveKey
       ? `There's no active ${label} model key, so the chatbot is temporarily unavailable. Add one in Settings › Model keys.`
       : `${label} rejected the model key, so the chatbot is temporarily unavailable. Replace it in Settings › Model keys.`;
-  }
-
-  // DEV_NOTE: The provider's usage → our counts. Providers leave fields undefined when they don't report them.
-  private static toModelCallUsage(usage: {
-    inputTokens: {
-      total: number | undefined;
-      cacheRead: number | undefined;
-      cacheWrite: number | undefined;
-    };
-    outputTokens: { total: number | undefined };
-  }): Schemas.ModelCallUsage {
-    return {
-      inputTokens: usage.inputTokens.total ?? 0,
-      cacheReadTokens: usage.inputTokens.cacheRead ?? 0,
-      cacheWriteTokens: usage.inputTokens.cacheWrite ?? 0,
-      outputTokens: usage.outputTokens.total ?? 0,
-    };
-  }
-
-  // DEV_NOTE: Passes every part through unchanged, shows each to onPart, and calls onEnd exactly once: when the
-  // stream finishes, errors or is cancelled by the reader (wasCancelled).
-  private static observeStream<TPart>(
-    source: ReadableStream<TPart>,
-    onPart: (part: TPart) => void,
-    onEnd: (wasCancelled: boolean) => void,
-  ): ReadableStream<TPart> {
-    let hasEnded = false;
-    const end = (wasCancelled: boolean) => {
-      if (hasEnded) return;
-      hasEnded = true;
-      onEnd(wasCancelled);
-    };
-    const reader = source.getReader();
-
-    return new ReadableStream<TPart>({
-      async pull(controller) {
-        try {
-          const { done, value } = await reader.read();
-          if (done) {
-            end(false);
-            controller.close();
-            return;
-          }
-          onPart(value);
-          controller.enqueue(value);
-        } catch (error) {
-          end(false);
-          controller.error(error);
-        }
-      },
-      async cancel(reason) {
-        end(true);
-        await reader.cancel(reason);
-      },
-    });
   }
 }

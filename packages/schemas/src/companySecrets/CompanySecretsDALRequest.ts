@@ -33,3 +33,11 @@ export type UpdateCompanySecretDALRequest = FindCompanySecretDALRequest &
 export type FindActiveModelKeyDALRequest = Pick<CompanySecret, "companyId"> & {
   provider: ModelProviderEnum;
 };
+
+// DEV_NOTE: Marks a model key Invalid only if the row still holds the exact value that was used (iv and key version
+// change on every replacement) and is still Active, so a late rejection never touches a key the admin has replaced
+// or revoked since.
+export type InvalidateModelKeyDALRequest = Pick<
+  CompanySecret,
+  "companyId" | "publicId" | "iv" | "encryptionKeyVersion"
+>;

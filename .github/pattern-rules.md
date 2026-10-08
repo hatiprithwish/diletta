@@ -739,7 +739,7 @@ FOREIGN KEY
 
 ### 3.10 Model Calls Only Through the Router [CRITICAL]
 
-**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`) may mark a company key Invalid, never a gateway error. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
+**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. A call billed without usage (stream cut or cancelled, connection lost) is written `usage_status` Pending for the Cron backfill, never Reported at $0. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
 
 **Violations:**
 
@@ -747,7 +747,8 @@ FOREIGN KEY
 - `fetch` to a provider API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, …) or to `gateway.ai.cloudflare.com` outside `providers/aiGateway.ts`
 - A model call that skips the router's middleware (no `model_calls` row), or a cost computed outside `computeModelCallCostUsd`
 - A fallback price (0 or a default) for a model missing from `MODEL_PRICES`
-- Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape
+- Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape, on a 403, or through the general `updateCompanySecret` (it would invalidate a key the admin replaced meanwhile)
+- Writing a `model_calls` row as Reported with zero usage for a call that reached the provider without a refusal (use Pending with the gateway log id, or Unknown)
 - Logging the decrypted company key or the gateway token, or passing either anywhere but the provider SDK settings
 - `env.AI.run(...)` with a non-embedding model, or anywhere except knowledge ingestion/search
 - A Think `getModel()` that builds a provider client itself instead of asking the router

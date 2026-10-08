@@ -160,4 +160,55 @@ export default class QualityIssuesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: Replaces an issue's note (the key-failure path adds a provider to the open system issue). note is free
+  // text, so it stays out of the log.
+  async updateQualityIssueNote(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateQualityIssueNoteDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+    const { note: _note, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(qualityIssues.publicId, params.publicId),
+        eq(qualityIssues.companyId, params.companyId),
+      ];
+      const [qualityIssueResponse] = await tx
+        .update(qualityIssues)
+        .set({ note: params.note, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      if (!qualityIssueResponse) {
+        const message = "Quality issue not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.UpdateQualityIssueNote,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Quality issue note updated successfully";
+      response.qualityIssue = qualityIssueResponse;
+    } catch (error) {
+      const message = "Unknown error in updating quality issue note";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateQualityIssueNote,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

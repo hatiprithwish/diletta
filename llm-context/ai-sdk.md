@@ -14,5 +14,5 @@ Installed (apps/backend, pinned, 7-day release age): `ai` 7.0.126, `@ai-sdk/anth
 ## How Diletta uses it
 
 - Only `providers/aiGateway.ts` imports `@ai-sdk/<provider>` (pattern rule 3.10). `createAnthropic` / `createOpenAI` / `createGoogle` get `baseURL` on AI Gateway, the company key as `apiKey`, and the gateway headers.
-- `ModelRouterRepo` wraps the model with `LanguageModelMiddleware` (`wrapGenerate` / `wrapStream`) to write `model_calls`. v4 usage is nested: `inputTokens.{total, noCache, cacheRead, cacheWrite}`, `outputTokens.{total, text, reasoning}`; a stream reports it in its `finish` part. Response headers are on `result.response.headers`.
+- `ModelRouterRepo.buildRecordingMiddleware` wraps the model (`wrapGenerate` / `wrapStream`) to write `model_calls`. v4 usage is nested: `inputTokens.{total, noCache, cacheRead, cacheWrite}`, `outputTokens.{total, text, reasoning}` (`AiGatewayProvider.toModelCallUsage`); a stream reports it only in its `finish` part, observed through `Utility.observeStream`, which also reports a read error or a cancel. Response headers are on `result.response.headers`, and on `APICallError.responseHeaders` for a refused call.
 - Errors from the provider are `APICallError` (`statusCode`, `responseBody`). Tests mock `fetch` for gateway URLs rather than injecting a fetch into the provider.

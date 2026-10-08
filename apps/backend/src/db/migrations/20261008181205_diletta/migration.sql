@@ -1,0 +1,2 @@
+ALTER TABLE "model_calls" ADD COLUMN "usage_status" smallint DEFAULT 1 NOT NULL;--> statement-breakpoint
+CREATE INDEX "IDX_model_calls_created_at_pending" ON "model_calls" ("created_at") WHERE "usage_status" = 2;

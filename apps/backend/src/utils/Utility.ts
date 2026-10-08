@@ -56,4 +56,43 @@ export default class Utility {
     }
     return false;
   }
+
+  // DEV_NOTE: Passes every chunk of a stream through unchanged, shows each to onChunk, and calls onEnd exactly once:
+  // when the stream finishes, fails (error set, and passed on to the reader) or is cancelled by the reader
+  // (wasCancelled).
+  static observeStream<TChunk>(
+    source: ReadableStream<TChunk>,
+    onChunk: (chunk: TChunk) => void,
+    onEnd: (end: { wasCancelled: boolean; error: unknown }) => void,
+  ): ReadableStream<TChunk> {
+    let hasEnded = false;
+    const end = (wasCancelled: boolean, error: unknown) => {
+      if (hasEnded) return;
+      hasEnded = true;
+      onEnd({ wasCancelled, error });
+    };
+    const reader = source.getReader();
+
+    return new ReadableStream<TChunk>({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            end(false, null);
+            controller.close();
+            return;
+          }
+          onChunk(value);
+          controller.enqueue(value);
+        } catch (error) {
+          end(false, error);
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        end(true, null);
+        await reader.cancel(reason);
+      },
+    });
+  }
 }

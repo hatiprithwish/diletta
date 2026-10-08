@@ -181,21 +181,7 @@ export default class CompanySecretsRepo {
         return { isSuccess: false, message: "Company secret is not active" };
       }
 
-      const decrypted = await CompanyKeyProvider.decryptValue(this.env, tx, {
-        companyId: params.companyId,
-        column: Schemas.EncryptedColumnEnum.CompanySecret,
-        encryptedValue: { ciphertext: companySecret.encryptedSecret, iv: companySecret.iv },
-        encryptionKeyVersion: companySecret.encryptionKeyVersion,
-      });
-      if (!decrypted.isSuccess || decrypted.plaintext === undefined) {
-        return { isSuccess: false, message: decrypted.message };
-      }
-
-      return {
-        isSuccess: true,
-        message: "Company secret decrypted successfully",
-        secret: decrypted.plaintext,
-      };
+      return await CompanyKeyProvider.decryptCompanySecret(this.env, tx, companySecret);
     });
   }
 }

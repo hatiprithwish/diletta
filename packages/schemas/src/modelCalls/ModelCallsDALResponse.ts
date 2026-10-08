@@ -5,3 +5,7 @@ import type { ApiResponse } from "../common";
 export interface ModelCallDALResponse extends ApiResponse {
   modelCall?: ModelCall;
 }
+
+export interface ModelCallsDALResponse extends ApiResponse {
+  modelCalls?: ModelCall[];
+}

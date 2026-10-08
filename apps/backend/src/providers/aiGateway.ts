@@ -4,9 +4,11 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { APICallError, wrapLanguageModel } from "ai";
 import type { LanguageModel, LanguageModelMiddleware } from "ai";
 import * as Schemas from "@app/schemas";
+import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
 
 const GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1";
+const CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4";
 
 // DEV_NOTE: Provider-native gateway endpoints (llm-context/ai-gateway.md). The gateway forwards everything after the
 // provider segment to the provider unchanged, so each path ends where the SDK's default base URL ends
@@ -17,15 +19,30 @@ const PROVIDER_PATH: Record<Schemas.ModelProviderEnum, string> = {
   [Schemas.ModelProviderEnum.Google]: "google-ai-studio/v1beta",
 };
 
+// DEV_NOTE: One SDK factory per provider. A Record, so adding a provider to ModelProviderEnum fails to compile until
+// it has a factory here (and a path above).
+const PROVIDER_MODEL_FACTORY: Record<
+  Schemas.ModelProviderEnum,
+  (
+    settings: { baseURL: string; apiKey: string; headers: Record<string, string> },
+    model: string,
+  ) => Parameters<typeof wrapLanguageModel>[0]["model"]
+> = {
+  [Schemas.ModelProviderEnum.Anthropic]: (settings, model) => createAnthropic(settings)(model),
+  [Schemas.ModelProviderEnum.OpenAI]: (settings, model) => createOpenAI(settings)(model),
+  [Schemas.ModelProviderEnum.Google]: (settings, model) => createGoogle(settings)(model),
+};
+
 const GATEWAY_LOG_ID_HEADER = "cf-aig-log-id";
 // DEV_NOTE: The gateway keeps the first 5 metadata entries and drops the rest silently
 const MAX_METADATA_ENTRIES = 5;
 
-// DEV_NOTE: The only place a provider SDK is built (pattern rule 3.10). Pure: no database, no transaction. The
-// company key arrives decrypted from ModelRouterRepo and goes only into the SDK's own auth header (x-api-key,
-// Authorization or x-goog-api-key) on requests to the gateway; it is never logged or returned. The gateway token
-// (cf-aig-authorization) is the platform's, from AI_GATEWAY_TOKEN: a Secrets Store binding in staging and production,
-// a .dev.vars string locally (docs/runbooks/ai-gateway.md).
+// DEV_NOTE: The only place a provider SDK is built and AI Gateway is called (pattern rule 3.10). No database, no
+// transaction. The company key arrives decrypted from ModelRouterRepo and goes only into the SDK's own auth header
+// (x-api-key, Authorization or x-goog-api-key) on requests to the gateway; it is never logged or returned. The gateway
+// token is the platform's, from AI_GATEWAY_TOKEN (a Secrets Store binding in staging and production, a .dev.vars
+// string locally): cf-aig-authorization on model calls, and the Bearer token for reading gateway logs, so it carries
+// AI Gateway Run + Read (docs/runbooks/ai-gateway.md).
 export default class AiGatewayProvider {
   static async createModel(
     env: Env,
@@ -37,7 +54,6 @@ export default class AiGatewayProvider {
       middleware: LanguageModelMiddleware;
     },
   ): Promise<Schemas.GetModelResponse<LanguageModel>> {
-    const response: Schemas.GetModelResponse<LanguageModel> = { isSuccess: false };
     const logMetadata = { provider: params.provider, model: params.model };
 
     try {
@@ -50,32 +66,28 @@ export default class AiGatewayProvider {
           message,
           metadata: logMetadata,
         });
-        response.message = message;
-        response.failure = Schemas.ModelRouterFailureEnum.ServerError;
-        return response;
+        return { isSuccess: false, message, failure: Schemas.ModelRouterFailureEnum.ServerError };
       }
 
-      const settings = {
-        baseURL: `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}`,
-        apiKey: params.apiKey,
-        headers: {
-          "cf-aig-authorization": `Bearer ${token}`,
-          "cf-aig-metadata": JSON.stringify(
-            Object.fromEntries(Object.entries(params.metadata).slice(0, MAX_METADATA_ENTRIES)),
-          ),
+      const model = PROVIDER_MODEL_FACTORY[params.provider](
+        {
+          baseURL: `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}`,
+          apiKey: params.apiKey,
+          headers: {
+            "cf-aig-authorization": `Bearer ${token}`,
+            "cf-aig-metadata": JSON.stringify(
+              Object.fromEntries(Object.entries(params.metadata).slice(0, MAX_METADATA_ENTRIES)),
+            ),
+          },
         },
+        params.model,
+      );
+
+      return {
+        isSuccess: true,
+        message: "Gateway model created successfully",
+        model: wrapLanguageModel({ model, middleware: params.middleware }),
       };
-
-      const model =
-        params.provider === Schemas.ModelProviderEnum.Anthropic
-          ? createAnthropic(settings)(params.model)
-          : params.provider === Schemas.ModelProviderEnum.OpenAI
-            ? createOpenAI(settings)(params.model)
-            : createGoogle(settings)(params.model);
-
-      response.isSuccess = true;
-      response.message = "Gateway model created successfully";
-      response.model = wrapLanguageModel({ model, middleware: params.middleware });
     } catch (error) {
       const message = "Unknown error in creating gateway model";
       AppLogger.error({
@@ -85,8 +97,91 @@ export default class AiGatewayProvider {
         error,
         metadata: logMetadata,
       });
+      return { isSuccess: false, message, failure: Schemas.ModelRouterFailureEnum.ServerError };
+    }
+  }
+
+  // DEV_NOTE: Token counts from the gateway's log of one call (Cloudflare API, AI Gateway Read), for the usage
+  // backfill. isNotFound while the log doesn't exist (it may not be written yet); hasUsage false when it exists
+  // without token counts. Never throws.
+  static async getLogUsage(
+    env: Env,
+    gatewayLogId: string,
+  ): Promise<Schemas.GatewayLogUsageResponse> {
+    const response: Schemas.GatewayLogUsageResponse = { isSuccess: false };
+    const metadata = { gatewayLogId };
+
+    try {
+      const token = await AiGatewayProvider.getGatewayToken(env);
+      if (!token || !env.AI_GATEWAY_ACCOUNT_ID || !env.AI_GATEWAY_NAME) {
+        const message = "AI Gateway is not configured";
+        AppLogger.error({
+          category: Schemas.LogCategory.ModelRouter,
+          action: Schemas.LogAction.GetGatewayLogUsage,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const url = `${CLOUDFLARE_API_BASE_URL}/accounts/${env.AI_GATEWAY_ACCOUNT_ID}/ai-gateway/gateways/${env.AI_GATEWAY_NAME}/logs/${encodeURIComponent(gatewayLogId)}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(Constants.AI_GATEWAY_LOG_FETCH_TIMEOUT_MS),
+      });
+
+      if (res.status === 404) {
+        await res.body?.cancel();
+        response.message = "Gateway log not found";
+        response.isNotFound = true;
+        return response;
+      }
+      if (!res.ok) {
+        await res.body?.cancel();
+        const message = `Gateway log request failed with status ${res.status}`;
+        AppLogger.error({
+          category: Schemas.LogCategory.ModelRouter,
+          action: Schemas.LogAction.GetGatewayLogUsage,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const parsed = Schemas.ZAiGatewayLogResponse.safeParse(await res.json());
+      if (!parsed.success || !parsed.data.success) {
+        const message = "Gateway log response is malformed";
+        AppLogger.error({
+          category: Schemas.LogCategory.ModelRouter,
+          action: Schemas.LogAction.GetGatewayLogUsage,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const inputTokens = parsed.data.result?.tokens_in ?? 0;
+      const outputTokens = parsed.data.result?.tokens_out ?? 0;
+      response.isSuccess = true;
+      response.message = "Gateway log usage fetched successfully";
+      // DEV_NOTE: A call the provider billed always has a prompt, so 0 input tokens means the log has no count
+      response.hasUsage = inputTokens > 0;
+      response.inputTokens = inputTokens;
+      response.outputTokens = outputTokens;
+    } catch (error) {
+      const message = "Unknown error in fetching gateway log usage";
+      AppLogger.error({
+        category: Schemas.LogCategory.ModelRouter,
+        action: Schemas.LogAction.GetGatewayLogUsage,
+        message,
+        error,
+        metadata,
+      });
       response.message = message;
-      response.failure = Schemas.ModelRouterFailureEnum.ServerError;
     }
 
     return response;
@@ -97,10 +192,26 @@ export default class AiGatewayProvider {
     return headers?.[GATEWAY_LOG_ID_HEADER] ?? null;
   }
 
+  // DEV_NOTE: Same, for a call that failed with an HTTP answer (the headers ride on the APICallError)
+  static getGatewayLogIdFromError(error: unknown): string | null {
+    return APICallError.isInstance(error)
+      ? AiGatewayProvider.getGatewayLogId(error.responseHeaders)
+      : null;
+  }
+
+  // DEV_NOTE: True when the provider (or the gateway) answered the call with an error status. Providers don't bill a
+  // request they refuse, so such a call has no usage to recover. Anything else (connection lost, timeout, abort, an
+  // unreadable body) may have been billed.
+  static isRefusedCall(error: unknown): boolean {
+    return APICallError.isInstance(error) && error.statusCode !== undefined;
+  }
+
   // DEV_NOTE: True only when the provider itself said the company's key is bad, matched on the provider's own error
-  // shape. A gateway error (bad cf-aig token, gateway rate limit) has an `error` array instead and never matches, so a
-  // platform misconfiguration can't invalidate every company's key. Google answers an invalid key with 400
-  // API_KEY_INVALID rather than 401, hence the per-provider rules.
+  // shape. A gateway error (bad cf-aig token, gateway rate limit or spend limit) has an `error` array instead and never
+  // matches, so a platform misconfiguration can't invalidate every company's key. 403s (Anthropic permission_error,
+  // Google PERMISSION_DENIED) mean a valid key can't use this model or the API isn't enabled: a config problem, not a
+  // bad key, so they never invalidate it. Google answers an invalid key with 400 API_KEY_INVALID, hence per-provider
+  // rules.
   static isRejectedKeyError(provider: Schemas.ModelProviderEnum, error: unknown): boolean {
     if (!APICallError.isInstance(error) || error.statusCode === undefined) {
       return false;
@@ -112,18 +223,13 @@ export default class AiGatewayProvider {
 
     switch (provider) {
       case Schemas.ModelProviderEnum.Anthropic:
-        return (
-          (error.statusCode === 401 && providerError.type === "authentication_error") ||
-          (error.statusCode === 403 && providerError.type === "permission_error")
-        );
+        return error.statusCode === 401 && providerError.type === "authentication_error";
       case Schemas.ModelProviderEnum.OpenAI:
         return error.statusCode === 401;
       case Schemas.ModelProviderEnum.Google:
         return (
           (error.statusCode === 400 && providerError.reasons.includes("API_KEY_INVALID")) ||
-          ((error.statusCode === 401 || error.statusCode === 403) &&
-            (providerError.status === "UNAUTHENTICATED" ||
-              providerError.status === "PERMISSION_DENIED"))
+          (error.statusCode === 401 && providerError.status === "UNAUTHENTICATED")
         );
     }
   }
@@ -138,6 +244,23 @@ export default class AiGatewayProvider {
       return error.name === "AbortError" ? "aborted" : error.name;
     }
     return "unknown";
+  }
+
+  // DEV_NOTE: The SDK's usage → our counts. Providers leave fields undefined when they don't report them.
+  static toModelCallUsage(usage: {
+    inputTokens: {
+      total: number | undefined;
+      cacheRead: number | undefined;
+      cacheWrite: number | undefined;
+    };
+    outputTokens: { total: number | undefined };
+  }): Schemas.ModelCallUsage {
+    return {
+      inputTokens: usage.inputTokens.total ?? 0,
+      cacheReadTokens: usage.inputTokens.cacheRead ?? 0,
+      cacheWriteTokens: usage.inputTokens.cacheWrite ?? 0,
+      outputTokens: usage.outputTokens.total ?? 0,
+    };
   }
 
   private static async getGatewayToken(env: Env): Promise<string | null> {

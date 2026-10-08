@@ -393,9 +393,9 @@ const FIXTURES: Fixture[] = [
         .values({
           publicId: pid(),
           companyId,
-          taskType: "qa.answer",
+          taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
           tier: Schemas.ModelCallTierIntEnum.Small,
-          provider: "google",
+          provider: Schemas.ModelProviderEnum.Google,
           model: "rls-test",
         })
         .returning({ id: modelCalls.id }),

@@ -1,14 +1,7 @@
+import z from "zod";
 import { ModelProviderEnum } from "../companySecrets";
 import { ModelTierEnum } from "../configSpec";
 import { ModelCallTierIntEnum } from "../modelCalls";
-
-// DEV_NOTE: What a model call is for (model_calls.task_type). Embeddings (knowledge.embed) run on Workers AI, not
-// through the router, so they have no entry here.
-export enum ModelTaskTypeEnum {
-  RouteIntent = "route.intent",
-  QaAnswer = "qa.answer",
-  EvalJudge = "eval.judge",
-}
 
 // DEV_NOTE: Why the router handed out no model. The caller (Conversation DO) shows every one of them to the widget
 // as MODEL_UNAVAILABLE_MESSAGE; the reason is logged, never shown.
@@ -231,3 +224,17 @@ export function computeModelCallCostUsd(price: ModelPrice, usage: ModelCallUsage
 
   return cost.toFixed(COST_DECIMALS);
 }
+
+// DEV_NOTE: The parts of an AI Gateway log (Cloudflare API: GET …/ai-gateway/gateways/{gateway}/logs/{id}) the usage
+// backfill reads. Loose: the log carries many more fields, never read. tokens_in has no cache split.
+export const ZAiGatewayLogResponse = z.looseObject({
+  success: z.boolean(),
+  result: z
+    .looseObject({
+      tokens_in: z.number().int().min(0).nullable().optional(),
+      tokens_out: z.number().int().min(0).nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+});
+export type AiGatewayLogResponse = z.infer<typeof ZAiGatewayLogResponse>;
