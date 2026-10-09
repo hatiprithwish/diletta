@@ -19,7 +19,7 @@ These rules are mandatory per CLAUDE.md.
 - Routes importing directly from DAL
 - Repo building queries with Drizzle (`select`/`insert`/`update`/`delete`/`sql`). Allowed in a Repo: `import type { NodePgDatabase } from "drizzle-orm/node-postgres"`, `getDbClient` and `withTenant` from `@/db/` (see `ChatbotsRepo.ts`)
 - Durable Objects, Queue consumers or Cron handlers calling a DAL directly (they go through a Repo)
-- A provider (`apps/backend/src/providers/`) that calls a DAL without the caller's `tx`, opens `withTenant`/`withPlatform` itself, or builds a Drizzle query. Allowed: a provider calling a DAL with the Repo's `tx` when several Repos share the step (golden: `providers/companyKey.ts`)
+- A provider (`apps/backend/src/providers/`) that calls a DAL without the caller's `tx`, opens `withTenant`/`withPlatform` itself, or builds a Drizzle query. Allowed: a provider calling a DAL with the Repo's `tx` when several Repos share the step (golden: `providers/companyKey.ts`), or when it holds one self-contained multi-DAL step a Repo runs inside its own transaction (`providers/criticalEvent.ts`, `providers/modelKeyFailure.ts`)
 - Web components importing directly from worker DAL/Repo
 
 **Detection:**
@@ -748,6 +748,7 @@ FOREIGN KEY
 - A model call that skips the router's middleware (no `model_calls` row), or a cost computed outside `computeModelCallCostUsd`
 - A fallback price (0 or a default) for a model missing from `MODEL_PRICES`
 - Letting a provider or gateway error (or its message) out of a routed model's call unwrapped, or deciding a usage status outside `ModelCallRecordingProvider`
+- Wrapping a retryable answer before retrying it (the SDK won't retry a wrapped error), or a retry without a cap, backoff or abort
 - Deciding which providers a system issue covers from its note text instead of its activity events
 - Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape, on a 403, or through the general `updateCompanySecret` (it would invalidate a key the admin replaced meanwhile)
 - Writing a `model_calls` row as Reported with zero usage for a call that reached the provider without a refusal (use Pending with the gateway log id, or Unknown)
@@ -1139,6 +1140,8 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 - Checking company, chatbot or conversation status only at connect time (they change while a socket is open)
 - An auto-close or retry scheduled at a time that may already have passed
 - Recording a turn's messages only once with no catch-up (a failed write or an eviction loses them)
+- Reading `this.messages` in `webSocketMessage` before `__unsafe_ensureInitialized()` (after a hibernation wake it is empty), or syncing by array index
+- Closing a conversation while its read model has an unsynced backlog, or doing database work inside `onStart` (it blocks every event)
 - Keeping the host bearer token in Think state, `configure`, SQLite or a connection attachment (pattern rule 3.11)
 
 **Detection Pattern:**
@@ -1238,5 +1241,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id)
 Maintainer: hatiprithwish

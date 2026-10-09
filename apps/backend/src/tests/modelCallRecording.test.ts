@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { APICallError, generateText, streamText, wrapLanguageModel } from "ai";
 import { MockLanguageModelV4, convertArrayToReadableStream } from "ai/test";
 import * as Schemas from "@app/schemas";
+import Constants from "@/config/Constants";
 import AiGatewayProvider from "@/providers/aiGateway";
 import ModelCallRecordingProvider, { ModelUnavailableError } from "@/providers/modelCallRecording";
 
@@ -16,15 +17,30 @@ const usage = (input: number | undefined, output: number | undefined) => ({
   outputTokens: { total: output, text: output, reasoning: undefined },
 });
 
-const apiError = (statusCode: number, body: unknown, headers: Record<string, string> = {}) =>
+// DEV_NOTE: retry-after-ms 0 keeps retried tests fast; isRetryable defaults to the SDK's own rule for the status
+const apiError = (
+  statusCode: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+  isRetryable?: boolean,
+) =>
   new APICallError({
     message: RAW_PROVIDER_TEXT,
     url: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
     requestBodyValues: {},
     statusCode,
-    responseHeaders: headers,
+    responseHeaders: { "retry-after-ms": "0", ...headers },
     responseBody: JSON.stringify(body),
+    isRetryable,
   });
+
+const generated = (text: string) => ({
+  content: [{ type: "text" as const, text }],
+  finishReason: { unified: "stop" as const, raw: "stop" },
+  usage: usage(100, 10),
+  warnings: [],
+  response: { headers: { "cf-aig-log-id": "log-ok" } },
+});
 
 function wrapped(model: MockLanguageModelV4, onRejectedKey = vi.fn(async () => {})) {
   const records: Schemas.ModelCallRecord[] = [];
@@ -217,9 +233,10 @@ describe("ModelCallRecordingProvider generate", () => {
       failure: Schemas.ModelRouterFailureEnum.ProviderError,
       cause: refusal,
     });
-    expect(records[0]).toMatchObject({
+    // DEV_NOTE: Refused before anything was billed: real zeros, output included
+    expect(records.at(-1)).toMatchObject({
       usageStatus: Schemas.ModelCallUsageStatusIntEnum.Reported,
-      usage: null,
+      usage: Schemas.ZERO_MODEL_CALL_USAGE,
       errorCode: "http_429",
     });
     expect(onRejectedKey).not.toHaveBeenCalled();
@@ -247,7 +264,130 @@ describe("ModelCallRecordingProvider generate", () => {
   });
 });
 
+describe("ModelCallRecordingProvider retries", () => {
+  it("retries an overloaded provider and records every attempt", async () => {
+    let calls = 0;
+    const { model, records } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          calls += 1;
+          if (calls <= 2)
+            throw apiError(529, { type: "error", error: { type: "overloaded_error" } });
+          return generated("Third time lucky");
+        },
+      }),
+    );
+
+    // DEV_NOTE: The SDK's own retry is left at its default; the middleware does the retrying
+    const result = await generateText({ model, prompt: "Hi" });
+
+    expect(result.text).toBe("Third time lucky");
+    expect(calls).toBe(3);
+    expect(records.map((record) => [record.usageStatus, record.errorCode])).toEqual([
+      [Schemas.ModelCallUsageStatusIntEnum.Reported, "http_529"],
+      [Schemas.ModelCallUsageStatusIntEnum.Reported, "http_529"],
+      [Schemas.ModelCallUsageStatusIntEnum.Reported, null],
+    ]);
+  });
+
+  it("gives up after the last retry with the safe error, and never retries a stream that started", async () => {
+    let calls = 0;
+    const { model, records } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          calls += 1;
+          throw apiError(503, { error: { message: "unavailable" } });
+        },
+      }),
+    );
+
+    await expect(generateText({ model, prompt: "Hi" })).rejects.toMatchObject({
+      name: "ModelUnavailableError",
+      failure: Schemas.ModelRouterFailureEnum.ProviderError,
+    });
+    expect(calls).toBe(Constants.MODEL_CALL_MAX_RETRIES + 1);
+    expect(records).toHaveLength(Constants.MODEL_CALL_MAX_RETRIES + 1);
+  });
+
+  it("doesn't retry an answer that isn't retryable", async () => {
+    let calls = 0;
+    const { model } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          calls += 1;
+          throw apiError(400, { type: "error", error: { type: "invalid_request_error" } });
+        },
+      }),
+    );
+
+    await expect(generateText({ model, prompt: "Hi" })).rejects.toBeInstanceOf(
+      ModelUnavailableError,
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("stops waiting to retry when the caller aborts", async () => {
+    const abort = new AbortController();
+    const { model } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          setTimeout(() => abort.abort(), 20);
+          throw apiError(
+            429,
+            { type: "error", error: { type: "rate_limit_error" } },
+            {
+              "retry-after-ms": "5000",
+            },
+          );
+        },
+      }),
+    );
+
+    const started = Date.now();
+    await expect(
+      generateText({ model, prompt: "Hi", abortSignal: abort.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
 describe("AiGatewayProvider usage rules", () => {
+  it("treats a gateway timeout or upstream failure as possibly billed, and a gateway 4xx as refused", () => {
+    const gatewayBody = { success: false, result: [], error: [{ code: 2008, message: "timeout" }] };
+    expect(AiGatewayProvider.isRefusedCall(apiError(504, gatewayBody))).toBe(false);
+    expect(AiGatewayProvider.isRefusedCall(apiError(408, gatewayBody))).toBe(false);
+    expect(AiGatewayProvider.isRefusedCall(apiError(401, gatewayBody))).toBe(true);
+    expect(AiGatewayProvider.isRefusedCall(apiError(429, gatewayBody))).toBe(true);
+    expect(AiGatewayProvider.isRefusedCall(apiError(503, { error: { message: "x" } }))).toBe(true);
+  });
+
+  it("records a gateway 5xx that carries a log id as Pending", async () => {
+    const { model, records } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw apiError(
+            524,
+            { success: false, result: [], error: [{ code: 2008, message: "upstream timeout" }] },
+            { "cf-aig-log-id": "log-timeout" },
+            false,
+          );
+        },
+      }),
+    );
+
+    await expect(generateText({ model, prompt: "Hi" })).rejects.toBeInstanceOf(
+      ModelUnavailableError,
+    );
+    expect(records).toEqual([
+      expect.objectContaining({
+        usage: null,
+        usageStatus: Schemas.ModelCallUsageStatusIntEnum.Pending,
+        gatewayLogId: "log-timeout",
+        errorCode: "http_524",
+      }),
+    ]);
+  });
+
   it("reads usage only when the provider reported an input total", () => {
     expect(AiGatewayProvider.toModelCallUsage(usage(undefined, 10))).toBeNull();
     expect(AiGatewayProvider.toModelCallUsage(usage(0, 0))).toEqual({

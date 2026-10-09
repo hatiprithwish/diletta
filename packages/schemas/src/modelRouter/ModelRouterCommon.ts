@@ -198,6 +198,14 @@ export interface ModelCallUsage {
   outputTokens: number;
 }
 
+// DEV_NOTE: The usage of a call the provider refused: nothing billed, so every count is a real 0
+export const ZERO_MODEL_CALL_USAGE: ModelCallUsage = {
+  inputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  outputTokens: 0,
+};
+
 const TOKENS_PER_MILLION = 1_000_000;
 // DEV_NOTE: model_calls.cost_usd is numeric(12, 6)
 const COST_DECIMALS = 6;

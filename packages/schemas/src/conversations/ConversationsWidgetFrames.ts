@@ -1,4 +1,5 @@
 import z from "zod";
+import type { ConfigSpec } from "../configSpec";
 import { ZConversationSession } from "./ConversationsCommon";
 import type { TurnMessage } from "../messages";
 
@@ -77,28 +78,51 @@ export interface TranscriptEntry {
 // DEV_NOTE: Server-side only — the next slice of the transcript to write to the read model: one turn (a user message
 // and what followed it) with the ULID it was admitted under (a new one when that was lost, e.g. after an eviction).
 // userMessageId is null for a slice with no user message: a reply that arrived after its user message was synced,
-// written under the last synced turn's id. title is the user message's text, cut to the title length.
+// written under the last synced turn's id. title is the user message's text, cut to the title length. lastEntryId is
+// the last transcript message the turn covers: the new sync position once it is written.
 export interface TranscriptTurn {
   turnId: string;
   userMessageId: string | null;
   messages: TurnMessage[];
   title: string | null;
-  // Number of transcript entries this turn covers, to advance the synced count
-  entryCount: number;
+  lastEntryId: string;
 }
 
+// DEV_NOTE: Server-side only — the turns to write, or isPositionLost when the last synced message isn't in the
+// transcript Think loaded (an empty or windowed view): nothing is written until it is, rather than guess
+export interface UnsyncedTranscript {
+  turns: TranscriptTurn[];
+  isPositionLost: boolean;
+}
+
+// DEV_NOTE: Server-side only — the turn the Conversation DO is preparing or running (at most one). TModel is the AI
+// SDK LanguageModel (@app/schemas doesn't depend on it). model and spec are null while the turn is being prepared.
+export interface ActiveTurn<TModel> {
+  requestId: string;
+  turnId: string;
+  userMessageId: string;
+  model: TModel | null;
+  spec: ConfigSpec | null;
+}
+
+// DEV_NOTE: Server-side only — a prepared turn's config and routed model, or why it can't run (isClosed: the
+// conversation was closed elsewhere)
+export type PreparedTurn<TModel> =
+  | { isSuccess: true; spec: ConfigSpec; model: TModel }
+  | { isSuccess: false; isClosed: boolean };
+
 // DEV_NOTE: Server-side only — what the Conversation DO keeps in its own storage between wakes: who it serves, the
-// auto-close bookkeeping, whether it is closed, and the read-model sync position. syncedMessageCount is how many
-// transcript messages (in order) are in messages; turnIds maps a user message id to the turn ULID it was admitted
-// under, until that turn is synced; lastSyncedTurnId takes a late reply. Internal ids only; never the host bearer
-// token.
+// auto-close bookkeeping, whether it is closed, and the read-model sync position. lastSyncedMessageId is the last
+// transcript message written to messages (an id, not an index: Think may load an empty or windowed view); turnIds maps
+// a user message id to the turn ULID it was admitted under, until that turn is synced; lastSyncedTurnId takes a late
+// reply. Internal ids only; never the host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
   hasAnswer: z.boolean(),
   closeScheduleId: z.string().nullable(),
   isClosed: z.boolean(),
-  syncedMessageCount: z.number().int().min(0),
+  lastSyncedMessageId: z.string().nullable(),
   turnIds: z.record(z.string(), z.string()),
   lastSyncedTurnId: z.string().nullable(),
 });

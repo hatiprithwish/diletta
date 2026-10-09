@@ -3,13 +3,14 @@ import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import ActivityLogDAL from "@/data-access-layer/ActivityLogDAL";
 import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
 import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
+import Constants from "@/config/Constants";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
 const QUALITY_ISSUE_ENTITY = "quality_issue";
 
-// DEV_NOTE: The model router's key-failure step, in the caller's transaction (pattern rule 1.1: a provider may call
-// DALs inside the Repo's tx and never opens one). It never throws; a failure comes back as isSuccess false and the Repo
+// DEV_NOTE: The model router's key-failure step, in the caller's transaction (pattern rule 1.1: a provider may hold a
+// self-contained multi-DAL step a Repo runs inside its own tx; it never opens one). It never throws; a failure comes back as isSuccess false and the Repo
 // rolls back.
 //   1. The key used (if any) is marked Invalid, only while the row still holds that exact value and is Active: a key
 //      the admin replaced or revoked since is left alone, and the failure is dropped as stale.
@@ -137,6 +138,7 @@ export default class ModelKeyFailureProvider {
       companyId: params.companyId,
       entityType: QUALITY_ISSUE_ENTITY,
       entityId: qualityIssue.id,
+      limit: Constants.ACTIVITY_LOGS_BY_ENTITY_LIMIT,
     });
     if (!logs.isSuccess || !logs.activityLogs) {
       return { isSuccess: false, message: logs.message };

@@ -102,6 +102,7 @@ export enum LogAction {
   CreateModelCall = "CreateModelCall",
   GetPendingModelCalls = "GetPendingModelCalls",
   SettleModelCallUsage = "SettleModelCallUsage",
+  TouchPendingModelCall = "TouchPendingModelCall",
   BackfillModelCallUsage = "BackfillModelCallUsage",
 
   // Quality issues

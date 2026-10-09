@@ -854,6 +854,39 @@ describe("ModelRouterRepo key-failure path", () => {
     expect(issue?.note).toContain("There's no active OpenAI model key");
   });
 
+  it("invalidates a Google key the provider answers 401 UNAUTHENTICATED, end to end", async () => {
+    const fixture = await createFixture();
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Google);
+    mockCloudflare(() =>
+      Response.json(
+        {
+          error: {
+            code: 401,
+            message: "Request had invalid credentials.",
+            status: "UNAUTHENTICATED",
+          },
+        },
+        { status: 401 },
+      ),
+    );
+    const { ctx, settle } = createCtx();
+
+    const failed = generateText({
+      model: await routeOrThrow(
+        new ModelRouterRepo(routerEnv(), ctx),
+        request(fixture, { routing: mixedRouting, tier: Schemas.ModelTierEnum.Small }),
+      ),
+      prompt: "Hi",
+    });
+    await expect(failed).rejects.toMatchObject({
+      failure: Schemas.ModelRouterFailureEnum.KeyUnavailable,
+    });
+    await settle();
+
+    expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Invalid);
+    expect(await getQualityIssues(fixture.companyId)).toHaveLength(1);
+  });
+
   it("invalidates a Google key the provider answers API_KEY_INVALID, end to end", async () => {
     const fixture = await createFixture();
     const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Google);
@@ -1012,6 +1045,40 @@ describe("ModelCallsRepo.backfillPendingUsage", () => {
       companyIds: [fixture.companyId],
     });
     expect(again).toMatchObject({ backfilledCount: 0, unknownCount: 0, stillPendingCount: 1 });
+  });
+
+  it("doesn't let rows whose log is late starve a newer row that could settle", async () => {
+    const fixture = await createFixture();
+    const stuckRows = Constants.MODEL_CALL_BACKFILL_BATCH_SIZE + 5;
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.insert(modelCalls).values(
+        Array.from({ length: stuckRows }, (_, index) => ({
+          publicId: Utility.generatePublicId(),
+          companyId: fixture.companyId,
+          taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
+          tier: Schemas.ModelCallTierIntEnum.Mid,
+          provider: Schemas.ModelProviderEnum.Anthropic,
+          model: "claude-sonnet-5-5",
+          gatewayLogId: `log-late-${index}`,
+          usageStatus: Schemas.ModelCallUsageStatusIntEnum.Pending,
+          createdAt: new Date(Date.now() - 5 * 60_000),
+        })),
+      );
+    });
+    const resolvable = await insertPendingCall(fixture, "log-ready", 2 * 60_000);
+    mockCloudflare((mocked) =>
+      mocked.url.endsWith("/log-ready")
+        ? Response.json({ success: true, result: { tokens_in: 10, tokens_out: 1 } })
+        : Response.json({ success: false }, { status: 404 }),
+    );
+    const repo = new ModelCallsRepo(routerEnv());
+
+    await repo.backfillPendingUsage({ companyIds: [fixture.companyId] });
+    await repo.backfillPendingUsage({ companyIds: [fixture.companyId] });
+
+    expect((await getCall(resolvable))?.usageStatus).toBe(
+      Schemas.ModelCallUsageStatusIntEnum.Backfilled,
+    );
   });
 
   it("works through more Pending rows than one batch, a batch per sweep", async () => {

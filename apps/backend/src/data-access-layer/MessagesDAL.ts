@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { conversations, messages } from "@/db/tables";
@@ -82,42 +82,6 @@ export default class MessagesDAL {
         message,
         error,
         metadata,
-      });
-      response.message = message;
-    }
-
-    return response;
-  }
-
-  // DEV_NOTE: One page of a conversation's transcript, oldest first by default (created_at, then id)
-  async getMessages(tx: NodePgTransaction<EmptyRelations>, params: Schemas.GetMessagesDALRequest) {
-    const response: Schemas.MessagesDALResponse = { isSuccess: false };
-
-    try {
-      const conditions = [
-        eq(messages.conversationId, params.conversationId),
-        eq(messages.companyId, params.companyId),
-      ];
-      const order = params.sortDirection === Schemas.SortDirection.Desc ? desc : asc;
-      const messagesResponse = await tx
-        .select()
-        .from(messages)
-        .where(and(...conditions))
-        .orderBy(order(messages.createdAt), asc(messages.id))
-        .limit(params.pageSize)
-        .offset((params.pageNo - 1) * params.pageSize);
-
-      response.isSuccess = true;
-      response.message = "Messages fetched successfully";
-      response.messages = messagesResponse;
-    } catch (error) {
-      const message = "Unknown error in listing messages";
-      AppLogger.error({
-        category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.ListMessages,
-        message,
-        error,
-        metadata: params,
       });
       response.message = message;
     }

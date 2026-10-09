@@ -6,6 +6,7 @@ import type { LanguageModel, LanguageModelMiddleware } from "ai";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
 
 const GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1";
 const CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4";
@@ -199,14 +200,47 @@ export default class AiGatewayProvider {
       : null;
   }
 
-  // DEV_NOTE: True when the provider (or the gateway) answered the call with an error status (4xx / 5xx). Providers
-  // don't bill a request they refuse, so such a call has no usage to recover. Anything else may have been billed:
-  // connection lost, timeout, abort, or a 2xx whose body couldn't be read or parsed (the SDK raises that as an
-  // APICallError carrying the 2xx status).
+  // DEV_NOTE: True when the call was answered with an error status before anything was billed: a provider's 4xx / 5xx,
+  // or a gateway 4xx (bad token, rate or spend limit: the request never left the gateway). A gateway 5xx or 408 (a
+  // timeout or upstream failure, its body in the gateway's own shape) may come after the provider took and billed the
+  // request, so it isn't a refusal; nor is anything else (connection lost, timeout, abort, or a 2xx whose body couldn't
+  // be read, which the SDK raises as an APICallError carrying the 2xx status). Not refused → Pending for the backfill.
   static isRefusedCall(error: unknown): boolean {
+    if (
+      !APICallError.isInstance(error) ||
+      error.statusCode === undefined ||
+      error.statusCode < 400
+    ) {
+      return false;
+    }
+    const isGatewayTimeout =
+      AiGatewayProvider.isGatewayError(error) &&
+      (error.statusCode >= 500 || error.statusCode === 408);
+    return !isGatewayTimeout;
+  }
+
+  // DEV_NOTE: The gateway's own error (its body's `error` is an array), as opposed to the provider's (an object)
+  static isGatewayError(error: unknown): boolean {
+    if (!APICallError.isInstance(error) || !error.responseBody) return false;
+    const body = Utility.parseJson(error.responseBody);
     return (
-      APICallError.isInstance(error) && error.statusCode !== undefined && error.statusCode >= 400
+      typeof body === "object" && body !== null && "error" in body && Array.isArray(body.error)
     );
+  }
+
+  // DEV_NOTE: A call worth trying again: the AI SDK's own verdict on the answer (408 / 409 / 429 / 5xx)
+  static isRetryable(error: unknown): boolean {
+    return APICallError.isInstance(error) && error.isRetryable;
+  }
+
+  // DEV_NOTE: How long the answer asks us to wait before retrying (retry-after-ms or retry-after in seconds), or null
+  static getRetryAfterMs(error: unknown): number | null {
+    if (!APICallError.isInstance(error)) return null;
+    const headers = error.responseHeaders ?? {};
+    const ms = Number(headers["retry-after-ms"]);
+    if (Number.isFinite(ms) && ms >= 0) return ms;
+    const seconds = Number(headers["retry-after"]);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1_000 : null;
   }
 
   // DEV_NOTE: True only when the provider itself said the company's key is bad, matched on the provider's own error

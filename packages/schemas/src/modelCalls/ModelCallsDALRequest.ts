@@ -8,7 +8,8 @@ export type CreateModelCallDALRequest = Omit<
 >;
 
 // DEV_NOTE: Platform (withPlatform) — the backfill sweep across companies. Pending rows created before createdBefore
-// (the log has had time to appear), oldest first. companyIds limits it to some companies (tests on the shared
+// (the log has had time to appear), least recently tried first (updated_at), so rows whose log isn't there yet take
+// turns with newer ones instead of filling every batch. companyIds limits it to some companies (tests on the shared
 // staging branch); the Cron passes null.
 export type GetPendingModelCallsDALRequest = {
   companyIds: string[] | null;
@@ -26,3 +27,6 @@ export type SettleModelCallUsageDALRequest = Pick<
   outputTokens: number | null;
   costUsd: string | null;
 };
+
+// DEV_NOTE: Marks a Pending row as just tried (updated_at = now), so the next sweep starts with rows tried longer ago
+export type TouchPendingModelCallDALRequest = Pick<ModelCall, "companyId" | "publicId">;

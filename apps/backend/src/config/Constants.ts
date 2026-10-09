@@ -64,6 +64,18 @@ export default class Constants {
   static readonly MODEL_CALL_BACKFILL_CONCURRENCY = 10;
   static readonly AI_GATEWAY_LOG_FETCH_TIMEOUT_MS = 5_000;
 
+  // DEV_NOTE: A model call the provider or gateway answers with a retryable status (408 / 409 / 429 / 5xx, the AI SDK's
+  // isRetryable) is retried by the recording middleware, at most MODEL_CALL_MAX_RETRIES times: after the provider's
+  // retry-after when it gives one (capped), else MODEL_CALL_RETRY_BASE_MS doubled per attempt. The SDK's own retry never
+  // sees these errors (the middleware hands it only the safe ModelUnavailableError), so retries happen here only.
+  static readonly MODEL_CALL_MAX_RETRIES = 2;
+  static readonly MODEL_CALL_RETRY_BASE_MS = 1_000;
+  static readonly MODEL_CALL_RETRY_MAX_DELAY_MS = 10_000;
+
+  // DEV_NOTE: The most activity rows read for one entity (an issue gathers a handful: opened, a provider per failing
+  // key, triage events from M4)
+  static readonly ACTIVITY_LOGS_BY_ENTITY_LIMIT = 100;
+
   // DEV_NOTE: Conversation DO (M2-2). The widget route hands the verified session to the DO in this header, which it
   // always sets itself (any client-sent copy is dropped); the DO has no public route, so only the worker reaches it.
   // A frame over WIDGET_FRAME_MAX_BYTES is dropped unread. A conversation idle for CONVERSATION_IDLE_CLOSE_MS closes

@@ -128,8 +128,8 @@ export default class ModelCallsDAL {
     return response;
   }
 
-  // DEV_NOTE: Platform read (withPlatform) for the backfill sweep: Pending rows across companies, oldest first, served
-  // by the IDX_model_calls_created_at_pending partial index
+  // DEV_NOTE: Platform read (withPlatform) for the backfill sweep: Pending rows across companies, least recently tried
+  // first (updated_at); the IDX_model_calls_created_at_pending partial index keeps the read to Pending rows
   async getPendingModelCalls(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetPendingModelCallsDALRequest,
@@ -146,7 +146,7 @@ export default class ModelCallsDAL {
         .select()
         .from(modelCalls)
         .where(and(...conditions))
-        .orderBy(asc(modelCalls.createdAt), asc(modelCalls.id))
+        .orderBy(asc(modelCalls.updatedAt), asc(modelCalls.id))
         .limit(params.limit);
 
       response.isSuccess = true;
@@ -215,6 +215,44 @@ export default class ModelCallsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.SettleModelCallUsage,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A Pending row the backfill couldn't settle yet: updated_at = now, so the next sweep tries others first.
+  // Only while still Pending.
+  async touchPendingModelCall(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.TouchPendingModelCallDALRequest,
+  ) {
+    const response: Schemas.ModelCallDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.publicId, params.publicId),
+        eq(modelCalls.companyId, params.companyId),
+        eq(modelCalls.usageStatus, Schemas.ModelCallUsageStatusIntEnum.Pending),
+      ];
+      const [modelCallResponse] = await tx
+        .update(modelCalls)
+        .set({ updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Pending model call marked as tried";
+      response.modelCall = modelCallResponse;
+    } catch (error) {
+      const message = "Unknown error in marking a pending model call as tried";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.TouchPendingModelCall,
         message,
         error,
         metadata: params,

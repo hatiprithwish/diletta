@@ -23,8 +23,9 @@ export default class EventOutboxRepo {
   private dal: EventOutboxDAL;
   private queue: Queue<Schemas.EventOutboxMessage>;
 
-  constructor(env: Env) {
-    this.db = getDbClient(env);
+  // DEV_NOTE: db is optional so a Repo that relays its own events can share its client (one pool per request)
+  constructor(env: Env, db: NodePgDatabase = getDbClient(env)) {
+    this.db = db;
     this.dal = new EventOutboxDAL();
     this.queue = env.EVENTS_QUEUE;
   }

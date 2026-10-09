@@ -7,10 +7,10 @@ import TranscriptProvider from "@/providers/transcript";
 const user = (id: string, text: string) => ({ id, role: "user" as const, text });
 const assistant = (id: string, text: string) => ({ id, role: "assistant" as const, text });
 
-function turns(
+function unsynced(
   entries: ReturnType<typeof TranscriptProvider.toEntries>,
   options: {
-    syncedCount?: number;
+    lastSyncedMessageId?: string | null;
     turnIds?: Record<string, string>;
     lastSyncedTurnId?: string | null;
   } = {},
@@ -18,13 +18,24 @@ function turns(
   let minted = 0;
   return TranscriptProvider.unsyncedTurns({
     entries,
-    syncedCount: options.syncedCount ?? 0,
+    lastSyncedMessageId: options.lastSyncedMessageId ?? null,
     turnIds: options.turnIds ?? {},
     lastSyncedTurnId: options.lastSyncedTurnId ?? null,
     mintTurnId: () => `minted-${++minted}`,
     titleMaxChars: 10,
   });
 }
+
+const userRow = (id: string, text: string) => ({
+  sessionMessageId: id,
+  role: Schemas.MessageRoleIntEnum.User,
+  content: { text },
+});
+const assistantRow = (id: string, text: string) => ({
+  sessionMessageId: id,
+  role: Schemas.MessageRoleIntEnum.Assistant,
+  content: { text },
+});
 
 describe("TranscriptProvider.toEntries", () => {
   it("keeps id, role and text, and marks other roles", () => {
@@ -52,7 +63,7 @@ describe("TranscriptProvider.toEntries", () => {
 
 describe("TranscriptProvider.unsyncedTurns", () => {
   it("groups each user message with its replies, under the turn id it was admitted with", () => {
-    const result = turns(
+    const result = unsynced(
       [
         user("u1", "First question"),
         assistant("a1", "One"),
@@ -61,90 +72,80 @@ describe("TranscriptProvider.unsyncedTurns", () => {
       ],
       { turnIds: { u1: "turn-1", u2: "turn-2" } },
     );
-    expect(result).toEqual([
-      {
-        turnId: "turn-1",
-        userMessageId: "u1",
-        title: "First ques",
-        entryCount: 2,
-        messages: [
-          {
-            sessionMessageId: "u1",
-            role: Schemas.MessageRoleIntEnum.User,
-            content: { text: "First question" },
-          },
-          {
-            sessionMessageId: "a1",
-            role: Schemas.MessageRoleIntEnum.Assistant,
-            content: { text: "One" },
-          },
-        ],
-      },
-      {
-        turnId: "turn-2",
-        userMessageId: "u2",
-        title: "Second",
-        entryCount: 2,
-        messages: [
-          {
-            sessionMessageId: "u2",
-            role: Schemas.MessageRoleIntEnum.User,
-            content: { text: "Second" },
-          },
-          {
-            sessionMessageId: "a2",
-            role: Schemas.MessageRoleIntEnum.Assistant,
-            content: { text: "Two" },
-          },
-        ],
-      },
-    ]);
+    expect(result).toEqual({
+      isPositionLost: false,
+      turns: [
+        {
+          turnId: "turn-1",
+          userMessageId: "u1",
+          title: "First ques",
+          lastEntryId: "a1",
+          messages: [userRow("u1", "First question"), assistantRow("a1", "One")],
+        },
+        {
+          turnId: "turn-2",
+          userMessageId: "u2",
+          title: "Second",
+          lastEntryId: "a2",
+          messages: [userRow("u2", "Second"), assistantRow("a2", "Two")],
+        },
+      ],
+    });
   });
 
-  it("starts after the synced position, and mints a turn id that was lost", () => {
-    const result = turns(
+  it("starts after the last synced message, and mints a turn id that was lost", () => {
+    const result = unsynced(
       [user("u1", "Old"), assistant("a1", "Old reply"), user("u2", "Cut by an eviction")],
-      {
-        syncedCount: 2,
-      },
+      { lastSyncedMessageId: "a1" },
     );
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ turnId: "minted-1", userMessageId: "u2", entryCount: 1 });
+    expect(result.turns).toHaveLength(1);
+    expect(result.turns[0]).toMatchObject({
+      turnId: "minted-1",
+      userMessageId: "u2",
+      lastEntryId: "u2",
+    });
+  });
+
+  it("defers when the last synced message isn't in the loaded transcript, instead of skipping or repeating", () => {
+    expect(unsynced([], { lastSyncedMessageId: "a1" })).toEqual({
+      turns: [],
+      isPositionLost: true,
+    });
+    expect(unsynced([user("u9", "A recent window only")], { lastSyncedMessageId: "a1" })).toEqual({
+      turns: [],
+      isPositionLost: true,
+    });
   });
 
   it("puts a reply that landed after its user message was synced under the last synced turn", () => {
-    const result = turns([user("u1", "Q"), assistant("a1", "Late reply")], {
-      syncedCount: 1,
+    const result = unsynced([user("u1", "Q"), assistant("a1", "Late reply")], {
+      lastSyncedMessageId: "u1",
       lastSyncedTurnId: "turn-1",
     });
-    expect(result).toEqual([
+    expect(result.turns).toEqual([
       {
         turnId: "turn-1",
         userMessageId: null,
         title: null,
-        entryCount: 1,
-        messages: [
-          {
-            sessionMessageId: "a1",
-            role: Schemas.MessageRoleIntEnum.Assistant,
-            content: { text: "Late reply" },
-          },
-        ],
+        lastEntryId: "a1",
+        messages: [assistantRow("a1", "Late reply")],
       },
     ]);
   });
 
-  it("counts but doesn't write entries with no text or another role", () => {
-    const result = turns([
+  it("moves past entries with no text or another role without writing them", () => {
+    const result = unsynced([
       user("u1", "Q"),
       assistant("a1", ""),
       { id: "s1", role: "other", text: "sys" },
     ]);
-    expect(result[0]?.entryCount).toBe(3);
-    expect(result[0]?.messages.map((message) => message.sessionMessageId)).toEqual(["u1"]);
+    expect(result.turns[0]?.lastEntryId).toBe("s1");
+    expect(result.turns[0]?.messages.map((message) => message.sessionMessageId)).toEqual(["u1"]);
   });
 
   it("returns nothing when everything is synced", () => {
-    expect(turns([user("u1", "Q"), assistant("a1", "A")], { syncedCount: 2 })).toEqual([]);
+    expect(
+      unsynced([user("u1", "Q"), assistant("a1", "A")], { lastSyncedMessageId: "a1" }),
+    ).toEqual({ turns: [], isPositionLost: false });
   });
 });

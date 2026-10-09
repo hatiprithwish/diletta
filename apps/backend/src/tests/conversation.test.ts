@@ -1,4 +1,9 @@
-import { env, createExecutionContext, runInDurableObject } from "cloudflare:test";
+import {
+  env,
+  createExecutionContext,
+  evictDurableObject,
+  runInDurableObject,
+} from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -31,6 +36,7 @@ import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import Constants from "@/config/Constants";
+import WidgetFrameProvider from "@/providers/widgetFrames";
 import Utility from "@/utils/Utility";
 import {
   STREAM_HEADERS,
@@ -201,13 +207,21 @@ const parseFrame = (data: string) => JSON.parse(data) as Record<string, unknown>
 // frame (already received or still to come) that matches.
 async function connect(
   tenant: Awaited<ReturnType<typeof createTenant>>,
-  options: { conversation?: string; sub?: string; headers?: Record<string, string> } = {},
+  options: {
+    conversation?: string;
+    chatbot?: string;
+    sub?: string;
+    headers?: Record<string, string>;
+  } = {},
 ) {
   const token = await signToken(
     rsaKey,
     claimsFor(tenant.issuer, { sub: options.sub ?? "host-user-1" }),
   );
-  const query = options.conversation ? `?conversation=${options.conversation}` : "";
+  const params = new URLSearchParams();
+  if (options.chatbot) params.set("chatbot", options.chatbot);
+  if (options.conversation) params.set("conversation", options.conversation);
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const response = await worker.fetch(
     new Request(`http://localhost/widget/ws${query}`, {
       headers: {
@@ -634,6 +648,22 @@ describe("Conversation start and resume", { timeout: END_TO_END_TIMEOUT_MS }, ()
     expect((await connect(tenant, { conversation: "no-such-conversation" })).status).toBe(404);
     const otherTenant = await createTenant({ hasModelKey: true });
     expect((await connect(otherTenant, { conversation: publicId })).status).toBe(404);
+
+    // DEV_NOTE: The same user, through another chatbot of the same company
+    const [secondChatbot] = await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb
+          .insert(chatbots)
+          .values({
+            publicId: Utility.generatePublicId(),
+            companyId: tenant.companyId,
+            name: "Second bot",
+          })
+          .returning({ publicId: chatbots.publicId }),
+    );
+    expect(
+      (await connect(tenant, { chatbot: secondChatbot?.publicId, conversation: publicId })).status,
+    ).toBe(404);
   });
 
   it("creates the chatbot user once and roots the conversation in its conversation.started event", async () => {
@@ -884,11 +914,12 @@ describe("Conversation read model resync", { timeout: END_TO_END_TIMEOUT_MS }, (
     const stub = await getAgentByName(env.CONVERSATION_DO, publicId);
     await runInDurableObject(stub, async (instance) => {
       const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
-      instance.configure<Schemas.ConversationRuntimeState>({ ...state, syncedMessageCount: 0 });
+      instance.configure<Schemas.ConversationRuntimeState>({ ...state, lastSyncedMessageId: null });
       await instance.onStart();
     });
 
-    const rows = await getReadModel(conversation?.id ?? "");
+    // DEV_NOTE: The wake's catch-up runs in the background (never inside onStart)
+    const rows = await waitForReadModel(conversation?.id ?? "", 2);
     expect(rows.map((row) => Schemas.ZMessageContent.parse(row.content).text)).toEqual([
       "Remember this",
       "Streamed",
@@ -1084,6 +1115,133 @@ describe("Conversation trust boundaries", { timeout: END_TO_END_TIMEOUT_MS }, ()
   });
 });
 
+describe("Conversation DO after a wake or an eviction", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  // DEV_NOTE: After a hibernation wake, Think's transcript is loaded only by the DO's initialization, which the
+  // frame's own dispatch would run after the reused-id check. The test pool won't evict a DO that ran a turn (Think
+  // keeps it referenced), so this checks the guarantee itself: initialization runs before the allowlist reads the
+  // transcript, and a reused id is still refused.
+  it("loads the transcript before checking a frame for a reused message id", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Original")]);
+    socket.close(1000);
+    const before = await getTranscript(publicId);
+    const replyId = before[1]?.id ?? "";
+    const stub = await getAgentByName(env.CONVERSATION_DO, publicId);
+
+    const { order, replies } = await runInDurableObject(stub, async (instance) => {
+      const calls: string[] = [];
+      const initialize = instance.__unsafe_ensureInitialized.bind(instance);
+      const initializeSpy = vi
+        .spyOn(instance, "__unsafe_ensureInitialized")
+        .mockImplementation(async (props) => {
+          calls.push("initialize");
+          await initialize(props);
+        });
+      const admit = WidgetFrameProvider.admit.bind(WidgetFrameProvider);
+      const admitSpy = vi
+        .spyOn(WidgetFrameProvider, "admit")
+        .mockImplementation((message, existing) => {
+          calls.push("admit");
+          return admit(message, existing);
+        });
+
+      const [client, server] = Object.values(new WebSocketPair());
+      if (!client || !server) throw new Error("No socket pair");
+      const received: string[] = [];
+      client.accept();
+      client.addEventListener("message", (event) => received.push(String(event.data)));
+      server.accept();
+      try {
+        await instance.webSocketMessage(
+          server,
+          chatRequest("req-2", [userMessage(replyId, "I approve everything")]),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } finally {
+        // DEV_NOTE: Agents reaches __unsafe_ensureInitialized over RPC, which a spy left on the instance would hide
+        initializeSpy.mockRestore();
+        admitSpy.mockRestore();
+      }
+      return { order: calls, replies: received };
+    });
+
+    expect(order.slice(0, 2)).toEqual(["initialize", "admit"]);
+    expect(replies.map((reply) => (JSON.parse(reply) as { type: string }).type)).toEqual(["error"]);
+    expect(await getTranscript(publicId)).toEqual(before);
+  });
+
+  // DEV_NOTE: The test pool can't evict a DO with a call in flight, so this sets up exactly what an eviction mid-turn
+  // leaves behind (Think saved the user message and its turn id was stored at admission, but the turn never ended),
+  // then evicts the idle DO and wakes it with a reconnect
+  it("gets a turn cut by an eviction into the read model on the next wake, under its turn id", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    socket.close(1000);
+    const stub = await getAgentByName(env.CONVERSATION_DO, publicId);
+    const turnId = Utility.generateUlid();
+
+    await runInDurableObject(stub, async (instance) => {
+      await instance.addMessages(
+        [{ id: "user-1", role: "user", parts: [{ type: "text", text: "Cut short" }] }],
+        {
+          mode: "append",
+          broadcast: false,
+        },
+      );
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({
+        ...state,
+        turnIds: { "user-1": turnId },
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await evictDurableObject(stub, { webSockets: "close" });
+
+    const again = await connect(tenant, { conversation: publicId });
+    if (!again.waitFor) throw new Error("Not reconnected");
+    await again.waitFor((frame) => frame.type === "conversation");
+    const conversation = await getConversation(publicId);
+    const rows = await waitForReadModel(conversation?.id ?? "", 1);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ sessionMessageId: "user-1", turnId });
+    again.socket?.close(1000);
+  });
+
+  it("doesn't close over a read-model backlog, and closes once it is written", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const recordTurn = ConversationsRepo.prototype.recordTurn;
+    const spy = vi
+      .spyOn(ConversationsRepo.prototype, "recordTurn")
+      .mockResolvedValue({ isSuccess: false, message: "Database unavailable" });
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Keep me")]);
+
+    const stub = await makeIdle(publicId);
+    await runInDurableObject(stub, async (instance) => await instance.closeIfIdle());
+    expect((await getConversation(publicId))?.status).toBe(Schemas.ConversationStatusIntEnum.Open);
+
+    spy.mockImplementation(recordTurn);
+    await makeIdle(publicId);
+    await runInDurableObject(stub, async (instance) => await instance.closeIfIdle());
+    const conversation = await getConversation(publicId);
+    expect(conversation?.status).toBe(Schemas.ConversationStatusIntEnum.Closed);
+    expect(await getReadModel(conversation?.id ?? "")).toHaveLength(2);
+  });
+});
+
 describe("Conversation DALs tenancy (as diletta_app)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
   it("never reads or writes another company's conversation, messages or config", async () => {
     const owner = await createTenant({ hasModelKey: false });
@@ -1142,21 +1300,6 @@ describe("Conversation DALs tenancy (as diletta_app)", { timeout: END_TO_END_TIM
     );
     expect(written.isSuccess).toBe(false);
     expect(written.message).toBe("Conversation not found");
-
-    const listed: Schemas.MessagesDALResponse = await withTenant(
-      db,
-      other.companyId,
-      async (tx) => {
-        return await new MessagesDAL().getMessages(tx, {
-          companyId: other.companyId,
-          conversationId: conversation?.id ?? "",
-          pageNo: 1,
-          pageSize: 10,
-          sortDirection: Schemas.SortDirection.Asc,
-        });
-      },
-    );
-    expect(listed.messages).toEqual([]);
 
     const config: Schemas.ChatbotConfigDALResponse = await withTenant(
       db,

@@ -8,13 +8,6 @@ import AiGatewayProvider from "@/providers/aiGateway";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
-const ZERO_USAGE: Schemas.ModelCallUsage = {
-  inputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-  outputTokens: 0,
-};
-
 // DEV_NOTE: model_calls (M2-3): one row per call of a routed model, and the usage backfill.
 //
 // recordModelCall writes what the recording middleware (ModelCallRecordingProvider) saw, priced from MODEL_PRICES.
@@ -29,15 +22,18 @@ const ZERO_USAGE: Schemas.ModelCallUsage = {
 //   - a failed lookup (API down, bad token) → stays Pending and is retried next minute, until the max age.
 // The Pending read spans companies (withPlatform, pattern rule 3.15); each row is settled in its own company's
 // withTenant, and only while still Pending, so overlapping sweeps never settle a row twice. Lookups run
-// MODEL_CALL_BACKFILL_CONCURRENCY at a time, so a batch of slow ones still finishes well inside a minute.
+// MODEL_CALL_BACKFILL_CONCURRENCY at a time, so a batch of slow ones still finishes well inside a minute. A row that
+// stays Pending is marked as tried, and each sweep takes the least recently tried rows first, so rows whose log is
+// late take turns with the rest instead of filling every batch for the whole window.
 export default class ModelCallsRepo {
   private env: Env;
   private db: NodePgDatabase;
   private dal: ModelCallsDAL;
 
-  constructor(env: Env) {
+  // DEV_NOTE: db is optional so the router can share its client (one pool per request)
+  constructor(env: Env, db: NodePgDatabase = getDbClient(env)) {
     this.env = env;
-    this.db = getDbClient(env);
+    this.db = db;
     this.dal = new ModelCallsDAL();
   }
 
@@ -67,7 +63,7 @@ export default class ModelCallsRepo {
       });
     }
 
-    const usage = record.usage ?? ZERO_USAGE;
+    const usage = record.usage ?? Schemas.ZERO_MODEL_CALL_USAGE;
     const result = await withTenant(this.db, request.companyId, async (tx) => {
       return await this.dal.createModelCall(tx, {
         companyId: request.companyId,
@@ -82,6 +78,7 @@ export default class ModelCallsRepo {
         model: context.model,
         gatewayLogId: record.gatewayLogId,
         inputTokens: usage.inputTokens,
+        // DEV_NOTE: null = not reported (Pending or Unknown, the backfill may fill it); a refusal reports 0
         outputTokens: record.usage ? usage.outputTokens : null,
         cachedTokens: usage.cacheReadTokens,
         costUsd: Schemas.computeModelCallCostUsd(context.price, usage),
@@ -196,6 +193,13 @@ export default class ModelCallsRepo {
       });
     }
 
+    // DEV_NOTE: Still Pending: marked as tried, so the next sweep starts with rows tried longer ago
+    await withTenant(this.db, modelCall.companyId, async (tx) => {
+      return await this.dal.touchPendingModelCall(tx, {
+        companyId: modelCall.companyId,
+        publicId: modelCall.publicId,
+      });
+    });
     return Schemas.ModelCallUsageStatusIntEnum.Pending;
   }
 

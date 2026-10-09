@@ -96,8 +96,8 @@ export default class ActivityLogDAL {
     return response;
   }
 
-  // DEV_NOTE: Every log row of one entity, oldest first (IDX_activity_log_entity_id). Not paged: an entity gathers a
-  // handful of events (an issue: opened, a provider added per failing key).
+  // DEV_NOTE: The log rows of one entity, oldest first (IDX_activity_log_entity_id), at most params.limit: an entity
+  // gathers a handful of events (an issue: opened, a provider added per failing key, triage)
   async getActivityLogsByEntity(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetActivityLogsByEntityDALRequest,
@@ -114,7 +114,8 @@ export default class ActivityLogDAL {
         .select()
         .from(activityLog)
         .where(and(...conditions))
-        .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+        .orderBy(asc(activityLog.createdAt), asc(activityLog.id))
+        .limit(params.limit);
 
       response.isSuccess = true;
       response.message = "Activity logs fetched successfully";

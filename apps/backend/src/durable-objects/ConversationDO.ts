@@ -55,15 +55,9 @@ export class ConversationDO extends Think<Env> {
   chatRecovery = { maxAttempts: 0, terminalMessage: TURN_FAILED_MESSAGE };
 
   // DEV_NOTE: The turn being prepared or run: at most one. In memory only (a turn keeps the DO awake).
-  private activeTurn: {
-    requestId: string;
-    turnId: string;
-    userMessageId: string;
-    model: LanguageModel | null;
-    spec: Schemas.ConfigSpec | null;
-  } | null = null;
+  private activeTurn: Schemas.ActiveTurn<LanguageModel> | null = null;
   private isClosing = false;
-  private isSyncing = false;
+  private syncInFlight: Promise<boolean> | null = null;
   private isSyncRequested = false;
 
   getModel(): LanguageModel {
@@ -96,15 +90,16 @@ export class ConversationDO extends Think<Env> {
     };
   }
 
-  // DEV_NOTE: Every wake (after hibernation or an eviction): catch the read model up, and make sure an auto-close is
-  // pending
+  // DEV_NOTE: Every wake (after hibernation or an eviction): make sure an auto-close is pending, and catch the read
+  // model up in the background. onStart runs while the DO holds every other event back (blockConcurrencyWhile), so the
+  // catch-up (a database write per turn) must not run inside it.
   async onStart(): Promise<void> {
     const state = this.getRuntimeState();
-    if (!state || state.isClosed) return;
-    await this.syncReadModel();
-    if (!state.closeScheduleId) {
+    if (!state) return;
+    if (!state.isClosed && !state.closeScheduleId) {
       await this.armAutoClose();
     }
+    this.ctx.waitUntil(this.syncReadModel());
   }
 
   async onConnect(connection: Connection, ctx: ConnectionContext): Promise<void> {
@@ -136,7 +131,7 @@ export class ConversationDO extends Think<Env> {
         hasAnswer: false,
         closeScheduleId: null,
         isClosed: false,
-        syncedMessageCount: 0,
+        lastSyncedMessageId: null,
         turnIds: {},
         lastSyncedTurnId: null,
       });
@@ -157,8 +152,10 @@ export class ConversationDO extends Think<Env> {
   }
 
   // DEV_NOTE: Every inbound frame passes here before Agents and Think see it (Agents installs its own handler only when
-  // the class has none)
+  // the class has none). The DO is initialized first: after a hibernation wake Think's transcript isn't loaded until
+  // then, and the reused-id check below must see every stored message.
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    await this.__unsafe_ensureInitialized();
     const admission = WidgetFrameProvider.admit(
       message,
       new Set(this.messages.map((stored) => stored.id)),
@@ -178,8 +175,16 @@ export class ConversationDO extends Think<Env> {
       await this.lifecycle.webSocketMessage(ws, admission.frame);
       return;
     }
-    if (await this.startTurn(ws, admission.requestId, admission.message.id)) {
+    if (!(await this.startTurn(ws, admission.requestId, admission.message.id))) {
+      return;
+    }
+    try {
       await this.lifecycle.webSocketMessage(ws, admission.frame);
+    } finally {
+      // DEV_NOTE: Think's chat handler resolves once the turn is over. A turn it ended without calling onChatResponse or
+      // onChatError (a skipped request, a failed save) is ended here, so it can't block the conversation; one that did
+      // end is already released and this is a no-op.
+      await this.finishTurn(admission.requestId, "error", null);
     }
   }
 
@@ -224,7 +229,12 @@ export class ConversationDO extends Think<Env> {
 
     this.isClosing = true;
     try {
-      await this.syncReadModel();
+      // DEV_NOTE: Never close over a read-model backlog: nothing syncs a closed conversation, so it would be lost
+      if (!(await this.syncReadModel())) {
+        this.patchRuntimeState({ closeScheduleId: null });
+        await this.armAutoClose();
+        return;
+      }
       const current = this.getRuntimeState() ?? state;
       const closed = await this.conversationsRepo().closeConversation({
         session: current.session,
@@ -314,10 +324,7 @@ export class ConversationDO extends Think<Env> {
   private async prepareTurn(
     session: Schemas.ConversationSession,
     turnId: string,
-  ): Promise<
-    | { isSuccess: true; spec: Schemas.ConfigSpec; model: LanguageModel }
-    | { isSuccess: false; isClosed: boolean }
-  > {
+  ): Promise<Schemas.PreparedTurn<LanguageModel>> {
     const config = await this.conversationsRepo().loadTurnConfig({ session });
     if (!config.isSuccess || !config.spec) {
       const isClosed = config.failure === Schemas.TurnConfigFailureEnum.ConversationClosed;
@@ -363,65 +370,98 @@ export class ConversationDO extends Think<Env> {
     await this.armAutoClose();
   }
 
-  // DEV_NOTE: Writes the transcript past the synced position to the read model, turn by turn, advancing the position
-  // only after a turn's write commits; a failure stops here and the next turn or wake retries. A running turn is left
-  // out until it ends. One sync at a time; a call made meanwhile runs once more after it.
-  private async syncReadModel(): Promise<void> {
-    if (this.isSyncing) {
+  // DEV_NOTE: Writes the transcript past the synced position (a message id) to the read model, turn by turn, moving
+  // the position only after a turn's write commits. A running turn is left out until it ends. One sync at a time: a
+  // call made while one runs asks it to go round once more and waits for it, so every caller gets the outcome of a
+  // sync that started after its call. Resolves true when everything is synced, false when a write failed or the
+  // position isn't in the loaded transcript (logged; the next turn, wake or close retries).
+  private async syncReadModel(): Promise<boolean> {
+    if (this.syncInFlight) {
       this.isSyncRequested = true;
-      return;
+      return await this.syncInFlight;
     }
-    this.isSyncing = true;
-    try {
-      do {
-        this.isSyncRequested = false;
-        const state = this.getRuntimeState();
-        if (!state) return;
+    const repo = this.conversationsRepo();
+    this.syncInFlight = (async () => {
+      try {
+        let isSynced = true;
+        do {
+          this.isSyncRequested = false;
+          isSynced = await this.syncOnce(repo);
+        } while (this.isSyncRequested && isSynced);
+        return isSynced;
+      } finally {
+        this.syncInFlight = null;
+      }
+    })();
+    return await this.syncInFlight;
+  }
 
-        const entries = TranscriptProvider.toEntries(this.messages);
-        const activeUserMessageId = this.activeTurn?.userMessageId;
-        const activeIndex = activeUserMessageId
-          ? entries.findIndex((entry) => entry.id === activeUserMessageId)
-          : -1;
-        const turns = TranscriptProvider.unsyncedTurns({
-          entries: activeIndex >= 0 ? entries.slice(0, activeIndex) : entries,
-          syncedCount: state.syncedMessageCount,
-          turnIds: state.turnIds,
-          lastSyncedTurnId: state.lastSyncedTurnId,
-          mintTurnId: () => Utility.generateUlid(),
-          titleMaxChars: Constants.CONVERSATION_TITLE_MAX_CHARS,
+  private async syncOnce(repo: ConversationsRepo): Promise<boolean> {
+    const state = this.getRuntimeState();
+    if (!state) return true;
+
+    const entries = TranscriptProvider.toEntries(this.messages);
+    const activeUserMessageId = this.activeTurn?.userMessageId;
+    const activeIndex = activeUserMessageId
+      ? entries.findIndex((entry) => entry.id === activeUserMessageId)
+      : -1;
+    const unsynced = TranscriptProvider.unsyncedTurns({
+      entries: activeIndex >= 0 ? entries.slice(0, activeIndex) : entries,
+      lastSyncedMessageId: state.lastSyncedMessageId,
+      turnIds: state.turnIds,
+      lastSyncedTurnId: state.lastSyncedTurnId,
+      mintTurnId: () => Utility.generateUlid(),
+      titleMaxChars: Constants.CONVERSATION_TITLE_MAX_CHARS,
+    });
+    if (unsynced.isPositionLost) {
+      AppLogger.warn({
+        category: Schemas.LogCategory.Conversation,
+        action: Schemas.LogAction.SyncReadModel,
+        message: "Last synced message isn't in the loaded transcript; sync deferred",
+        metadata: { conversationPublicId: this.name, messageCount: entries.length },
+      });
+      return false;
+    }
+
+    for (const turn of unsynced.turns) {
+      const recorded = await repo.recordTurn({
+        session: state.session,
+        turnId: turn.turnId,
+        messages: turn.messages,
+        title: turn.title,
+      });
+      if (!recorded.isSuccess) {
+        AppLogger.error({
+          category: Schemas.LogCategory.Conversation,
+          action: Schemas.LogAction.SyncReadModel,
+          message: recorded.message ?? "Turn not recorded in the read model; retrying later",
+          metadata: { conversationPublicId: this.name, turnId: turn.turnId },
         });
-
-        for (const turn of turns) {
-          const recorded = await this.conversationsRepo().recordTurn({
-            session: state.session,
-            turnId: turn.turnId,
-            messages: turn.messages,
-            title: turn.title,
-          });
-          if (!recorded.isSuccess) {
-            AppLogger.error({
-              category: Schemas.LogCategory.Conversation,
-              action: Schemas.LogAction.SyncReadModel,
-              message: recorded.message ?? "Turn not recorded in the read model; retrying later",
-              metadata: { conversationPublicId: this.name, turnId: turn.turnId },
-            });
-            return;
-          }
-          const current = this.getRuntimeState();
-          if (!current) return;
-          const turnIds = { ...current.turnIds };
-          if (turn.userMessageId !== null) delete turnIds[turn.userMessageId];
-          this.patchRuntimeState({
-            syncedMessageCount: current.syncedMessageCount + turn.entryCount,
-            turnIds,
-            lastSyncedTurnId: turn.turnId,
-          });
-        }
-      } while (this.isSyncRequested);
-    } finally {
-      this.isSyncing = false;
+        return false;
+      }
+      const turnIds = { ...(this.getRuntimeState()?.turnIds ?? {}) };
+      if (turn.userMessageId !== null) delete turnIds[turn.userMessageId];
+      this.patchRuntimeState({
+        lastSyncedMessageId: turn.lastEntryId,
+        lastSyncedTurnId: turn.turnId,
+        turnIds,
+      });
     }
+
+    // DEV_NOTE: A turn id whose user message Think never saved (a request it skipped) is dropped, so they can't pile
+    // up. Judged on the live state, not this sync's snapshot: a turn admitted while the sync was writing keeps its id.
+    const current = this.getRuntimeState();
+    if (current) {
+      const stored = new Set(this.messages.map((message) => message.id));
+      const liveUserMessageId = this.activeTurn?.userMessageId;
+      const turnIds = Object.fromEntries(
+        Object.entries(current.turnIds).filter(
+          ([userMessageId]) => userMessageId === liveUserMessageId || stored.has(userMessageId),
+        ),
+      );
+      this.patchRuntimeState({ turnIds });
+    }
+    return true;
   }
 
   // DEV_NOTE: One pending auto-close at a time: the previous schedule is cancelled before the new one is set. It runs
@@ -430,14 +470,22 @@ export class ConversationDO extends Think<Env> {
   private async armAutoClose(): Promise<void> {
     const state = this.getRuntimeState();
     if (!state || state.isClosed) return;
-    if (state.closeScheduleId) {
-      await this.cancelSchedule(state.closeScheduleId);
+    const previousId = state.closeScheduleId;
+    if (previousId) {
+      await this.cancelSchedule(previousId);
     }
     const runAt = Math.max(
       state.lastActivityAt + Constants.CONVERSATION_IDLE_CLOSE_MS,
       Date.now() + Constants.CONVERSATION_CLOSE_RETRY_MS,
     );
     const scheduled = await this.schedule(new Date(runAt), "closeIfIdle");
+
+    // DEV_NOTE: Another arm ran while this one awaited: keep theirs, drop ours, so one close stays pending
+    const current = this.getRuntimeState();
+    if (current && current.closeScheduleId !== previousId && current.closeScheduleId !== null) {
+      await this.cancelSchedule(scheduled.id);
+      return;
+    }
     this.patchRuntimeState({ closeScheduleId: scheduled.id });
   }
 

@@ -36,8 +36,9 @@ export default class ModelRouterRepo {
     this.db = getDbClient(env);
     this.ctx = ctx;
     this.companySecretsDal = new CompanySecretsDAL();
-    this.modelCallsRepo = new ModelCallsRepo(env);
-    this.eventOutboxRepo = new EventOutboxRepo(env);
+    // DEV_NOTE: One pool for the whole call: the Repos it writes through share this client
+    this.modelCallsRepo = new ModelCallsRepo(env, this.db);
+    this.eventOutboxRepo = new EventOutboxRepo(env, this.db);
   }
 
   async getModel(

@@ -1,4 +1,5 @@
 import type { LanguageModelMiddleware } from "ai";
+import Constants from "@/config/Constants";
 import AiGatewayProvider from "@/providers/aiGateway";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
@@ -17,13 +18,16 @@ export class ModelUnavailableError extends Error {
   }
 }
 
-// DEV_NOTE: Wraps every call of a routed model (generate and stream) to (1) record it: one ModelCallRecord per call,
-// handed to onRecord, and (2) make every failure a ModelUnavailableError. Pure: no database. All the usage-status rules
-// live here:
+// DEV_NOTE: Wraps every call of a routed model (generate and stream) to (1) retry what's worth retrying, (2) record
+// every attempt: one ModelCallRecord per provider call, handed to onRecord, and (3) make every final failure a
+// ModelUnavailableError. Pure: no database. All the usage-status rules live here:
 //   - the provider's usage arrived → Reported;
-//   - the provider or gateway refused the call (status ≥ 400) → Reported at 0 (nothing billed);
-//   - anything else (stream cut or cancelled, connection lost, unreadable 2xx, a finish without usage) → Pending when
-//     there is a gateway log id to backfill from, else Unknown.
+//   - the call was refused before anything was billed (AiGatewayProvider.isRefusedCall) → Reported at 0;
+//   - anything else (stream cut or cancelled, connection lost, unreadable 2xx, a finish without usage, a gateway
+//     timeout) → Pending when there is a gateway log id to backfill from, else Unknown.
+// Retries: an answer the SDK marks retryable (408 / 409 / 429 / 5xx) is tried again up to MODEL_CALL_MAX_RETRIES times
+// before the call starts streaming, honouring retry-after (capped) and the caller's abort. They happen here because the
+// SDK only retries its own retryable errors, and the middleware must hand it the safe error instead.
 // A rejected company key runs onRejectedKey before the error leaves, so the next turn already finds no active key.
 export default class ModelCallRecordingProvider {
   static createMiddleware(params: {
@@ -38,8 +42,9 @@ export default class ModelCallRecordingProvider {
       startedAt: number;
       errorCode: string | null;
     }) => {
+      const isRefusedWithoutUsage = outcome.isRefused && outcome.usage === null;
       params.onRecord({
-        usage: outcome.usage,
+        usage: isRefusedWithoutUsage ? Schemas.ZERO_MODEL_CALL_USAGE : outcome.usage,
         usageStatus: ModelCallRecordingProvider.usageStatus(outcome),
         gatewayLogId: outcome.gatewayLogId,
         latencyMs: Date.now() - outcome.startedAt,
@@ -47,9 +52,7 @@ export default class ModelCallRecordingProvider {
       });
     };
 
-    // DEV_NOTE: A call that failed before any usage: record it, run the key-failure path when the key was rejected,
-    // and return the error to throw
-    const onCallError = async (error: unknown, startedAt: number): Promise<unknown> => {
+    const recordFailedAttempt = (error: unknown, startedAt: number) => {
       record({
         usage: null,
         isRefused: AiGatewayProvider.isRefusedCall(error),
@@ -57,6 +60,10 @@ export default class ModelCallRecordingProvider {
         startedAt,
         errorCode: AiGatewayProvider.getErrorCode(error),
       });
+    };
+
+    // DEV_NOTE: The error to throw once retries are over: the key-failure step runs first for a rejected key
+    const finalError = async (error: unknown): Promise<unknown> => {
       if (!AiGatewayProvider.isRejectedKeyError(params.provider, error)) {
         return ModelCallRecordingProvider.toUnavailable(error);
       }
@@ -64,35 +71,50 @@ export default class ModelCallRecordingProvider {
       return new ModelUnavailableError(Schemas.ModelRouterFailureEnum.KeyUnavailable, error);
     };
 
+    // DEV_NOTE: Runs one provider call with retries; resolves with its result and when that attempt started
+    const withRetries = async <TResult>(
+      attempt: () => PromiseLike<TResult>,
+      signal: AbortSignal | undefined,
+    ): Promise<{ result: TResult; startedAt: number }> => {
+      for (let retry = 0; ; retry++) {
+        const startedAt = Date.now();
+        try {
+          return { result: await attempt(), startedAt };
+        } catch (error) {
+          recordFailedAttempt(error, startedAt);
+          const canRetry =
+            retry < Constants.MODEL_CALL_MAX_RETRIES &&
+            AiGatewayProvider.isRetryable(error) &&
+            !signal?.aborted;
+          if (!canRetry) {
+            throw await finalError(error);
+          }
+          await ModelCallRecordingProvider.waitBeforeRetry(retry, error, signal);
+        }
+      }
+    };
+
     return {
-      wrapGenerate: async ({ doGenerate }) => {
-        const startedAt = Date.now();
-        try {
-          const result = await doGenerate();
-          const usage = AiGatewayProvider.toModelCallUsage(result.usage);
-          record({
-            usage,
-            isRefused: false,
-            gatewayLogId: AiGatewayProvider.getGatewayLogId(result.response?.headers),
-            startedAt,
-            errorCode: null,
-          });
-          return result;
-        } catch (error) {
-          throw await onCallError(error, startedAt);
-        }
+      wrapGenerate: async ({ doGenerate, params: callOptions }) => {
+        const { result, startedAt } = await withRetries(doGenerate, callOptions.abortSignal);
+        record({
+          usage: AiGatewayProvider.toModelCallUsage(result.usage),
+          isRefused: false,
+          gatewayLogId: AiGatewayProvider.getGatewayLogId(result.response?.headers),
+          startedAt,
+          errorCode: null,
+        });
+        return result;
       },
-      wrapStream: async ({ doStream }) => {
-        const startedAt = Date.now();
-        let streamResult: Awaited<ReturnType<typeof doStream>>;
-        try {
-          streamResult = await doStream();
-        } catch (error) {
-          throw await onCallError(error, startedAt);
-        }
+      wrapStream: async ({ doStream, params: callOptions }) => {
+        const { result: streamResult, startedAt } = await withRetries(
+          doStream,
+          callOptions.abortSignal,
+        );
 
         // DEV_NOTE: Usage arrives in the stream's finish part. The record is made once, when the stream ends, fails or
-        // is cancelled. An error part is replaced with a ModelUnavailableError before Think reads it.
+        // is cancelled. An error part is replaced with a ModelUnavailableError before Think reads it (no retry once
+        // the reply has started streaming).
         let usage: Schemas.ModelCallUsage | null = null;
         let errorCode: string | null = null;
         const gatewayLogId = AiGatewayProvider.getGatewayLogId(streamResult.response?.headers);
@@ -130,6 +152,30 @@ export default class ModelCallRecordingProvider {
       return error;
     }
     return new ModelUnavailableError(Schemas.ModelRouterFailureEnum.ProviderError, error);
+  }
+
+  // DEV_NOTE: The provider's retry-after when given (capped), else exponential; ends early (throwing the abort) when the
+  // caller aborts meanwhile
+  private static async waitBeforeRetry(
+    retry: number,
+    error: unknown,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const delayMs = Math.min(
+      AiGatewayProvider.getRetryAfterMs(error) ?? Constants.MODEL_CALL_RETRY_BASE_MS * 2 ** retry,
+      Constants.MODEL_CALL_RETRY_MAX_DELAY_MS,
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   private static usageStatus(outcome: {
