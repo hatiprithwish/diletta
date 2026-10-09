@@ -585,6 +585,10 @@ export const messages = table(
   },
   (table) => [
     t.uniqueIndex("UNQ_messages_public_id").on(table.publicId),
+    // DEV_NOTE: One read-model row per Think message, so a retried turn write skips what it already stored
+    t
+      .uniqueIndex("UNQ_messages_conversation_id_session_message_id")
+      .on(table.conversationId, table.sessionMessageId),
     t.index("IDX_messages_company_id").on(table.companyId),
     t.index("IDX_messages_conversation_id").on(table.conversationId),
   ],

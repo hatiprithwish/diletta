@@ -2,7 +2,7 @@
 
 Index: [agents/llms.txt](https://developers.cloudflare.com/agents/llms.txt) (covers Think)
 
-Not installed yet. Latest on npm (2026-10-04): `@cloudflare/think` 0.20.0, `agents` 0.26.0; Think peers `agents >=0.25.0 <1.0.0`, `ai ^7`, `zod ^4`. M2-2 adds and pins them (ask before installing).
+Installed in `apps/backend` (M2-2), pinned: `@cloudflare/think` 0.19.0, `agents` 0.24.0 (Think peers `agents >=0.24.0 <1.0.0`, `ai ^6 || ^7`, `zod ^4`). Newer releases exist; upgrades wait out the 7-day release age and re-check the internals listed below.
 
 ## Think
 
@@ -27,7 +27,15 @@ Not installed yet. Latest on npm (2026-10-04): `@cloudflare/think` 0.20.0, `agen
 
 ## How Diletta uses it
 
-- The Conversation DO extends Think (M2-2). `getModel()` returns `ModelRouterRepo.getModel(...)`'s `model` (an AI SDK v7 `LanguageModel`, already wrapped to write `model_calls`); it never builds a provider client itself. A `failure`, or a `ModelUnavailableError` thrown from the call, shows the widget "Temporarily unavailable". `ai@7` is pinned to satisfy Think's `ai ^7` peer.
-- Agent state (`setState`, `this.sql`, message history) is persisted to SQLite and survives hibernation. Never put the host bearer token there; keep it in a plain class field (see `durable-objects.md`).
-- `turn_id` (ULID) is minted per turn in the DO and written to messages, tool calls and model calls.
+- Pinned: `@cloudflare/think` 0.19.0 + `agents` 0.24.0 (newest past the repo's 7-day release age). The docs above track the latest release; check `node_modules` when they disagree.
+- `ConversationDO` (M2-2, `apps/backend/src/durable-objects/`) extends Think, one per conversation, named by `conversations.public_id`. It is reached only through `GET /widget/ws`, after the worker has authenticated the JWT and started or resumed the conversation (ADR 0001). Never `routeAgentRequest`.
+- Think internals that shaped the design (0.19):
+  - On connect it sends the transcript before any subclass hook runs.
+  - It handles `cf_agent_*` chat frames before `onMessage`, and its chat broadcasts go to all sockets.
+  - It upserts client-sent messages by id, and a client `clear` frame wipes history.
+  - Hence: auth before the upgrade, and a `webSocketMessage` override that allowlists and rebuilds frames before handing them to `this.lifecycle.webSocketMessage`. Agents installs its own handler only when the class has none.
+- `getModel()` runs before `beforeTurn` and is synchronous, so the turn's config and routed model (`ModelRouterRepo.getModel`) are prepared while admitting the chat frame. `getModel` and `beforeTurn` return them; one turn runs at a time.
+- Defaults turned off: workspace tools incl. bash (`workspaceBash`), MCP tools, reasoning chunks, the identity frame, durable recovery (`chatRecovery: { maxAttempts: 0 }`, since a turn's routed model lives in memory). `onChatError`'s return value is broadcast as the error text, so it stays generic.
+- `onChatResponse` carries only the assistant message; the user message is read from `this.messages`. Both go to the `messages` read model with the turn's ULID. The Think session stays the source of truth.
+- `configure()` / `getConfig()` (private DO SQLite) hold the runtime state (`ZConversationRuntimeState`: session, last activity, outcome flag, auto-close schedule). Never the host bearer token: keep it in a plain class field (see `durable-objects.md`).
 - Approval-paused turns park instead of failing across eviction; the action engine's durable pause (M3-4) builds on that.

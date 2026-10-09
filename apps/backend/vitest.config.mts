@@ -28,10 +28,13 @@ export default defineConfig({
       // leak test runs through Neon's -pooler endpoint because local mode skips Hyperdrive's pool.
       // DATABASE_URL: the owner role (BYPASSRLS), for fixtures, cleanup and schema checks only; the code
       // under test runs as diletta_app through the HYPERDRIVE binding.
+      // AI_GATEWAY_TOKEN: a fixed fake that replaces the real staging token from .dev.vars, so no test (or a Durable
+      // Object a test drives) can reach AI Gateway on the platform's credentials; tests mock the gateway's fetch.
       miniflare: {
         bindings: {
           NEON_POOLER_URL: process.env.NEON_POOLER_URL ?? "",
           DATABASE_URL: process.env.DATABASE_URL ?? "",
+          AI_GATEWAY_TOKEN: "test-gateway-token",
         },
       },
     }),

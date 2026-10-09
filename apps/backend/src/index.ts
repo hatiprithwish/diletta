@@ -15,6 +15,9 @@ import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
 import consumeEvents from "@/queues/EventsConsumer";
 
+// DEV_NOTE: Durable Object classes are exported from the worker's main module (wrangler.jsonc durable_objects)
+export { ConversationDO } from "@/durable-objects/ConversationDO";
+
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests
 await configureLogger();
 

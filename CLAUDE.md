@@ -19,20 +19,21 @@
 
 ### Golden files
 
-| Layer                | File                                                |
-| -------------------- | --------------------------------------------------- |
-| Tenant transaction   | `apps/backend/src/db/withTenant.ts`                 |
-| Platform transaction | `apps/backend/src/db/withPlatform.ts`               |
-| RLS migration        | `apps/backend/src/db/migrations/*_rls_policies/`    |
-| DAL                  | `apps/backend/src/data-access-layer/ChatbotsDAL.ts` |
-| Repository           | `apps/backend/src/repositories/ChatbotsRepo.ts`     |
-| Provider → DAL       | `apps/backend/src/providers/companyKey.ts`          |
-| Schemas              | `packages/schemas/src/chatbots/`                    |
-| Tenant tests         | `apps/backend/src/tests/chatbots.test.ts`           |
-| RLS tests            | `apps/backend/src/tests/rls.test.ts`                |
-| Routes               | `apps/backend/src/routes/ChatbotsRoutes.ts`         |
-| Frontend data layer  | none yet: first dashboard page sets it (M4)         |
-| Frontend page        | none yet: first dashboard page sets it (M4)         |
+| Layer                | File                                                 |
+| -------------------- | ---------------------------------------------------- |
+| Tenant transaction   | `apps/backend/src/db/withTenant.ts`                  |
+| Platform transaction | `apps/backend/src/db/withPlatform.ts`                |
+| RLS migration        | `apps/backend/src/db/migrations/*_rls_policies/`     |
+| DAL                  | `apps/backend/src/data-access-layer/ChatbotsDAL.ts`  |
+| Repository           | `apps/backend/src/repositories/ChatbotsRepo.ts`      |
+| Provider → DAL       | `apps/backend/src/providers/companyKey.ts`           |
+| Schemas              | `packages/schemas/src/chatbots/`                     |
+| Tenant tests         | `apps/backend/src/tests/chatbots.test.ts`            |
+| RLS tests            | `apps/backend/src/tests/rls.test.ts`                 |
+| Routes               | `apps/backend/src/routes/ChatbotsRoutes.ts`          |
+| Durable Object       | `apps/backend/src/durable-objects/ConversationDO.ts` |
+| Frontend data layer  | none yet: first dashboard page sets it (M4)          |
+| Frontend page        | none yet: first dashboard page sets it (M4)          |
 
 Chatbots is the tenant golden example (M0-5), and since M1-8 also for routes. Operator routes follow `CompaniesRoutes.ts`. Until a frontend golden exists, follow the Conventions below and flag anything they don't cover.
 
@@ -70,7 +71,8 @@ Before using any third-party API: check the installed version in `package.json`,
 - **Pagination** (any list that grows without bound): request extends `ZPageApiRequest` (`common.ts`) with a `<Feature>SortColumn` enum; Repo fills defaults (`Constants.DEFAULT_PAGE_NO`/`DEFAULT_PAGE_SIZE`, `createdAt` desc); DAL maps the sort column, then `.orderBy(expr, asc(<table>.id)).limit(pageSize).offset((pageNo - 1) * pageSize)`. Totals come from a separate `get<Feature>Count` returning `TotalRecordsResponse`. No cursors. See `ChatbotUsersDAL.ts`.
 - **Routes**: `checkAuth` → `authorizeCompany(action)` (`/dashboard/*`) or `authorizePlatform(action)` (`/operator/*`) → `zValidator` → handler. Authorizing before validating means an unauthorized call gets 403, not 400. `c.get("companyId")` is the tenant key (from the signed-in admin, never the client). 201/200/403/404/500: a DAL not-found path sets `isNotFound: true` (with `isSuccess: false`), and the route answers `isSuccess ? 200 : isNotFound ? 404 : 500`, so a server error never shows as 404. Only `GET /dashboard/me` runs without an authorize middleware.
 - **Authz (M1-8)**: one `can(admin, action, resource)` (`packages/schemas/src/authz/`) for every dashboard and operator action. A new action goes in `AuthzActionEnum` (and in `OPERATOR_ONLY_ACTIONS` if a company admin must never perform it). Roles are derived from `admins.company_id`: NULL = operator, set = company admin. No role column. Company admins are created on first sign-in from Clerk invite metadata (`companyPublicId`), which is consumed in the same transaction so a deleted row stays deleted; operators are added by hand only (`docs/runbooks/operators.md`). Never create an `admins` row with no company from code. Admins of a churned company have no access (`AdminsRepo.resolveAdmin`); paused keeps access.
-- **Widget auth (M2-1)**: `GET /widget/ws` takes the companion JWT as the first WebSocket message `{type:"auth", token}`, never in the URL. Only `WidgetAuthRepo.authenticate` turns it into a `WidgetIdentity` (server-side, internal ids): alg allowlist RS256/ES256 + `kid`, no `crit` → issuer → `company_connections` (`withPlatform`) → signature on the issuer's JWKS (`JwksProvider`, KV `JWKS_CACHE`, fetched only for a registered issuer, size-capped) → `aud = WIDGET_JWT_AUDIENCE`, `exp`/`nbf`/`iat`, lifetime ≤ 5 min → connection active + `Origin` in `allowed_origins` → active company and chatbot (`withTenant`). Every failure before the signature passes is 4401, so only a signed token can see 4403/4404. Failures close with a `WidgetCloseCodeEnum` code and a generic reason. The M2-2 Conversation DO reuses `authenticate`.
+- **Widget auth (M2-1, ADR 0001)**: `GET /widget/ws` takes the companion JWT in `Sec-WebSocket-Protocol` (`['diletta.v1', <jwt>]`), never in the URL, and decides everything before the upgrade. Only `WidgetAuthRepo.authenticate` turns it into a `WidgetIdentity` (server-side, internal ids): alg allowlist RS256/ES256 + `kid`, no `crit` → issuer → `company_connections` (`withPlatform`) → signature on the issuer's JWKS (`JwksProvider`, KV `JWKS_CACHE`, fetched only for a registered issuer, size-capped) → `aud = WIDGET_JWT_AUDIENCE`, `exp`/`nbf`/`iat`, lifetime ≤ 5 min → connection active + `Origin` in `allowed_origins` → active company and chatbot (`withTenant`). Every failure before the signature passes is 401, so only a signed token can see 403/404. Failures are HTTP statuses (`WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP`) with a generic body; the answer selects `diletta.v1` only.
+- **Conversation DO (M2-2)**: `ConversationsRepo.startOrResume` (worker, after auth) upserts the `chatbot_users` row and creates the conversation (with a `conversation.started` critical event as `root_log_id`) or resumes the user's own open one (else 404). The worker then forwards the upgrade to `ConversationDO` (`getAgentByName`, name = `conversations.public_id`) with a fresh header set carrying the session (`CONVERSATION_SESSION_HEADER`); the DO has no public route. The DO extends Think, locked down: no workspace bash, MCP or tools (`activeTools: []`), no reasoning or identity frames, `onChatError` returns safe text only. Every inbound frame passes `webSocketMessage`'s allowlist (chat request rebuilt to its newest user message with a new id; cancel; stream resume); clear, client messages, tool results, state and rpc are refused. One turn at a time: the published config (`loadTurnConfig`, so a publish takes effect at the next turn) and the routed model are ready before Think saves the message, else `{type:"unavailable"}` and nothing is saved. Each turn gets a ULID (`Utility.generateUlid`) on its messages and model calls; after the reply, `recordTurn` writes the user + assistant messages to `messages` (idempotent on `session_message_id`). Auto-close after `CONVERSATION_IDLE_CLOSE_MS` (DO schedule): Closed, Answered or Abandoned. DO runtime state goes through `patchRuntimeState` (no await between read and write).
 - **Frontend `-data.ts`**: `Queries` class with hierarchical keys (`keys.all()` invalidates every detail). `setQueryData` on update, `removeQueries` on delete, `mutateAsync` when the caller must await, `mutate` otherwise. Every mutation needs a non-empty `onError` (toast).
 - **Frontend pages**: `useAuth()` at page level, explicit loading/error states, all requests through `apiClient`.
 - **Routes needing user data** live under `_authenticated/` — always.

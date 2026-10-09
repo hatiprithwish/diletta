@@ -47,3 +47,38 @@ describe("Utility.decodeBase64Url", () => {
     expect(Utility.decodeBase64Url("a")).toBeNull();
   });
 });
+
+describe("Utility.generateUlid", () => {
+  const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+  it("is 26 Crockford base32 chars led by the millisecond time", () => {
+    const ulid = Utility.generateUlid(1_760_000_000_000);
+    expect(ulid).toMatch(ULID_PATTERN);
+    // 1_760_000_000_000 in base32, zero-padded to 10 chars
+    expect(ulid.slice(0, 10)).toBe("01K742SG00");
+  });
+
+  it("sorts in creation order, within the same millisecond too", () => {
+    const now = Date.now() + 10_000;
+    const ids = [
+      Utility.generateUlid(now),
+      Utility.generateUlid(now),
+      Utility.generateUlid(now),
+      Utility.generateUlid(now + 1),
+    ];
+    expect([...ids].sort()).toEqual(ids);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("never goes backwards when the clock does", () => {
+    const now = Date.now() + 20_000;
+    const later = Utility.generateUlid(now);
+    const skewed = Utility.generateUlid(now - 5_000);
+    expect(skewed > later).toBe(true);
+  });
+
+  it("rejects a time out of range", () => {
+    expect(() => Utility.generateUlid(-1)).toThrow(RangeError);
+    expect(() => Utility.generateUlid(2 ** 48)).toThrow(RangeError);
+  });
+});

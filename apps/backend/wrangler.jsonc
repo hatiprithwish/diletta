@@ -5,7 +5,7 @@
   "name": "diletta-worker-local",
   "main": "src/index.ts",
   // DEV_NOTE: keep it up to date with the current date.
-  "compatibility_date": "2026-05-22",
+  "compatibility_date": "2026-06-11",
   // DEV_NOTE: nodejs_compat flag is needed for using AsyncLocalStorage.
   "compatibility_flags": ["nodejs_compat"],
   // DEV_NOTE: AI Gateway for the model router (M2-3, docs/runbooks/ai-gateway.md). Local dev uses the staging gateway;
@@ -21,6 +21,12 @@
       "invocation_logs": true,
     },
   },
+  // DEV_NOTE: Conversation DO (M2-2), one per conversation, built on Think (SQLite-backed). Reached only through the
+  // widget route (GET /widget/ws), never routed publicly. Bindings don't inherit, so each env declares its own.
+  "durable_objects": {
+    "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConversationDO"] }],
   // DEV_NOTE: Local dev + tests use the staging branch. wrangler/vitest connect directly via
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE from apps/backend/.env.
   "hyperdrive": [
@@ -55,6 +61,9 @@
   "env": {
     "staging": {
       "name": "diletta-worker-staging",
+      "durable_objects": {
+        "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+      },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
@@ -106,6 +115,9 @@
     },
     "production": {
       "name": "diletta-worker",
+      "durable_objects": {
+        "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+      },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",

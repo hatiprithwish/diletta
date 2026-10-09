@@ -13,21 +13,16 @@ export enum WidgetJwtAlgorithmEnum {
   ES256 = "ES256",
 }
 
-// DEV_NOTE: WebSocket close codes the widget acts on. 4xxx mirrors the HTTP status: 4401 = token rejected (the
-// widget may fetch a fresh token and reconnect), 4403 = not allowed (origin, disabled connection, churned or
-// paused company, paused chatbot: reconnecting won't help), 4404 = unknown chatbot, 4408 = no auth message in
-// time. 1011 = server error.
-export enum WidgetCloseCodeEnum {
-  BadRequest = 4400,
-  Unauthorized = 4401,
-  Forbidden = 4403,
-  NotFound = 4404,
-  AuthTimeout = 4408,
-  ServerError = 1011,
-}
+// DEV_NOTE: The widget's WebSocket subprotocol (ADR 0001). The widget offers ['diletta.v1', <companion JWT>] in
+// Sec-WebSocket-Protocol: the JWT never goes in the URL (URLs land in logs and history), and the server answers with
+// 'diletta.v1' only, so the token is never echoed back.
+export const WIDGET_SUBPROTOCOL = "diletta.v1";
 
-// DEV_NOTE: Why WidgetAuthRepo.authenticate failed. The route maps each to a close code; the reason is logged,
-// while the widget gets only the code and a generic message, so a caller can't probe which check failed.
+// DEV_NOTE: Why WidgetAuthRepo.authenticate (or the conversation lookup that follows it) failed. The route answers the
+// upgrade with the mapped HTTP status before any socket exists; the reason is logged, while the widget gets only the
+// status and a generic body, so a caller can't probe which check failed. 401 = token rejected (fetch a fresh token and
+// retry), 403 = not allowed (origin, disabled connection, churned or paused company, paused chatbot), 404 = unknown
+// chatbot, or a conversation that isn't this user's or is closed (start a new one).
 export enum WidgetAuthFailureEnum {
   Unauthorized = "Unauthorized",
   Forbidden = "Forbidden",
@@ -35,14 +30,14 @@ export enum WidgetAuthFailureEnum {
   ServerError = "ServerError",
 }
 
-export const WIDGET_AUTH_FAILURE_CLOSE_CODE_MAP: Record<
+export const WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP: Record<
   WidgetAuthFailureEnum,
-  WidgetCloseCodeEnum
+  401 | 403 | 404 | 500
 > = {
-  [WidgetAuthFailureEnum.Unauthorized]: WidgetCloseCodeEnum.Unauthorized,
-  [WidgetAuthFailureEnum.Forbidden]: WidgetCloseCodeEnum.Forbidden,
-  [WidgetAuthFailureEnum.NotFound]: WidgetCloseCodeEnum.NotFound,
-  [WidgetAuthFailureEnum.ServerError]: WidgetCloseCodeEnum.ServerError,
+  [WidgetAuthFailureEnum.Unauthorized]: 401,
+  [WidgetAuthFailureEnum.Forbidden]: 403,
+  [WidgetAuthFailureEnum.NotFound]: 404,
+  [WidgetAuthFailureEnum.ServerError]: 500,
 };
 
 // JOSE header of the companion JWT. kid is required: it picks the key out of the issuer's JWKS.
@@ -113,7 +108,7 @@ export interface DecodedWidgetJwt {
 }
 
 // DEV_NOTE: Server-side only — the verified widget caller. Carries internal ids (companyId, connectionId,
-// chatbotId), so it never goes to the widget; the Conversation DO (M2-2) takes it as the session identity.
+// chatbotId), so it never goes to the widget; the widget route turns it into the conversation session (M2-2).
 export interface WidgetIdentity {
   companyId: string;
   connectionId: string;

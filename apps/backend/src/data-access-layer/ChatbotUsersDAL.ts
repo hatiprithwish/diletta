@@ -84,15 +84,17 @@ export default class ChatbotUsersDAL {
         .where(and(...conditions))
         .limit(1);
 
+      // DEV_NOTE: Expected on a user's first visit (the widget route creates the row then), so a warning
       if (!chatbotUser) {
         const message = "Chatbot user not found";
-        AppLogger.error({
+        AppLogger.warn({
           category: Schemas.LogCategory.DAL,
           action: Schemas.LogAction.GetChatbotUserDetails,
           message,
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 

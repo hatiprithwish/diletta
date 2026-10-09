@@ -12,6 +12,7 @@ export enum LogCategory {
   Cron = "Cron",
   Widget = "Widget",
   ModelRouter = "ModelRouter",
+  Conversation = "Conversation",
 }
 
 export enum LogAction {
@@ -115,6 +116,26 @@ export enum LogAction {
   RecordModelCall = "RecordModelCall",
   HandleModelKeyFailure = "HandleModelKeyFailure",
   GetGatewayLogUsage = "GetGatewayLogUsage",
+
+  // Chatbot configs
+  GetPublishedChatbotConfig = "GetPublishedChatbotConfig",
+
+  // Conversations
+  CreateConversation = "CreateConversation",
+  GetConversationDetails = "GetConversationDetails",
+  SetConversationRootLog = "SetConversationRootLog",
+  SetConversationConfig = "SetConversationConfig",
+  TouchConversation = "TouchConversation",
+  CloseConversation = "CloseConversation",
+  StartConversation = "StartConversation",
+  LoadTurnConfig = "LoadTurnConfig",
+  RecordTurn = "RecordTurn",
+  RunTurn = "RunTurn",
+  FilterWidgetFrame = "FilterWidgetFrame",
+
+  // Messages
+  CreateMessages = "CreateMessages",
+  ListMessages = "ListMessages",
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",

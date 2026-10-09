@@ -12,6 +12,15 @@ import WidgetJwtProvider from "@/providers/widgetJwt";
 import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
 import Constants from "@/config/Constants";
 import Utility from "@/utils/Utility";
+import {
+  type TestKey,
+  base64Url,
+  claimsFor,
+  createKey,
+  encodeJson,
+  seedJwks,
+  signToken,
+} from "@/tests/helpers/widgetJwt";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -24,13 +33,6 @@ vi.mock("@/providers/logger", () => ({
   disposeLogger: vi.fn().mockResolvedValue(undefined),
   withRequestContext: vi.fn().mockImplementation((_id, next) => next()),
 }));
-
-// DEV_NOTE: A short auth timeout, so the "no first message" test doesn't wait the real 10s
-vi.mock("@/config/Constants", async (importOriginal) => {
-  const actual = await importOriginal<{ default: typeof Constants }>();
-  Object.defineProperty(actual.default, "WIDGET_AUTH_TIMEOUT_MS", { value: 300 });
-  return actual;
-});
 
 // DEV_NOTE: Tests hit the Neon staging branch; the Repo runs as diletta_app (HYPERDRIVE), so RLS applies. Fixtures and
 // cleanup run as the owner. Keys are generated per run, and each issuer's JWKS is seeded straight into the
@@ -58,13 +60,6 @@ let secondChatbotA = "";
 let pausedChatbotA = "";
 let chatbotOfB = "";
 
-interface TestKey {
-  kid: string;
-  alg: Schemas.WidgetJwtAlgorithmEnum;
-  privateKey: CryptoKey;
-  jwk: Schemas.Jwk;
-}
-
 let rsaKey: TestKey;
 let ecKey: TestKey;
 let otherRsaKey: TestKey; // same kid as rsaKey, different key pair: a forged signature
@@ -77,80 +72,6 @@ async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   } finally {
     await pool.end();
   }
-}
-
-function base64Url(bytes: ArrayBuffer | Uint8Array): string {
-  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  let binary = "";
-  for (const byte of view) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-const encodeJson = (value: unknown) => base64Url(new TextEncoder().encode(JSON.stringify(value)));
-
-async function createKey(
-  alg: Schemas.WidgetJwtAlgorithmEnum,
-  kid: string,
-  modulusLength = 2048,
-): Promise<TestKey> {
-  const pair = (await crypto.subtle.generateKey(
-    alg === Schemas.WidgetJwtAlgorithmEnum.RS256
-      ? {
-          name: "RSASSA-PKCS1-v1_5",
-          modulusLength,
-          publicExponent: new Uint8Array([1, 0, 1]),
-          hash: "SHA-256",
-        }
-      : { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
-  const publicJwk = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JsonWebKey;
-  return {
-    kid,
-    alg,
-    privateKey: pair.privateKey,
-    jwk: Schemas.ZJwk.parse({ ...publicJwk, kid, alg, use: "sig" }),
-  };
-}
-
-function claimsFor(issuer: string, overrides: Record<string, unknown> = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  return {
-    iss: issuer,
-    sub: "host-user-1",
-    aud: Schemas.WIDGET_JWT_AUDIENCE,
-    iat: now,
-    exp: now + 120,
-    roles: ["editor"],
-    name: "Ada",
-    ...overrides,
-  };
-}
-
-async function signToken(
-  key: TestKey,
-  claims: Record<string, unknown>,
-  headerOverrides: Record<string, unknown> = {},
-): Promise<string> {
-  const header = { alg: key.alg, kid: key.kid, typ: "JWT", ...headerOverrides };
-  const signingInput = `${encodeJson(header)}.${encodeJson(claims)}`;
-  const signature = await crypto.subtle.sign(
-    key.alg === Schemas.WidgetJwtAlgorithmEnum.RS256
-      ? { name: "RSASSA-PKCS1-v1_5" }
-      : { name: "ECDSA", hash: "SHA-256" },
-    key.privateKey,
-    new TextEncoder().encode(signingInput),
-  );
-  return `${signingInput}.${base64Url(signature)}`;
-}
-
-async function seedJwks(issuer: string, keys: Schemas.Jwk[], fetchedAt = Date.now()) {
-  await env.JWKS_CACHE.put(
-    `${Constants.JWKS_CACHE_KEY_PREFIX}${issuer}`,
-    JSON.stringify({ keys, fetchedAt }),
-    { expirationTtl: Constants.JWKS_CACHE_TTL_SECONDS },
-  );
 }
 
 // DEV_NOTE: Answers the JWKS URL of each listed issuer; any other fetch fails the test loudly
@@ -676,41 +597,27 @@ describe("WidgetAuthRepo.authenticate", () => {
   });
 });
 
+// DEV_NOTE: Failures only: every check runs before the upgrade, so a rejected widget gets an HTTP status and never a
+// socket. The accepted path (a socket into the Conversation DO) is covered in conversation.test.ts.
 describe("GET /widget/ws", () => {
-  async function openSocket(options: { query?: string; origin?: string | null } = {}) {
+  async function upgrade(
+    options: { query?: string; origin?: string | null; protocols?: string[] | null } = {},
+  ) {
     const headers: Record<string, string> = { Upgrade: "websocket" };
     const origin = options.origin === undefined ? ORIGIN : options.origin;
     if (origin !== null) headers["Origin"] = origin;
-
-    const response = await worker.fetch(
+    if (options.protocols !== null) {
+      const protocols = options.protocols ?? [
+        Schemas.WIDGET_SUBPROTOCOL,
+        await signToken(rsaKey, claimsFor(issuers.active)),
+      ];
+      headers["Sec-WebSocket-Protocol"] = protocols.join(", ");
+    }
+    return await worker.fetch(
       new Request(`http://localhost/widget/ws${options.query ?? ""}`, { headers }),
       env,
       createExecutionContext(),
     );
-    expect(response.status).toBe(101);
-    const socket = response.webSocket!;
-    socket.accept();
-
-    const messages: Schemas.WidgetServerMessage[] = [];
-    let onMessage: (() => void) | undefined;
-    socket.addEventListener("message", (event) => {
-      messages.push(JSON.parse(event.data as string));
-      onMessage?.();
-    });
-    const closed = new Promise<number>((resolve) => {
-      socket.addEventListener("close", (event) => resolve(event.code));
-    });
-    const nextMessage = () =>
-      new Promise<Schemas.WidgetServerMessage>((resolve) => {
-        const take = () => {
-          const message = messages.shift();
-          if (message) resolve(message);
-          else onMessage = take;
-        };
-        take();
-      });
-
-    return { socket, closed, nextMessage };
   }
 
   it("answers 426 without a WebSocket upgrade", async () => {
@@ -722,61 +629,42 @@ describe("GET /widget/ws", () => {
     expect(response.status).toBe(426);
   });
 
-  it("authenticates with the token as the first message", async () => {
-    const { socket, nextMessage } = await openSocket();
-    socket.send(
-      JSON.stringify({ type: "auth", token: await signToken(rsaKey, claimsFor(issuers.active)) }),
-    );
-
-    expect(await nextMessage()).toEqual({
-      type: "auth_ok",
-      chatbot: { publicId: defaultChatbotA.publicId, name: defaultChatbotA.name },
-    });
-
-    socket.send(JSON.stringify({ type: "something-else" }));
-    expect(await nextMessage()).toEqual({ type: "error", message: "Unsupported message" });
-    socket.close(1000);
+  it("answers 401 without the token in the subprotocol, or without diletta.v1", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    for (const protocols of [null, [Schemas.WIDGET_SUBPROTOCOL], [token]]) {
+      const response = await upgrade({ protocols });
+      expect(response.status).toBe(401);
+      expect(response.webSocket).toBeNull();
+    }
   });
 
-  it("closes 4401 on a bad token", async () => {
-    const { socket, closed } = await openSocket();
+  it("ignores a token in the URL", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    const response = await upgrade({
+      query: `?token=${token}`,
+      protocols: [Schemas.WIDGET_SUBPROTOCOL],
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("answers 401 on a bad token, with a generic body", async () => {
     const now = Math.floor(Date.now() / 1000);
     const expired = await signToken(
       rsaKey,
       claimsFor(issuers.active, { iat: now - 400, exp: now - 120 }),
     );
-    socket.send(JSON.stringify({ type: "auth", token: expired }));
-    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.Unauthorized);
+    const response = await upgrade({ protocols: [Schemas.WIDGET_SUBPROTOCOL, expired] });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ isSuccess: false, message: "Unauthorized" });
   });
 
-  it("closes 4403 on an origin the connection doesn't allow", async () => {
-    const { socket, closed } = await openSocket({ origin: "https://evil.example.com" });
-    socket.send(
-      JSON.stringify({ type: "auth", token: await signToken(rsaKey, claimsFor(issuers.active)) }),
-    );
-    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.Forbidden);
+  it("answers 403 on an origin the connection doesn't allow", async () => {
+    const response = await upgrade({ origin: "https://evil.example.com" });
+    expect(response.status).toBe(403);
   });
 
-  it("closes 4404 on a chatbot of another company", async () => {
-    const { socket, closed } = await openSocket({ query: `?chatbot=${chatbotOfB}` });
-    socket.send(
-      JSON.stringify({ type: "auth", token: await signToken(rsaKey, claimsFor(issuers.active)) }),
-    );
-    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.NotFound);
-  });
-
-  it("closes 4400 when the first message isn't an auth message", async () => {
-    const first = await openSocket();
-    first.socket.send("not json");
-    expect(await first.closed).toBe(Schemas.WidgetCloseCodeEnum.BadRequest);
-
-    const second = await openSocket();
-    second.socket.send(JSON.stringify({ type: "message", text: "hi" }));
-    expect(await second.closed).toBe(Schemas.WidgetCloseCodeEnum.BadRequest);
-  });
-
-  it("closes 4408 when no auth message arrives in time", async () => {
-    const { closed } = await openSocket();
-    expect(await closed).toBe(Schemas.WidgetCloseCodeEnum.AuthTimeout);
+  it("answers 404 on a chatbot of another company", async () => {
+    const response = await upgrade({ query: `?chatbot=${chatbotOfB}` });
+    expect(response.status).toBe(404);
   });
 });
