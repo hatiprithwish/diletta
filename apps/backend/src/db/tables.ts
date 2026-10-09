@@ -641,7 +641,7 @@ export const modelCalls = table(
     turnId: t.text("turn_id"), // ULID from the Conversation DO
     taskType: t.text("task_type").$type<Schemas.ModelTaskTypeEnum>().notNull(), // route.intent, qa.answer, eval.judge…
     tier: t.smallint().$type<Schemas.ModelCallTierIntEnum>().notNull(),
-    provider: t.text().$type<Schemas.ModelProviderEnum>().notNull(),
+    provider: t.text().$type<Schemas.ModelCallProvider>().notNull(), // company key provider, or workers_ai (embeddings)
     model: t.text().notNull(),
     gatewayLogId: t.text("gateway_log_id"),
     inputTokens: t.integer("input_tokens").notNull().default(0),
@@ -762,6 +762,12 @@ export const knowledgeSources = table(
       .notNull()
       .default(Schemas.KnowledgeSourceStatusIntEnum.Active),
     lastSyncedAt: t.timestamp("last_synced_at", { withTimezone: true }),
+    // DEV_NOTE: The sync that owns the source (its workflow instance id), set at each claim. Only that sync may write
+    // the source's documents, so a sync left behind by a pause / resume or a stale re-claim stops at its next step.
+    // sync_heartbeat_at is set at the claim and on every sync step: a Syncing source whose heartbeat is older than
+    // KNOWLEDGE_SYNC_STALE_MS has no live sync, and a Failed one is retried by the Cron after a backoff from it.
+    syncRunId: t.text("sync_run_id"),
+    syncHeartbeatAt: t.timestamp("sync_heartbeat_at", { withTimezone: true }),
     createdBy: t.bigint("created_by", { mode: "string" }), // → admins.id, null = system
     updatedBy: t.bigint("updated_by", { mode: "string" }), // → admins.id, null = system
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -808,6 +814,11 @@ export const knowledgeDocuments = table(
   (table) => [
     t.uniqueIndex("UNQ_knowledge_documents_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_knowledge_documents_file_id").on(table.fileId),
+    // DEV_NOTE: One document per web page of a source, so a page is never stored twice
+    t
+      .uniqueIndex("UNQ_knowledge_documents_knowledge_source_id_source_url")
+      .on(table.knowledgeSourceId, table.sourceUrl)
+      .where(sql`${table.sourceUrl} IS NOT NULL`),
     t.index("IDX_knowledge_documents_company_id").on(table.companyId),
     t.index("IDX_knowledge_documents_knowledge_source_id").on(table.knowledgeSourceId),
   ],
@@ -821,7 +832,7 @@ export const files = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
-    ownerType: t.text("owner_type").notNull(),
+    ownerType: t.text("owner_type").$type<Schemas.FileOwnerTypeEnum>().notNull(),
     ownerId: t.bigint("owner_id", { mode: "string" }).notNull(), // → <owner_type>.id
     filename: t.text(),
     mime: t.text().notNull(),

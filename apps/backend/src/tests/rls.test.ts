@@ -332,7 +332,7 @@ const FIXTURES: Fixture[] = [
         .values({
           publicId: pid(),
           companyId,
-          ownerType: "conversation",
+          ownerType: Schemas.FileOwnerTypeEnum.KnowledgeDocument,
           ownerId: fakeId(),
           mime: "text/plain",
           sizeBytes: 1,

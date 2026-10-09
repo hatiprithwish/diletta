@@ -36,6 +36,7 @@ export default class Constants {
   // wrangler.jsonc triggers.crons exactly. The every-minute one also runs the model_calls usage backfill.
   static readonly OUTBOX_SWEEP_CRON = "* * * * *";
   static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
+  static readonly KNOWLEDGE_RESYNC_CRON = "0 * * * *";
 
   // DEV_NOTE: Widget auth (M2-1, ADR 0001). The companion JWT rides in Sec-WebSocket-Protocol on the upgrade. A token
   // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of
@@ -103,4 +104,46 @@ export default class Constants {
   // this, so a stuck close never fires in a loop
   static readonly CONVERSATION_CLOSE_RETRY_MS = 60_000;
   static readonly CONVERSATION_TITLE_MAX_CHARS = 80;
+
+  // DEV_NOTE: Knowledge ingestion (M2-5). One KnowledgeSyncWorkflow per source sync lists the source's items (at most
+  // KNOWLEDGE_MAX_ITEMS_PER_SYNC: a sitemap's same-site page URLs, following nested sitemap indexes
+  // KNOWLEDGE_SITEMAP_MAX_DEPTH deep and reading at most KNOWLEDGE_SITEMAP_MAX_FILES sitemap files, or an upload
+  // source's documents with work to do), then fetches, converts, hashes, chunks and embeds one item per step. Each
+  // fetch is capped in time, size and redirects (each hop must stay on the site). A Syncing source whose heartbeat is
+  // older than KNOWLEDGE_SYNC_STALE_MS (its workflow died) may be claimed again; a Daily / Weekly source left Failed is
+  // retried by the Cron KNOWLEDGE_FAILED_RETRY_MS after its last attempt. An upload source re-lists its Pending
+  // documents after each round (files uploaded mid-sync), at most KNOWLEDGE_SYNC_MAX_ROUNDS rounds, and starts a new
+  // sync if any are still Pending at the end.
+  static readonly KNOWLEDGE_MAX_ITEMS_PER_SYNC = 500;
+  static readonly KNOWLEDGE_SITEMAP_MAX_DEPTH = 2;
+  static readonly KNOWLEDGE_SITEMAP_MAX_FILES = 20;
+  static readonly KNOWLEDGE_SITEMAP_MAX_BYTES = 10 * 1024 * 1024;
+  static readonly KNOWLEDGE_PAGE_MAX_BYTES = 5 * 1024 * 1024;
+  static readonly KNOWLEDGE_FETCH_TIMEOUT_MS = 15_000;
+  static readonly KNOWLEDGE_FETCH_MAX_REDIRECTS = 5;
+  static readonly KNOWLEDGE_FETCH_USER_AGENT = "DilettaBot/1.0 (knowledge sync)";
+  static readonly KNOWLEDGE_SYNC_STALE_MS = 6 * 60 * 60_000;
+  static readonly KNOWLEDGE_FAILED_RETRY_MS = 6 * 60 * 60_000;
+  static readonly KNOWLEDGE_SYNC_MAX_ROUNDS = 3;
+  // DEV_NOTE: The hourly Cron starts at most this many due syncs per run; the rest wait for the next hour
+  static readonly KNOWLEDGE_RESYNC_BATCH_SIZE = 100;
+  static readonly KNOWLEDGE_DAILY_SYNC_MS = 24 * 60 * 60_000;
+  static readonly KNOWLEDGE_WEEKLY_SYNC_MS = 7 * 24 * 60 * 60_000;
+  // DEV_NOTE: An upload request body is refused past this before it is parsed (the file cap plus multipart framing)
+  static readonly KNOWLEDGE_UPLOAD_BODY_MAX_BYTES = 10 * 1024 * 1024 + 64 * 1024;
+
+  // DEV_NOTE: Chunking (KnowledgeChunkerProvider): sections split at markdown headings, packed up to
+  // KNOWLEDGE_CHUNK_TARGET_CHARS (~400 tokens, overlap included) with KNOWLEDGE_CHUNK_OVERLAP_CHARS carried into the
+  // next chunk of the same section. Each heading is clipped to KNOWLEDGE_HEADING_MAX_CHARS and the path to
+  // KNOWLEDGE_HEADING_PATH_MAX_CHARS, so the embedded text stays far under bge-m3's 8,192 tokens. A document past
+  // KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT keeps its first chunks only (logged).
+  static readonly KNOWLEDGE_CHUNK_TARGET_CHARS = 1_600;
+  static readonly KNOWLEDGE_CHUNK_OVERLAP_CHARS = 200;
+  static readonly KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT = 400;
+  static readonly KNOWLEDGE_HEADING_MAX_CHARS = 200;
+  static readonly KNOWLEDGE_HEADING_PATH_MAX_CHARS = 600;
+  static readonly KNOWLEDGE_TITLE_MAX_CHARS = 200;
+
+  // DEV_NOTE: Embedding (KnowledgeEmbedProvider): texts per Workers AI call (one model_calls row each)
+  static readonly KNOWLEDGE_EMBED_BATCH_SIZE = 50;
 }

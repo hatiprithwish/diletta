@@ -7,10 +7,12 @@ import AuthRoutes from "@/routes/AuthRoutes";
 import AdminsRoutes from "@/routes/AdminsRoutes";
 import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
 import CompaniesRoutes from "@/routes/CompaniesRoutes";
+import KnowledgeSourcesRoutes from "@/routes/KnowledgeSourcesRoutes";
 import WidgetRoutes from "@/routes/WidgetRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
+import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
 import consumeEvents from "@/queues/EventsConsumer";
@@ -18,6 +20,8 @@ import consumeEvents from "@/queues/EventsConsumer";
 // DEV_NOTE: Durable Object classes are exported from the worker's main module (wrangler.jsonc durable_objects)
 export { ConversationDO } from "@/durable-objects/ConversationDO";
 export { BudgetDO } from "@/durable-objects/BudgetDO";
+// DEV_NOTE: Workflow classes are exported from the main module too (wrangler.jsonc workflows)
+export { KnowledgeSyncWorkflow } from "@/workflows/KnowledgeSyncWorkflow";
 
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests
 await configureLogger();
@@ -53,6 +57,7 @@ app.use(
 app.route("/auth", AuthRoutes);
 app.route("/dashboard", AdminsRoutes);
 app.route("/dashboard/chatbots", ChatbotsRoutes);
+app.route("/dashboard/knowledge-sources", KnowledgeSourcesRoutes);
 app.route("/operator/companies", CompaniesRoutes);
 app.route("/widget", WidgetRoutes);
 
@@ -62,8 +67,8 @@ export default {
     return app.fetch(req, env, ctx);
   },
 
-  // DEV_NOTE: Two crons (wrangler.jsonc), told apart by controller.cron: every minute the outbox relay sweep + purge
-  // and the model_calls usage backfill, daily the activity_log partition maintenance
+  // DEV_NOTE: Three crons (wrangler.jsonc), told apart by controller.cron: every minute the outbox relay sweep + purge
+  // and the model_calls usage backfill, daily the activity_log partition maintenance, hourly the knowledge re-sync
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     switch (controller.cron) {
       case Constants.OUTBOX_SWEEP_CRON:
@@ -72,6 +77,9 @@ export default {
         break;
       case Constants.ACTIVITY_LOG_PARTITIONS_CRON:
         await runActivityLogPartitions(env);
+        break;
+      case Constants.KNOWLEDGE_RESYNC_CRON:
+        await runKnowledgeResync(env);
         break;
       default:
         AppLogger.error({

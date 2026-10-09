@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -130,7 +130,8 @@ export default class ModelCallsDAL {
 
   // DEV_NOTE: BudgetDO's seed (M2-4): the spend already recorded for the company since the start of its billing period.
   // A Pending or Unknown row adds its cost as it stands (0 until backfilled); the seed runs once per period, and every
-  // call after it is counted by BudgetDO's own reservations.
+  // call after it is counted by BudgetDO's own reservations. Tier Embed rows (Workers AI embeddings, M2-5) are left
+  // out: the platform pays for them, not the company's key.
   async getModelCallCostSum(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetModelCallCostSumDALRequest,
@@ -141,6 +142,7 @@ export default class ModelCallsDAL {
       const conditions = [
         eq(modelCalls.companyId, params.companyId),
         gte(modelCalls.createdAt, params.from),
+        ne(modelCalls.tier, Schemas.ModelCallTierIntEnum.Embed),
       ];
       const [sum] = await tx
         .select({

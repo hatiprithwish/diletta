@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { ModelProviderEnum } from "../companySecrets";
 import { ModelTierEnum } from "../configSpec";
+import { PlatformModelProviderEnum } from "../modelCalls";
 import {
   MODEL_PRICES,
   MODEL_TIER_CALL_TIER_MAP,
+  PLATFORM_MODEL_PRICES,
   computeModelCallCostUsd,
+  getModelCallPrice,
   getModelPrice,
   type ModelPrice,
 } from "./ModelRouterCommon";
@@ -112,6 +115,46 @@ describe("MODEL_TIER_CALL_TIER_MAP", () => {
   it("maps every config tier", () => {
     for (const tier of Object.values(ModelTierEnum)) {
       expect(MODEL_TIER_CALL_TIER_MAP[tier]).toBeDefined();
+    }
+  });
+});
+
+describe("computeModelCallCostUsd rounded up (platform embeddings)", () => {
+  const embedPrice = PLATFORM_MODEL_PRICES[PlatformModelProviderEnum.WorkersAi]["@cf/baai/bge-m3"]!;
+  const usage = (inputTokens: number) => ({
+    inputTokens,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+  });
+
+  it("never stores a billed call as $0", () => {
+    expect(computeModelCallCostUsd(embedPrice, usage(30))).toBe("0.000000");
+    expect(computeModelCallCostUsd(embedPrice, usage(30), true)).toBe("0.000001");
+  });
+
+  it("keeps exact values and zero usage as they are", () => {
+    expect(computeModelCallCostUsd(embedPrice, usage(1_000_000), true)).toBe("0.012000");
+    expect(computeModelCallCostUsd(embedPrice, usage(0), true)).toBe("0.000000");
+  });
+});
+
+describe("getModelCallPrice", () => {
+  it("finds routed and platform models, and nothing else", () => {
+    expect(
+      getModelCallPrice(PlatformModelProviderEnum.WorkersAi, "@cf/baai/bge-m3"),
+    ).not.toBeNull();
+    expect(getModelCallPrice(PlatformModelProviderEnum.WorkersAi, "constructor")).toBeNull();
+    expect(getModelCallPrice(ModelProviderEnum.Anthropic, "claude-opus-5-5")).toEqual(
+      getModelPrice(ModelProviderEnum.Anthropic, "claude-opus-5-5"),
+    );
+  });
+
+  it("keeps cacheWrite at or above input for platform models (the backfill prices at the dearer)", () => {
+    for (const models of Object.values(PLATFORM_MODEL_PRICES)) {
+      for (const modelPrice of Object.values(models)) {
+        expect(modelPrice.cacheWriteUsdPerMTok).toBeGreaterThanOrEqual(modelPrice.inputUsdPerMTok);
+      }
     }
   });
 });

@@ -26,7 +26,7 @@ Config limits are platform defaults (`packages/schemas/src/configSpec/ConfigSpec
 
 A turn's message-rate and turn-rate slots are used only once its model is routed, so a turn that couldn't run (no model key, Neon down) doesn't count against the user.
 
-When a new month starts, BudgetDO seeds the month from `SUM(model_calls.cost_usd)` since the 1st (UTC). Pending rows add 0 until backfilled, so a seed taken right after the 1st can be a few cents low.
+When a new month starts, BudgetDO seeds the month from `SUM(model_calls.cost_usd)` since the 1st (UTC). Pending rows add 0 until backfilled, so a seed taken right after the 1st can be a few cents low. Knowledge embeddings (tier Embed, Workers AI, M2-5) are left out: the platform pays for them, not the company's key.
 
 ## Change a company's budget
 

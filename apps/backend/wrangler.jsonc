@@ -59,12 +59,25 @@
       },
     ],
   },
+  // DEV_NOTE: Knowledge ingestion (M2-5, docs/runbooks/knowledge.md). AI: Workers AI for toMarkdown and bge-m3
+  // embeddings (platform-paid; only providers/knowledgeExtract.ts and providers/knowledgeEmbed.ts call it; tests pass
+  // a fake). FILES_BUCKET and KNOWLEDGE_SYNC_WORKFLOW run on miniflare's local simulation here; local-only names.
+  "ai": { "binding": "AI" },
+  "r2_buckets": [{ "binding": "FILES_BUCKET", "bucket_name": "diletta-files-local" }],
+  "workflows": [
+    {
+      "name": "diletta-knowledge-sync-local",
+      "binding": "KNOWLEDGE_SYNC_WORKFLOW",
+      "class_name": "KnowledgeSyncWorkflow",
+    },
+  ],
   // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows, and
   // the model_calls usage backfill from AI Gateway logs (M2-3).
-  // Daily 03:00 UTC: activity_log partition maintenance (M1-9). scheduled() matches these strings against
-  // Constants.OUTBOX_SWEEP_CRON / ACTIVITY_LOG_PARTITIONS_CRON; change both together. triggers is inherited by every env.
+  // Daily 03:00 UTC: activity_log partition maintenance (M1-9). Hourly: knowledge re-sync of due web sources (M2-5).
+  // scheduled() matches these strings against Constants.OUTBOX_SWEEP_CRON / ACTIVITY_LOG_PARTITIONS_CRON /
+  // KNOWLEDGE_RESYNC_CRON; change both together. triggers is inherited by every env.
   "triggers": {
-    "crons": ["* * * * *", "0 3 * * *"],
+    "crons": ["* * * * *", "0 3 * * *", "0 * * * *"],
   },
   "env": {
     "staging": {
@@ -112,6 +125,19 @@
           },
         ],
       },
+      // DEV_NOTE: Knowledge ingestion (M2-5, docs/runbooks/knowledge.md). AI: Workers AI for toMarkdown and bge-m3
+      // embeddings (platform-paid; only providers/knowledgeExtract.ts and providers/knowledgeEmbed.ts call it).
+      // FILES_BUCKET: every stored object, registered in the files table (key t/{company}/{file}).
+      // KNOWLEDGE_SYNC_WORKFLOW: one instance per source sync. Bindings don't inherit, so each env declares its own.
+      "ai": { "binding": "AI" },
+      "r2_buckets": [{ "binding": "FILES_BUCKET", "bucket_name": "diletta-files-staging" }],
+      "workflows": [
+        {
+          "name": "diletta-knowledge-sync-staging",
+          "binding": "KNOWLEDGE_SYNC_WORKFLOW",
+          "class_name": "KnowledgeSyncWorkflow",
+        },
+      ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
@@ -169,6 +195,19 @@
           },
         ],
       },
+      // DEV_NOTE: Knowledge ingestion (M2-5, docs/runbooks/knowledge.md). AI: Workers AI for toMarkdown and bge-m3
+      // embeddings (platform-paid; only providers/knowledgeExtract.ts and providers/knowledgeEmbed.ts call it).
+      // FILES_BUCKET: every stored object, registered in the files table (key t/{company}/{file}).
+      // KNOWLEDGE_SYNC_WORKFLOW: one instance per source sync. Bindings don't inherit, so each env declares its own.
+      "ai": { "binding": "AI" },
+      "r2_buckets": [{ "binding": "FILES_BUCKET", "bucket_name": "diletta-files-production" }],
+      "workflows": [
+        {
+          "name": "diletta-knowledge-sync-production",
+          "binding": "KNOWLEDGE_SYNC_WORKFLOW",
+          "class_name": "KnowledgeSyncWorkflow",
+        },
+      ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
