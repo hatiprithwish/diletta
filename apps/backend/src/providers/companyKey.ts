@@ -161,6 +161,30 @@ export default class CompanyKeyProvider {
     return decrypted;
   }
 
+  // DEV_NOTE: The one way to read a company_secrets value (CompanySecretsRepo, the model router): decrypts the row's
+  // ciphertext with its own key version. The plaintext goes back to a server-side caller only.
+  static async decryptCompanySecret(
+    env: Env,
+    tx: NodePgTransaction<EmptyRelations>,
+    companySecret: Schemas.CompanySecret,
+  ): Promise<Schemas.DecryptedCompanySecretResponse> {
+    const decrypted = await CompanyKeyProvider.decryptValue(env, tx, {
+      companyId: companySecret.companyId,
+      column: Schemas.EncryptedColumnEnum.CompanySecret,
+      encryptedValue: { ciphertext: companySecret.encryptedSecret, iv: companySecret.iv },
+      encryptionKeyVersion: companySecret.encryptionKeyVersion,
+    });
+    if (!decrypted.isSuccess || decrypted.plaintext === undefined) {
+      return { isSuccess: false, message: decrypted.message };
+    }
+
+    return {
+      isSuccess: true,
+      message: "Company secret decrypted successfully",
+      secret: decrypted.plaintext,
+    };
+  }
+
   private static async unwrapCompanyKey(
     env: Env,
     companyEncryptionKey: Schemas.CompanyEncryptionKey,

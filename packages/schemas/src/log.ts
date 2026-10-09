@@ -11,6 +11,8 @@ export enum LogCategory {
   Partition = "Partition",
   Cron = "Cron",
   Widget = "Widget",
+  ModelRouter = "ModelRouter",
+  Conversation = "Conversation",
 }
 
 export enum LogAction {
@@ -87,6 +89,8 @@ export enum LogAction {
   GetCompanySecretDetails = "GetCompanySecretDetails",
   ListCompanySecrets = "ListCompanySecrets",
   UpdateCompanySecret = "UpdateCompanySecret",
+  GetActiveModelKey = "GetActiveModelKey",
+  InvalidateModelKey = "InvalidateModelKey",
 
   // Chatbot user secrets
   CreateChatbotUserSecret = "CreateChatbotUserSecret",
@@ -94,8 +98,51 @@ export enum LogAction {
   ListChatbotUserSecrets = "ListChatbotUserSecrets",
   UpdateChatbotUserSecret = "UpdateChatbotUserSecret",
 
+  // Model calls
+  CreateModelCall = "CreateModelCall",
+  GetPendingModelCalls = "GetPendingModelCalls",
+  SettleModelCallUsage = "SettleModelCallUsage",
+  TouchPendingModelCall = "TouchPendingModelCall",
+  BackfillModelCallUsage = "BackfillModelCallUsage",
+
+  // Quality issues
+  LockOpenSystemQualityIssue = "LockOpenSystemQualityIssue",
+  GetOpenSystemQualityIssue = "GetOpenSystemQualityIssue",
+  CreateSystemQualityIssue = "CreateSystemQualityIssue",
+  UpdateQualityIssueNote = "UpdateQualityIssueNote",
+
+  // Model router
+  GetModel = "GetModel",
+  CreateGatewayModel = "CreateGatewayModel",
+  RecordModelCall = "RecordModelCall",
+  HandleModelKeyFailure = "HandleModelKeyFailure",
+  SyncReadModel = "SyncReadModel",
+  CloseIdleConversation = "CloseIdleConversation",
+  GetGatewayLogUsage = "GetGatewayLogUsage",
+
+  // Chatbot configs
+  GetPublishedChatbotConfig = "GetPublishedChatbotConfig",
+
+  // Conversations
+  CreateConversation = "CreateConversation",
+  GetConversationDetails = "GetConversationDetails",
+  SetConversationRootLog = "SetConversationRootLog",
+  SetConversationConfig = "SetConversationConfig",
+  TouchConversation = "TouchConversation",
+  CloseConversation = "CloseConversation",
+  StartConversation = "StartConversation",
+  LoadTurnConfig = "LoadTurnConfig",
+  RecordTurn = "RecordTurn",
+  RunTurn = "RunTurn",
+  FilterWidgetFrame = "FilterWidgetFrame",
+
+  // Messages
+  CreateMessages = "CreateMessages",
+  ListMessages = "ListMessages",
+
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",
+  GetActivityLogsByEntity = "GetActivityLogsByEntity",
   CreateEventOutbox = "CreateEventOutbox",
   GetEventOutboxByDedupeKey = "GetEventOutboxByDedupeKey",
   LockEventOutboxDedupeKey = "LockEventOutboxDedupeKey",

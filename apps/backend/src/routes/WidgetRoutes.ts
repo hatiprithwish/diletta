@@ -1,26 +1,28 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
-import AppLogger from "@/providers/logger";
+import { getAgentByName } from "agents";
 import Constants from "@/config/Constants";
+import AppLogger from "@/providers/logger";
+import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
+import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: Widget routes, mounted at /widget. There is no Clerk session here: the widget proves who it is in-band,
-// with the companion JWT as its first WebSocket message (never in the URL, which lands in logs). The socket is
-// accepted unauthenticated and closed unless its first message, sent within WIDGET_AUTH_TIMEOUT_MS, is a valid auth message.
-// WidgetAuthRepo decides; this route only maps its failure to a close code. The widget gets the code and a generic
-// reason, never which check failed. M2-2 moves the socket into the Conversation DO (routeAgentRequest), which runs
-// the same WidgetAuthRepo.authenticate on the first message.
+// DEV_NOTE: Widget routes, mounted at /widget. No Clerk session here: the widget proves who it is with the companion
+// JWT, sent in Sec-WebSocket-Protocol on the upgrade (['diletta.v1', <jwt>]; never in the URL, which lands in logs).
+// Everything is decided before any socket exists (ADR 0001): WidgetAuthRepo verifies the token, ConversationsRepo
+// starts the user's conversation or checks the one they resume is theirs, and only then is the upgrade forwarded to
+// that conversation's DO, with the verified session in a header this route always sets itself. A failure is an HTTP
+// status with a generic body (401 / 403 / 404 / 500); which check failed is logged, never sent. The answer selects
+// 'diletta.v1' only, so the token is never echoed.
 const WidgetRoutes = new Hono<AppContext>();
 
-const CLOSE_REASON: Record<Schemas.WidgetCloseCodeEnum, string> = {
-  [Schemas.WidgetCloseCodeEnum.BadRequest]: "Bad request",
-  [Schemas.WidgetCloseCodeEnum.Unauthorized]: "Unauthorized",
-  [Schemas.WidgetCloseCodeEnum.Forbidden]: "Forbidden",
-  [Schemas.WidgetCloseCodeEnum.NotFound]: "Not found",
-  [Schemas.WidgetCloseCodeEnum.AuthTimeout]: "Authentication timed out",
-  [Schemas.WidgetCloseCodeEnum.ServerError]: "Server error",
+const FAILURE_BODY: Record<Schemas.WidgetAuthFailureEnum, string> = {
+  [Schemas.WidgetAuthFailureEnum.Unauthorized]: "Unauthorized",
+  [Schemas.WidgetAuthFailureEnum.Forbidden]: "Forbidden",
+  [Schemas.WidgetAuthFailureEnum.NotFound]: "Not found",
+  [Schemas.WidgetAuthFailureEnum.ServerError]: "Server error",
 };
 
 WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), async (c) => {
@@ -28,130 +30,106 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
     return c.json({ isSuccess: false, message: "Expected a WebSocket upgrade" }, 426);
   }
 
-  const repo = new WidgetAuthRepo(c.env);
-  const origin = c.req.header("Origin") ?? null;
-  const chatbotPublicId = c.req.valid("query").chatbot ?? null;
+  const reject = (failure: Schemas.WidgetAuthFailureEnum) =>
+    c.json(
+      { isSuccess: false, message: FAILURE_BODY[failure] },
+      Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
+    );
 
-  const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
-  server.accept();
-
-  // DEV_NOTE: pending → verifying (first message in, checks running) → authenticated. Messages that arrive while the
-  // first one is being verified get an error, not a second verification.
-  let state: "pending" | "verifying" | "authenticated" | "closed" = "pending";
-
-  // DEV_NOTE: The client can disconnect at any moment, including between a verification finishing and its close event
-  // arriving, and send / close on a socket that is already closing throw. Both are guarded so they never throw into
-  // the verification promise chain; a failed send means the socket is gone.
-  const send = (message: Schemas.WidgetServerMessage) => {
-    if (state === "closed") return;
-    try {
-      server.send(JSON.stringify(message));
-    } catch {
-      state = "closed";
-      clearTimeout(authTimer);
-    }
-  };
-  const close = (code: Schemas.WidgetCloseCodeEnum) => {
-    if (state === "closed") return;
-    state = "closed";
-    clearTimeout(authTimer);
-    try {
-      server.close(code, CLOSE_REASON[code]);
-    } catch {
-      // DEV_NOTE: Already closing or closed by the client: nothing left to close
-    }
-  };
-
-  // DEV_NOTE: Guards the first message only. Once it arrives the timer stops: verification is bounded by the JWKS
-  // fetch timeout and the database, and ends in auth_ok or a close either way.
-  const authTimer = setTimeout(() => {
-    if (state === "pending") {
-      AppLogger.warn({
-        category: Schemas.LogCategory.Widget,
-        action: Schemas.LogAction.AuthenticateWidget,
-        message: "No auth message in time",
-        metadata: { origin },
-      });
-      close(Schemas.WidgetCloseCodeEnum.AuthTimeout);
-    }
-  }, Constants.WIDGET_AUTH_TIMEOUT_MS);
-
-  server.addEventListener("message", (event) => {
-    const parsed =
-      typeof event.data === "string"
-        ? Schemas.ZWidgetClientMessage.safeParse(parseJson(event.data))
-        : null;
-
-    if (state === "pending") {
-      if (!parsed?.success || parsed.data.type !== "auth") {
-        close(Schemas.WidgetCloseCodeEnum.BadRequest);
-        return;
-      }
-      state = "verifying";
-      clearTimeout(authTimer);
-      const token = parsed.data.token;
-      // DEV_NOTE: The listener can't be async (an unhandled rejection would be lost), so the verification runs as a
-      // promise that never rejects: authenticate returns failures instead of throwing, and the catch covers the rest.
-      repo
-        .authenticate({ token, origin, chatbotPublicId })
-        .then((result) => {
-          if (state !== "verifying") return;
-          if (!result.isSuccess || !result.identity) {
-            close(
-              Schemas.WIDGET_AUTH_FAILURE_CLOSE_CODE_MAP[
-                result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError
-              ],
-            );
-            return;
-          }
-          state = "authenticated";
-          send({
-            type: "auth_ok",
-            chatbot: {
-              publicId: result.identity.chatbotPublicId,
-              name: result.identity.chatbotName,
-            },
-          });
-        })
-        .catch((error: unknown) => {
-          AppLogger.error({
-            category: Schemas.LogCategory.Widget,
-            action: Schemas.LogAction.AuthenticateWidget,
-            message: "Unknown error in authenticating widget",
-            error,
-          });
-          close(Schemas.WidgetCloseCodeEnum.ServerError);
-        });
-      return;
-    }
-
-    if (state === "verifying") {
-      send({ type: "error", message: "Authentication in progress" });
-      return;
-    }
-
-    if (state === "authenticated") {
-      send({
-        type: "error",
-        message: parsed?.success ? "Already authenticated" : "Unsupported message",
-      });
-    }
-  });
-
-  server.addEventListener("close", () => {
-    state = "closed";
-    clearTimeout(authTimer);
-  });
-
-  return new Response(null, { status: 101, webSocket: client });
-});
-
-function parseJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
+  // DEV_NOTE: The browser sends the offered subprotocols comma-separated; the token is the one that isn't ours
+  const offered = (c.req.header("Sec-WebSocket-Protocol") ?? "")
+    .split(",")
+    .map((protocol) => protocol.trim())
+    .filter(Boolean);
+  const token = offered.find((protocol) => protocol !== Schemas.WIDGET_SUBPROTOCOL);
+  if (!offered.includes(Schemas.WIDGET_SUBPROTOCOL) || !token) {
+    return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
   }
-}
+
+  const query = c.req.valid("query");
+  const authenticated = await new WidgetAuthRepo(c.env).authenticate({
+    token,
+    origin: c.req.header("Origin") ?? null,
+    chatbotPublicId: query.chatbot ?? null,
+  });
+  if (!authenticated.isSuccess || !authenticated.identity) {
+    return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+  }
+
+  const conversationsRepo = new ConversationsRepo(c.env);
+  const started = await conversationsRepo.startOrResume({
+    identity: authenticated.identity,
+    conversationPublicId: query.conversation ?? null,
+  });
+  if (!started.isSuccess || !started.session) {
+    return reject(
+      Schemas.CONVERSATION_START_FAILURE_WIDGET_AUTH_MAP[
+        started.failure ?? Schemas.ConversationStartFailureEnum.ServerError
+      ],
+    );
+  }
+  const { session } = started;
+  if (started.outboxId) {
+    c.executionCtx.waitUntil(
+      new EventOutboxRepo(c.env).relayEvents({
+        companyId: session.companyId,
+        outboxIds: [started.outboxId],
+      }),
+    );
+  }
+
+  // DEV_NOTE: A conversation this request created but no socket ever reached would stay Open with no DO to auto-close
+  // it, so it is closed again (Abandoned) when the upgrade fails
+  const failUpgrade = async () => {
+    if (started.isNew) {
+      await conversationsRepo.closeConversation({
+        session,
+        outcome: Schemas.ConversationOutcomeIntEnum.Abandoned,
+      });
+    }
+    return reject(Schemas.WidgetAuthFailureEnum.ServerError);
+  };
+
+  try {
+    // DEV_NOTE: A fresh header set: nothing the client sent beyond the upgrade itself reaches the DO, so it can't
+    // pose as another session or pass its own session header
+    const headers = new Headers({
+      Upgrade: "websocket",
+      Connection: "Upgrade",
+      [Constants.CONVERSATION_SESSION_HEADER]: JSON.stringify(session),
+    });
+    for (const name of ["Sec-WebSocket-Key", "Sec-WebSocket-Version", "Origin"]) {
+      const value = c.req.header(name);
+      if (value) headers.set(name, value);
+    }
+
+    const stub = await getAgentByName(c.env.CONVERSATION_DO, session.conversationPublicId);
+    const upgraded = await stub.fetch(new Request(c.req.url, { headers }));
+    if (upgraded.status !== 101 || !upgraded.webSocket) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Conversation,
+        action: Schemas.LogAction.StartConversation,
+        message: "Conversation DO refused the upgrade",
+        metadata: { conversationPublicId: session.conversationPublicId, status: upgraded.status },
+      });
+      return await failUpgrade();
+    }
+
+    return new Response(null, {
+      status: 101,
+      webSocket: upgraded.webSocket,
+      headers: { "Sec-WebSocket-Protocol": Schemas.WIDGET_SUBPROTOCOL },
+    });
+  } catch (error) {
+    AppLogger.error({
+      category: Schemas.LogCategory.Conversation,
+      action: Schemas.LogAction.StartConversation,
+      message: "Unknown error in forwarding the widget upgrade",
+      error,
+      metadata: { conversationPublicId: session.conversationPublicId },
+    });
+    return await failUpgrade();
+  }
+});
 
 export default WidgetRoutes;

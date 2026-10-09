@@ -5,11 +5,15 @@
   "name": "diletta-worker-local",
   "main": "src/index.ts",
   // DEV_NOTE: keep it up to date with the current date.
-  "compatibility_date": "2026-05-22",
+  "compatibility_date": "2026-06-11",
   // DEV_NOTE: nodejs_compat flag is needed for using AsyncLocalStorage.
   "compatibility_flags": ["nodejs_compat"],
+  // DEV_NOTE: AI Gateway for the model router (M2-3, docs/runbooks/ai-gateway.md). Local dev uses the staging gateway;
+  // AI_GATEWAY_TOKEN comes from .dev.vars locally and from a Secrets Store binding in each env.
   "vars": {
     "ALLOWED_CORS_ORIGIN": "http://localhost:3000",
+    "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
+    "AI_GATEWAY_NAME": "diletta-staging",
   },
   "observability": {
     "logs": {
@@ -17,6 +21,12 @@
       "invocation_logs": true,
     },
   },
+  // DEV_NOTE: Conversation DO (M2-2), one per conversation, built on Think (SQLite-backed). Reached only through the
+  // widget route (GET /widget/ws), never routed publicly. Bindings don't inherit, so each env declares its own.
+  "durable_objects": {
+    "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConversationDO"] }],
   // DEV_NOTE: Local dev + tests use the staging branch. wrangler/vitest connect directly via
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE from apps/backend/.env.
   "hyperdrive": [
@@ -41,7 +51,8 @@
       },
     ],
   },
-  // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows.
+  // DEV_NOTE: Every minute: outbox sweep (pending rows the after-commit relay missed) + purge of published rows, and
+  // the model_calls usage backfill from AI Gateway logs (M2-3).
   // Daily 03:00 UTC: activity_log partition maintenance (M1-9). scheduled() matches these strings against
   // Constants.OUTBOX_SWEEP_CRON / ACTIVITY_LOG_PARTITIONS_CRON; change both together. triggers is inherited by every env.
   "triggers": {
@@ -50,6 +61,9 @@
   "env": {
     "staging": {
       "name": "diletta-worker-staging",
+      "durable_objects": {
+        "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+      },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
@@ -65,6 +79,12 @@
           "binding": "MASTER_KEY_V1",
           "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
           "secret_name": "diletta-master-key-v1-staging",
+        },
+        // DEV_NOTE: AI Gateway token (cf-aig-authorization) for the model router (M2-3, docs/runbooks/ai-gateway.md)
+        {
+          "binding": "AI_GATEWAY_TOKEN",
+          "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
+          "secret_name": "diletta-aig-token-staging",
         },
       ],
       // DEV_NOTE: Outbox relay target (M1-6). The worker produces and consumes its own events; messages past
@@ -83,6 +103,8 @@
       },
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
+        "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
+        "AI_GATEWAY_NAME": "diletta-staging",
       },
       "observability": {
         "logs": {
@@ -93,6 +115,9 @@
     },
     "production": {
       "name": "diletta-worker",
+      "durable_objects": {
+        "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+      },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
@@ -108,6 +133,12 @@
           "binding": "MASTER_KEY_V1",
           "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
           "secret_name": "diletta-master-key-v1-production",
+        },
+        // DEV_NOTE: AI Gateway token (cf-aig-authorization) for the model router (M2-3, docs/runbooks/ai-gateway.md)
+        {
+          "binding": "AI_GATEWAY_TOKEN",
+          "store_id": "bc38c3de34874ebaa3d415f7b42509d6", // default_secrets_store
+          "secret_name": "diletta-aig-token-production",
         },
       ],
       // DEV_NOTE: Outbox relay target (M1-6). The worker produces and consumes its own events; messages past
@@ -126,6 +157,8 @@
       },
       "vars": {
         "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
+        "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
+        "AI_GATEWAY_NAME": "diletta-production",
       },
       "observability": {
         "logs": {

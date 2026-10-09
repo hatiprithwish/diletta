@@ -174,6 +174,104 @@ export default class CompanySecretsDAL {
     return response;
   }
 
+  // DEV_NOTE: The model router's key lookup. Only an active row: an invalid or revoked key is never used again until
+  // an admin replaces it. isNotFound when the company has no active key for the provider: an expected state (the
+  // router opens a system issue for it), so it's a warning, not an error.
+  async getActiveModelKey(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindActiveModelKeyDALRequest,
+  ) {
+    const response: Schemas.CompanySecretDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.type, Schemas.CompanySecretTypeIntEnum.ModelKey),
+        eq(companySecrets.provider, params.provider),
+        eq(companySecrets.status, Schemas.CompanySecretStatusIntEnum.Active),
+      ];
+      const [companySecret] = await tx
+        .select()
+        .from(companySecrets)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!companySecret) {
+        const message = "No active model key for this provider";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetActiveModelKey,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Active model key fetched successfully";
+      response.companySecret = companySecret;
+    } catch (error) {
+      const message = "Unknown error in fetching active model key";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActiveModelKey,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The model router's key-failure path. Updates only while the row still holds the value that was used
+  // (same iv and key version) and is Active. No match is a success with no companySecret: the admin replaced or
+  // revoked the key since the call, so there is nothing to invalidate.
+  async invalidateModelKey(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.InvalidateModelKeyDALRequest,
+  ) {
+    const response: Schemas.CompanySecretDALResponse = { isSuccess: false };
+    const { iv: _iv, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(companySecrets.publicId, params.publicId),
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.type, Schemas.CompanySecretTypeIntEnum.ModelKey),
+        eq(companySecrets.status, Schemas.CompanySecretStatusIntEnum.Active),
+        eq(companySecrets.iv, Buffer.from(params.iv)),
+        eq(companySecrets.encryptionKeyVersion, params.encryptionKeyVersion),
+      ];
+      const [companySecret] = await tx
+        .update(companySecrets)
+        .set({ status: Schemas.CompanySecretStatusIntEnum.Invalid, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      response.isSuccess = true;
+      response.message = companySecret
+        ? "Model key invalidated successfully"
+        : "Model key changed since the call; left as is";
+      response.companySecret = companySecret;
+    } catch (error) {
+      const message = "Unknown error in invalidating model key";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.InvalidateModelKey,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Not paged: one row per provider or connection credential, so a company has a handful
   async getCompanySecrets(
     tx: NodePgTransaction<EmptyRelations>,

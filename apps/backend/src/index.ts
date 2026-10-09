@@ -11,8 +11,12 @@ import WidgetRoutes from "@/routes/WidgetRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
+import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
 import consumeEvents from "@/queues/EventsConsumer";
+
+// DEV_NOTE: Durable Object classes are exported from the worker's main module (wrangler.jsonc durable_objects)
+export { ConversationDO } from "@/durable-objects/ConversationDO";
 
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests
 await configureLogger();
@@ -57,12 +61,13 @@ export default {
     return app.fetch(req, env, ctx);
   },
 
-  // DEV_NOTE: Two crons (wrangler.jsonc), told apart by controller.cron: every minute the outbox relay sweep + purge,
-  // daily the activity_log partition maintenance
+  // DEV_NOTE: Two crons (wrangler.jsonc), told apart by controller.cron: every minute the outbox relay sweep + purge
+  // and the model_calls usage backfill, daily the activity_log partition maintenance
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     switch (controller.cron) {
       case Constants.OUTBOX_SWEEP_CRON:
-        await runOutboxSweep(env);
+        // DEV_NOTE: Independent jobs; one failing never skips the other (each logs its own failures)
+        await Promise.allSettled([runOutboxSweep(env), runModelCallUsageBackfill(env)]);
         break;
       case Constants.ACTIVITY_LOG_PARTITIONS_CRON:
         await runActivityLogPartitions(env);

@@ -19,7 +19,7 @@ These rules are mandatory per CLAUDE.md.
 - Routes importing directly from DAL
 - Repo building queries with Drizzle (`select`/`insert`/`update`/`delete`/`sql`). Allowed in a Repo: `import type { NodePgDatabase } from "drizzle-orm/node-postgres"`, `getDbClient` and `withTenant` from `@/db/` (see `ChatbotsRepo.ts`)
 - Durable Objects, Queue consumers or Cron handlers calling a DAL directly (they go through a Repo)
-- A provider (`apps/backend/src/providers/`) that calls a DAL without the caller's `tx`, opens `withTenant`/`withPlatform` itself, or builds a Drizzle query. Allowed: a provider calling a DAL with the Repo's `tx` when several Repos share the step (golden: `providers/companyKey.ts`)
+- A provider (`apps/backend/src/providers/`) that calls a DAL without the caller's `tx`, opens `withTenant`/`withPlatform` itself, or builds a Drizzle query. Allowed: a provider calling a DAL with the Repo's `tx` when several Repos share the step (golden: `providers/companyKey.ts`), or when it holds one self-contained multi-DAL step a Repo runs inside its own transaction (`providers/criticalEvent.ts`, `providers/modelKeyFailure.ts`)
 - Web components importing directly from worker DAL/Repo
 
 **Detection:**
@@ -739,12 +739,20 @@ FOREIGN KEY
 
 ### 3.10 Model Calls Only Through the Router [CRITICAL]
 
-**Rule:** Every LLM call goes through the model router (M2-3) on the company's own key via AI Gateway. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
+**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Usage-status rules live only in `ModelCallRecordingProvider`: a call billed without usage (stream cut or cancelled, connection lost, a finish without totals, an unreadable 2xx) is written `usage_status` Pending for the Cron backfill, never Reported at $0; only a 4xx/5xx refusal is Reported at 0. Every model failure reaches the caller as `ModelUnavailableError` (an abort stays an abort): Think sends a stream error's message to the widget verbatim. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
 
 **Violations:**
 
-- Importing a provider SDK outside the model router: `openai`, `@anthropic-ai/sdk`, `@google/genai`, `@google/generative-ai`, `@mistralai/*`, `cohere-ai`, `groq-sdk`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, or any other `@ai-sdk/<provider>`
-- `fetch` to a provider API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, …) or to `gateway.ai.cloudflare.com` outside the router
+- Importing a provider SDK anywhere but `providers/aiGateway.ts`: `openai`, `@anthropic-ai/sdk`, `@google/genai`, `@google/generative-ai`, `@mistralai/*`, `cohere-ai`, `groq-sdk`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, or any other `@ai-sdk/<provider>`
+- `fetch` to a provider API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, …) or to `gateway.ai.cloudflare.com` outside `providers/aiGateway.ts`
+- A model call that skips the router's middleware (no `model_calls` row), or a cost computed outside `computeModelCallCostUsd`
+- A fallback price (0 or a default) for a model missing from `MODEL_PRICES`
+- Letting a provider or gateway error (or its message) out of a routed model's call unwrapped, or deciding a usage status outside `ModelCallRecordingProvider`
+- Wrapping a retryable answer before retrying it (the SDK won't retry a wrapped error), or a retry without a cap, backoff or abort
+- Deciding which providers a system issue covers from its note text instead of its activity events
+- Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape, on a 403, or through the general `updateCompanySecret` (it would invalidate a key the admin replaced meanwhile)
+- Writing a `model_calls` row as Reported with zero usage for a call that reached the provider without a refusal (use Pending with the gateway log id, or Unknown)
+- Logging the decrypted company key or the gateway token, or passing either anywhere but the provider SDK settings
 - `env.AI.run(...)` with a non-embedding model, or anywhere except knowledge ingestion/search
 - A Think `getModel()` that builds a provider client itself instead of asking the router
 - A provider API key read from `env` (platform key) for a company's model call
@@ -757,7 +765,16 @@ api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|gateway
 env\.AI\.run\(
 ```
 
-**Fix:** Call the model router; it decrypts the company key, sets AI Gateway metadata and handles the key-failure path.
+**Examples:**
+
+```
+- ❌ import { createAnthropic } from "@ai-sdk/anthropic"; // in a DO or a Repo
+- ❌ getModel() { return createOpenAI({ apiKey: env.OPENAI_KEY })("gpt-6-sol"); }
+- ❌ const cost = MODEL_PRICES[provider][model]?.inputUsdPerMTok ?? 0;
+- ✅ const routed = await new ModelRouterRepo(env, ctx).getModel({ companyId, …, routing: spec.routing });
+```
+
+**Fix:** Call `ModelRouterRepo.getModel`; it prices the model, decrypts the company key, sets AI Gateway metadata, records `model_calls` and handles the key-failure path (`docs/runbooks/ai-gateway.md`).
 
 ---
 
@@ -1073,36 +1090,67 @@ SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
 
 ### 3.22 Widget Identity Only From a Verified Companion JWT [CRITICAL]
 
-**Rule:** The widget authenticates in-band: its first WebSocket message is `{ type: "auth", token }` (never a token in the URL, a query param or a header), and nothing else is handled until `WidgetAuthRepo.authenticate` succeeds. That method is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required; `crit` rejected) → issuer → `company_connections` row (`withPlatform`) → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer, body capped in bytes while streaming) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `nbf`, `iat`, lifetime ≤ 5 min → connection active and `Origin` in its `allowed_origins` → company active and the chatbot active, in `withTenant`. Every failure before the signature and claims pass is `Unauthorized` (4401), so the close code never tells an unsigned token whether an issuer is registered or an origin allowed. Claims are validated, never transformed (no `.trim()` on `sub`). The identity carries internal ids and stays server-side; the widget gets only a close code (`WidgetCloseCodeEnum`) or `auth_ok` with the chatbot's `publicId`. The token is never logged or stored.
+**Rule:** The widget authenticates before the WebSocket upgrade (ADR 0001): the companion JWT rides in `Sec-WebSocket-Protocol` as `['diletta.v1', <jwt>]` (never in a URL or query param), and `GET /widget/ws` answers with an HTTP status before any socket exists. `WidgetAuthRepo.authenticate` is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required; `crit` rejected) → issuer → `company_connections` row (`withPlatform`) → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer, body capped in bytes while streaming) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `nbf`, `iat`, lifetime ≤ 5 min → connection active and `Origin` in its `allowed_origins` → company active and the chatbot active, in `withTenant`. Every failure before the signature and claims pass is `Unauthorized` (401), so the status never tells an unsigned token whether an issuer is registered or an origin allowed. Claims are validated, never transformed (no `.trim()` on `sub`). The identity carries internal ids and stays server-side; the upgrade is forwarded to the Conversation DO only after `ConversationsRepo.startOrResume`, with a fresh header set the route builds itself. The response selects `diletta.v1` only; the token is never echoed, logged or stored.
 
 **Violations:**
 
-- Reading the companion JWT from a URL, query string or header, or accepting widget messages before `auth_ok`
+- Reading the companion JWT from a URL or query string, or accepting a widget socket before `authenticate` and `startOrResume` succeed
+- Forwarding client headers to the Conversation DO, or letting a client-sent `CONVERSATION_SESSION_HEADER` through
+- Routing the Conversation DO publicly (`routeAgentRequest`, `/agents/*`): it must be reachable only through `GET /widget/ws`
 - Trusting a decoded claim (`iss`, `sub`, `roles`, a `company` claim) before the signature and claims checks pass, other than `iss` to find the connection row
 - Fetching a JWKS (or any URL built from a token) for an issuer with no `company_connections` row, or with `redirect` other than `"error"`
 - Adding `none`, `HS*` or any symmetric algorithm to the allowlist, or picking the verify algorithm from the JWK instead of the pinned header `alg`
 - Importing a JWK with its private members, as extractable, or with usages beyond `["verify"]`
-- A second widget auth path that skips `WidgetAuthRepo.authenticate` (the Conversation DO from M2-2 calls the same method)
-- A check that answers anything but `Unauthorized` before the signature and claims pass (an issuer, connection-status or origin oracle)
-- Reading a JWKS (or any fetched body) without a byte cap enforced while streaming (`await res.text()` before a length check)
-- Logging the token, or telling the widget which check failed
+- A check that answers anything but 401 before the signature and claims pass (an issuer, connection-status or origin oracle)
+- Reading a JWKS (or any fetched body) without a byte cap enforced while streaming
+- Logging the token, echoing it in the selected subprotocol, or telling the widget which check failed
 
 **Detection Pattern:**
 
 ```regex
-alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=
+alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRequest
 ```
 
 **Examples:**
 
 ```
 - ❌ new WebSocket(`${url}?token=${jwt}`)
-- ❌ const claims = JSON.parse(atob(token.split(".")[1])); companyId = claims.company;
-- ❌ await fetch(`${claims.iss}/.well-known/jwks.json`) // before the issuer lookup
-- ✅ const result = await new WidgetAuthRepo(env).authenticate({ token, origin, chatbotPublicId });
+- ❌ return routeAgentRequest(request, env); // exposes /agents/conversation-do/<name>
+- ❌ await stub.fetch(c.req.raw); // forwards client headers to the DO
+- ✅ new WebSocket(url, ["diletta.v1", jwt]); // widget
+- ✅ authenticate → startOrResume → getAgentByName(env.CONVERSATION_DO, publicId).fetch(new Request(url, { headers }))
 ```
 
-**Fix:** Send the token as the first message and route it through `WidgetAuthRepo.authenticate`; map `failure` with `WIDGET_AUTH_FAILURE_CLOSE_CODE_MAP`. See `routes/WidgetRoutes.ts`, `providers/widgetJwt.ts`, `providers/jwks.ts`.
+**Fix:** Send the token in the subprotocol and route it through `WidgetAuthRepo.authenticate`; map `failure` with `WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP`. See `routes/WidgetRoutes.ts`, `providers/widgetJwt.ts`, `providers/jwks.ts`, ADR 0001.
+
+---
+
+### 3.23 Conversation DO Stays Server-Authoritative [CRITICAL]
+
+**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools: []` until tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames; everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
+
+**Violations:**
+
+- Removing or widening the frame allowlist, or passing a client chat body through unchanged (client history, `clientTools`, custom fields, `trigger: "regenerate-message"`)
+- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin
+- Returning a raw error or provider message from `onChatError`
+- Calling a model outside `ModelRouterRepo.getModel` (pattern rule 3.10), or running a turn without a fresh `loadTurnConfig`
+- Writing the read model anywhere but `ConversationsRepo.recordTurn`, or reading `messages` into a turn (the Think session is the source of truth)
+- `this.configure({ ...state, … })` with a `state` read before an `await`
+- Checking company, chatbot or conversation status only at connect time (they change while a socket is open)
+- An auto-close or retry scheduled at a time that may already have passed
+- Recording a turn's messages only once with no catch-up (a failed write or an eviction loses them)
+- Reading `this.messages` in `webSocketMessage` before `__unsafe_ensureInitialized()` (after a hibernation wake it is empty), or syncing by array index
+- Closing a conversation while its read model has an unsynced backlog, or doing database work inside `onStart` (it blocks every event)
+- Keeping the host bearer token in Think state, `configure`, SQLite or a connection attachment (pattern rule 3.11)
+
+**Detection Pattern:**
+
+```regex
+workspaceBash\s*=\s*true|includeMcpTools\s*=\s*true|fetchTools\s*=\s*\{
+```
+
+**Fix:** Mirror `durable-objects/ConversationDO.ts`.
 
 ---
 
@@ -1193,5 +1241,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id)
 Maintainer: hatiprithwish

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "UNQ_messages_conversation_id_session_message_id" ON "messages" ("conversation_id","session_message_id");

@@ -97,7 +97,7 @@ Build against `docs/architecture/companion-architecture-v0_15.excalidraw` (30 ta
 
 **Edge and identity**
 
-- Widget talks over WebSocket, JWT sent as the first message. Issuer → `company_connections` row, JWKS derived from issuer.
+- Widget talks over WebSocket, JWT sent in `Sec-WebSocket-Protocol` and verified before the upgrade (ADR 0001; was: JWT as the first message). Issuer → `company_connections` row, JWKS derived from issuer.
 - `/eval/*` accepts only a platform-signed eval JWT, and only for staging connections.
 - One `can(admin, action, resource)` check for every dashboard action.
 

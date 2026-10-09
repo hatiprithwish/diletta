@@ -8,3 +8,9 @@ export type CreateActivityLogDALRequest = ActivityLogBase & Pick<ActivityLog, "c
 export interface CreateActivityLogPartitionDALRequest {
   monthStart: Date;
 }
+
+// DEV_NOTE: The log rows of one entity (IDX_activity_log_entity_id), oldest first, at most limit of them
+export type GetActivityLogsByEntityDALRequest = Pick<ActivityLog, "companyId" | "entityType"> & {
+  entityId: string;
+  limit: number;
+};

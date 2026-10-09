@@ -1,5 +1,5 @@
 import type { NullableDALFields } from "../common";
-import type { CompanySecret } from "./CompanySecretsCommon";
+import type { CompanySecret, ModelProviderEnum } from "./CompanySecretsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // The secret arrives already encrypted by the Repo; plaintext never reaches the DAL.
@@ -28,3 +28,16 @@ export type UpdateCompanySecretDALRequest = FindCompanySecretDALRequest &
       iv: Uint8Array;
     }
   >;
+
+// Params to find a company's active model key for one provider (at most one: UNQ_company_secrets_company_id_provider_active)
+export type FindActiveModelKeyDALRequest = Pick<CompanySecret, "companyId"> & {
+  provider: ModelProviderEnum;
+};
+
+// DEV_NOTE: Marks a model key Invalid only if the row still holds the exact value that was used (iv and key version
+// change on every replacement) and is still Active, so a late rejection never touches a key the admin has replaced
+// or revoked since.
+export type InvalidateModelKeyDALRequest = Pick<
+  CompanySecret,
+  "companyId" | "publicId" | "iv" | "encryptionKeyVersion"
+>;

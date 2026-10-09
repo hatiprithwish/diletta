@@ -1,3 +1,5 @@
+import z from "zod";
+
 export enum QualityIssueSourceIntEnum {
   User = 1,
   Admin = 2,
@@ -69,3 +71,26 @@ export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
   [QualityIssueTypeIntEnum.ModelError]: QualityIssueTypeLabelEnum.ModelError,
   [QualityIssueTypeIntEnum.Injection]: QualityIssueTypeLabelEnum.Injection,
 };
+
+// Whole Quality Issue Body — DB shape (enums stored as integers)
+// DEV_NOTE: id, companyId, conversationId, changeRequestId, feedbackId, evalCaseId, createdBy and updatedBy are
+// internal bigint ids — used by DAL/Repo only, NEVER sent to a client. CHECKs tie feedbackId to source = User,
+// createdBy to source = Admin and evalCaseId to status = Converted.
+export const ZQualityIssue = z.object({
+  id: z.string(),
+  publicId: z.string(),
+  companyId: z.string(),
+  conversationId: z.string(),
+  changeRequestId: z.string().nullable(),
+  feedbackId: z.string().nullable(),
+  source: z.enum(QualityIssueSourceIntEnum),
+  status: z.enum(QualityIssueStatusIntEnum),
+  issueType: z.enum(QualityIssueTypeIntEnum).nullable(),
+  note: z.string().nullable(),
+  evalCaseId: z.string().nullable(),
+  createdBy: z.string().nullable(),
+  updatedBy: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+export type QualityIssue = z.infer<typeof ZQualityIssue>;

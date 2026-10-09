@@ -1,0 +1,1 @@
+Do a solid code review of all the file changes present in the repo. Verify properly if there's any plausible bugs. Also check for unclean code which breaks SOLID principles and best practices. Report all of these issues.

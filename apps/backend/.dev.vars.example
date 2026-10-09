@@ -24,3 +24,7 @@ CLOUDFLARE_ACCOUNT_ID=  # ci-required
 # shares the staging database, so a different value makes company keys unreadable.
 # Get it from the team password manager — see docs/runbooks/master-key.md.
 MASTER_KEY_V1=          # local-only
+
+# AI Gateway token for the model router (cf-aig-authorization), staging gateway.
+# MUST equal the staging Secrets Store secret `diletta-aig-token-staging` — see docs/runbooks/ai-gateway.md.
+AI_GATEWAY_TOKEN=       # local-only

@@ -6,6 +6,10 @@ export interface ActivityLogDALResponse extends ApiResponse {
   activityLog?: ActivityLog;
 }
 
+export interface ActivityLogsDALResponse extends ApiResponse {
+  activityLogs?: ActivityLog[];
+}
+
 // DEV_NOTE: wasCreated = false when the month's partition already existed
 export interface ActivityLogPartitionDALResponse extends ApiResponse {
   partitionName?: string;
