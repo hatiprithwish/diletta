@@ -1156,17 +1156,21 @@ workspaceBash\s*=\s*true|includeMcpTools\s*=\s*true|fetchTools\s*=\s*\{
 
 ### 3.24 Every Model Call Reserved Against the Budget [CRITICAL]
 
-**Rule:** Every provider call a routed model makes (each retry too) first reserves its worst-case cost, and a refused call never reaches the provider. The reserve lives only in the router path: `ModelCallRecordingProvider` caps `maxOutputTokens` (`MODEL_CALL_MAX_OUTPUT_TOKENS`, and the caller's tokens left) and calls `budget.reserve` before each attempt; `ModelRouterRepo` holds the caller's caps (`GetModelRequest.caps`, the Conversation DO's `TurnBudgetProvider`) and then the company's `BudgetDO.reserve`, and settles each record against its own reservation. A call whose usage isn't known (Pending / Unknown) stays counted at its whole hold; an unsettled hold expires into spend, never back to free. `BudgetDO` (one per company, named by `companies.id`) is the only place company and chatbot-user spend is counted live; its arithmetic lives in `BudgetLedgerProvider` (pure, in micro-dollars) and its only Neon read is `BudgetRepo.getBudgetSeed` (NULL `spending_budget` = `DEFAULT_SPENDING_BUDGET_USD`). It fails closed: no ledger for the current period (Neon or the DO unreachable) refuses with `Unavailable`. The Conversation DO admits a turn only after its own caps and `BudgetDO.admitTurn`; a rate refusal answers `BUDGET_RATE_LIMIT_MESSAGE`, anything else `unavailable`, and the message isn't saved.
+**Rule:** Every provider call a routed model makes (each retry too) is sized and held before it goes out, and a refused call never reaches the provider. `ModelCallRecordingProvider` estimates the prompt once per call, asks `budget.reserve` per attempt and sends that attempt with the hold's `maxOutputTokens`. `ModelCallBudgetProvider` is the only place a hold is sized, reserved and settled: input at the plain input rate, output cut to the caller's output tokens and cost left (refused under `MODEL_CALL_MIN_OUTPUT_TOKENS`), held by `GetModelRequest.caps` (the Conversation DO's `TurnBudget`) and then `BudgetDO.reserve`; each record settles its own hold. A call whose usage isn't known keeps its whole cost hold (never free) and counts no output tokens; an unsettled hold expires into spend. `maxTokensPerTurn` counts output tokens only. `BudgetDO` (one per company, reached only via `BudgetDO.forCompany`) is the only place company and chatbot-user spend is counted live: it Zod-parses every request, charges expired holds before reading the ledger for a check, keeps its arithmetic in `BudgetLedgerProvider` (pure, micro-dollars), reads Neon only through `BudgetRepo.getBudgetSeed` (NULL `spending_budget` = `DEFAULT_SPENDING_BUDGET_USD`), backs off a failed read for `BUDGET_LOAD_RETRY_MS`, and fails closed (`Unavailable`). The Conversation DO checks its own caps before routing and `BudgetDO.admitTurn` after it; a rate refusal answers `BUDGET_RATE_LIMIT_MESSAGE`, anything else `unavailable`, and the message isn't saved.
 
 **Violations:**
 
-- A model call that sends before `budget.reserve` resolves, or a refused reservation that still calls the provider (or retries)
-- A `ModelCallRecordingProvider.createMiddleware` without a real `budget` outside its unit test, or a `GetModelRequest` from the Conversation DO with `caps: null`
+- A model call that sends before `budget.reserve` resolves, a refused hold that still calls the provider (or retries), or an attempt sent with a `maxOutputTokens` other than its hold's
+- Sizing, pricing or settling a hold outside `ModelCallBudgetProvider`, or a `ModelCallRecordingProvider.createMiddleware` without a real `budget` outside its unit test
+- A `GetModelRequest` from the Conversation DO with `caps: null`
 - Counting money in float dollars inside the budget path instead of micro-dollars (`usdToMicros`), or rounding a hold down
 - Settling a Pending / Unknown call at 0, or releasing an expired reservation instead of charging it
-- An `await` between reading BudgetDO's ledger or reservations and writing them (two calls could share the last of a budget)
+- Reading BudgetDO's ledger for a check before its expired holds are charged, or an `await` between reading BudgetDO's state and writing it
+- Storing an RPC request in BudgetDO without parsing it (`ZReserveBudgetRequest` etc.)
 - A refusal treated as allowed when BudgetDO can't be reached or read (fail open)
-- Turn or conversation caps checked only once per turn instead of before every call, or `turnTimeoutSeconds` / `maxTokensPerTurn` left out of `beforeTurn`
+- `env.BUDGET_DO.getByName(…)` anywhere but `BudgetDO.forCompany`
+- Counting prompt tokens against `maxTokensPerTurn`, or using up a rate slot before the turn's model is routed
+- Turn or conversation caps checked only once per turn instead of before every call, or `turnTimeoutSeconds` left out of `beforeTurn`
 - Reading a company's budget or spend for BudgetDO outside `BudgetRepo` (tenant data, `withTenant`)
 
 **Detection Pattern:**
@@ -1174,6 +1178,7 @@ workspaceBash\s*=\s*true|includeMcpTools\s*=\s*true|fetchTools\s*=\s*\{
 ```regex
 createMiddleware\(\{(?![\s\S]{0,200}budget)
 caps:\s*null
+BUDGET_DO\.getByName
 ```
 
 **Examples:**
@@ -1181,10 +1186,11 @@ caps:\s*null
 ```
 - ❌ const reserved = await stub.reserve(req).catch(() => ({ isSuccess: true }));
 - ❌ spentUsd += Number(costUsd);
-- ✅ params.caps?.reserve({ amountMicros, tokens }) ?? (await this.budgetDo(companyId).reserve({ … }))
+- ❌ const ledger = this.getLedger(); const reservations = this.liveReservations(now); // stale ledger
+- ✅ budget: { reserve: (estimate) => ModelCallBudgetProvider.reserve(this.env, { request: params, price, estimate }) }
 ```
 
-**Fix:** Route through `ModelRouterRepo.getModel` with the turn's `TurnBudgetProvider`; mirror `durable-objects/BudgetDO.ts` and `providers/budgetLedger.ts` (`docs/runbooks/budget.md`).
+**Fix:** Route through `ModelRouterRepo.getModel` with the turn's `TurnBudget`; mirror `providers/modelCallBudget.ts`, `durable-objects/BudgetDO.ts` and `providers/budgetLedger.ts` (`docs/runbooks/budget.md`).
 
 ---
 

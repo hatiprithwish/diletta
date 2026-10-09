@@ -10,41 +10,38 @@ const RESERVATION_PREFIX = "reservation:";
 const USER_PREFIX = "user:";
 
 // DEV_NOTE: BudgetDO (M2-4): one per company, named by companies.id (internal; reached only from the worker and the
-// Conversation DO, never routed publicly). The live counters behind every model call's budget check:
+// Conversation DO through BudgetDO.forCompany, never routed publicly). The live counters behind every model call:
 //   - admitTurn: before a turn (Conversation DO): user message rate, and room left in the company budget and the
 //     user's daily cap.
-//   - reserve: before every provider call (ModelRouterRepo, through the recording middleware): the call's worst-case
-//     cost is held, or the call is refused and never reaches the provider.
+//   - reserve: before every provider call (ModelCallBudgetProvider): the call's worst-case cost is held, or the call
+//     is refused and never reaches the provider.
 //   - settle: after the call: the hold is replaced by the real cost (or kept whole when the cost isn't known yet).
-// Plain DurableObject (no Think/Agents: no sockets, no chat), state in its SQLite kv, synchronous between awaits. The
-// only await is the Neon read (BudgetRepo): the budget, re-read every BUDGET_REFRESH_MS, and when a period starts (or
-// on first use) the period's spend so far from model_calls. Every check and write after it runs with no await in
-// between, so concurrent calls can't both take the last of the budget. Fails closed: no ledger for the current period
-// (Neon unreachable) refuses with Unavailable. A stale budget (a refresh failed) is kept until the next refresh.
+// Plain DurableObject (no Think/Agents: no sockets, no chat), state in its SQLite kv, synchronous between awaits. Every
+// request is parsed first (this is a trust boundary). The only await is the Neon read (BudgetRepo): the budget, re-read
+// every BUDGET_REFRESH_MS, and when a period starts (or on first use) the period's spend so far from model_calls. After
+// it, expired holds are charged and then the ledger is read, checked and written with no await in between, so
+// concurrent calls can't both take the last of the budget. Fails closed: no ledger for the current period (Neon
+// unreachable) refuses with Unavailable. A failed load isn't retried for BUDGET_LOAD_RETRY_MS (a stale budget is kept
+// meanwhile), so an outage doesn't add a Neon timeout to every call.
 export class BudgetDO extends DurableObject<Env> {
   private loading: Promise<void> | null = null;
+  private lastFailedLoadAt = 0;
 
-  async admitTurn(
-    request: Schemas.AdmitBudgetTurnRequest,
-  ): Promise<Schemas.BudgetAdmissionResponse> {
-    if (!(await this.ensureLedger(request.companyId))) {
-      return this.refuse(
-        Schemas.LogAction.AdmitBudgetTurn,
-        Schemas.BudgetRefusalEnum.Unavailable,
-        request,
-      );
-    }
+  // DEV_NOTE: The only way to reach a company's BudgetDO, so the naming rule lives in one place
+  static forCompany(env: Env, companyId: string): DurableObjectStub<BudgetDO> {
+    return env.BUDGET_DO.getByName(companyId);
+  }
 
-    const now = Date.now();
-    const ledger = this.getLedger();
-    if (!ledger) {
-      return this.refuse(
-        Schemas.LogAction.AdmitBudgetTurn,
-        Schemas.BudgetRefusalEnum.Unavailable,
-        request,
-      );
-    }
-    const reservations = this.liveReservations(now);
+  async admitTurn(raw: Schemas.AdmitBudgetTurnRequest): Promise<Schemas.BudgetAdmissionResponse> {
+    const action = Schemas.LogAction.AdmitBudgetTurn;
+    const parsed = Schemas.ZAdmitBudgetTurnRequest.safeParse(raw);
+    if (!parsed.success) return this.reject(action, raw);
+    const request = parsed.data;
+
+    const opened = await this.openLedger(request.companyId);
+    if (!opened) return this.refuse(action, Schemas.BudgetRefusalEnum.Unavailable, request);
+    const { ledger, reservations, now } = opened;
+
     const user = BudgetLedgerProvider.userCounters(
       this.getUser(request.chatbotUserId),
       ledger.dayKey,
@@ -61,30 +58,21 @@ export class BudgetDO extends DurableObject<Env> {
     });
     this.putUser(request.chatbotUserId, admitted.user);
     if (admitted.refusal) {
-      return this.refuse(Schemas.LogAction.AdmitBudgetTurn, admitted.refusal, request);
+      return this.refuse(action, admitted.refusal, request);
     }
     return { isSuccess: true, message: "Turn admitted" };
   }
 
-  async reserve(request: Schemas.ReserveBudgetRequest): Promise<Schemas.BudgetReservationResponse> {
-    if (!(await this.ensureLedger(request.companyId))) {
-      return this.refuse(
-        Schemas.LogAction.ReserveBudget,
-        Schemas.BudgetRefusalEnum.Unavailable,
-        request,
-      );
-    }
+  async reserve(raw: Schemas.ReserveBudgetRequest): Promise<Schemas.BudgetReservationResponse> {
+    const action = Schemas.LogAction.ReserveBudget;
+    const parsed = Schemas.ZReserveBudgetRequest.safeParse(raw);
+    if (!parsed.success) return this.reject(action, raw);
+    const request = parsed.data;
 
-    const now = Date.now();
-    const ledger = this.getLedger();
-    if (!ledger) {
-      return this.refuse(
-        Schemas.LogAction.ReserveBudget,
-        Schemas.BudgetRefusalEnum.Unavailable,
-        request,
-      );
-    }
-    const reservations = this.liveReservations(now);
+    const opened = await this.openLedger(request.companyId);
+    if (!opened) return this.refuse(action, Schemas.BudgetRefusalEnum.Unavailable, request);
+    const { ledger, reservations, now } = opened;
+
     const user =
       request.chatbotUserId === null
         ? null
@@ -105,7 +93,7 @@ export class BudgetDO extends DurableObject<Env> {
       amountMicros: request.amountMicros,
     });
     if (refusal) {
-      return this.refuse(Schemas.LogAction.ReserveBudget, refusal, request);
+      return this.refuse(action, refusal, request);
     }
 
     const reservationId = crypto.randomUUID();
@@ -123,7 +111,11 @@ export class BudgetDO extends DurableObject<Env> {
 
   // DEV_NOTE: No Neon read: a settle only moves a hold into spend. An unknown id (already expired and counted, or
   // settled twice) is a no-op success.
-  async settle(request: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
+  async settle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
+    const parsed = Schemas.ZSettleBudgetRequest.safeParse(raw);
+    if (!parsed.success) return this.reject(Schemas.LogAction.SettleBudget, raw);
+    const request = parsed.data;
+
     const ledger = this.getLedger();
     if (!ledger || ledger.companyId !== request.companyId) {
       AppLogger.error({
@@ -144,9 +136,24 @@ export class BudgetDO extends DurableObject<Env> {
     return { isSuccess: true, message: "Budget settled" };
   }
 
+  // DEV_NOTE: The shared opening of admitTurn and reserve: a ledger for this company and the current period (loaded
+  // when due), then the expired holds charged, and only then the ledger read the caller checks against, so an expired
+  // hold is counted as spent, never dropped from both spent and held. null = no usable ledger (fail closed).
+  private async openLedger(companyId: string): Promise<{
+    ledger: Schemas.BudgetLedger;
+    reservations: Schemas.BudgetReservation[];
+    now: number;
+  } | null> {
+    if (!(await this.ensureLedger(companyId))) return null;
+    const now = Date.now();
+    const reservations = this.liveReservations(now);
+    const ledger = this.getLedger();
+    return ledger ? { ledger, reservations, now } : null;
+  }
+
   // DEV_NOTE: true when there is a ledger for this company and the current period. Loads it (one load at a time; a
   // caller arriving meanwhile waits for the same one) when the period changed, the DO is new, or the budget is due for
-  // a refresh. A failed refresh keeps the current period's ledger as it was.
+  // a refresh, unless a load failed within BUDGET_LOAD_RETRY_MS. A failed refresh keeps the current period's ledger.
   private async ensureLedger(companyId: string): Promise<boolean> {
     const stored = this.getLedger();
     if (stored && stored.companyId !== companyId) {
@@ -162,7 +169,8 @@ export class BudgetDO extends DurableObject<Env> {
     const now = Date.now();
     const isCurrent = stored?.periodKey === Schemas.budgetPeriodKey(now);
     const isFresh = isCurrent && now - (stored?.budgetLoadedAt ?? 0) < Constants.BUDGET_REFRESH_MS;
-    if (!isFresh) {
+    const isBackingOff = now - this.lastFailedLoadAt < Constants.BUDGET_LOAD_RETRY_MS;
+    if (!isFresh && (!isBackingOff || this.loading)) {
       this.loading ??= this.loadLedger(companyId).finally(() => {
         this.loading = null;
       });
@@ -189,13 +197,17 @@ export class BudgetDO extends DurableObject<Env> {
       isSpendNeeded,
     });
     if (!seed.isSuccess || seed.spendingBudgetUsd === undefined) {
+      this.lastFailedLoadAt = Date.now();
       return;
     }
 
     const budgetMicros = Schemas.usdToMicros(seed.spendingBudgetUsd);
     const current = this.getLedger();
     if (isSpendNeeded || !current || current.periodKey !== periodKey) {
-      if (seed.spentUsd === undefined) return;
+      if (seed.spentUsd === undefined) {
+        this.lastFailedLoadAt = Date.now();
+        return;
+      }
       const opened = BudgetLedgerProvider.openPeriod({
         companyId,
         now: startedAt,
@@ -271,6 +283,24 @@ export class BudgetDO extends DurableObject<Env> {
     if (reservation.chatbotUserId !== null && settled.user) {
       this.putUser(reservation.chatbotUserId, settled.user);
     }
+  }
+
+  // DEV_NOTE: A request that doesn't parse is refused (fail closed) and logged as an error: callers are our own code
+  private reject(
+    action: Schemas.LogAction,
+    raw: unknown,
+  ): { isSuccess: false; message: string; refusal: Schemas.BudgetRefusalEnum } {
+    AppLogger.error({
+      category: Schemas.LogCategory.Budget,
+      action,
+      message: "Invalid budget request",
+      metadata: { request: raw },
+    });
+    return {
+      isSuccess: false,
+      message: "Invalid budget request",
+      refusal: Schemas.BudgetRefusalEnum.Unavailable,
+    };
   }
 
   private refuse(

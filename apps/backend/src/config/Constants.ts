@@ -73,14 +73,17 @@ export default class Constants {
   static readonly MODEL_CALL_RETRY_MAX_DELAY_MS = 10_000;
 
   // DEV_NOTE: Budget (M2-4). Every provider call is sized at its worst case before it goes out: the prompt at
-  // BUDGET_CHARS_PER_INPUT_TOKEN characters per token (fewer than any tokenizer averages, so it overcounts) plus
-  // maxOutputTokens, which the recording middleware caps at MODEL_CALL_MAX_OUTPUT_TOKENS and at the turn's tokens left.
-  // BudgetDO re-reads companies.spending_budget every BUDGET_REFRESH_MS, so an admin's change applies within it. A
-  // reservation never settled (its caller was evicted mid-call) is counted as spent after BUDGET_RESERVATION_TTL_MS,
-  // longer than the longest turn (turnTimeoutSeconds ≤ 900) so a live call is never expired.
+  // BUDGET_CHARS_PER_INPUT_TOKEN characters per token (fewer than any tokenizer averages, so it overcounts) plus its
+  // maxOutputTokens: at most MODEL_CALL_MAX_OUTPUT_TOKENS, cut to the turn's output tokens and cost left; under
+  // MODEL_CALL_MIN_OUTPUT_TOKENS the call is refused instead. BudgetDO re-reads companies.spending_budget every
+  // BUDGET_REFRESH_MS, so an admin's change applies within it; a failed read is retried no sooner than
+  // BUDGET_LOAD_RETRY_MS. A reservation never settled (its caller was evicted mid-call) is counted as spent after
+  // BUDGET_RESERVATION_TTL_MS, longer than the longest turn (turnTimeoutSeconds ≤ 900) so a live call is never expired.
   static readonly MODEL_CALL_MAX_OUTPUT_TOKENS = 8_192;
+  static readonly MODEL_CALL_MIN_OUTPUT_TOKENS = 256;
   static readonly BUDGET_CHARS_PER_INPUT_TOKEN = 3;
   static readonly BUDGET_REFRESH_MS = 60_000;
+  static readonly BUDGET_LOAD_RETRY_MS = 5_000;
   static readonly BUDGET_RESERVATION_TTL_MS = 20 * 60_000;
   static readonly BUDGET_MESSAGE_WINDOW_MS = 60_000;
   static readonly BUDGET_TURN_WINDOW_MS = 60 * 60_000;

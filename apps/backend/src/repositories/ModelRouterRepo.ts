@@ -1,17 +1,16 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { LanguageModel } from "ai";
-import Constants from "@/config/Constants";
 import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AiGatewayProvider from "@/providers/aiGateway";
 import CompanyKeyProvider from "@/providers/companyKey";
+import ModelCallBudgetProvider from "@/providers/modelCallBudget";
 import AppLogger from "@/providers/logger";
 import ModelCallRecordingProvider from "@/providers/modelCallRecording";
 import ModelKeyFailureProvider from "@/providers/modelKeyFailure";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import ModelCallsRepo from "@/repositories/ModelCallsRepo";
-import type { BudgetDO } from "@/durable-objects/BudgetDO";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The model router (M2-3), the only way to a chat model (pattern rule 3.10). getModel:
@@ -22,10 +21,9 @@ import * as Schemas from "@app/schemas";
 //   4. AiGatewayProvider builds the provider-native model on AI Gateway, wrapped by ModelCallRecordingProvider: each
 //      call is recorded (ModelCallsRepo.recordModelCall, in waitUntil), every failure becomes a ModelUnavailableError,
 //      and a key the provider rejects runs the key-failure step (ModelKeyFailureProvider) before the error leaves.
-//   5. budget (M2-4): every provider call (each retry too) first reserves its worst-case cost: the caller's caps
-//      (request.caps, held in its memory), then the company's BudgetDO (company budget + chatbot user's daily cap).
-//      A refusal raises BudgetExceeded and the call never reaches the provider. When the call ends its record settles
-//      the hold with the real cost (the whole hold when usage isn't known: Pending / Unknown stay counted).
+//   5. budget (M2-4): every provider call (each retry too) is sized and held first by ModelCallBudgetProvider: the
+//      caller's caps (request.caps), then the company's BudgetDO. A refusal raises BudgetExceeded and the call never
+//      reaches the provider. Each record settles its own hold (the whole hold when usage isn't known).
 // Every response failure is shown to the widget as MODEL_UNAVAILABLE_MESSAGE; the reason is logged only.
 export default class ModelRouterRepo {
   private env: Env;
@@ -109,13 +107,16 @@ export default class ModelRouterRepo {
       middleware: ModelCallRecordingProvider.createMiddleware({
         provider,
         budget: {
-          maxOutputTokens: (estimatedInputTokens) =>
-            params.caps?.maxOutputTokens(estimatedInputTokens) ??
-            Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
-          reserve: (estimate) => this.reserveBudget(params, price, estimate),
+          reserve: (estimate) =>
+            ModelCallBudgetProvider.reserve(this.env, { request: params, price, estimate }),
         },
-        onRecord: (record, reservation) => {
-          this.settleBudget(params, price, record, reservation);
+        onRecord: (record, hold) => {
+          ModelCallBudgetProvider.settle(this.env, this.ctx, {
+            request: params,
+            price,
+            record,
+            hold,
+          });
           this.ctx.waitUntil(this.modelCallsRepo.recordModelCall({ context, record }));
         },
         onRejectedKey: async () => {
@@ -138,123 +139,6 @@ export default class ModelRouterRepo {
     }
 
     return { isSuccess: true, message: "Model routed successfully", model: created.model };
-  }
-
-  // DEV_NOTE: Holds one call's worst case: priced from MODEL_PRICES at the estimate (every input token at the dearer
-  // of the input and cache-write prices, all of maxOutputTokens), then held by the caller's caps and by BudgetDO. A
-  // BudgetDO refusal (or an unreachable BudgetDO: fail closed) releases the caps' hold. Never throws.
-  private async reserveBudget(
-    params: Schemas.GetModelRequest,
-    price: Schemas.ModelPrice,
-    estimate: Schemas.ModelCallEstimate,
-  ): Promise<Schemas.ModelCallReservation> {
-    const amountMicros = Schemas.usdToMicros(
-      Schemas.computeModelCallCostUsd(price, {
-        inputTokens: estimate.inputTokens,
-        cacheReadTokens: 0,
-        cacheWriteTokens:
-          price.cacheWriteUsdPerMTok > price.inputUsdPerMTok ? estimate.inputTokens : 0,
-        outputTokens: estimate.maxOutputTokens,
-      }),
-    );
-    const tokens = estimate.inputTokens + estimate.maxOutputTokens;
-    const metadata = {
-      companyId: params.companyId,
-      conversationId: params.conversationId,
-      turnId: params.turnId,
-      amountMicros,
-    };
-
-    const localRefusal = params.caps?.reserve({ amountMicros, tokens }) ?? null;
-    if (localRefusal) {
-      AppLogger.warn({
-        category: Schemas.LogCategory.Budget,
-        action: Schemas.LogAction.ReserveBudget,
-        message: "Caller's cap refused the call",
-        metadata: { ...metadata, refusal: localRefusal },
-      });
-      return { isSuccess: false, refusal: localRefusal };
-    }
-
-    let reserved: Schemas.BudgetReservationResponse;
-    try {
-      reserved = await this.budgetDo(params.companyId).reserve({
-        companyId: params.companyId,
-        chatbotUserId: params.chatbotUserId,
-        userDailyCostCapUsd:
-          params.chatbotUserId === null ? null : (params.caps?.userDailyCostCapUsd ?? null),
-        amountMicros,
-      });
-    } catch (error) {
-      AppLogger.error({
-        category: Schemas.LogCategory.Budget,
-        action: Schemas.LogAction.ReserveBudget,
-        message: "BudgetDO unreachable; call refused",
-        error,
-        metadata,
-      });
-      reserved = { isSuccess: false, refusal: Schemas.BudgetRefusalEnum.Unavailable };
-    }
-
-    if (!reserved.isSuccess || !reserved.reservationId) {
-      params.caps?.settle({ amountMicros, tokens, costMicros: 0, usedTokens: 0 });
-      return {
-        isSuccess: false,
-        refusal: reserved.refusal ?? Schemas.BudgetRefusalEnum.Unavailable,
-      };
-    }
-    return { isSuccess: true, reservationId: reserved.reservationId, amountMicros, tokens };
-  }
-
-  // DEV_NOTE: Replaces a call's hold with what it cost: priced from its usage, or the whole hold when the usage isn't
-  // known. The caps settle at once (the next step of the turn sees it); BudgetDO in waitUntil. A failed BudgetDO
-  // settle is logged; the hold then expires into spend (BUDGET_RESERVATION_TTL_MS), so it is never lost.
-  private settleBudget(
-    params: Schemas.GetModelRequest,
-    price: Schemas.ModelPrice,
-    record: Schemas.ModelCallRecord,
-    reservation: Extract<Schemas.ModelCallReservation, { isSuccess: true }>,
-  ): void {
-    const costMicros = record.usage
-      ? Schemas.usdToMicros(Schemas.computeModelCallCostUsd(price, record.usage))
-      : null;
-    params.caps?.settle({
-      amountMicros: reservation.amountMicros,
-      tokens: reservation.tokens,
-      costMicros: costMicros ?? reservation.amountMicros,
-      usedTokens: record.usage
-        ? record.usage.inputTokens + record.usage.outputTokens
-        : reservation.tokens,
-    });
-
-    this.ctx.waitUntil(
-      this.budgetDo(params.companyId)
-        .settle({
-          companyId: params.companyId,
-          reservationId: reservation.reservationId,
-          costMicros,
-        })
-        .then((settled) => {
-          if (!settled.isSuccess) throw new Error(settled.message ?? "Settle refused");
-        })
-        .catch((error: unknown) => {
-          AppLogger.error({
-            category: Schemas.LogCategory.Budget,
-            action: Schemas.LogAction.SettleBudget,
-            message: "Budget not settled; the hold expires into spend",
-            error,
-            metadata: {
-              companyId: params.companyId,
-              conversationId: params.conversationId,
-              reservationId: reservation.reservationId,
-            },
-          });
-        }),
-    );
-  }
-
-  private budgetDo(companyId: string): DurableObjectStub<BudgetDO> {
-    return this.env.BUDGET_DO.getByName(companyId);
   }
 
   // DEV_NOTE: The provider's active key, decrypted, and which exact value it is (for a later invalidation).

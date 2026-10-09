@@ -34,27 +34,22 @@ export class ModelUnavailableError extends Error {
 // before the call starts streaming, honouring retry-after (capped) and the caller's abort. They happen here because the
 // SDK only retries its own retryable errors, and the middleware must hand it the safe error instead.
 // A rejected company key runs onRejectedKey before the error leaves, so the next turn already finds no active key.
-// Budget (M2-4): maxOutputTokens is capped (MODEL_CALL_MAX_OUTPUT_TOKENS, and what budget.maxOutputTokens allows for
-// the turn), and every attempt reserves its worst case (budget.reserve) before it is sent. A refused attempt never
-// reaches the provider and raises BudgetExceeded (not retried, not recorded: nothing was called). Each record carries
-// its attempt's reservation, so the caller settles exactly that hold.
+// Budget (M2-4): the prompt is estimated once per call; before each attempt (retries too) budget.reserve sizes and
+// holds it, and the attempt is sent with the hold's maxOutputTokens (never more than MODEL_CALL_MAX_OUTPUT_TOKENS or the
+// caller's own setting), straight to the wrapped model so a retry can get a fresh size. A refused attempt never reaches
+// the provider and raises BudgetExceeded (not retried, not recorded: nothing was called). Each record carries its
+// attempt's hold, so the caller settles exactly that hold.
 export default class ModelCallRecordingProvider {
   static createMiddleware(params: {
     provider: Schemas.ModelProviderEnum;
     budget: {
-      maxOutputTokens: (estimatedInputTokens: number) => number;
-      reserve: (estimate: Schemas.ModelCallEstimate) => Promise<Schemas.ModelCallReservation>;
+      reserve: (estimate: Schemas.ModelCallEstimate) => Promise<Schemas.ModelCallHoldResponse>;
     };
-    onRecord: (
-      record: Schemas.ModelCallRecord,
-      reservation: Extract<Schemas.ModelCallReservation, { isSuccess: true }>,
-    ) => void;
+    onRecord: (record: Schemas.ModelCallRecord, hold: Schemas.ModelCallHold) => void;
     onRejectedKey: (error: unknown) => Promise<void>;
   }): LanguageModelMiddleware {
-    type Reservation = Extract<Schemas.ModelCallReservation, { isSuccess: true }>;
-
     const record = (
-      reservation: Reservation,
+      hold: Schemas.ModelCallHold,
       outcome: {
         usage: Schemas.ModelCallUsage | null;
         isRefused: boolean;
@@ -72,12 +67,16 @@ export default class ModelCallRecordingProvider {
           latencyMs: Date.now() - outcome.startedAt,
           errorCode: outcome.errorCode,
         },
-        reservation,
+        hold,
       );
     };
 
-    const recordFailedAttempt = (reservation: Reservation, error: unknown, startedAt: number) => {
-      record(reservation, {
+    const recordFailedAttempt = (
+      hold: Schemas.ModelCallHold,
+      error: unknown,
+      startedAt: number,
+    ) => {
+      record(hold, {
         usage: null,
         isRefused: AiGatewayProvider.isRefusedCall(error),
         gatewayLogId: AiGatewayProvider.getGatewayLogIdFromError(error),
@@ -96,38 +95,39 @@ export default class ModelCallRecordingProvider {
     };
 
     // DEV_NOTE: The attempt's hold, or the safe error when the budget refuses it (the provider is never called)
-    const reserve = async (callOptions: LanguageModelV4CallOptions): Promise<Reservation> => {
-      const estimate: Schemas.ModelCallEstimate = {
-        inputTokens: ModelCallRecordingProvider.estimateInputTokens(callOptions),
-        maxOutputTokens: callOptions.maxOutputTokens ?? Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
-      };
-      const reservation: Schemas.ModelCallReservation =
-        estimate.maxOutputTokens < 1
-          ? { isSuccess: false, refusal: Schemas.BudgetRefusalEnum.TurnTokens }
-          : await params.budget.reserve(estimate);
-      if (!reservation.isSuccess) {
+    const reserve = async (estimate: Schemas.ModelCallEstimate): Promise<Schemas.ModelCallHold> => {
+      const held = await params.budget.reserve(estimate);
+      if (!held.isSuccess) {
         throw new ModelUnavailableError(
           Schemas.ModelRouterFailureEnum.BudgetExceeded,
-          new Error(`Budget refused the call: ${reservation.refusal}`),
+          new Error(`Budget refused the call: ${held.refusal}`),
         );
       }
-      return reservation;
+      return held.hold;
     };
 
-    // DEV_NOTE: Runs one provider call with retries, each attempt reserved first; resolves with its result, its
-    // reservation and when that attempt started
+    // DEV_NOTE: Runs one provider call with retries, each attempt held first and sent with its hold's output cap;
+    // resolves with its result, its hold and when that attempt started
     const withRetries = async <TResult>(
-      attempt: () => PromiseLike<TResult>,
+      attempt: (callOptions: LanguageModelV4CallOptions) => PromiseLike<TResult>,
       callOptions: LanguageModelV4CallOptions,
-    ): Promise<{ result: TResult; reservation: Reservation; startedAt: number }> => {
+    ): Promise<{ result: TResult; hold: Schemas.ModelCallHold; startedAt: number }> => {
       const signal = callOptions.abortSignal;
+      const estimate: Schemas.ModelCallEstimate = {
+        inputTokens: ModelCallRecordingProvider.estimateInputTokens(callOptions),
+        requestedMaxOutputTokens: Math.min(
+          callOptions.maxOutputTokens ?? Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+          Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+        ),
+      };
       for (let retry = 0; ; retry++) {
-        const reservation = await reserve(callOptions);
+        const hold = await reserve(estimate);
         const startedAt = Date.now();
         try {
-          return { result: await attempt(), reservation, startedAt };
+          const result = await attempt({ ...callOptions, maxOutputTokens: hold.maxOutputTokens });
+          return { result, hold, startedAt };
         } catch (error) {
-          recordFailedAttempt(reservation, error, startedAt);
+          recordFailedAttempt(hold, error, startedAt);
           const canRetry =
             retry < Constants.MODEL_CALL_MAX_RETRIES &&
             AiGatewayProvider.isRetryable(error) &&
@@ -141,21 +141,12 @@ export default class ModelCallRecordingProvider {
     };
 
     return {
-      // DEV_NOTE: Never more output than the platform cap, the caller's own setting or the turn's tokens left; the
-      // reservation is sized on the same number
-      transformParams: async ({ params: callOptions }) => {
-        const allowed = Math.min(
-          callOptions.maxOutputTokens ?? Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
-          Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
-          params.budget.maxOutputTokens(
-            ModelCallRecordingProvider.estimateInputTokens(callOptions),
-          ),
+      wrapGenerate: async ({ model, params: callOptions }) => {
+        const { result, hold, startedAt } = await withRetries(
+          (options) => model.doGenerate(options),
+          callOptions,
         );
-        return { ...callOptions, maxOutputTokens: Math.max(0, Math.floor(allowed)) };
-      },
-      wrapGenerate: async ({ doGenerate, params: callOptions }) => {
-        const { result, reservation, startedAt } = await withRetries(doGenerate, callOptions);
-        record(reservation, {
+        record(hold, {
           usage: AiGatewayProvider.toModelCallUsage(result.usage),
           isRefused: false,
           gatewayLogId: AiGatewayProvider.getGatewayLogId(result.response?.headers),
@@ -164,12 +155,12 @@ export default class ModelCallRecordingProvider {
         });
         return result;
       },
-      wrapStream: async ({ doStream, params: callOptions }) => {
+      wrapStream: async ({ model, params: callOptions }) => {
         const {
           result: streamResult,
-          reservation,
+          hold,
           startedAt,
-        } = await withRetries(doStream, callOptions);
+        } = await withRetries((options) => model.doStream(options), callOptions);
 
         // DEV_NOTE: Usage arrives in the stream's finish part. The record is made once, when the stream ends, fails or
         // is cancelled. An error part is replaced with a ModelUnavailableError before Think reads it (no retry once
@@ -189,7 +180,7 @@ export default class ModelCallRecordingProvider {
           },
           mapError: (error) => ModelCallRecordingProvider.toUnavailable(error),
           onEnd: ({ wasCancelled, error }) => {
-            record(reservation, {
+            record(hold, {
               usage,
               isRefused: false,
               gatewayLogId,
@@ -207,7 +198,7 @@ export default class ModelCallRecordingProvider {
 
   // DEV_NOTE: The prompt's size in tokens, over- rather than under-estimated: every character of the prompt and the
   // tool definitions as JSON (structure included) at BUDGET_CHARS_PER_INPUT_TOKEN characters per token. Used only to
-  // size a reservation; the real count comes back with the call's usage.
+  // size a hold, once per call; the real count comes back with the call's usage.
   static estimateInputTokens(callOptions: LanguageModelV4CallOptions): number {
     const characters =
       JSON.stringify(callOptions.prompt).length + JSON.stringify(callOptions.tools ?? []).length;

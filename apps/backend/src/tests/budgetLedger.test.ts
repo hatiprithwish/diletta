@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import BudgetLedgerProvider from "@/providers/budgetLedger";
-import TurnBudgetProvider from "@/providers/turnBudget";
+import TurnBudget from "@/budget/TurnBudget";
+import ModelCallBudgetProvider from "@/providers/modelCallBudget";
 
-// DEV_NOTE: Unit tests for the budget math (M2-4): BudgetDO's ledger arithmetic and the Conversation DO's turn caps.
+// DEV_NOTE: Unit tests for the budget math (M2-4): BudgetDO's ledger arithmetic, the Conversation DO's turn caps and
+// the sizing of one call's hold.
 // No database, no Durable Object; BudgetDO itself is covered against Neon in budget.test.ts.
 
 const NOW = Date.parse("2026-10-09T12:00:00.000Z");
@@ -218,7 +220,7 @@ describe("BudgetLedgerProvider", () => {
   });
 });
 
-describe("TurnBudgetProvider", () => {
+describe("TurnBudget", () => {
   const limits = (overrides: Partial<Schemas.ConfigSpec["limits"]> = {}) => ({
     ...Schemas.CONFIG_SPEC_PLATFORM_DEFAULTS.limits,
     maxTokensPerTurn: 1_000,
@@ -229,55 +231,173 @@ describe("TurnBudgetProvider", () => {
 
   function turnBudget(overrides: Partial<Schemas.ConfigSpec["limits"]> = {}, spent = 0) {
     let conversationSpentMicros = spent;
-    const caps = new TurnBudgetProvider({
+    const caps = new TurnBudget({
       limits: limits(overrides),
       getConversationSpentMicros: () => conversationSpentMicros,
-      onSpent: (costMicros) => {
+      onSpent: (costMicros: number) => {
         conversationSpentMicros += costMicros;
       },
     });
     return { caps, conversationSpent: () => conversationSpentMicros };
   }
 
-  it("gives the next call only the turn's tokens left after its prompt", () => {
+  it("counts only output tokens against maxTokensPerTurn", () => {
     const { caps } = turnBudget();
-    expect(caps.maxOutputTokens(300)).toBe(700);
-    expect(caps.reserve({ amountMicros: 1, tokens: 900 })).toBeNull();
-    expect(caps.maxOutputTokens(50)).toBe(50);
-    expect(caps.maxOutputTokens(200)).toBe(0);
+    expect(caps.remaining().outputTokens).toBe(1_000);
+    expect(caps.reserve({ amountMicros: 1, outputTokens: 900 })).toBeNull();
+    expect(caps.remaining().outputTokens).toBe(100);
+    caps.settle({ amountMicros: 1, outputTokens: 900, costMicros: 1, usedOutputTokens: 300 });
+    expect(caps.remaining().outputTokens).toBe(700);
   });
 
-  it("refuses a call over the turn's tokens, the turn's cost or the conversation's cost", () => {
-    expect(turnBudget().caps.reserve({ amountMicros: 1, tokens: 1_001 })).toBe(
+  it("gives the cost left as the smaller of the turn's and the conversation's, naming which", () => {
+    expect(turnBudget().caps.remaining()).toMatchObject({
+      costMicros: 500_000,
+      costRefusal: Schemas.BudgetRefusalEnum.TurnCost,
+    });
+    expect(turnBudget({}, 900_000).caps.remaining()).toMatchObject({
+      costMicros: 100_000,
+      costRefusal: Schemas.BudgetRefusalEnum.ConversationCost,
+    });
+  });
+
+  it("refuses a hold over the turn's tokens, the turn's cost or the conversation's cost", () => {
+    expect(turnBudget().caps.reserve({ amountMicros: 1, outputTokens: 1_001 })).toBe(
       Schemas.BudgetRefusalEnum.TurnTokens,
     );
-    expect(turnBudget().caps.reserve({ amountMicros: 500_001, tokens: 1 })).toBe(
+    expect(turnBudget().caps.reserve({ amountMicros: 500_001, outputTokens: 1 })).toBe(
       Schemas.BudgetRefusalEnum.TurnCost,
     );
-    expect(turnBudget({}, 900_000).caps.reserve({ amountMicros: 100_001, tokens: 1 })).toBe(
+    expect(turnBudget({}, 900_000).caps.reserve({ amountMicros: 100_001, outputTokens: 1 })).toBe(
       Schemas.BudgetRefusalEnum.ConversationCost,
     );
   });
 
   it("moves a settled call's cost into the conversation's spend and frees its hold", () => {
     const { caps, conversationSpent } = turnBudget();
-    expect(caps.reserve({ amountMicros: 400_000, tokens: 800 })).toBeNull();
-    caps.settle({ amountMicros: 400_000, tokens: 800, costMicros: 30_000, usedTokens: 200 });
+    expect(caps.reserve({ amountMicros: 400_000, outputTokens: 800 })).toBeNull();
+    caps.settle({
+      amountMicros: 400_000,
+      outputTokens: 800,
+      costMicros: 30_000,
+      usedOutputTokens: 200,
+    });
 
     expect(conversationSpent()).toBe(30_000);
-    expect(caps.maxOutputTokens(0)).toBe(800);
-    expect(caps.reserve({ amountMicros: 470_000, tokens: 1 })).toBeNull();
+    expect(caps.reserve({ amountMicros: 470_000, outputTokens: 800 })).toBeNull();
     expect(caps.isExhausted()).toBe(false);
   });
 
-  it("is exhausted once the turn's tokens are used up", () => {
+  it("is exhausted once the turn's output tokens are used up", () => {
     const { caps } = turnBudget();
-    caps.reserve({ amountMicros: 1, tokens: 1_000 });
-    caps.settle({ amountMicros: 1, tokens: 1_000, costMicros: 1, usedTokens: 1_000 });
+    caps.reserve({ amountMicros: 1, outputTokens: 1_000 });
+    caps.settle({ amountMicros: 1, outputTokens: 1_000, costMicros: 1, usedOutputTokens: 1_000 });
     expect(caps.isExhausted()).toBe(true);
   });
 
   it("passes the user's daily cap on to BudgetDO", () => {
     expect(turnBudget({ userDailyCostCapUsd: 3 }).caps.userDailyCostCapUsd).toBe(3);
+  });
+});
+
+describe("ModelCallBudgetProvider.size", () => {
+  const fable = Schemas.getModelPrice(Schemas.ModelProviderEnum.Anthropic, "claude-fable-5-1");
+  const sonnet = Schemas.getModelPrice(Schemas.ModelProviderEnum.Anthropic, "claude-sonnet-5-5");
+  const defaults = Schemas.CONFIG_SPEC_PLATFORM_DEFAULTS.limits;
+  const fresh = (overrides: Partial<ReturnType<Schemas.ModelCallCaps["remaining"]>> = {}) => ({
+    outputTokens: defaults.maxTokensPerTurn,
+    costMicros: Schemas.usdToMicros(defaults.turnCostCapUsd),
+    costRefusal: Schemas.BudgetRefusalEnum.TurnCost,
+    ...overrides,
+  });
+
+  it("prices input at the plain input rate and the full output asked for", () => {
+    if (!sonnet) throw new Error("No price");
+    const sized = ModelCallBudgetProvider.size({
+      price: sonnet,
+      estimate: { inputTokens: 1_000, requestedMaxOutputTokens: 8_192 },
+      remaining: null,
+    });
+    // DEV_NOTE: $2/M × 1,000 + $10/M × 8,192 = $0.08392
+    expect(sized).toEqual({ isSuccess: true, amountMicros: 83_920, maxOutputTokens: 8_192 });
+  });
+
+  it("gives a pricey model a shorter answer under the default caps instead of refusing a long prompt", () => {
+    if (!fable) throw new Error("No price");
+    // DEV_NOTE: ~60k characters of prompt, well past the ~22k where cache-write pricing + a fixed 8,192 output
+    // refused every turn: $10/M × 20,000 = $0.20 in, so $0.30 left buys 5,999 output tokens at $50/M
+    const sized = ModelCallBudgetProvider.size({
+      price: fable,
+      estimate: { inputTokens: 20_000, requestedMaxOutputTokens: 8_192 },
+      remaining: fresh(),
+    });
+    if (!sized.isSuccess) throw new Error(`Refused: ${sized.refusal}`);
+    expect(sized.maxOutputTokens).toBe(5_999);
+    expect(sized.amountMicros).toBeLessThanOrEqual(fresh().costMicros);
+  });
+
+  it("caps the output at the turn's output tokens left", () => {
+    if (!sonnet) throw new Error("No price");
+    const sized = ModelCallBudgetProvider.size({
+      price: sonnet,
+      estimate: { inputTokens: 100, requestedMaxOutputTokens: 8_192 },
+      remaining: fresh({ outputTokens: 1_200 }),
+    });
+    expect(sized).toMatchObject({ isSuccess: true, maxOutputTokens: 1_200 });
+  });
+
+  it("refuses when fewer than the minimum output tokens are left, naming the cap that ran out", () => {
+    if (!sonnet || !fable) throw new Error("No price");
+    expect(
+      ModelCallBudgetProvider.size({
+        price: sonnet,
+        estimate: { inputTokens: 100, requestedMaxOutputTokens: 8_192 },
+        remaining: fresh({ outputTokens: Constants.MODEL_CALL_MIN_OUTPUT_TOKENS - 1 }),
+      }),
+    ).toEqual({ isSuccess: false, refusal: Schemas.BudgetRefusalEnum.TurnTokens });
+    expect(
+      ModelCallBudgetProvider.size({
+        price: fable,
+        estimate: { inputTokens: 1_000, requestedMaxOutputTokens: 8_192 },
+        remaining: fresh({
+          costMicros: 20_000,
+          costRefusal: Schemas.BudgetRefusalEnum.ConversationCost,
+        }),
+      }),
+    ).toEqual({ isSuccess: false, refusal: Schemas.BudgetRefusalEnum.ConversationCost });
+  });
+
+  it("allows a call that asks for less than the minimum itself", () => {
+    if (!sonnet) throw new Error("No price");
+    expect(
+      ModelCallBudgetProvider.size({
+        price: sonnet,
+        estimate: { inputTokens: 100, requestedMaxOutputTokens: 50 },
+        remaining: fresh(),
+      }),
+    ).toMatchObject({ isSuccess: true, maxOutputTokens: 50 });
+  });
+
+  it("uses the long-context prices past their line", () => {
+    const price: Schemas.ModelPrice = {
+      inputUsdPerMTok: 1,
+      outputUsdPerMTok: 1,
+      cacheReadUsdPerMTok: 1,
+      cacheWriteUsdPerMTok: 1,
+      longContext: {
+        overInputTokens: 1_000,
+        inputUsdPerMTok: 2,
+        outputUsdPerMTok: 100,
+        cacheReadUsdPerMTok: 2,
+        cacheWriteUsdPerMTok: 2,
+      },
+    };
+    const sized = ModelCallBudgetProvider.size({
+      price,
+      estimate: { inputTokens: 2_000, requestedMaxOutputTokens: 8_192 },
+      remaining: fresh({ costMicros: 104_000 }),
+    });
+    // DEV_NOTE: input 2,000 × 2 = 4,000 micros; (104,000 - 4,000 - 1) / 100 per output token → 999
+    expect(sized).toMatchObject({ isSuccess: true, maxOutputTokens: 999 });
   });
 });

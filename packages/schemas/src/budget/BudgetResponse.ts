@@ -18,15 +18,17 @@ export interface BudgetSeedResponse extends ApiResponse {
   spentUsd?: string;
 }
 
-// DEV_NOTE: Server-side only — one provider call's hold, from the router to the recording middleware and back with
-// the call's record. reservationId is BudgetDO's; amountMicros / tokens are what was held. A refused call carries the
-// refusal and never reaches the provider.
-export type ModelCallReservation =
-  | {
-      isSuccess: true;
-      reservationId: string;
-      amountMicros: number;
-      tokens: number;
-      refusal?: undefined;
-    }
+// DEV_NOTE: Server-side only — one provider call's hold, from ModelCallBudgetProvider to the recording middleware and
+// back with the call's record. maxOutputTokens is what the call may generate (sized to fit the caps' tokens and cost
+// left); amountMicros / outputTokens are what was held.
+export interface ModelCallHold {
+  reservationId: string;
+  amountMicros: number;
+  outputTokens: number;
+  maxOutputTokens: number;
+}
+
+// DEV_NOTE: A refused call carries the refusal and never reaches the provider
+export type ModelCallHoldResponse =
+  | { isSuccess: true; hold: ModelCallHold }
   | { isSuccess: false; refusal: BudgetRefusalEnum };

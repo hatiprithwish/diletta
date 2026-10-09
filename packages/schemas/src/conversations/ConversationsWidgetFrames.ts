@@ -97,7 +97,7 @@ export interface UnsyncedTranscript {
 }
 
 // DEV_NOTE: Server-side only — the turn the Conversation DO is preparing or running (at most one). TModel is the AI
-// SDK LanguageModel (@app/schemas doesn't depend on it); TCaps the turn's budget (TurnBudgetProvider, M2-4). model,
+// SDK LanguageModel (@app/schemas doesn't depend on it); TCaps the turn's budget (TurnBudget, M2-4). model,
 // spec and caps are null while the turn is being prepared.
 export interface ActiveTurn<TModel, TCaps> {
   requestId: string;

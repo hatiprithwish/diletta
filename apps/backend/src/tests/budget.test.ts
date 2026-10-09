@@ -15,7 +15,8 @@ import {
   conversations,
   modelCalls,
 } from "@/db/tables";
-import TurnBudgetProvider from "@/providers/turnBudget";
+import TurnBudget from "@/budget/TurnBudget";
+import { BudgetDO } from "@/durable-objects/BudgetDO";
 import BudgetRepo from "@/repositories/BudgetRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
@@ -178,7 +179,7 @@ async function routeOrThrow(router: ModelRouterRepo, params: Schemas.GetModelReq
   return routed.model;
 }
 
-const budgetDo = (companyId: string) => env.BUDGET_DO.getByName(companyId);
+const budgetDo = (companyId: string) => BudgetDO.forCompany(env, companyId);
 
 async function readLedger(companyId: string): Promise<Schemas.BudgetLedger> {
   return await runInDurableObject(budgetDo(companyId), (_instance, state) =>
@@ -287,7 +288,7 @@ describe("Budget on the model router", () => {
     const fixture = await createFixture("5");
     await addAnthropicKey(fixture.companyId);
     mockCloudflare((mocked) => anthropicMessage(String(mocked.body?.model)));
-    const caps = new TurnBudgetProvider({
+    const caps = new TurnBudget({
       limits: { ...Schemas.CONFIG_SPEC_PLATFORM_DEFAULTS.limits, conversationCostCapUsd: 0.01 },
       getConversationSpentMicros: () => 9_999,
       onSpent: () => {},
@@ -306,19 +307,19 @@ describe("Budget on the model router", () => {
     const fixture = await createFixture("0.000001");
     await addAnthropicKey(fixture.companyId);
     mockCloudflare((mocked) => anthropicMessage(String(mocked.body?.model)));
-    const caps = new TurnBudgetProvider({
+    const caps = new TurnBudget({
       limits: Schemas.CONFIG_SPEC_PLATFORM_DEFAULTS.limits,
       getConversationSpentMicros: () => 0,
       onSpent: () => {},
     });
-    const tokensBefore = caps.maxOutputTokens(0);
+    const before = caps.remaining();
     const { ctx } = createCtx();
     const model = await routeOrThrow(new ModelRouterRepo(routerEnv(), ctx), request(fixture, caps));
 
     await expect(generateText({ model, prompt: "Hi" })).rejects.toMatchObject({
       failure: Schemas.ModelRouterFailureEnum.BudgetExceeded,
     });
-    expect(caps.maxOutputTokens(0)).toBe(tokensBefore);
+    expect(caps.remaining()).toEqual(before);
     expect(caps.isExhausted()).toBe(false);
   });
 });
@@ -382,6 +383,40 @@ describe("BudgetDO", () => {
     expect((await reserve(fixture, 1)).isSuccess).toBe(true);
     expect((await readLedger(fixture.companyId)).spentMicros).toBe(400_000);
     expect(await reservationCount(fixture.companyId)).toBe(1);
+  });
+
+  it("checks a hold against the spend its expired holds were just charged to", async () => {
+    const fixture = await createFixture("1");
+    const held = await reserve(fixture, 400_000);
+    await runInDurableObject(budgetDo(fixture.companyId), (_instance, state) => {
+      const key = `reservation:${held.reservationId ?? ""}`;
+      const stored = Schemas.ZBudgetReservation.parse(state.storage.kv.get(key));
+      state.storage.kv.put(key, { ...stored, createdAt: Date.now() - 21 * 60_000 });
+    });
+
+    // DEV_NOTE: $0.40 expired into spend: $0.70 more would be $1.10 on a $1 budget
+    expect(await reserve(fixture, 700_000)).toMatchObject({
+      refusal: Schemas.BudgetRefusalEnum.CompanyBudget,
+    });
+    expect((await readLedger(fixture.companyId)).spentMicros).toBe(400_000);
+    expect((await reserve(fixture, 600_000)).isSuccess).toBe(true);
+  });
+
+  it("refuses a request that doesn't parse, and stores nothing", async () => {
+    const fixture = await createFixture("1");
+    expect(await reserve(fixture, -5)).toMatchObject({
+      refusal: Schemas.BudgetRefusalEnum.Unavailable,
+    });
+    expect(await reserve(fixture, 0.5)).toMatchObject({
+      refusal: Schemas.BudgetRefusalEnum.Unavailable,
+    });
+    expect(await reservationCount(fixture.companyId)).toBe(0);
+    const settled = await budgetDo(fixture.companyId).settle({
+      companyId: fixture.companyId,
+      reservationId: "not-a-uuid",
+      costMicros: -1,
+    });
+    expect(settled.isSuccess).toBe(false);
   });
 
   it("holds the user to their daily cap and message rate", async () => {

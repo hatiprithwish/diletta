@@ -692,7 +692,7 @@ describe("Conversation budget", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     socket.close(1000);
   });
 
-  it("caps a call's output at the turn's tokens left", async () => {
+  it("caps a call's output at the turn's output tokens, however long the prompt", async () => {
     const tenant = await createTenant({ hasModelKey: true });
     await publishConfig(tenant, PERSONA, 2, { maxTokensPerTurn: 2_000 });
     mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
@@ -702,9 +702,34 @@ describe("Conversation budget", { timeout: END_TO_END_TIMEOUT_MS }, () => {
 
     await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Hello?")]);
 
-    const maxTokens = Number(gatewayRequests()[0]?.body?.max_tokens);
-    expect(maxTokens).toBeGreaterThan(0);
-    expect(maxTokens).toBeLessThan(2_000);
+    // DEV_NOTE: maxTokensPerTurn counts output only, so the prompt doesn't eat into it
+    expect(gatewayRequests()[0]?.body?.max_tokens).toBe(2_000);
+    socket.close(1000);
+  });
+
+  it("doesn't use up the user's message rate on a turn that couldn't run", async () => {
+    const tenant = await createTenant({ hasModelKey: false });
+    await publishConfig(tenant, PERSONA, 2, { userMessagesPerMinute: 1 });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    await waitFor((frame) => frame.type === "conversation");
+
+    socket.send(chatRequest("req-1", [userMessage("user-1", "Hello?")]));
+    await waitFor((frame) => frame.type === "unavailable");
+
+    await new CompanySecretsRepo(env).createCompanySecret({
+      companyId: tenant.companyId,
+      connectionId: null,
+      companySecret: {
+        type: Schemas.CompanySecretTypeIntEnum.ModelKey,
+        provider: Schemas.ModelProviderEnum.Anthropic,
+        secret: `sk-ant-${crypto.randomUUID()}`,
+        expiresAt: null,
+      },
+    });
+    await sendTurn(socket, waitFor, "req-2", [userMessage("user-2", "Hello again?")]);
+    expect(gatewayRequests()).toHaveLength(1);
     socket.close(1000);
   });
 

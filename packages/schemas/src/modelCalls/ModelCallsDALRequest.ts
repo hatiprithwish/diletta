@@ -30,3 +30,6 @@ export type SettleModelCallUsageDALRequest = Pick<
 
 // DEV_NOTE: Marks a Pending row as just tried (updated_at = now), so the next sweep starts with rows tried longer ago
 export type TouchPendingModelCallDALRequest = Pick<ModelCall, "companyId" | "publicId">;
+
+// DEV_NOTE: BudgetDO's seed (M2-4): the spend already recorded for a company since `from` (its billing period start)
+export type GetModelCallCostSumDALRequest = Pick<ModelCall, "companyId"> & { from: Date };
