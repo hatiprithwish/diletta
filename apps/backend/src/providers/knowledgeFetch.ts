@@ -11,59 +11,92 @@ const XML_ENTITIES: Readonly<Record<string, string>> = {
   "&quot;": '"',
   "&apos;": "'",
 };
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+// DEV_NOTE: The first two bytes of every gzip stream (RFC 1952)
+const GZIP_MAGIC = [0x1f, 0x8b];
 
-// DEV_NOTE: Fetches web knowledge (M2-5): pages and sitemaps of a company's sitemap / url source. Only http(s) URLs
-// on the source's own host are crawled; every fetch is capped in time (KNOWLEDGE_FETCH_TIMEOUT_MS) and size (read as a
-// stream, cut off at the cap), so a slow or huge response can't hold a sync step. Returns { isSuccess, message } and
-// never throws. Fetched text is untrusted content: it is stored and searched, never followed as instructions.
+// DEV_NOTE: Fetches web knowledge (M2-5): pages and sitemaps of a company's sitemap / url source. Only http(s) URLs on
+// the source's own site are fetched: the site is the host without a leading "www." on the default port, and every
+// redirect hop must stay on it (followed by hand, at most KNOWLEDGE_FETCH_MAX_REDIRECTS), so a page can't hand us
+// another site's content. Every fetch is capped in time (KNOWLEDGE_FETCH_TIMEOUT_MS, per hop) and size (read as a
+// stream, cut off at the cap). Returns { isSuccess, message } and never throws. Fetched text is untrusted content: it is
+// stored and searched, never followed as instructions.
 export default class KnowledgeFetchProvider {
   static async fetchDocument(
     url: string,
-    maxBytes: number,
+    params: { site: string; maxBytes: number },
   ): Promise<Schemas.KnowledgeFetchResponse> {
     const response: Schemas.KnowledgeFetchResponse = { isSuccess: false };
-
-    if (!KnowledgeFetchProvider.isCrawlableUrl(url)) {
-      response.message = "URL is not crawlable";
+    const start = KnowledgeFetchProvider.normalizeUrl(url, params.site);
+    if (!start) {
+      response.message = "URL is not on the source's site";
       return response;
     }
+    let current: string = start;
 
     try {
-      const fetched = await fetch(url, {
-        headers: {
-          "User-Agent": Constants.KNOWLEDGE_FETCH_USER_AGENT,
-          Accept:
-            "text/html,application/xhtml+xml,application/xml,text/xml,application/pdf,text/plain,text/markdown;q=0.9,*/*;q=0.5",
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(Constants.KNOWLEDGE_FETCH_TIMEOUT_MS),
-      });
+      for (let hop = 0; hop <= Constants.KNOWLEDGE_FETCH_MAX_REDIRECTS; hop++) {
+        const fetched: Response = await fetch(current, {
+          headers: {
+            "User-Agent": Constants.KNOWLEDGE_FETCH_USER_AGENT,
+            Accept:
+              "text/html,application/xhtml+xml,application/xml,text/xml,application/pdf,text/plain,text/markdown;q=0.9,*/*;q=0.5",
+          },
+          redirect: "manual",
+          signal: AbortSignal.timeout(Constants.KNOWLEDGE_FETCH_TIMEOUT_MS),
+        });
 
-      if (!fetched.ok) {
-        await fetched.body?.cancel();
-        response.message = `Fetch answered ${fetched.status}`;
+        if (REDIRECT_STATUSES.has(fetched.status)) {
+          await fetched.body?.cancel();
+          const location = fetched.headers.get("location");
+          const next: string | null = location
+            ? KnowledgeFetchProvider.normalizeUrl(
+                KnowledgeFetchProvider.resolve(location, current),
+                params.site,
+              )
+            : null;
+          if (!next) {
+            response.message = "Redirect leaves the source's site";
+            return response;
+          }
+          current = next;
+          continue;
+        }
+
+        if (!fetched.ok) {
+          await fetched.body?.cancel();
+          response.message = `Fetch answered ${fetched.status}`;
+          return response;
+        }
+
+        const declaredLength = Number(fetched.headers.get("content-length"));
+        if (Number.isFinite(declaredLength) && declaredLength > params.maxBytes) {
+          await fetched.body?.cancel();
+          response.message = "Response is too large";
+          return response;
+        }
+
+        const bytes = await KnowledgeFetchProvider.readCapped(fetched.body, params.maxBytes);
+        if (!bytes) {
+          response.message = "Response is too large";
+          return response;
+        }
+
+        const [mime, ...parameters] = (fetched.headers.get("content-type") ?? "").split(";");
+        const charset = parameters
+          .map((parameter) => parameter.trim().toLowerCase())
+          .find((parameter) => parameter.startsWith("charset="))
+          ?.slice("charset=".length)
+          .replace(/"/g, "");
+        response.isSuccess = true;
+        response.message = "Document fetched successfully";
+        response.bytes = bytes;
+        response.mime = mime?.trim().toLowerCase() ?? "";
+        response.charset = charset || null;
         return response;
       }
 
-      const declaredLength = Number(fetched.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-        await fetched.body?.cancel();
-        response.message = "Response is too large";
-        return response;
-      }
-
-      const bytes = await KnowledgeFetchProvider.readCapped(fetched.body, maxBytes);
-      if (!bytes) {
-        response.message = "Response is too large";
-        return response;
-      }
-
-      response.isSuccess = true;
-      response.message = "Document fetched successfully";
-      response.bytes = bytes;
-      response.mime =
-        fetched.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
-      response.finalUrl = fetched.url || url;
+      response.message = "Too many redirects";
     } catch (error) {
       const message = "Fetch failed";
       AppLogger.warn({
@@ -71,7 +104,7 @@ export default class KnowledgeFetchProvider {
         action: Schemas.LogAction.FetchKnowledgePage,
         message,
         // DEV_NOTE: A dead or slow site is expected, so warn with the error's name (TimeoutError, TypeError) only
-        metadata: { url, reason: error instanceof Error ? error.name : "unknown" },
+        metadata: { url: current, reason: error instanceof Error ? error.name : "unknown" },
       });
       response.message = message;
     }
@@ -79,38 +112,48 @@ export default class KnowledgeFetchProvider {
     return response;
   }
 
-  // DEV_NOTE: Every page URL of a sitemap, following a sitemap index down to KNOWLEDGE_SITEMAP_MAX_DEPTH levels.
-  // Kept: http(s) on the sitemap's own host, fragment removed, each once, at most KNOWLEDGE_MAX_ITEMS_PER_SYNC. The
-  // root sitemap must load; a nested one that fails is skipped (logged), so one broken child doesn't fail the sync.
+  // DEV_NOTE: Every page URL of a sitemap, following a sitemap index down to KNOWLEDGE_SITEMAP_MAX_DEPTH levels and
+  // reading at most KNOWLEDGE_SITEMAP_MAX_FILES sitemap files. Kept: http(s) on the sitemap's site, fragment removed,
+  // each once, at most KNOWLEDGE_MAX_ITEMS_PER_SYNC. The root sitemap must load. A nested one that fails is skipped
+  // (logged), and like a cap that cut the walk short it makes the listing incomplete (isComplete false), so the sync
+  // prunes nothing from it.
   static async listSitemapUrls(sitemapUrl: string): Promise<Schemas.SitemapUrlsResponse> {
     const response: Schemas.SitemapUrlsResponse = { isSuccess: false };
-    const host = KnowledgeFetchProvider.hostOf(sitemapUrl);
-    if (!host || !KnowledgeFetchProvider.isCrawlableUrl(sitemapUrl)) {
+    const site = KnowledgeFetchProvider.siteOf(sitemapUrl);
+    if (!site) {
       response.message = "Sitemap URL is not crawlable";
       return response;
     }
 
     const urls = new Set<string>();
     const seenSitemaps = new Set<string>();
+    let isComplete = true;
     let level = [sitemapUrl];
 
-    for (
-      let depth = 0;
-      depth <= Constants.KNOWLEDGE_SITEMAP_MAX_DEPTH && level.length > 0;
-      depth++
-    ) {
+    for (let depth = 0; level.length > 0; depth++) {
+      if (depth > Constants.KNOWLEDGE_SITEMAP_MAX_DEPTH) {
+        isComplete = false;
+        break;
+      }
       const next: string[] = [];
       for (const url of level) {
-        if (urls.size >= Constants.KNOWLEDGE_MAX_ITEMS_PER_SYNC) break;
         if (seenSitemaps.has(url)) continue;
+        if (
+          urls.size >= Constants.KNOWLEDGE_MAX_ITEMS_PER_SYNC ||
+          seenSitemaps.size >= Constants.KNOWLEDGE_SITEMAP_MAX_FILES
+        ) {
+          isComplete = false;
+          break;
+        }
         seenSitemaps.add(url);
 
-        const sitemap = await KnowledgeFetchProvider.fetchSitemap(url);
+        const sitemap = await KnowledgeFetchProvider.fetchSitemap(url, site);
         if (!sitemap.isSuccess || !sitemap.parsed) {
           if (depth === 0) {
             response.message = sitemap.message ?? "Sitemap could not be read";
             return response;
           }
+          isComplete = false;
           AppLogger.warn({
             category: Schemas.LogCategory.Knowledge,
             action: Schemas.LogAction.ListSitemapUrls,
@@ -121,12 +164,14 @@ export default class KnowledgeFetchProvider {
         }
 
         for (const loc of sitemap.parsed.locs) {
-          const normalized = KnowledgeFetchProvider.normalizeUrl(loc, host);
+          const normalized = KnowledgeFetchProvider.normalizeUrl(loc, site);
           if (!normalized) continue;
           if (sitemap.parsed.isIndex) {
             next.push(normalized);
           } else if (urls.size < Constants.KNOWLEDGE_MAX_ITEMS_PER_SYNC) {
             urls.add(normalized);
+          } else {
+            isComplete = false;
           }
         }
       }
@@ -136,6 +181,7 @@ export default class KnowledgeFetchProvider {
     response.isSuccess = true;
     response.message = "Sitemap URLs listed successfully";
     response.urls = [...urls];
+    response.isComplete = isComplete;
     return response;
   }
 
@@ -152,58 +198,68 @@ export default class KnowledgeFetchProvider {
     return { isIndex: SITEMAP_INDEX_PATTERN.test(xml), locs };
   }
 
-  // DEV_NOTE: Pure: http(s) with no credentials in it. Hostnames were checked as public domains when the source was
-  // created (ZKnowledgeSourceUrl); page URLs come from that host only (normalizeUrl).
-  static isCrawlableUrl(url: string): boolean {
+  // DEV_NOTE: Pure: the site a URL belongs to (lowercase host without a leading "www."), or null when it isn't an
+  // http(s) URL on the default port with no credentials in it. Source URLs were checked as public domains when the
+  // source was created (ZKnowledgeSourceUrl).
+  static siteOf(url: string): string | null {
     try {
       const parsed = new URL(url);
-      return (
+      const isCrawlable =
         (parsed.protocol === "https:" || parsed.protocol === "http:") &&
         parsed.username === "" &&
-        parsed.password === ""
-      );
+        parsed.password === "" &&
+        parsed.port === "";
+      return isCrawlable ? parsed.hostname.toLowerCase().replace(/^www\./, "") : null;
     } catch {
-      return false;
+      return null;
     }
   }
 
-  // DEV_NOTE: Pure: the URL a page is stored under (knowledge_documents.source_url), or null when it is off the host
-  // or not crawlable. The fragment is dropped (same page); the query is kept (it can select different content).
-  static normalizeUrl(url: string, host: string): string | null {
+  // DEV_NOTE: Pure: the URL a page is stored under (knowledge_documents.source_url), or null when it is off the site or
+  // not crawlable. The fragment is dropped (same page); the query is kept (it can select different content).
+  static normalizeUrl(url: string, site: string): string | null {
+    if (KnowledgeFetchProvider.siteOf(url) !== site) return null;
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.href;
+  }
+
+  // DEV_NOTE: Pure: a page with no heading is titled by the last segment of its path, or its host
+  static titleFromUrl(url: string): string | null {
     try {
       const parsed = new URL(url);
-      if (parsed.host !== host || !KnowledgeFetchProvider.isCrawlableUrl(parsed.href)) return null;
-      parsed.hash = "";
-      return parsed.href;
+      const segment = parsed.pathname.split("/").filter(Boolean).pop();
+      const title = segment ? decodeURIComponent(segment).replace(/[-_]+/g, " ") : parsed.host;
+      return title.slice(0, Constants.KNOWLEDGE_TITLE_MAX_CHARS);
     } catch {
       return null;
     }
   }
 
-  static hostOf(url: string): string | null {
+  private static resolve(location: string, base: string): string {
     try {
-      return new URL(url).host;
+      return new URL(location, base).href;
     } catch {
-      return null;
+      return "";
     }
   }
 
-  private static async fetchSitemap(url: string): Promise<Schemas.ParsedSitemapResponse> {
-    const fetched = await KnowledgeFetchProvider.fetchDocument(
-      url,
-      Constants.KNOWLEDGE_SITEMAP_MAX_BYTES,
-    );
+  private static async fetchSitemap(
+    url: string,
+    site: string,
+  ): Promise<Schemas.ParsedSitemapResponse> {
+    const fetched = await KnowledgeFetchProvider.fetchDocument(url, {
+      site,
+      maxBytes: Constants.KNOWLEDGE_SITEMAP_MAX_BYTES,
+    });
     if (!fetched.isSuccess || !fetched.bytes) {
       return { isSuccess: false, message: fetched.message };
     }
 
-    // DEV_NOTE: sitemap.xml.gz is served as gzip bytes (not Content-Encoding), so it is unpacked here, capped again
-    const isGzip =
-      fetched.mime === "application/gzip" ||
-      fetched.mime === "application/x-gzip" ||
-      url.endsWith(".gz");
+    // DEV_NOTE: A sitemap.xml.gz is served as gzip bytes, unless the server also sent Content-Encoding: gzip and fetch
+    // already unpacked it, so the bytes decide (gzip magic), not the name or type. Unpacked under the same cap.
     let bytes: Uint8Array | null = fetched.bytes;
-    if (isGzip) {
+    if (fetched.bytes[0] === GZIP_MAGIC[0] && fetched.bytes[1] === GZIP_MAGIC[1]) {
       try {
         const stream = new Blob([fetched.bytes])
           .stream()

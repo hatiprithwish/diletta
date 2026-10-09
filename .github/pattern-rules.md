@@ -1197,25 +1197,28 @@ BUDGET_DO\.getByName
 
 ### 3.25 Knowledge Ingestion Skips Unchanged Text [CRITICAL]
 
-**Rule:** A knowledge source syncs only through `KnowledgeSourcesRepo.startSync` (route, upload, Cron): the source row is locked `FOR UPDATE` and claimed (Syncing) unless Paused or already syncing (stale after `KNOWLEDGE_SYNC_STALE_MS`), then one `KnowledgeSyncWorkflow` instance starts (`KnowledgeSyncWorkflowProvider`); a failed start puts the source in Failed. Every workflow step calls `KnowledgeIngestionRepo`, and step results carry ids and outcomes only, never page text or bytes. Per item: fetch (`KnowledgeFetchProvider`: http(s), the source's own host, capped in time and size) or read from R2 → convert (`KnowledgeExtractProvider`) → normalize → `content_hash` = sha256 of the text. An Indexed document whose hash matches is Unchanged: zero chunking and zero embed calls. A changed one is chunked (`KnowledgeChunkerProvider`, pure) and embedded (`KnowledgeEmbedProvider`), then stored in one transaction that re-locks the source and requires Syncing (pause and delete take the same lock), with its file row and R2 object (`KnowledgeDocumentFilesProvider`, key `fileR2Key`), and its chunks deleted and rewritten. R2 objects of deleted files go after the commit; an object written by a rolled-back transaction is deleted. Source URLs are public http(s) domains (`ZKnowledgeSourceUrl`).
+**Rule:** A knowledge source syncs only through `KnowledgeSourcesRepo.startSync` (route, upload, resume, Cron): the source row is locked `FOR UPDATE` and claimed (Syncing with a new `sync_run_id`) unless Paused or its heartbeat is fresh (`KNOWLEDGE_SYNC_STALE_MS`), then one `KnowledgeSyncWorkflow` instance starts under that id (`KnowledgeSyncWorkflowProvider`); a failed start puts the source in Failed. Only the run the source names may write: every write locks the source and requires Syncing + its `sync_run_id`, and refreshes `sync_heartbeat_at`; any other run answers Stopped. Workflow steps call `KnowledgeIngestionRepo`, return ids and outcomes only (never text or bytes), and throw when the Repo answers `isSuccess: false` so the step retries. Per item: fetch (`KnowledgeFetchProvider`: http(s) on the source's site, every redirect hop re-checked, capped in time and size) or read from R2 → convert (`KnowledgeExtractProvider`) → normalize (NUL dropped) → `content_hash` = `KNOWLEDGE_PIPELINE_VERSION` + sha256 of the text. An Indexed document whose hash matches is Unchanged: zero chunking and zero embed calls. A changed one is chunked (`KnowledgeChunkerProvider`, pure) and embedded (`KnowledgeEmbedProvider`, rows through `KnowledgeEmbedCallsProvider` in a transaction that rolls back on any failed row); its new bytes go to R2 as a new file before the transaction, which re-reads the document under the lock, writes the file row (`KnowledgeDocumentFilesProvider`) and deletes + rewrites the chunks. The new object is deleted if the item isn't stored; a replaced or removed file's object is deleted after the commit. Pruning runs only after a complete, non-empty listing. One document per (source, URL). Source URLs are public http(s) domains on the default port (`ZKnowledgeSourceUrl`); uploads are size-capped before parsing (`bodyLimit`) and type-checked by magic bytes. Tests may read `FILES_BUCKET` directly to check objects.
 
 **Violations:**
 
-- Embedding or re-chunking a document without first comparing its `content_hash`, or hashing the bytes instead of the normalized text
-- Creating a `KnowledgeSyncWorkflow` instance anywhere but `KnowledgeSyncWorkflowProvider.start`, or without claiming the source first
-- Writing documents or chunks without locking the source row and checking it is still Syncing in the same transaction
-- Returning page text, markdown or bytes from a workflow step
-- A fetch in ingestion without a timeout and a byte cap, following a URL off the source's host, or a source URL schema that accepts IP literals or single-label hosts
+- Embedding or re-chunking a document without first comparing its `content_hash`, hashing the bytes instead of the normalized text, or a chunker / embedding change without bumping `KNOWLEDGE_PIPELINE_VERSION`
+- Creating a `KnowledgeSyncWorkflow` instance anywhere but `KnowledgeSyncWorkflowProvider.start`, or without claiming the source (and its `sync_run_id`) first
+- Writing documents, chunks or the source's sync state without locking the source row and checking Syncing + `sync_run_id` in the same transaction (the Unchanged touch and Failed mark included)
+- Holding the source lock while uploading bytes to R2, or overwriting an existing object in place
+- Returning page text, markdown or bytes from a workflow step, or a step that returns `isSuccess: false` instead of throwing
+- A fetch in ingestion without a timeout and a byte cap, `redirect: "follow"`, or following a URL off the source's site
+- Pruning after a listing that is incomplete (`isComplete` false) or empty
 - Updating `knowledge_chunks` in place instead of delete + insert, or chunks whose `knowledge_source_id` differs from their document's
-- Deleting a file row and its R2 object in the other order (object first), or leaving an object written by a rolled-back transaction
-- A `files` row for a knowledge document whose `owner_id` isn't the document's id after its transaction
+- Ignoring a `createModelCall` result for an embed row
+- Parsing an upload body before `bodyLimit`
 
 **Detection Pattern:**
 
 ```regex
 KNOWLEDGE_SYNC_WORKFLOW\.create\((?!.*knowledgeSyncWorkflow\.ts)
-FILES_BUCKET\.(put|delete|get)\((?!.*fileStorage\.ts)
+FILES_BUCKET\.(put|delete|get|list)\((?!.*fileStorage\.ts)
 update\(knowledgeChunks\)
+redirect:\s*"follow"
 ```
 
 **Examples:**
@@ -1224,6 +1227,7 @@ update\(knowledgeChunks\)
 - ❌ await env.KNOWLEDGE_SYNC_WORKFLOW.create({ params }); // in a route, no claim
 - ❌ const embedded = await KnowledgeEmbedProvider.embed(env, { texts }); // before checking existing.contentHash
 - ❌ return await step.do("item-0", () => ({ text })); // page text in workflow state
+- ❌ const owned = source.status === Syncing; // no sync_run_id check: a run left behind keeps writing
 - ✅ if (existing && existing.contentHash === contentHash && existing.indexStatus === Indexed) { /* touch lastSyncedAt only */ }
 ```
 

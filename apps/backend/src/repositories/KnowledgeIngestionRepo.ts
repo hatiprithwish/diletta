@@ -6,27 +6,34 @@ import FilesDAL from "@/data-access-layer/FilesDAL";
 import KnowledgeChunksDAL from "@/data-access-layer/KnowledgeChunksDAL";
 import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
 import KnowledgeSourcesDAL from "@/data-access-layer/KnowledgeSourcesDAL";
-import ModelCallsDAL from "@/data-access-layer/ModelCallsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import FileStorageProvider from "@/providers/fileStorage";
 import KnowledgeChunkerProvider from "@/providers/knowledgeChunker";
 import KnowledgeDocumentFilesProvider from "@/providers/knowledgeDocumentFiles";
 import KnowledgeEmbedProvider from "@/providers/knowledgeEmbed";
+import KnowledgeEmbedCallsProvider from "@/providers/knowledgeEmbedCalls";
 import KnowledgeExtractProvider from "@/providers/knowledgeExtract";
 import KnowledgeFetchProvider from "@/providers/knowledgeFetch";
 import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The steps of one source sync (M2-5), each called from its own KnowledgeSyncWorkflow step, each opening its
 // own withTenant transactions (companyId: the internal id from the workflow params, set server-side at the claim).
 //
-// Per item: fetch (web) or read from R2 (upload) → convert to markdown → normalize → content_hash. A document whose
-// stored hash matches and that is Indexed is Unchanged: its last_synced_at moves, nothing is chunked and no embed call
-// is made. Otherwise it is chunked and embedded (one model_calls row per Workers AI call, tier Embed, usage Estimated),
-// then one transaction stores it: the source row is locked FOR UPDATE and must still be Syncing (a pause or a delete
-// takes the same lock, so a stopped sync writes nothing more), then the file and its R2 object, the document, and its
-// chunks (old ones deleted, new ones written). Any failed write rolls the whole item back.
+// Ownership: the claim stored the run's syncRunId on the source. Every write first locks the source row FOR UPDATE and
+// requires it to be Syncing and owned by this run (a pause, a delete and a newer claim take the same lock), so a run
+// left behind writes nothing and stops (outcome Stopped); every write also refreshes the run's heartbeat.
+//
+// Per item: fetch (web, same site only) or read from R2 (upload) → convert to markdown → normalize → content_hash
+// (pipeline version + sha256 of the text). A document whose stored hash matches and that is Indexed is Unchanged:
+// nothing is chunked and no embed call is made. Otherwise it is chunked and embedded (one model_calls row per Workers
+// AI call), a new page's bytes go to R2 under a new file, then one transaction stores the file, the document
+// (re-read under the lock) and its chunks (old deleted, new written).
+//
+// A database or storage failure answers isSuccess false, and the workflow step throws so Workflows retries it; an
+// expected failure (dead page, unsupported type, embedding refused) is an outcome and the sync goes on.
 export default class KnowledgeIngestionRepo {
   private env: Env;
   private db: NodePgDatabase;
@@ -35,7 +42,6 @@ export default class KnowledgeIngestionRepo {
   private chunksDal: KnowledgeChunksDAL;
   private filesDal: FilesDAL;
   private companiesDal: CompaniesDAL;
-  private modelCallsDal: ModelCallsDAL;
 
   constructor(env: Env) {
     this.env = env;
@@ -45,39 +51,41 @@ export default class KnowledgeIngestionRepo {
     this.chunksDal = new KnowledgeChunksDAL();
     this.filesDal = new FilesDAL();
     this.companiesDal = new CompaniesDAL();
-    this.modelCallsDal = new ModelCallsDAL();
   }
 
-  // DEV_NOTE: Round 0 lists the whole source: a sitemap's pages, a url source's one page, or every document of an
-  // upload source. Later rounds (upload sources only) list the documents still Pending: files uploaded while the sync
-  // ran. A source that is gone or no longer Syncing (paused) stops the sync.
+  // DEV_NOTE: Round 0 lists the whole source: a sitemap's pages, a url source's one page, or an upload source's
+  // documents with work to do (Pending, Failed, or indexed by an older pipeline). Later rounds (upload sources only)
+  // list the documents still Pending: files uploaded while the sync ran.
   async listSyncItems(
     params: Schemas.KnowledgeSyncWorkflowParams & { round: number },
   ): Promise<Schemas.ListKnowledgeSyncItemsResponse> {
-    const found = await withTenant(this.db, params.companyId, async (tx) => {
-      return await this.sourcesDal.getKnowledgeSourceDetails(tx, {
-        companyId: params.companyId,
-        publicId: params.knowledgeSourcePublicId,
-        isForUpdate: false,
-      });
-    });
-    const source = "knowledgeSource" in found ? found.knowledgeSource : undefined;
-    if (!found.isSuccess && !found.isNotFound) {
-      return { isSuccess: false, message: found.message };
-    }
-    if (!source || source.status !== Schemas.KnowledgeSourceStatusIntEnum.Syncing) {
+    const owned = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.SyncingKnowledgeSourceResponse> => {
+        return await this.lockOwnedSource(tx, params);
+      },
+    );
+    if (!owned.isSuccess) return { isSuccess: false, message: owned.message };
+    const source = "source" in owned ? owned.source : undefined;
+    if (!source) {
       return { isSuccess: true, message: "Knowledge source is not syncing", isStopped: true };
     }
 
     if (source.type === Schemas.KnowledgeSourceTypeIntEnum.Upload) {
       const documents = await withTenant(this.db, params.companyId, async (tx) => {
-        return await this.documentsDal.getKnowledgeDocumentsBySource(tx, {
-          companyId: params.companyId,
-          knowledgeSourceId: source.id,
-          indexStatuses:
-            params.round === 0 ? null : [Schemas.KnowledgeDocumentIndexStatusIntEnum.Pending],
-          limit: Constants.KNOWLEDGE_MAX_ITEMS_PER_SYNC,
-        });
+        const scope = { companyId: params.companyId, knowledgeSourceId: source.id };
+        return params.round === 0
+          ? await this.documentsDal.getKnowledgeDocumentsToIndex(tx, {
+              ...scope,
+              contentHashPrefix: `${Schemas.KNOWLEDGE_PIPELINE_VERSION}:`,
+              limit: Constants.KNOWLEDGE_MAX_ITEMS_PER_SYNC,
+            })
+          : await this.documentsDal.getKnowledgeDocumentsBySource(tx, {
+              ...scope,
+              indexStatuses: [Schemas.KnowledgeDocumentIndexStatusIntEnum.Pending],
+              limit: Constants.KNOWLEDGE_MAX_ITEMS_PER_SYNC,
+            });
       });
       if (!documents.isSuccess || !("knowledgeDocuments" in documents)) {
         return { isSuccess: false, message: documents.message };
@@ -89,24 +97,35 @@ export default class KnowledgeIngestionRepo {
           knowledgeDocumentPublicId: document.publicId,
         })),
         isWebSource: false,
+        isComplete: false,
       };
     }
 
     // DEV_NOTE: Web sources are listed once (round 0): the listing is the whole site
-    if (params.round > 0 || !source.url) {
-      return { isSuccess: true, message: "Nothing more to list", items: [], isWebSource: true };
+    const site = source.url ? KnowledgeFetchProvider.siteOf(source.url) : null;
+    if (params.round > 0) {
+      return {
+        isSuccess: true,
+        message: "Nothing more to list",
+        items: [],
+        isWebSource: true,
+        isComplete: false,
+      };
     }
-    const host = KnowledgeFetchProvider.hostOf(source.url);
+    if (!source.url || !site) {
+      return {
+        isSuccess: true,
+        message: "Knowledge source URL is not crawlable",
+        isListingFailed: true,
+      };
+    }
     if (source.type === Schemas.KnowledgeSourceTypeIntEnum.Url) {
-      const url = host ? KnowledgeFetchProvider.normalizeUrl(source.url, host) : null;
-      if (!url) {
-        return { isSuccess: false, message: "Knowledge source URL is not crawlable" };
-      }
       return {
         isSuccess: true,
         message: "Knowledge sync items listed successfully",
-        items: [{ url }],
+        items: [{ url: KnowledgeFetchProvider.normalizeUrl(source.url, site) ?? source.url }],
         isWebSource: true,
+        isComplete: true,
       };
     }
 
@@ -118,33 +137,26 @@ export default class KnowledgeIngestionRepo {
         message: "Sitemap could not be listed",
         metadata: { ...params, reason: listed.message ?? null },
       });
-      return { isSuccess: false, message: listed.message };
+      return { isSuccess: true, message: listed.message, isListingFailed: true };
     }
     return {
       isSuccess: true,
       message: "Knowledge sync items listed successfully",
       items: listed.urls.map((url) => ({ url })),
       isWebSource: true,
+      isComplete: listed.isComplete ?? false,
     };
   }
 
   async ingestSyncItem(
-    params: Schemas.KnowledgeSyncWorkflowParams & { item: Schemas.KnowledgeSyncItem },
+    params: Schemas.KnowledgeSyncItemParams,
   ): Promise<Schemas.IngestKnowledgeSyncItemResponse> {
     const context = await this.loadItemContext(params);
     if (!context.isSuccess) {
-      return {
-        isSuccess: false,
-        message: context.message,
-        outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Failed,
-      };
+      return { isSuccess: false, message: context.message };
     }
-    if (context.isStopped || !context.source || !context.companyPublicId) {
-      return {
-        isSuccess: true,
-        message: "Knowledge source is not syncing",
-        outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Stopped,
-      };
+    if (!context.source || !context.companyPublicId) {
+      return this.stopped();
     }
     const { source, companyPublicId } = context;
     const existing = context.existing ?? null;
@@ -157,53 +169,34 @@ export default class KnowledgeIngestionRepo {
       };
     }
 
-    const content = await this.loadContent(params, companyPublicId, existing);
+    const content = await this.loadContent(params, source, companyPublicId, existing);
     if (!content.isSuccess || !content.bytes || !content.mime) {
-      return await this.markFailed(
-        params,
-        existing,
-        content.message ?? "Document could not be read",
-      );
+      // DEV_NOTE: An upload's stored file that can't be read (database, R2) is retried; a missing one, like a dead or
+      // unsupported web page, fails the item
+      if (isUpload && !content.isNotFound) {
+        return { isSuccess: false, message: content.message };
+      }
+      return await this.markFailed(params, content.message ?? "Document could not be read");
     }
 
     const extracted = await KnowledgeExtractProvider.toText(this.env, {
       bytes: content.bytes,
       mime: content.mime,
+      charset: content.charset ?? null,
     });
     const text = KnowledgeChunkerProvider.normalizeText(extracted.text ?? "");
     if (!extracted.isSuccess || !text) {
-      return await this.markFailed(params, existing, extracted.message ?? "Document has no text");
+      return await this.markFailed(params, extracted.message ?? "Document has no text");
     }
 
     // DEV_NOTE: The content_hash skip: an unchanged, already indexed document is never chunked or embedded again
-    const contentHash = await KnowledgeChunkerProvider.hashText(text);
+    const contentHash = await KnowledgeChunkerProvider.contentHash(text);
     if (
       existing &&
       existing.contentHash === contentHash &&
       existing.indexStatus === Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed
     ) {
-      const touched = await withTenant(this.db, params.companyId, async (tx) => {
-        return await this.documentsDal.updateKnowledgeDocument(tx, {
-          id: existing.id,
-          companyId: params.companyId,
-          title: null,
-          contentHash: null,
-          indexStatus: null,
-          lastSyncedAt: new Date(),
-        });
-      });
-      return touched.isSuccess
-        ? {
-            isSuccess: true,
-            message: "Knowledge document unchanged",
-            outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Unchanged,
-            embedCallCount: 0,
-          }
-        : {
-            isSuccess: false,
-            message: touched.message,
-            outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Failed,
-          };
+      return await this.markUnchanged(params);
     }
 
     const chunked = KnowledgeChunkerProvider.chunk(text);
@@ -218,26 +211,18 @@ export default class KnowledgeIngestionRepo {
 
     const embedded = await this.embedChunks(params.companyId, companyPublicId, chunked.chunks);
     if (!embedded.isSuccess || !embedded.chunks) {
-      const failed = await this.markFailed(
-        params,
-        existing,
-        embedded.message ?? "Embedding failed",
-      );
+      const failed = await this.markFailed(params, embedded.message ?? "Embedding failed");
       return { ...failed, embedCallCount: embedded.callCount };
     }
 
     const title =
       KnowledgeChunkerProvider.extractTitle(text) ??
-      existing?.title ??
-      ("url" in params.item ? this.titleFromUrl(params.item.url) : null);
-    const stored = await this.storeDocument({
-      ...params,
-      source,
+      ("url" in params.item
+        ? KnowledgeFetchProvider.titleFromUrl(params.item.url)
+        : (existing?.title ?? null));
+    const stored = await this.storeDocument(params, {
       companyPublicId,
-      existing,
-      bytes: content.bytes,
-      mime: content.mime,
-      isNewContent: !isUpload,
+      content: { bytes: content.bytes, mime: content.mime },
       title,
       contentHash,
       chunks: embedded.chunks,
@@ -245,9 +230,9 @@ export default class KnowledgeIngestionRepo {
     return { ...stored, embedCallCount: embedded.callCount };
   }
 
-  // DEV_NOTE: A web source's documents whose URL the finished listing no longer has (removed from the sitemap) are
-  // deleted with their chunks, files and R2 objects. Only while the source is still Syncing (locked). An empty listing
-  // prunes nothing: a site serving an empty sitemap for a moment must not wipe its knowledge.
+  // DEV_NOTE: A web source's documents whose URL the finished, complete listing no longer has (removed from the
+  // sitemap) are deleted with their chunks, files and R2 objects. The workflow never calls it for a partial listing,
+  // and an empty listing prunes nothing: a site serving an empty sitemap for a moment must not wipe its knowledge.
   async pruneUnlistedDocuments(
     params: Schemas.KnowledgeSyncWorkflowParams & { listedUrls: string[] },
   ): Promise<Schemas.PruneKnowledgeDocumentsResponse> {
@@ -263,135 +248,129 @@ export default class KnowledgeIngestionRepo {
       });
       return { isSuccess: true, message: "Listing is empty; nothing pruned", deletedCount: 0 };
     }
-    const result = await withTenant(this.db, params.companyId, async (tx) => {
-      const locked = await this.lockSyncingSource(tx, params);
-      if (!locked.isSuccess) throw new TenantRollbackError(locked.message);
-      if (!locked.source || !locked.companyPublicId) {
-        return {
-          isSuccess: true,
-          message: "Knowledge source is not syncing",
-          deletedCount: 0,
-          fileR2Keys: [],
-        };
-      }
 
-      const unlisted = await this.documentsDal.getUnlistedKnowledgeDocuments(tx, {
-        companyId: params.companyId,
-        knowledgeSourceId: locked.source.id,
-        listedSourceUrls: params.listedUrls,
-      });
-      if (!unlisted.isSuccess || !unlisted.knowledgeDocuments) {
-        throw new TenantRollbackError(unlisted.message);
-      }
+    const result = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.RemoveKnowledgeDocumentsResponse> => {
+        const owned = await this.lockOwnedSource(tx, params);
+        if (!owned.isSuccess) throw new TenantRollbackError(owned.message);
+        if (!owned.source || !owned.companyPublicId) {
+          return { isSuccess: true, message: "Knowledge source is not syncing", deletedCount: 0 };
+        }
 
-      const removed = await KnowledgeDocumentFilesProvider.remove(tx, {
-        companyId: params.companyId,
-        companyPublicId: locked.companyPublicId,
-        documents: unlisted.knowledgeDocuments,
-      });
-      if (!removed.isSuccess) throw new TenantRollbackError(removed.message);
-      return removed;
-    });
+        const unlisted = await this.documentsDal.getUnlistedKnowledgeDocuments(tx, {
+          companyId: params.companyId,
+          knowledgeSourceId: owned.source.id,
+          listedSourceUrls: params.listedUrls,
+        });
+        if (!unlisted.isSuccess || !unlisted.knowledgeDocuments) {
+          throw new TenantRollbackError(unlisted.message);
+        }
 
-    if (!result.isSuccess || !("fileR2Keys" in result)) {
-      return { isSuccess: false, message: result.message };
-    }
-    if (result.fileR2Keys && result.fileR2Keys.length > 0) {
-      await FileStorageProvider.deleteObjects(this.env, { keys: result.fileR2Keys });
+        const removed = await KnowledgeDocumentFilesProvider.remove(tx, {
+          companyId: params.companyId,
+          companyPublicId: owned.companyPublicId,
+          documents: unlisted.knowledgeDocuments,
+        });
+        if (!removed.isSuccess) throw new TenantRollbackError(removed.message);
+        return removed;
+      },
+    );
+
+    if (!result.isSuccess) return { isSuccess: false, message: result.message };
+    const fileR2Keys = "fileR2Keys" in result ? (result.fileR2Keys ?? []) : [];
+    if (fileR2Keys.length > 0) {
+      await FileStorageProvider.deleteObjects(this.env, { keys: fileR2Keys });
     }
     return {
       isSuccess: true,
       message: "Unlisted knowledge documents pruned",
-      deletedCount: result.deletedCount ?? 0,
+      deletedCount: "deletedCount" in result ? (result.deletedCount ?? 0) : 0,
     };
   }
 
   // DEV_NOTE: Ends the sync: Active with last_synced_at = now, or Failed (the listing failed, or every item failed).
-  // Only a source still Syncing is changed: a paused or deleted one stays as the admin left it.
+  // Only while this run owns the source: a paused, deleted or re-claimed one stays as it is. hasPendingDocuments tells
+  // the workflow an upload source got files after its last listing, so it starts another sync.
   async finishSync(
     params: Schemas.KnowledgeSyncWorkflowParams & { isFailed: boolean },
-  ): Promise<Schemas.ApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const locked = await this.lockSyncingSource(tx, params);
-      if (!locked.isSuccess) return { isSuccess: false, message: locked.message };
-      if (!locked.source) return { isSuccess: true, message: "Knowledge source is not syncing" };
-
-      const finished = await this.sourcesDal.setKnowledgeSourceSyncState(tx, {
-        companyId: params.companyId,
-        publicId: params.knowledgeSourcePublicId,
-        status: params.isFailed
-          ? Schemas.KnowledgeSourceStatusIntEnum.Failed
-          : Schemas.KnowledgeSourceStatusIntEnum.Active,
-        lastSyncedAt: params.isFailed ? null : new Date(),
-      });
-      return { isSuccess: finished.isSuccess, message: finished.message };
-    });
-  }
-
-  // DEV_NOTE: The source (only while Syncing), the company's public id (R2 keys, gateway metadata) and the document the
-  // item already has, if any: by URL for a web page, by publicId for an upload
-  private async loadItemContext(
-    params: Schemas.KnowledgeSyncWorkflowParams & { item: Schemas.KnowledgeSyncItem },
-  ): Promise<Schemas.KnowledgeSyncItemContextResponse> {
+  ): Promise<Schemas.FinishKnowledgeSyncResponse> {
     return await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.KnowledgeSyncItemContextResponse> => {
-        const found = await this.sourcesDal.getKnowledgeSourceDetails(tx, {
+      async (tx): Promise<Schemas.FinishKnowledgeSyncResponse> => {
+        const owned = await this.lockOwnedSource(tx, params);
+        if (!owned.isSuccess) return { isSuccess: false, message: owned.message };
+        if (!owned.source) return { isSuccess: true, message: "Knowledge source is not syncing" };
+
+        const finished = await this.sourcesDal.setKnowledgeSourceSyncState(tx, {
           companyId: params.companyId,
           publicId: params.knowledgeSourcePublicId,
-          isForUpdate: false,
+          status: params.isFailed
+            ? Schemas.KnowledgeSourceStatusIntEnum.Failed
+            : Schemas.KnowledgeSourceStatusIntEnum.Active,
+          lastSyncedAt: params.isFailed ? null : new Date(),
+          syncRunId: null,
         });
-        if (!found.isSuccess && !found.isNotFound)
-          return { isSuccess: false, message: found.message };
-        const source = found.knowledgeSource;
-        if (!source || source.status !== Schemas.KnowledgeSourceStatusIntEnum.Syncing) {
-          return { isSuccess: true, isStopped: true };
+        if (!finished.isSuccess) throw new TenantRollbackError(finished.message);
+
+        if (owned.source.type !== Schemas.KnowledgeSourceTypeIntEnum.Upload) {
+          return { isSuccess: true, message: "Knowledge sync finished" };
         }
-
-        const company = await this.companiesDal.getCompanyDetails(tx, {
+        const pending = await this.documentsDal.getKnowledgeDocumentsBySource(tx, {
           companyId: params.companyId,
+          knowledgeSourceId: owned.source.id,
+          indexStatuses: [Schemas.KnowledgeDocumentIndexStatusIntEnum.Pending],
+          limit: 1,
         });
-        if (!company.isSuccess || !company.company)
-          return { isSuccess: false, message: company.message };
-
-        const document =
-          "url" in params.item
-            ? await this.documentsDal.getKnowledgeDocumentBySourceUrl(tx, {
-                companyId: params.companyId,
-                knowledgeSourceId: source.id,
-                sourceUrl: params.item.url,
-              })
-            : await this.documentsDal.getKnowledgeDocumentDetails(tx, {
-                companyId: params.companyId,
-                knowledgeSourceId: source.id,
-                publicId: params.item.knowledgeDocumentPublicId,
-              });
-        if (!document.isSuccess && !document.isNotFound)
-          return { isSuccess: false, message: document.message };
-
+        if (!pending.isSuccess || !pending.knowledgeDocuments) {
+          throw new TenantRollbackError(pending.message);
+        }
         return {
           isSuccess: true,
-          isStopped: false,
-          source,
-          companyPublicId: company.company.publicId,
-          existing: document.knowledgeDocument ?? null,
+          message: "Knowledge sync finished",
+          hasPendingDocuments: pending.knowledgeDocuments.length > 0,
         };
       },
     );
   }
 
-  // DEV_NOTE: The item's bytes: fetched for a web page (capped, supported types only), read back from R2 for an upload
+  // DEV_NOTE: The source (only while this run owns it), the company's public id (R2 keys, gateway metadata) and the
+  // document the item already has, if any. Read without a lock: the store re-reads the document under it.
+  private async loadItemContext(
+    params: Schemas.KnowledgeSyncItemParams,
+  ): Promise<Schemas.KnowledgeSyncItemContextResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.KnowledgeSyncItemContextResponse> => {
+        const owned = await this.findOwnedSource(tx, params, false);
+        if (!owned.isSuccess || !owned.source) return owned;
+        const existing = await this.findItemDocument(tx, params, owned.source.id);
+        if (!existing.isSuccess && !existing.isNotFound) {
+          return { isSuccess: false, message: existing.message };
+        }
+        return { ...owned, existing: existing.knowledgeDocument ?? null };
+      },
+    );
+  }
+
+  // DEV_NOTE: The item's bytes: fetched for a web page (same site only, capped, supported types only), read back from
+  // R2 for an upload (isNotFound when its file row or object is gone)
   private async loadContent(
-    params: Schemas.KnowledgeSyncWorkflowParams & { item: Schemas.KnowledgeSyncItem },
+    params: Schemas.KnowledgeSyncItemParams,
+    source: Schemas.KnowledgeSource,
     companyPublicId: string,
     existing: Schemas.KnowledgeDocument | null,
   ): Promise<Schemas.KnowledgeFetchResponse> {
     if ("url" in params.item) {
-      const fetched = await KnowledgeFetchProvider.fetchDocument(
-        params.item.url,
-        Constants.KNOWLEDGE_PAGE_MAX_BYTES,
-      );
+      const site = source.url ? KnowledgeFetchProvider.siteOf(source.url) : null;
+      if (!site) return { isSuccess: false, message: "Knowledge source URL is not crawlable" };
+      const fetched = await KnowledgeFetchProvider.fetchDocument(params.item.url, {
+        site,
+        maxBytes: Constants.KNOWLEDGE_PAGE_MAX_BYTES,
+      });
       if (fetched.isSuccess && !KnowledgeExtractProvider.isSupportedMime(fetched.mime ?? "")) {
         return {
           isSuccess: false,
@@ -400,24 +379,29 @@ export default class KnowledgeIngestionRepo {
       }
       return fetched;
     }
-    if (!existing) return { isSuccess: false, message: "Knowledge document not found" };
+    if (!existing) {
+      return { isSuccess: false, isNotFound: true, message: "Knowledge document not found" };
+    }
 
     const file = await withTenant(this.db, params.companyId, async (tx) => {
       return await this.filesDal.getFile(tx, { id: existing.fileId, companyId: params.companyId });
     });
     if (!file.isSuccess || !("file" in file) || !file.file) {
-      return { isSuccess: false, message: file.message };
+      return { isSuccess: false, isNotFound: file.isNotFound, message: file.message };
     }
     const object = await FileStorageProvider.getObject(this.env, {
       key: Schemas.fileR2Key(companyPublicId, file.file.publicId),
     });
-    if (!object.isSuccess || !object.bytes) return { isSuccess: false, message: object.message };
-    return { isSuccess: true, bytes: object.bytes, mime: file.file.mime };
+    if (!object.isSuccess || !object.bytes) {
+      return { isSuccess: false, isNotFound: object.isNotFound, message: object.message };
+    }
+    return { isSuccess: true, bytes: object.bytes, mime: file.file.mime, charset: null };
   }
 
   // DEV_NOTE: Embeds every chunk (heading path + text) and writes one model_calls row per Workers AI call made, even
-  // when a call failed: an embedding is billed to the platform either way. The price is checked first, so a model
-  // missing from PLATFORM_MODEL_PRICES is refused before any call, never recorded at 0.
+  // when a call failed. The price is checked first, so a model missing from PLATFORM_MODEL_PRICES is refused before
+  // any call. A failed row write rolls the batch back and is logged as an error with the calls' token counts (the
+  // spend stays visible); the document itself goes on.
   private async embedChunks(
     companyId: string,
     companyPublicId: string,
@@ -426,10 +410,7 @@ export default class KnowledgeIngestionRepo {
     if (chunks.length === 0) {
       return { isSuccess: true, chunks: [], callCount: 0 };
     }
-    const price = Schemas.getModelCallPrice(
-      Schemas.PlatformModelProviderEnum.WorkersAi,
-      Schemas.KNOWLEDGE_EMBEDDING_MODEL,
-    );
+    const price = KnowledgeEmbedCallsProvider.price();
     if (!price) {
       const message = "Embedding model is not priced";
       AppLogger.error({
@@ -447,41 +428,24 @@ export default class KnowledgeIngestionRepo {
     });
     const calls = embedded.calls ?? [];
     if (calls.length > 0) {
-      await withTenant(this.db, companyId, async (tx) => {
-        for (const call of calls) {
-          await this.modelCallsDal.createModelCall(tx, {
-            companyId,
-            chatbotId: null,
-            chatbotUserId: null,
-            conversationId: null,
-            evalRunId: null,
-            turnId: null,
-            taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
-            tier: Schemas.ModelCallTierIntEnum.Embed,
-            provider: Schemas.PlatformModelProviderEnum.WorkersAi,
-            model: Schemas.KNOWLEDGE_EMBEDDING_MODEL,
-            gatewayLogId: call.gatewayLogId,
-            inputTokens: call.inputTokens,
-            outputTokens: null,
-            cachedTokens: 0,
-            costUsd: Schemas.computeModelCallCostUsd(
-              price,
-              {
-                inputTokens: call.inputTokens,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                outputTokens: 0,
-              },
-              true,
-            ),
-            latencyMs: call.latencyMs,
-            wasEscalated: false,
-            errorCode: call.errorCode,
-            usageStatus: Schemas.ModelCallUsageStatusIntEnum.Estimated,
-          });
-        }
-        return { isSuccess: true };
+      const recorded = await withTenant(this.db, companyId, async (tx) => {
+        const result = await KnowledgeEmbedCallsProvider.record(tx, { companyId, price, calls });
+        if (!result.isSuccess) throw new TenantRollbackError(result.message);
+        return result;
       });
+      if (!recorded.isSuccess) {
+        AppLogger.error({
+          category: Schemas.LogCategory.Knowledge,
+          action: Schemas.LogAction.EmbedKnowledgeChunks,
+          message: "Embedding calls were made but their model_calls rows could not be written",
+          metadata: {
+            companyId,
+            calls: calls.length,
+            inputTokens: calls.reduce((total, call) => total + call.inputTokens, 0),
+            reason: recorded.message ?? null,
+          },
+        });
+      }
     }
 
     if (!embedded.isSuccess || !embedded.embeddings) {
@@ -499,123 +463,156 @@ export default class KnowledgeIngestionRepo {
     };
   }
 
+  // DEV_NOTE: A web page's bytes are written to R2 first, as a new file (never overwriting the old one), so no lock is
+  // held while they upload. Then one transaction: lock the owned source, re-read the document, write the new file row
+  // (a new document, or replace the old file), update the document and replace its chunks. A transaction that doesn't
+  // store the item (failed, or the run stopped) deletes the new object; a stored one deletes the replaced file's.
   private async storeDocument(
-    params: Schemas.KnowledgeSyncWorkflowParams & {
-      item: Schemas.KnowledgeSyncItem;
-      source: Schemas.KnowledgeSource;
+    params: Schemas.KnowledgeSyncItemParams,
+    data: {
       companyPublicId: string;
-      existing: Schemas.KnowledgeDocument | null;
-      bytes: Uint8Array<ArrayBuffer>;
-      mime: string;
-      isNewContent: boolean;
+      content: { bytes: Uint8Array<ArrayBuffer>; mime: string };
       title: string | null;
       contentHash: string;
       chunks: Schemas.EmbeddedKnowledgeChunk[];
     },
   ): Promise<Schemas.IngestKnowledgeSyncItemResponse> {
-    let writtenR2Key: string | null = null;
+    const sourceUrl = "url" in params.item ? params.item.url : null;
+    let newFile: Pick<Schemas.StoredFile, "publicId" | "mime" | "sizeBytes" | "sha256"> | null =
+      null;
+    if (sourceUrl) {
+      newFile = {
+        publicId: Utility.generatePublicId(),
+        mime: data.content.mime,
+        sizeBytes: data.content.bytes.byteLength,
+        sha256: await KnowledgeChunkerProvider.hashBytes(data.content.bytes),
+      };
+      const stored = await FileStorageProvider.putObject(this.env, {
+        key: Schemas.fileR2Key(data.companyPublicId, newFile.publicId),
+        bytes: data.content.bytes,
+        mime: data.content.mime,
+      });
+      if (!stored.isSuccess) return { isSuccess: false, message: stored.message };
+    }
     const now = new Date();
+    let oldFileR2Key: string | null = null;
 
-    const result = await withTenant(this.db, params.companyId, async (tx) => {
-      const locked = await this.lockSyncingSource(tx, params);
-      if (!locked.isSuccess) throw new TenantRollbackError(locked.message);
-      if (!locked.source) {
-        return {
-          isSuccess: true,
-          message: "Knowledge source is not syncing",
-          outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Stopped,
-        };
-      }
+    const result = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.IngestKnowledgeSyncItemResponse> => {
+        const owned = await this.lockOwnedSource(tx, params);
+        if (!owned.isSuccess) throw new TenantRollbackError(owned.message);
+        if (!owned.source) return this.stopped();
+        const source = owned.source;
 
-      let documentId: string;
-      if (params.existing) {
-        documentId = params.existing.id;
-        if (params.isNewContent) {
-          const sha256 = await KnowledgeChunkerProvider.hashBytes(params.bytes);
-          const replaced = await KnowledgeDocumentFilesProvider.replaceContent(this.env, tx, {
+        const found = await this.findItemDocument(tx, params, source.id);
+        if (!found.isSuccess && !found.isNotFound) throw new TenantRollbackError(found.message);
+        let document = found.knowledgeDocument ?? null;
+
+        if (!document) {
+          // DEV_NOTE: An upload deleted while it was being embedded: this item is done, the sync goes on
+          if (!newFile) {
+            return {
+              isSuccess: true,
+              message: "Knowledge document is gone",
+              outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Failed,
+            };
+          }
+          const created = await KnowledgeDocumentFilesProvider.create(tx, {
             companyId: params.companyId,
-            companyPublicId: params.companyPublicId,
-            fileId: params.existing.fileId,
-            bytes: params.bytes,
-            mime: params.mime,
-            sha256,
+            knowledgeSourceId: source.id,
+            file: { ...newFile, filename: null, createdBy: null },
+            document: {
+              title: data.title,
+              sourceUrl,
+              contentHash: data.contentHash,
+              indexStatus: Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed,
+              lastSyncedAt: now,
+            },
           });
-          if (!replaced.isSuccess) throw new TenantRollbackError(replaced.message);
-        }
-        const updated = await this.documentsDal.updateKnowledgeDocument(tx, {
-          id: documentId,
-          companyId: params.companyId,
-          title: params.title,
-          contentHash: params.contentHash,
-          indexStatus: Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed,
-          lastSyncedAt: now,
-        });
-        if (!updated.isSuccess) throw new TenantRollbackError(updated.message);
-      } else {
-        const sourceUrl = "url" in params.item ? params.item.url : null;
-        const created = await KnowledgeDocumentFilesProvider.create(this.env, tx, {
-          companyId: params.companyId,
-          companyPublicId: params.companyPublicId,
-          knowledgeSourceId: params.source.id,
-          bytes: params.bytes,
-          mime: params.mime,
-          sha256: await KnowledgeChunkerProvider.hashBytes(params.bytes),
-          filename: null,
-          createdBy: null,
-          document: {
-            title: params.title,
-            sourceUrl,
-            contentHash: params.contentHash,
+          if (!created.isSuccess || !created.knowledgeDocument) {
+            throw new TenantRollbackError(created.message);
+          }
+          document = created.knowledgeDocument;
+        } else {
+          let fileId: string | null = null;
+          if (newFile) {
+            const replaced = await KnowledgeDocumentFilesProvider.replaceFile(tx, {
+              companyId: params.companyId,
+              companyPublicId: data.companyPublicId,
+              document,
+              file: newFile,
+            });
+            if (!replaced.isSuccess || !replaced.fileId) {
+              throw new TenantRollbackError(replaced.message);
+            }
+            fileId = replaced.fileId;
+            oldFileR2Key = replaced.oldFileR2Key ?? null;
+          }
+          const updated = await this.documentsDal.updateKnowledgeDocument(tx, {
+            id: document.id,
+            companyId: params.companyId,
+            title: data.title,
+            contentHash: data.contentHash,
             indexStatus: Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed,
             lastSyncedAt: now,
-          },
-        });
-        writtenR2Key = created.fileR2Key ?? null;
-        if (!created.isSuccess || !created.knowledgeDocument) {
-          throw new TenantRollbackError(created.message);
+            fileId,
+          });
+          if (!updated.isSuccess) throw new TenantRollbackError(updated.message);
         }
-        documentId = created.knowledgeDocument.id;
-      }
 
-      const deleted = await this.chunksDal.deleteKnowledgeChunksByDocuments(tx, {
-        companyId: params.companyId,
-        knowledgeDocumentIds: [documentId],
+        const deleted = await this.chunksDal.deleteKnowledgeChunksByDocuments(tx, {
+          companyId: params.companyId,
+          knowledgeDocumentIds: [document.id],
+        });
+        if (!deleted.isSuccess) throw new TenantRollbackError(deleted.message);
+        const chunks = await this.chunksDal.createKnowledgeChunks(tx, {
+          companyId: params.companyId,
+          knowledgeDocumentId: document.id,
+          knowledgeSourceId: source.id,
+          chunks: data.chunks,
+        });
+        if (!chunks.isSuccess) throw new TenantRollbackError(chunks.message);
+
+        return {
+          isSuccess: true,
+          message: "Knowledge document indexed",
+          outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Indexed,
+        };
+      },
+    );
+
+    const isStored =
+      result.isSuccess &&
+      "outcome" in result &&
+      result.outcome === Schemas.KnowledgeSyncItemOutcomeEnum.Indexed;
+    if (!isStored && newFile) {
+      await FileStorageProvider.deleteObjects(this.env, {
+        keys: [Schemas.fileR2Key(data.companyPublicId, newFile.publicId)],
       });
-      if (!deleted.isSuccess) throw new TenantRollbackError(deleted.message);
-      const chunks = await this.chunksDal.createKnowledgeChunks(tx, {
-        companyId: params.companyId,
-        knowledgeDocumentId: documentId,
-        knowledgeSourceId: params.source.id,
-        chunks: params.chunks,
-      });
-      if (!chunks.isSuccess) throw new TenantRollbackError(chunks.message);
-
-      return {
-        isSuccess: true,
-        message: "Knowledge document indexed",
-        outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Indexed,
-      };
-    });
-
-    if (!result.isSuccess) {
-      // DEV_NOTE: The rows rolled back; the object written for a new file has no row now, so it goes too
-      if (writtenR2Key) {
-        await FileStorageProvider.deleteObjects(this.env, { keys: [writtenR2Key] });
-      }
-      return await this.markFailed(
-        params,
-        params.existing,
-        result.message ?? "Knowledge document could not be stored",
-      );
+    }
+    if (isStored && oldFileR2Key) {
+      await FileStorageProvider.deleteObjects(this.env, { keys: [oldFileR2Key] });
     }
     return result;
+  }
+
+  // DEV_NOTE: Unchanged: only last_synced_at moves, under the lock and only while the run owns the source
+  private async markUnchanged(
+    params: Schemas.KnowledgeSyncItemParams,
+  ): Promise<Schemas.IngestKnowledgeSyncItemResponse> {
+    return await this.updateItemDocument(params, {
+      outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Unchanged,
+      message: "Knowledge document unchanged",
+      update: { indexStatus: null, lastSyncedAt: new Date() },
+    });
   }
 
   // DEV_NOTE: An item that failed: its document (if it has one) is marked Failed, and the sync goes on with the next
   // item. Its stored chunks stay searchable until a later sync indexes it again.
   private async markFailed(
-    params: Schemas.KnowledgeSyncWorkflowParams & { item: Schemas.KnowledgeSyncItem },
-    existing: Schemas.KnowledgeDocument | null,
+    params: Schemas.KnowledgeSyncItemParams,
     reason: string,
   ): Promise<Schemas.IngestKnowledgeSyncItemResponse> {
     AppLogger.warn({
@@ -624,61 +621,118 @@ export default class KnowledgeIngestionRepo {
       message: "Knowledge sync item failed",
       metadata: { ...params, reason },
     });
-    if (existing) {
-      await withTenant(this.db, params.companyId, async (tx) => {
-        return await this.documentsDal.updateKnowledgeDocument(tx, {
-          id: existing.id,
-          companyId: params.companyId,
-          title: null,
-          contentHash: null,
-          indexStatus: Schemas.KnowledgeDocumentIndexStatusIntEnum.Failed,
-          lastSyncedAt: null,
-        });
-      });
-    }
-    return {
-      isSuccess: true,
-      message: reason,
+    return await this.updateItemDocument(params, {
       outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Failed,
-    };
+      message: reason,
+      update: {
+        indexStatus: Schemas.KnowledgeDocumentIndexStatusIntEnum.Failed,
+        lastSyncedAt: null,
+      },
+    });
   }
 
-  // DEV_NOTE: Locks the source row for the rest of the transaction; source is set only while it is Syncing
-  private async lockSyncingSource(
+  private async updateItemDocument(
+    params: Schemas.KnowledgeSyncItemParams,
+    change: {
+      outcome: Schemas.KnowledgeSyncItemOutcomeEnum;
+      message: string;
+      update: Pick<Schemas.UpdateKnowledgeDocumentDALRequest, "indexStatus" | "lastSyncedAt">;
+    },
+  ): Promise<Schemas.IngestKnowledgeSyncItemResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.IngestKnowledgeSyncItemResponse> => {
+        const owned = await this.lockOwnedSource(tx, params);
+        if (!owned.isSuccess) throw new TenantRollbackError(owned.message);
+        if (!owned.source) return this.stopped();
+
+        const found = await this.findItemDocument(tx, params, owned.source.id);
+        if (!found.isSuccess && !found.isNotFound) throw new TenantRollbackError(found.message);
+        if (found.knowledgeDocument) {
+          const updated = await this.documentsDal.updateKnowledgeDocument(tx, {
+            id: found.knowledgeDocument.id,
+            companyId: params.companyId,
+            title: null,
+            contentHash: null,
+            fileId: null,
+            ...change.update,
+          });
+          if (!updated.isSuccess) throw new TenantRollbackError(updated.message);
+        }
+        return {
+          isSuccess: true,
+          message: change.message,
+          outcome: change.outcome,
+          embedCallCount: 0,
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Locks the source row for the rest of the transaction and, while this run owns it, refreshes the run's
+  // heartbeat. source is set only while the source is Syncing and owned by params.syncRunId.
+  private async lockOwnedSource(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.KnowledgeSyncWorkflowParams,
+  ): Promise<Schemas.SyncingKnowledgeSourceResponse> {
+    const owned = await this.findOwnedSource(tx, params, true);
+    if (!owned.isSuccess || !owned.source) return owned;
+    const touched = await this.sourcesDal.touchKnowledgeSourceSync(tx, {
+      companyId: params.companyId,
+      publicId: params.knowledgeSourcePublicId,
+    });
+    return touched.isSuccess ? owned : { isSuccess: false, message: touched.message };
+  }
+
+  private async findOwnedSource(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.KnowledgeSyncWorkflowParams,
+    isForUpdate: boolean,
   ): Promise<Schemas.SyncingKnowledgeSourceResponse> {
     const found = await this.sourcesDal.getKnowledgeSourceDetails(tx, {
       companyId: params.companyId,
       publicId: params.knowledgeSourcePublicId,
-      isForUpdate: true,
+      isForUpdate,
     });
     if (!found.isSuccess && !found.isNotFound) return { isSuccess: false, message: found.message };
-    if (
-      !found.knowledgeSource ||
-      found.knowledgeSource.status !== Schemas.KnowledgeSourceStatusIntEnum.Syncing
-    ) {
-      return { isSuccess: true };
-    }
+    const source = found.knowledgeSource;
+    const isOwned =
+      source?.status === Schemas.KnowledgeSourceStatusIntEnum.Syncing &&
+      source.syncRunId === params.syncRunId;
+    if (!source || !isOwned) return { isSuccess: true };
+
     const company = await this.companiesDal.getCompanyDetails(tx, { companyId: params.companyId });
-    if (!company.isSuccess || !company.company)
+    if (!company.isSuccess || !company.company) {
       return { isSuccess: false, message: company.message };
-    return {
-      isSuccess: true,
-      source: found.knowledgeSource,
-      companyPublicId: company.company.publicId,
-    };
+    }
+    return { isSuccess: true, source, companyPublicId: company.company.publicId };
   }
 
-  // DEV_NOTE: A page with no heading is titled by the last segment of its path, or its host
-  private titleFromUrl(url: string): string | null {
-    try {
-      const parsed = new URL(url);
-      const segment = parsed.pathname.split("/").filter(Boolean).pop();
-      const title = segment ? decodeURIComponent(segment).replace(/[-_]+/g, " ") : parsed.host;
-      return title.slice(0, Constants.KNOWLEDGE_TITLE_MAX_CHARS);
-    } catch {
-      return null;
-    }
+  // DEV_NOTE: The document an item already has: by URL for a web page, by publicId for an upload
+  private async findItemDocument(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.KnowledgeSyncItemParams,
+    knowledgeSourceId: string,
+  ): Promise<Schemas.KnowledgeDocumentDALResponse> {
+    return "url" in params.item
+      ? await this.documentsDal.getKnowledgeDocumentBySourceUrl(tx, {
+          companyId: params.companyId,
+          knowledgeSourceId,
+          sourceUrl: params.item.url,
+        })
+      : await this.documentsDal.getKnowledgeDocumentDetails(tx, {
+          companyId: params.companyId,
+          knowledgeSourceId,
+          publicId: params.item.knowledgeDocumentPublicId,
+        });
+  }
+
+  private stopped(): Schemas.IngestKnowledgeSyncItemResponse {
+    return {
+      isSuccess: true,
+      message: "Knowledge source is not syncing",
+      outcome: Schemas.KnowledgeSyncItemOutcomeEnum.Stopped,
+    };
   }
 }

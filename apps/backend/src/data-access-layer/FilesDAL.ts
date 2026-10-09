@@ -4,11 +4,10 @@ import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, files } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
-import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL for the files registry (every R2 object). Holds no db client: every method takes the tx opened
 // by withTenant in the Repo and filters on companyId. Rows only: the R2 object is written and deleted by
-// FileStorageProvider, keyed by Schemas.fileR2Key.
+// FileStorageProvider, keyed by Schemas.fileR2Key. A file's bytes never change: new bytes are a new file.
 export default class FilesDAL {
   async createFile(tx: NodePgTransaction<EmptyRelations>, params: Schemas.CreateFileDALRequest) {
     const response: Schemas.FileDALResponse = { isSuccess: false };
@@ -37,7 +36,7 @@ export default class FilesDAL {
       const [fileResponse] = await tx
         .insert(files)
         .values({
-          publicId: Utility.generatePublicId(),
+          publicId: params.publicId,
           companyId: params.companyId,
           ownerType: params.ownerType,
           ownerId: params.ownerId,
@@ -112,56 +111,6 @@ export default class FilesDAL {
     return response;
   }
 
-  async updateFileContent(
-    tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.UpdateFileContentDALRequest,
-  ) {
-    const response: Schemas.FileDALResponse = { isSuccess: false };
-
-    try {
-      const conditions = [eq(files.id, params.id), eq(files.companyId, params.companyId)];
-      const [fileResponse] = await tx
-        .update(files)
-        .set({
-          mime: params.mime,
-          sizeBytes: params.sizeBytes,
-          sha256: params.sha256,
-          updatedAt: new Date(),
-        })
-        .where(and(...conditions))
-        .returning();
-
-      if (!fileResponse) {
-        const message = "File not found";
-        AppLogger.error({
-          category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.UpdateFileContent,
-          message,
-          metadata: params,
-        });
-        response.message = message;
-        response.isNotFound = true;
-        return response;
-      }
-
-      response.isSuccess = true;
-      response.message = "File content updated successfully";
-      response.file = fileResponse;
-    } catch (error) {
-      const message = "Unknown error in updating file content";
-      AppLogger.error({
-        category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.UpdateFileContent,
-        message,
-        error,
-        metadata: params,
-      });
-      response.message = message;
-    }
-
-    return response;
-  }
-
   async getFile(tx: NodePgTransaction<EmptyRelations>, params: Schemas.FindFileDALRequest) {
     const response: Schemas.FileDALResponse = { isSuccess: false };
 
@@ -194,41 +143,6 @@ export default class FilesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetFile,
-        message,
-        error,
-        metadata: params,
-      });
-      response.message = message;
-    }
-
-    return response;
-  }
-
-  async getFiles(tx: NodePgTransaction<EmptyRelations>, params: Schemas.FindFilesDALRequest) {
-    const response: Schemas.FilesDALResponse = { isSuccess: false };
-
-    if (params.ids.length === 0) {
-      response.isSuccess = true;
-      response.message = "No files to fetch";
-      response.files = [];
-      return response;
-    }
-
-    try {
-      const conditions = [inArray(files.id, params.ids), eq(files.companyId, params.companyId)];
-      const filesResponse = await tx
-        .select()
-        .from(files)
-        .where(and(...conditions));
-
-      response.isSuccess = true;
-      response.message = "Files fetched successfully";
-      response.files = filesResponse;
-    } catch (error) {
-      const message = "Unknown error in fetching files";
-      AppLogger.error({
-        category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.GetFiles,
         message,
         error,
         metadata: params,

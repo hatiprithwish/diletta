@@ -9,12 +9,22 @@ import type { KnowledgeDocument } from "../knowledgeDocuments";
 import type { KnowledgeSource, KnowledgeSourceStateResponse } from "../knowledgeSources";
 import type { ApiResponse } from "../common";
 
-// DEV_NOTE: The sync's item list. isStopped: the source is gone or no longer Syncing, so nothing runs.
-// isWebSource: the listing is the whole site, so documents missing from it are pruned after the sync.
+// DEV_NOTE: The sync's item list. isStopped: the source is gone, no longer Syncing, or owned by another run.
+// isListingFailed: the site couldn't be listed (the sync ends Failed; a database failure is isSuccess false instead,
+// and the step retries). isWebSource + isComplete: the listing is the whole site, so documents missing from it are
+// pruned; a partial listing (a nested sitemap failed, a cap was hit) prunes nothing.
 export interface ListKnowledgeSyncItemsResponse extends ApiResponse {
   items?: KnowledgeSyncItem[];
   isStopped?: boolean;
+  isListingFailed?: boolean;
   isWebSource?: boolean;
+  isComplete?: boolean;
+}
+
+// DEV_NOTE: hasPendingDocuments: an upload source still has Pending documents (uploaded after the last listing), so
+// the workflow starts another sync
+export interface FinishKnowledgeSyncResponse extends ApiResponse {
+  hasPendingDocuments?: boolean;
 }
 
 export interface IngestKnowledgeSyncItemResponse extends ApiResponse {
@@ -32,16 +42,18 @@ export interface StartDueKnowledgeSyncsResponse extends ApiResponse {
   failedCount?: number;
 }
 
-// DEV_NOTE: A fetched page or sitemap (KnowledgeFetchProvider). mime is the response's type without parameters;
-// finalUrl is where redirects ended.
+// DEV_NOTE: A fetched page or sitemap (KnowledgeFetchProvider). mime is the response's type without parameters,
+// charset its charset parameter (null when absent).
 export interface KnowledgeFetchResponse extends ApiResponse {
   bytes?: Uint8Array<ArrayBuffer>;
   mime?: string;
-  finalUrl?: string;
+  charset?: string | null;
 }
 
+// DEV_NOTE: isComplete is false when a nested sitemap failed or a cap cut the listing short
 export interface SitemapUrlsResponse extends ApiResponse {
   urls?: string[];
+  isComplete?: boolean;
 }
 
 // DEV_NOTE: A document's text as markdown (KnowledgeExtractProvider)
@@ -65,11 +77,16 @@ export interface ParsedSitemapResponse extends ApiResponse {
   parsed?: ParsedSitemap;
 }
 
-// DEV_NOTE: KnowledgeDocumentFilesProvider.create: the new document, and the R2 key it wrote, which the Repo deletes
-// when its transaction then rolls back (set even on failure once the object was written)
+// DEV_NOTE: KnowledgeDocumentFilesProvider.create: the new document (its file row points at it)
 export interface CreateKnowledgeDocumentWithFileResponse extends ApiResponse {
   knowledgeDocument?: KnowledgeDocument;
-  fileR2Key?: string;
+}
+
+// DEV_NOTE: KnowledgeDocumentFilesProvider.replaceFile: the new file's id (the document points at it) and the R2
+// key of the file it replaced, deleted after the commit
+export interface ReplaceKnowledgeDocumentFileResponse extends ApiResponse {
+  fileId?: string;
+  oldFileR2Key?: string;
 }
 
 // DEV_NOTE: KnowledgeDocumentFilesProvider.remove: the R2 keys of the deleted files, deleted after the commit

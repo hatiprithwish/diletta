@@ -1,4 +1,16 @@
-import { and, asc, count, desc, eq, inArray, isNotNull, notInArray } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  notInArray,
+  notLike,
+  or,
+} from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { files, knowledgeDocuments, knowledgeSources } from "@/db/tables";
@@ -191,6 +203,7 @@ export default class KnowledgeDocumentsDAL {
           contentHash: params.contentHash ?? undefined,
           indexStatus: params.indexStatus ?? undefined,
           lastSyncedAt: params.lastSyncedAt ?? undefined,
+          fileId: params.fileId ?? undefined,
           updatedAt: new Date(),
         })
         .where(and(...conditions))
@@ -335,6 +348,51 @@ export default class KnowledgeDocumentsDAL {
       response.knowledgeDocuments = knowledgeDocumentsResponse;
     } catch (error) {
       const message = "Unknown error in fetching knowledge documents by source";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetKnowledgeDocumentsBySource,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getKnowledgeDocumentsToIndex(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetKnowledgeDocumentsToIndexDALRequest,
+  ) {
+    const response: Schemas.KnowledgeDocumentsDALResponse = { isSuccess: false };
+
+    try {
+      const hasWork = [
+        inArray(knowledgeDocuments.indexStatus, [
+          Schemas.KnowledgeDocumentIndexStatusIntEnum.Pending,
+          Schemas.KnowledgeDocumentIndexStatusIntEnum.Failed,
+        ]),
+        isNull(knowledgeDocuments.contentHash),
+        notLike(knowledgeDocuments.contentHash, `${params.contentHashPrefix}%`),
+      ];
+      const conditions = [
+        eq(knowledgeDocuments.companyId, params.companyId),
+        eq(knowledgeDocuments.knowledgeSourceId, params.knowledgeSourceId),
+        or(...hasWork),
+      ];
+      const knowledgeDocumentsResponse = await tx
+        .select()
+        .from(knowledgeDocuments)
+        .where(and(...conditions))
+        .orderBy(asc(knowledgeDocuments.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Knowledge documents to index fetched successfully";
+      response.knowledgeDocuments = knowledgeDocumentsResponse;
+    } catch (error) {
+      const message = "Unknown error in fetching knowledge documents to index";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetKnowledgeDocumentsBySource,

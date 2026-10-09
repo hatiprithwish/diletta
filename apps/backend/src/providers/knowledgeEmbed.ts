@@ -29,11 +29,15 @@ export default class KnowledgeEmbedProvider {
         0,
       );
       const startedAt = Date.now();
+      // DEV_NOTE: aiGatewayLogId holds the last call's log id; a call that throws may never set it, so a failed call
+      // records a log id only when it changed
+      const previousLogId = env.AI.aiGatewayLogId;
 
       try {
         const output = await env.AI.run(
           Schemas.KNOWLEDGE_EMBEDDING_MODEL,
-          { text: batch },
+          // DEV_NOTE: Chunks stay far under 8,192 tokens; truncating is the backstop, never a failed document
+          { text: batch, truncate_inputs: true },
           {
             gateway: {
               id: env.AI_GATEWAY_NAME,
@@ -77,10 +81,11 @@ export default class KnowledgeEmbedProvider {
         }
         embeddings.push(...vectors);
       } catch (error) {
+        const logId = env.AI.aiGatewayLogId;
         response.calls?.push({
           inputTokens,
           latencyMs: Date.now() - startedAt,
-          gatewayLogId: env.AI.aiGatewayLogId,
+          gatewayLogId: logId && logId !== previousLogId ? logId : null,
           errorCode: "embed_failed",
         });
         const message = "Unknown error in embedding knowledge chunks";

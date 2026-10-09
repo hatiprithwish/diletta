@@ -1,19 +1,23 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { zValidator } from "@hono/zod-validator";
 import KnowledgeSourcesRepo from "@/repositories/KnowledgeSourcesRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
+import Constants from "@/config/Constants";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Knowledge sources and their documents (M2-5), mounted at /dashboard/knowledge-sources. Chain: checkAuth →
 // authorizeCompany(action) → zValidator → handler. companyId comes from the signed-in admin, never the client; sources
 // and documents are addressed by publicId. A request the source's state refuses (already syncing, paused, wrong source
-// type) answers 409 with its failure; isSuccess ? 200 : isNotFound ? 404 : 500 otherwise.
+// type) answers 409 with its failure, an upload whose bytes don't match its type 400; isSuccess ? 200 : isNotFound ?
+// 404 : 500 otherwise. An upload body over KNOWLEDGE_UPLOAD_BODY_MAX_BYTES is refused with 413 before it is parsed.
 const KnowledgeSourcesRoutes = new Hono<AppContext>();
 
 function stateStatus(response: Schemas.KnowledgeSourceStateResponse, success: 200 | 201) {
   if (response.isSuccess) return success;
+  if (response.failure === Schemas.KnowledgeSourceFailureEnum.UnreadableFile) return 400;
   if (response.failure) return 409;
   return response.isNotFound ? 404 : 500;
 }
@@ -162,6 +166,10 @@ KnowledgeSourcesRoutes.post(
   "/:publicId/documents",
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceUpdate),
+  bodyLimit({
+    maxSize: Constants.KNOWLEDGE_UPLOAD_BODY_MAX_BYTES,
+    onError: (c) => c.json({ isSuccess: false, message: "File is too large" }, 413),
+  }),
   zValidator("form", Schemas.ZUploadKnowledgeDocumentApiRequest),
   async (c) => {
     const repo = new KnowledgeSourcesRepo(c.env);

@@ -24,22 +24,30 @@ export type UpdateKnowledgeSourceDALRequest = Pick<KnowledgeSource, "publicId" |
   NullableDALFields<Pick<KnowledgeSource, "syncFrequency" | "status">> &
   Pick<KnowledgeSource, "updatedBy">;
 
-// DEV_NOTE: The sync's own state changes (claim → Syncing, finish → Active / Failed). lastSyncedAt null is left as it
-// is. updatedBy is not touched: the sync is the system.
+// DEV_NOTE: The sync's own state changes (claim → Syncing with a new syncRunId, finish → Active / Failed). A null
+// lastSyncedAt / syncRunId is left as it is. sync_heartbeat_at and updatedAt are set by the DAL. updatedBy is not
+// touched: the sync is the system.
 export type SetKnowledgeSourceSyncStateDALRequest = Pick<
   KnowledgeSource,
   "publicId" | "companyId" | "status"
 > &
-  NullableDALFields<Pick<KnowledgeSource, "lastSyncedAt">>;
+  NullableDALFields<Pick<KnowledgeSource, "lastSyncedAt" | "syncRunId">>;
+
+// DEV_NOTE: A live sync's heartbeat (sync_heartbeat_at = now), from every step that holds the source lock
+export type TouchKnowledgeSourceSyncDALRequest = Pick<KnowledgeSource, "publicId" | "companyId">;
 
 export type DeleteKnowledgeSourceDALRequest = Pick<KnowledgeSource, "publicId" | "companyId">;
 
 // DEV_NOTE: Platform (withPlatform) — the re-sync Cron across companies. Active web sources whose frequency is due
-// (Daily synced before dailyBefore, Weekly before weeklyBefore, or never synced), plus sources stuck in Syncing since
-// before staleBefore (the sync died without finishing). Oldest first, at most limit.
+// (Daily synced before dailyBefore, Weekly before weeklyBefore, or never synced), Daily / Weekly sources left Failed
+// whose last attempt (heartbeat) is before failedBefore (a backoff), and sources stuck in Syncing whose heartbeat is
+// before staleBefore (the sync died). Oldest first, at most limit. companyIds limits it to some companies (tests on
+// the shared staging branch); the Cron passes null.
 export type GetDueKnowledgeSourcesDALRequest = {
   dailyBefore: Date;
   weeklyBefore: Date;
+  failedBefore: Date;
   staleBefore: Date;
+  companyIds: string[] | null;
   limit: number;
 };

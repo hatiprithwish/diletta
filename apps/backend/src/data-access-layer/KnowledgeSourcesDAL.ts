@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, knowledgeSources } from "@/db/tables";
@@ -262,6 +262,8 @@ export default class KnowledgeSourcesDAL {
           status: params.status,
           // DEV_NOTE: When a param is null, it's ignored
           lastSyncedAt: params.lastSyncedAt ?? undefined,
+          syncRunId: params.syncRunId ?? undefined,
+          syncHeartbeatAt: new Date(),
           updatedAt: new Date(),
         })
         .where(and(...conditions))
@@ -285,6 +287,41 @@ export default class KnowledgeSourcesDAL {
       response.knowledgeSource = knowledgeSourceResponse;
     } catch (error) {
       const message = "Unknown error in setting knowledge source sync state";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.SetKnowledgeSourceSyncState,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A live sync's heartbeat. The Repo calls it with the source row locked and owned by the run.
+  async touchKnowledgeSourceSync(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.TouchKnowledgeSourceSyncDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(knowledgeSources.publicId, params.publicId),
+        eq(knowledgeSources.companyId, params.companyId),
+      ];
+      const now = new Date();
+      await tx
+        .update(knowledgeSources)
+        .set({ syncHeartbeatAt: now, updatedAt: now })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Knowledge source sync heartbeat set";
+    } catch (error) {
+      const message = "Unknown error in setting knowledge source sync heartbeat";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.SetKnowledgeSourceSyncState,
@@ -345,8 +382,8 @@ export default class KnowledgeSourcesDAL {
     return response;
   }
 
-  // DEV_NOTE: Platform read (withPlatform) for the re-sync Cron: due Active web sources and stale Syncing ones across
-  // companies, least recently synced first (never synced = first)
+  // DEV_NOTE: Platform read (withPlatform) for the re-sync Cron: due Active web sources, Failed ones past their backoff
+  // and stale Syncing ones across companies, least recently synced first (never synced = first)
   async getDueKnowledgeSources(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetDueKnowledgeSourcesDALRequest,
@@ -354,33 +391,50 @@ export default class KnowledgeSourcesDAL {
     const response: Schemas.KnowledgeSourcesDALResponse = { isSuccess: false };
 
     try {
-      const isActive = eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Active);
-      const dueConditions = [
-        and(
-          isActive,
-          eq(knowledgeSources.syncFrequency, Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily),
-          or(
-            isNull(knowledgeSources.lastSyncedAt),
-            lt(knowledgeSources.lastSyncedAt, params.dailyBefore),
-          ),
-        ),
-        and(
-          isActive,
-          eq(knowledgeSources.syncFrequency, Schemas.KnowledgeSourceSyncFrequencyIntEnum.Weekly),
-          or(
-            isNull(knowledgeSources.lastSyncedAt),
-            lt(knowledgeSources.lastSyncedAt, params.weeklyBefore),
-          ),
-        ),
-        and(
-          eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Syncing),
-          lt(knowledgeSources.updatedAt, params.staleBefore),
+      const isScheduled = inArray(knowledgeSources.syncFrequency, [
+        Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily,
+        Schemas.KnowledgeSourceSyncFrequencyIntEnum.Weekly,
+      ]);
+      const dailyDue = [
+        eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Active),
+        eq(knowledgeSources.syncFrequency, Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily),
+        or(
+          isNull(knowledgeSources.lastSyncedAt),
+          lt(knowledgeSources.lastSyncedAt, params.dailyBefore),
         ),
       ];
+      const weeklyDue = [
+        eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Active),
+        eq(knowledgeSources.syncFrequency, Schemas.KnowledgeSourceSyncFrequencyIntEnum.Weekly),
+        or(
+          isNull(knowledgeSources.lastSyncedAt),
+          lt(knowledgeSources.lastSyncedAt, params.weeklyBefore),
+        ),
+      ];
+      const failedRetry = [
+        eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Failed),
+        isScheduled,
+        or(
+          isNull(knowledgeSources.syncHeartbeatAt),
+          lt(knowledgeSources.syncHeartbeatAt, params.failedBefore),
+        ),
+      ];
+      const staleSync = [
+        eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Syncing),
+        or(
+          isNull(knowledgeSources.syncHeartbeatAt),
+          lt(knowledgeSources.syncHeartbeatAt, params.staleBefore),
+        ),
+      ];
+      const conditions = [
+        or(and(...dailyDue), and(...weeklyDue), and(...failedRetry), and(...staleSync)),
+      ];
+      if (params.companyIds)
+        conditions.push(inArray(knowledgeSources.companyId, params.companyIds));
       const knowledgeSourcesResponse = await tx
         .select()
         .from(knowledgeSources)
-        .where(or(...dueConditions))
+        .where(and(...conditions))
         .orderBy(sql`${knowledgeSources.lastSyncedAt} asc nulls first`, asc(knowledgeSources.id))
         .limit(params.limit);
 

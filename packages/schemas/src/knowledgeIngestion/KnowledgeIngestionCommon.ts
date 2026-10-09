@@ -2,15 +2,25 @@ import type { KnowledgeChunkDraft } from "../knowledgeChunks";
 
 // DEV_NOTE: Knowledge ingestion (M2-5): one KnowledgeSyncWorkflow instance per source sync. Params and step results
 // are persisted by Workflows, so they carry ids and small values only, never page bytes or text. companyId is the
-// internal companies.id (server-side only: workflow params never reach a client).
+// internal companies.id (server-side only: workflow params never reach a client). syncRunId is the instance id the
+// claim stored on the source: a step whose run no longer owns the source stops.
 export interface KnowledgeSyncWorkflowParams {
   companyId: string;
   knowledgeSourcePublicId: string;
+  syncRunId: string;
 }
+
+// DEV_NOTE: Bump when the chunker or the embedding model changes. It prefixes every content_hash, so each document
+// indexed by an older pipeline hashes differently and is chunked and embedded again at its next sync (old vectors
+// never stay). Never mixed: a search compares embedding_model too.
+export const KNOWLEDGE_PIPELINE_VERSION = "k1";
 
 // DEV_NOTE: What one sync step works on: a web page by URL (sitemap, url sources) or an uploaded document by its
 // publicId (upload sources, bytes already in R2)
 export type KnowledgeSyncItem = { url: string } | { knowledgeDocumentPublicId: string };
+
+// DEV_NOTE: One item step's params: the run plus the item it works on
+export type KnowledgeSyncItemParams = KnowledgeSyncWorkflowParams & { item: KnowledgeSyncItem };
 
 // DEV_NOTE: How one item ended.
 //   Indexed: new or changed text, chunked, embedded and stored.

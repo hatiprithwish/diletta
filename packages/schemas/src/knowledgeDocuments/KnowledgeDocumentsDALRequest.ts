@@ -31,10 +31,11 @@ export type FindKnowledgeDocumentBySourceUrlDALRequest = Pick<
   "companyId" | "knowledgeSourceId"
 > & { sourceUrl: string };
 
-// DEV_NOTE: The sync's writes; a null param is left as it is. updatedAt is set by the DAL.
+// DEV_NOTE: The sync's writes; a null param is left as it is. fileId moves to a new file when a page's bytes change.
+// updatedAt is set by the DAL.
 export type UpdateKnowledgeDocumentDALRequest = Pick<KnowledgeDocument, "id" | "companyId"> &
   NullableDALFields<
-    Pick<KnowledgeDocument, "title" | "contentHash" | "indexStatus" | "lastSyncedAt">
+    Pick<KnowledgeDocument, "title" | "contentHash" | "indexStatus" | "lastSyncedAt" | "fileId">
   >;
 
 export type GetKnowledgeDocumentsCountDALRequest = Pick<
@@ -48,6 +49,13 @@ export type GetKnowledgeDocumentsDALRequest = GetKnowledgeDocumentsCountDALReque
 // DEV_NOTE: The documents a sync works through (upload sources), oldest first. indexStatuses null = any.
 export type GetKnowledgeDocumentsBySourceDALRequest = GetKnowledgeDocumentsCountDALRequest & {
   indexStatuses: KnowledgeDocumentIndexStatusIntEnum[] | null;
+  limit: number;
+};
+
+// DEV_NOTE: An upload source's documents a sync has work for: Pending or Failed, or indexed by an older pipeline
+// (content_hash without contentHashPrefix). Oldest first.
+export type GetKnowledgeDocumentsToIndexDALRequest = GetKnowledgeDocumentsCountDALRequest & {
+  contentHashPrefix: string;
   limit: number;
 };
 

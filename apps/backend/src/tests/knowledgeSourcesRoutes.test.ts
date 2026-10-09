@@ -141,7 +141,12 @@ describe("/dashboard/knowledge-sources", () => {
   });
 
   it("refuses a URL that isn't a public http(s) domain with 400", async () => {
-    for (const url of ["http://127.0.0.1/sitemap.xml", "http://localhost/x", "ftp://docs.test/x"]) {
+    for (const url of [
+      "http://127.0.0.1/sitemap.xml",
+      "http://localhost/x",
+      "ftp://docs.test/x",
+      "https://docs.example.com:8443/sitemap.xml",
+    ]) {
       const response = await call("POST", "/dashboard/knowledge-sources", {
         as: adminA,
         body: {
@@ -201,6 +206,21 @@ describe("/dashboard/knowledge-sources", () => {
         form: upload("photo.png", "png", "image/png"),
       });
       expect(unsupported.status).toBe(400);
+      const fakePdf = await call("POST", `${base}/documents`, {
+        as: adminA,
+        form: upload("fake.pdf", "not a pdf", "application/pdf"),
+      });
+      expect(fakePdf.status).toBe(400);
+      expect(fakePdf.body.failure).toBe(Schemas.KnowledgeSourceFailureEnum.UnreadableFile);
+      const tooLarge = await call("POST", `${base}/documents`, {
+        as: adminA,
+        form: upload(
+          "big.txt",
+          "x".repeat(Schemas.KNOWLEDGE_UPLOAD_MAX_BYTES + 128 * 1024),
+          "text/plain",
+        ),
+      });
+      expect(tooLarge.status).toBe(413);
       const uploaded = await call("POST", `${base}/documents`, {
         as: adminA,
         form: upload("guide.md", "# Guide\n\nHello.", ""),

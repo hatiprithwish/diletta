@@ -218,11 +218,17 @@ export const PLATFORM_MODEL_PRICES: Record<
 
 // DEV_NOTE: The price of any model_calls row (routed or platform). Own-property lookup, as getModelPrice.
 export function getModelCallPrice(provider: ModelCallProvider, model: string): ModelPrice | null {
-  if (provider === PlatformModelProviderEnum.WorkersAi) {
+  if (isPlatformModelProvider(provider)) {
     const prices = PLATFORM_MODEL_PRICES[provider];
     return Object.hasOwn(prices, model) ? (prices[model] ?? null) : null;
   }
   return getModelPrice(provider, model);
+}
+
+function isPlatformModelProvider(
+  provider: ModelCallProvider,
+): provider is PlatformModelProviderEnum {
+  return (Object.values(PlatformModelProviderEnum) as string[]).includes(provider);
 }
 
 // Token counts of one call. inputTokens is the whole prompt, cache reads and writes included.

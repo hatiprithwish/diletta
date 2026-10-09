@@ -11,8 +11,10 @@ import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import FileStorageProvider from "@/providers/fileStorage";
 import KnowledgeChunkerProvider from "@/providers/knowledgeChunker";
 import KnowledgeDocumentFilesProvider from "@/providers/knowledgeDocumentFiles";
+import KnowledgeExtractProvider from "@/providers/knowledgeExtract";
 import KnowledgeSyncWorkflowProvider from "@/providers/knowledgeSyncWorkflow";
 import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Knowledge sources and their documents for the dashboard (M2-5), and the start of every sync. Tenant Repo:
@@ -48,6 +50,7 @@ export default class KnowledgeSourcesRepo {
       companyId: _companyId,
       createdBy: _createdBy,
       updatedBy: _updatedBy,
+      syncRunId: _syncRunId,
       ...rest
     } = source;
     return {
@@ -168,8 +171,10 @@ export default class KnowledgeSourcesRepo {
     });
   }
 
-  // DEV_NOTE: Pause: any state → Paused (a running sync stops at its next item). Resume: Paused → Active only; resuming
-  // a source that isn't paused leaves its status alone (it may be syncing). A sync frequency is for web sources only.
+  // DEV_NOTE: Pause: any state → Paused (a running sync stops at its next step). Resume: Paused → Active only; resuming
+  // a source that isn't paused leaves its status alone (it may be syncing). A resumed upload source starts a sync for
+  // the files uploaded while it was paused (web sources wait for their schedule or a manual sync). A sync frequency is
+  // for web sources only.
   async updateKnowledgeSource(
     params: Schemas.UpdateKnowledgeSourceApiRequest & {
       companyId: string;
@@ -177,7 +182,8 @@ export default class KnowledgeSourcesRepo {
       adminId: string;
     },
   ): Promise<Schemas.UpdateKnowledgeSourceApiResponse> {
-    return await withTenant(
+    let isUploadResumed = false;
+    const updated = await withTenant(
       this.db,
       params.companyId,
       async (tx): Promise<Schemas.UpdateKnowledgeSourceApiResponse> => {
@@ -216,13 +222,23 @@ export default class KnowledgeSourcesRepo {
           status: status ?? null,
           updatedBy: params.adminId,
         });
+        isUploadResumed =
+          result.isSuccess &&
+          isResumingPaused &&
+          source.type === Schemas.KnowledgeSourceTypeIntEnum.Upload;
         return this.withSourceResponse(result);
       },
     );
+    if (!isUploadResumed) return updated;
+
+    const synced = await this.startSync({ companyId: params.companyId, publicId: params.publicId });
+    return synced.knowledgeSource
+      ? { ...updated, knowledgeSource: synced.knowledgeSource }
+      : updated;
   }
 
   // DEV_NOTE: Deletes the source with every document, chunk and file row in one transaction, then the R2 objects.
-  // A sync still running finds the source gone at its next item and stops.
+  // A sync still running finds the source gone at its next step and stops.
   async deleteKnowledgeSource(params: {
     companyId: string;
     publicId: string;
@@ -244,31 +260,19 @@ export default class KnowledgeSourcesRepo {
         });
         if (!company.isSuccess || !company.company) throw new TenantRollbackError(company.message);
 
-        const chunks = await this.chunksDal.deleteKnowledgeChunksBySource(tx, {
+        const removed = await KnowledgeDocumentFilesProvider.removeBySource(tx, {
           companyId: params.companyId,
+          companyPublicId: company.company.publicId,
           knowledgeSourceId: source.id,
         });
-        if (!chunks.isSuccess) throw new TenantRollbackError(chunks.message);
-        const documents = await this.documentsDal.deleteKnowledgeDocumentsBySource(tx, {
-          companyId: params.companyId,
-          knowledgeSourceId: source.id,
-        });
-        if (!documents.isSuccess || !documents.knowledgeDocuments) {
-          throw new TenantRollbackError(documents.message);
-        }
-        const files = await this.filesDal.deleteFiles(tx, {
-          companyId: params.companyId,
-          ids: documents.knowledgeDocuments.map((document) => document.fileId),
-        });
-        if (!files.isSuccess || !files.files) throw new TenantRollbackError(files.message);
+        if (!removed.isSuccess) throw new TenantRollbackError(removed.message);
         const deleted = await this.dal.deleteKnowledgeSource(tx, params);
         if (!deleted.isSuccess) throw new TenantRollbackError(deleted.message);
 
-        const companyPublicId = company.company.publicId;
         return {
           isSuccess: true,
           message: "Knowledge source deleted successfully",
-          fileR2Keys: files.files.map((file) => Schemas.fileR2Key(companyPublicId, file.publicId)),
+          fileR2Keys: removed.fileR2Keys,
         };
       },
     );
@@ -285,6 +289,7 @@ export default class KnowledgeSourcesRepo {
     publicId: string;
   }): Promise<Schemas.SyncKnowledgeSourceApiResponse> {
     const now = Date.now();
+    const syncRunId = `ks-${params.publicId}-${Utility.generateUlid()}`;
     const claimed = await withTenant(
       this.db,
       params.companyId,
@@ -303,9 +308,11 @@ export default class KnowledgeSourcesRepo {
             failure: Schemas.KnowledgeSourceFailureEnum.Paused,
           };
         }
+        // DEV_NOTE: Live = its run refreshed the heartbeat recently (every step does); an admin's edit doesn't count
+        const heartbeatAt = source.syncHeartbeatAt ?? source.updatedAt;
         const isLiveSync =
           source.status === Schemas.KnowledgeSourceStatusIntEnum.Syncing &&
-          now - source.updatedAt.getTime() < Constants.KNOWLEDGE_SYNC_STALE_MS;
+          now - heartbeatAt.getTime() < Constants.KNOWLEDGE_SYNC_STALE_MS;
         if (isLiveSync) {
           return {
             isSuccess: false,
@@ -319,6 +326,7 @@ export default class KnowledgeSourcesRepo {
           publicId: params.publicId,
           status: Schemas.KnowledgeSourceStatusIntEnum.Syncing,
           lastSyncedAt: null,
+          syncRunId,
         });
         return { ...this.withSourceResponse(result), source: result.knowledgeSource };
       },
@@ -336,6 +344,7 @@ export default class KnowledgeSourcesRepo {
     const started = await KnowledgeSyncWorkflowProvider.start(this.env, {
       companyId: params.companyId,
       knowledgeSourcePublicId: params.publicId,
+      syncRunId,
     });
     if (started.isSuccess) {
       return {
@@ -345,23 +354,37 @@ export default class KnowledgeSourcesRepo {
       };
     }
 
-    // DEV_NOTE: Nothing is running for the claim, so the source must not stay in Syncing
-    const failed = await withTenant(this.db, params.companyId, async (tx) => {
-      return await this.dal.setKnowledgeSourceSyncState(tx, {
-        companyId: params.companyId,
-        publicId: params.publicId,
-        status: Schemas.KnowledgeSourceStatusIntEnum.Failed,
-        lastSyncedAt: null,
-      });
-    });
+    // DEV_NOTE: Nothing is running for the claim, so the source must not stay in Syncing (unless a newer claim or a
+    // pause took it meanwhile)
+    const failed = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.KnowledgeSourceDALResponse> => {
+        const found = await this.dal.getKnowledgeSourceDetails(tx, {
+          ...params,
+          isForUpdate: true,
+        });
+        if (!found.isSuccess || found.knowledgeSource?.syncRunId !== syncRunId) return found;
+        if (found.knowledgeSource.status !== Schemas.KnowledgeSourceStatusIntEnum.Syncing)
+          return found;
+        return await this.dal.setKnowledgeSourceSyncState(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+          status: Schemas.KnowledgeSourceStatusIntEnum.Failed,
+          lastSyncedAt: null,
+          syncRunId: null,
+        });
+      },
+    );
     const { knowledgeSource } = this.withSourceResponse(
       "knowledgeSource" in failed ? failed : { isSuccess: false },
     );
     return { isSuccess: false, message: started.message, knowledgeSource };
   }
 
-  // DEV_NOTE: Hourly Cron (KnowledgeResyncCron): due web sources and stale syncs across companies (withPlatform read),
-  // each then started in its own company's withTenant through startSync, which re-checks its state under the lock
+  // DEV_NOTE: Hourly Cron (KnowledgeResyncCron): due web sources, Failed ones past their backoff and stale syncs across
+  // companies (withPlatform read), each then started in its own company's withTenant through startSync, which
+  // re-checks its state under the lock
   async startDueSyncs(params: {
     companyIds: string[] | null;
   }): Promise<Schemas.StartDueKnowledgeSyncsResponse> {
@@ -370,7 +393,9 @@ export default class KnowledgeSourcesRepo {
       return await this.dal.getDueKnowledgeSources(tx, {
         dailyBefore: new Date(now - Constants.KNOWLEDGE_DAILY_SYNC_MS),
         weeklyBefore: new Date(now - Constants.KNOWLEDGE_WEEKLY_SYNC_MS),
+        failedBefore: new Date(now - Constants.KNOWLEDGE_FAILED_RETRY_MS),
         staleBefore: new Date(now - Constants.KNOWLEDGE_SYNC_STALE_MS),
+        companyIds: params.companyIds,
         limit: Constants.KNOWLEDGE_RESYNC_BATCH_SIZE,
       });
     });
@@ -380,10 +405,7 @@ export default class KnowledgeSourcesRepo {
 
     let startedCount = 0;
     let failedCount = 0;
-    const sources = params.companyIds
-      ? due.knowledgeSources.filter((source) => params.companyIds?.includes(source.companyId))
-      : due.knowledgeSources;
-    for (const source of sources) {
+    for (const source of due.knowledgeSources) {
       const started = await this.startSync({
         companyId: source.companyId,
         publicId: source.publicId,
@@ -398,9 +420,10 @@ export default class KnowledgeSourcesRepo {
     return { isSuccess: true, message: "Due knowledge syncs started", startedCount, failedCount };
   }
 
-  // DEV_NOTE: Stores the file (row + R2 object) and a Pending document in one transaction, then starts a sync. A source
-  // that is paused keeps the document Pending until it is resumed and synced; one already syncing picks it up in its
-  // next round.
+  // DEV_NOTE: Writes the bytes to R2 first (a new file, named by a publicId generated here, so no source lock is held
+  // while they upload), then stores the file row and a Pending document in one transaction, then starts a sync. The
+  // object is deleted if the transaction doesn't commit. A paused source keeps the document Pending until it is
+  // resumed; one already syncing picks it up in its next round or its follow-up sync.
   async uploadKnowledgeDocument(
     params: Schemas.UploadKnowledgeDocumentApiRequest & {
       companyId: string;
@@ -413,8 +436,31 @@ export default class KnowledgeSourcesRepo {
       return { isSuccess: false, message: "Unsupported file type" };
     }
     const bytes = new Uint8Array(await params.file.arrayBuffer());
-    const sha256 = await KnowledgeChunkerProvider.hashBytes(bytes);
-    let writtenR2Key: string | null = null;
+    if (!KnowledgeExtractProvider.matchesType(bytes, mime)) {
+      return {
+        isSuccess: false,
+        message: "File content doesn't match its type",
+        failure: Schemas.KnowledgeSourceFailureEnum.UnreadableFile,
+      };
+    }
+
+    const company = await withTenant(this.db, params.companyId, async (tx) => {
+      return await this.companiesDal.getCompanyDetails(tx, { companyId: params.companyId });
+    });
+    if (!company.isSuccess || !("company" in company) || !company.company) {
+      return { isSuccess: false, message: company.message };
+    }
+    const file = {
+      publicId: Utility.generatePublicId(),
+      filename: params.file.name,
+      mime,
+      sizeBytes: bytes.byteLength,
+      sha256: await KnowledgeChunkerProvider.hashBytes(bytes),
+      createdBy: params.adminId,
+    };
+    const fileR2Key = Schemas.fileR2Key(company.company.publicId, file.publicId);
+    const stored = await FileStorageProvider.putObject(this.env, { key: fileR2Key, bytes, mime });
+    if (!stored.isSuccess) return { isSuccess: false, message: stored.message };
 
     const result = await withTenant(
       this.db,
@@ -435,20 +481,11 @@ export default class KnowledgeSourcesRepo {
             failure: Schemas.KnowledgeSourceFailureEnum.NotUploadSource,
           };
         }
-        const company = await this.companiesDal.getCompanyDetails(tx, {
-          companyId: params.companyId,
-        });
-        if (!company.isSuccess || !company.company) throw new TenantRollbackError(company.message);
 
-        const created = await KnowledgeDocumentFilesProvider.create(this.env, tx, {
+        const created = await KnowledgeDocumentFilesProvider.create(tx, {
           companyId: params.companyId,
-          companyPublicId: company.company.publicId,
           knowledgeSourceId: found.knowledgeSource.id,
-          bytes,
-          mime,
-          sha256,
-          filename: params.file.name,
-          createdBy: params.adminId,
+          file,
           document: {
             title: params.file.name.slice(0, Constants.KNOWLEDGE_TITLE_MAX_CHARS),
             sourceUrl: null,
@@ -457,7 +494,6 @@ export default class KnowledgeSourcesRepo {
             lastSyncedAt: null,
           },
         });
-        writtenR2Key = created.fileR2Key ?? null;
         if (!created.isSuccess || !created.knowledgeDocument) {
           throw new TenantRollbackError(created.message);
         }
@@ -470,9 +506,7 @@ export default class KnowledgeSourcesRepo {
     );
 
     if (!result.isSuccess) {
-      if (writtenR2Key) {
-        await FileStorageProvider.deleteObjects(this.env, { keys: [writtenR2Key] });
-      }
+      await FileStorageProvider.deleteObjects(this.env, { keys: [fileR2Key] });
       return result;
     }
 

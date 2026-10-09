@@ -54,25 +54,22 @@ export default class KnowledgeChunksDAL {
         return response;
       }
 
-      const created = await tx
-        .insert(knowledgeChunks)
-        .values(
-          params.chunks.map((chunk) => ({
-            companyId: params.companyId,
-            knowledgeDocumentId: params.knowledgeDocumentId,
-            knowledgeSourceId: params.knowledgeSourceId,
-            chunkIndex: chunk.chunkIndex,
-            headingPath: chunk.headingPath,
-            text: chunk.text,
-            embedding: chunk.embedding,
-            embeddingModel: chunk.embeddingModel,
-          })),
-        )
-        .returning({ id: knowledgeChunks.id });
+      const created = await tx.insert(knowledgeChunks).values(
+        params.chunks.map((chunk) => ({
+          companyId: params.companyId,
+          knowledgeDocumentId: params.knowledgeDocumentId,
+          knowledgeSourceId: params.knowledgeSourceId,
+          chunkIndex: chunk.chunkIndex,
+          headingPath: chunk.headingPath,
+          text: chunk.text,
+          embedding: chunk.embedding,
+          embeddingModel: chunk.embeddingModel,
+        })),
+      );
 
       response.isSuccess = true;
       response.message = "Knowledge chunks created successfully";
-      response.rowCount = created.length;
+      response.rowCount = created.rowCount ?? 0;
     } catch (error) {
       const message = "Unknown error in creating knowledge chunks";
       AppLogger.error({
@@ -106,14 +103,11 @@ export default class KnowledgeChunksDAL {
         inArray(knowledgeChunks.knowledgeDocumentId, params.knowledgeDocumentIds),
         eq(knowledgeChunks.companyId, params.companyId),
       ];
-      const deleted = await tx
-        .delete(knowledgeChunks)
-        .where(and(...conditions))
-        .returning({ id: knowledgeChunks.id });
+      const deleted = await tx.delete(knowledgeChunks).where(and(...conditions));
 
       response.isSuccess = true;
       response.message = "Knowledge chunks deleted successfully";
-      response.rowCount = deleted.length;
+      response.rowCount = deleted.rowCount ?? 0;
     } catch (error) {
       const message = "Unknown error in deleting knowledge chunks";
       AppLogger.error({
@@ -140,14 +134,11 @@ export default class KnowledgeChunksDAL {
         eq(knowledgeChunks.knowledgeSourceId, params.knowledgeSourceId),
         eq(knowledgeChunks.companyId, params.companyId),
       ];
-      const deleted = await tx
-        .delete(knowledgeChunks)
-        .where(and(...conditions))
-        .returning({ id: knowledgeChunks.id });
+      const deleted = await tx.delete(knowledgeChunks).where(and(...conditions));
 
       response.isSuccess = true;
       response.message = "Knowledge chunks deleted successfully";
-      response.rowCount = deleted.length;
+      response.rowCount = deleted.rowCount ?? 0;
     } catch (error) {
       const message = "Unknown error in deleting knowledge chunks by source";
       AppLogger.error({

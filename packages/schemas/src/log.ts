@@ -172,9 +172,7 @@ export enum LogAction {
   // Files
   CreateFile = "CreateFile",
   SetFileOwner = "SetFileOwner",
-  UpdateFileContent = "UpdateFileContent",
   GetFile = "GetFile",
-  GetFiles = "GetFiles",
   DeleteFiles = "DeleteFiles",
   PutFileObject = "PutFileObject",
   GetFileObject = "GetFileObject",
