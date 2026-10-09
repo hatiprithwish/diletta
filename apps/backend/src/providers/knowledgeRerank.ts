@@ -3,10 +3,13 @@ import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: The only env.AI.run caller for reranking (pattern rule 3.10): Workers AI bge-reranker-base scores each
 // search candidate against the query, platform-paid (tier Embed, search.rerank), through the env's AI Gateway for logs.
-// One call per search. The model returns no usage, so the call is counted at one token per character of the query and
-// of each candidate, plus its special tokens per pair: more than the tokenizer ever produces (usage Estimated, an
-// overcount never an under). Scores come back in input order, each in [0, 1] (toProbabilities). The call made, failed
-// or not, is returned in call for its model_calls row. Returns { isSuccess, message } and never throws.
+// One call per search. The call is counted at one token per character of the query and of each candidate, plus its
+// special tokens per pair: more than the tokenizer ever produces (usage Estimated, an overcount never an under).
+// Scores come back in input order. Workers AI returns them as relevance probabilities in [0, 1] (the model's sigmoid
+// already applied; checked against a live call 2026-10-10: 0.993 for a matching passage, ~0.0001 for unrelated ones),
+// so KNOWLEDGE_SEARCH_MIN_SCORE compares against them as they are, and an answer with a score outside [0, 1] is
+// refused rather than guessed at. The call made, failed or not, is returned in call for its model_calls row. Returns
+// { isSuccess, message } and never throws.
 const SPECIAL_TOKENS_PER_PAIR = 3;
 
 export default class KnowledgeRerankProvider {
@@ -56,8 +59,8 @@ export default class KnowledgeRerankProvider {
         errorCode: null,
       };
 
-      const rawScores = KnowledgeRerankProvider.readScores(output.response, params.texts.length);
-      if (!rawScores) {
+      const scores = KnowledgeRerankProvider.readScores(output.response, params.texts.length);
+      if (!scores) {
         const message = "Rerank response has the wrong shape";
         AppLogger.error({
           category: Schemas.LogCategory.Knowledge,
@@ -74,7 +77,7 @@ export default class KnowledgeRerankProvider {
 
       response.isSuccess = true;
       response.message = "Knowledge chunks reranked successfully";
-      response.scores = KnowledgeRerankProvider.toProbabilities(rawScores);
+      response.scores = scores;
     } catch (error) {
       const logId = env.AI.aiGatewayLogId;
       response.call = {
@@ -98,7 +101,7 @@ export default class KnowledgeRerankProvider {
   }
 
   // DEV_NOTE: The model answers { id, score } per candidate, best first; id is the candidate's index. Every candidate
-  // must come back exactly once with a finite score, or the answer is refused (null).
+  // must come back exactly once with a score in [0, 1], or the answer is refused (null).
   static readScores(
     entries: { id?: number; score?: number }[] | undefined,
     count: number,
@@ -114,21 +117,14 @@ export default class KnowledgeRerankProvider {
         id >= count ||
         scores[id] !== undefined ||
         typeof score !== "number" ||
-        !Number.isFinite(score)
+        !Number.isFinite(score) ||
+        score < 0 ||
+        score > 1
       ) {
         return null;
       }
       scores[id] = score;
     }
     return scores.map((score) => score ?? 0);
-  }
-
-  // DEV_NOTE: bge-reranker-base outputs a relevance logit, which a sigmoid maps to [0, 1]; Workers AI documents that
-  // mapping but not whether it applies it. A response whose scores all lie in [0, 1] is read as already mapped; any
-  // score outside means raw logits, and every score gets the sigmoid. Either way KNOWLEDGE_SEARCH_MIN_SCORE compares
-  // against a probability.
-  static toProbabilities(scores: number[]): number[] {
-    const isMapped = scores.every((score) => score >= 0 && score <= 1);
-    return isMapped ? scores : scores.map((score) => 1 / (1 + Math.exp(-score)));
   }
 }

@@ -3,7 +3,7 @@ import type { BudgetRefusalEnum } from "../budget";
 import type { ConfigSpec } from "../configSpec";
 import { ZConversationSession } from "./ConversationsCommon";
 import type { TurnMessage } from "../messages";
-import type { SearchHelpDocsResult } from "../knowledgeSearch";
+import type { KnowledgeCitation, SearchHelpDocsExcerpt } from "../knowledgeSearch";
 
 // DEV_NOTE: The longest user message the widget may send, in characters. Platform constant; the composer enforces
 // it too, the DO is the guard.
@@ -71,13 +71,13 @@ export type WidgetFrameAdmission =
   | { kind: "refuse"; reason: string };
 
 // DEV_NOTE: Server-side only — one Think transcript message reduced to what the read model keeps (TranscriptProvider).
-// searchResults are the results of the message's search_help_docs calls; citations are the ones its text cites
-// (filled per turn by unsyncedTurns, since a reply may cite a search made earlier in its turn).
+// searchCitations are the results of the message's search_help_docs calls (citation fields only); unsyncedTurns keeps
+// the ones a reply's text cites, from any search of its turn.
 export interface TranscriptEntry {
   id: string;
   role: "user" | "assistant" | "other";
   text: string;
-  searchResults: SearchHelpDocsResult[];
+  searchCitations: KnowledgeCitation[];
 }
 
 // DEV_NOTE: Server-side only — the next slice of the transcript to write to the read model: one turn (a user message
@@ -103,7 +103,8 @@ export interface UnsyncedTranscript {
 // DEV_NOTE: Server-side only — the turn the Conversation DO is preparing or running (at most one). TModel is the AI
 // SDK LanguageModel (@app/schemas doesn't depend on it); TCaps the turn's budget (TurnBudget, M2-4). model,
 // spec and caps are null while the turn is being prepared. citationCount is how many search results the turn has
-// numbered so far (M2-6), so a second search goes on from [n + 1].
+// numbered so far (M2-6), so a second search goes on from [n + 1]; searchExcerpts holds each of the turn's searches'
+// excerpts by tool call id, for the model only (the tool's output carries citations alone).
 export interface ActiveTurn<TModel, TCaps> {
   requestId: string;
   turnId: string;
@@ -112,6 +113,7 @@ export interface ActiveTurn<TModel, TCaps> {
   spec: ConfigSpec | null;
   caps: TCaps | null;
   citationCount: number;
+  searchExcerpts: Record<string, SearchHelpDocsExcerpt[]>;
 }
 
 // DEV_NOTE: Server-side only — a prepared turn's config, routed model and budget, or why it can't run (isClosed: the

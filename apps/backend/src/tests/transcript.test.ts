@@ -8,22 +8,14 @@ const user = (id: string, text: string) => ({
   id,
   role: "user" as const,
   text,
-  searchResults: [],
+  searchCitations: [],
 });
 const assistant = (
   id: string,
   text: string,
-  searchResults: Schemas.SearchHelpDocsResult[] = [],
-) => ({ id, role: "assistant" as const, text, searchResults });
+  searchCitations: Schemas.KnowledgeCitation[] = [],
+) => ({ id, role: "assistant" as const, text, searchCitations });
 
-const result = (n: number, documentPublicId: string): Schemas.SearchHelpDocsResult => ({
-  n,
-  documentPublicId,
-  title: `Doc ${documentPublicId}`,
-  sourceUrl: `https://docs.example.com/${documentPublicId}`,
-  headingPath: null,
-  text: `Excerpt ${n}`,
-});
 const citation = (n: number, documentPublicId: string): Schemas.KnowledgeCitation => ({
   n,
   documentPublicId,
@@ -78,16 +70,16 @@ describe("TranscriptProvider.toEntries", () => {
         { id: "s", role: "system", parts: [{ type: "text", text: "sys" }] },
       ]),
     ).toEqual([
-      { id: "u", role: "user", text: "Hi", searchResults: [] },
-      { id: "a", role: "assistant", text: "Hello there", searchResults: [] },
-      { id: "s", role: "other", text: "sys", searchResults: [] },
+      { id: "u", role: "user", text: "Hi", searchCitations: [] },
+      { id: "a", role: "assistant", text: "Hello there", searchCitations: [] },
+      { id: "s", role: "other", text: "sys", searchCitations: [] },
     ]);
   });
 
-  it("reads the results of finished search_help_docs calls only", () => {
+  it("reads the citations of finished search_help_docs calls only", () => {
     const output: Schemas.SearchHelpDocsOutput = {
       status: Schemas.SearchHelpDocsStatusEnum.Found,
-      results: [result(1, "kd_a")],
+      results: [citation(1, "kd_a")],
     };
     const [entry] = TranscriptProvider.toEntries([
       {
@@ -125,7 +117,7 @@ describe("TranscriptProvider.toEntries", () => {
         ],
       },
     ]);
-    expect(entry?.searchResults).toEqual([result(1, "kd_a")]);
+    expect(entry?.searchCitations).toEqual([citation(1, "kd_a")]);
     expect(entry?.text).toBe("Refunds take 5 days [1].");
   });
 });
@@ -206,7 +198,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
     const result = unsynced([
       user("u1", "Q"),
       assistant("a1", ""),
-      { id: "s1", role: "other", text: "sys", searchResults: [] },
+      { id: "s1", role: "other", text: "sys", searchCitations: [] },
     ]);
     expect(result.turns[0]?.lastEntryId).toBe("s1");
     expect(result.turns[0]?.messages.map((message) => message.sessionMessageId)).toEqual(["u1"]);
@@ -216,8 +208,8 @@ describe("TranscriptProvider.unsyncedTurns", () => {
     const synced = unsynced(
       [
         user("u1", "Refunds?"),
-        assistant("a1", "Searching", [result(1, "kd_a"), result(2, "kd_b")]),
-        assistant("a2", "Refunds take 5 days [2], see also [1, 2] and [7].", [result(3, "kd_c")]),
+        assistant("a1", "Searching", [citation(1, "kd_a"), citation(2, "kd_b")]),
+        assistant("a2", "Refunds take 5 days [2], see also [1, 2] and [7].", [citation(3, "kd_c")]),
         user("u2", "And returns [1]?"),
         assistant("a3", "Returns are free [1]."),
       ],

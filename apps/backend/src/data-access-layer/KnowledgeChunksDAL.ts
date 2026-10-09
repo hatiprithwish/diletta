@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { knowledgeChunks, knowledgeDocuments } from "@/db/tables";
@@ -92,17 +93,9 @@ export default class KnowledgeChunksDAL {
     params: Schemas.SearchKnowledgeChunksByVectorDALRequest,
   ) {
     const response: Schemas.KnowledgeChunkMatchesDALResponse = { isSuccess: false };
-    const metadata = {
-      companyId: params.companyId,
-      sourceCount: params.knowledgeSourceIds.length,
-      limit: params.limit,
-    };
 
     if (params.knowledgeSourceIds.length === 0) {
-      response.isSuccess = true;
-      response.message = "No knowledge sources to search";
-      response.matches = [];
-      return response;
+      return KnowledgeChunksDAL.noSourcesToSearch(response);
     }
 
     try {
@@ -119,23 +112,11 @@ export default class KnowledgeChunksDAL {
           Number,
         );
       const conditions = [
-        eq(knowledgeChunks.companyId, params.companyId),
-        inArray(knowledgeChunks.knowledgeSourceId, params.knowledgeSourceIds),
-        eq(knowledgeChunks.embeddingModel, params.embeddingModel),
+        ...KnowledgeChunksDAL.searchConditions(params),
         isNotNull(knowledgeChunks.embedding),
-        eq(knowledgeDocuments.companyId, params.companyId),
-        eq(knowledgeDocuments.indexStatus, Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed),
       ];
       const rows = await tx
-        .select({
-          chunkId: knowledgeChunks.id,
-          documentPublicId: knowledgeDocuments.publicId,
-          title: knowledgeDocuments.title,
-          sourceUrl: knowledgeDocuments.sourceUrl,
-          headingPath: knowledgeChunks.headingPath,
-          text: knowledgeChunks.text,
-          distance,
-        })
+        .select({ ...KnowledgeChunksDAL.matchColumns, distance })
         .from(knowledgeChunks)
         .innerJoin(
           knowledgeDocuments,
@@ -158,7 +139,7 @@ export default class KnowledgeChunksDAL {
         action: Schemas.LogAction.SearchKnowledgeChunksByVector,
         message,
         error,
-        metadata,
+        metadata: KnowledgeChunksDAL.searchMetadata(params),
       });
       response.message = message;
     }
@@ -171,17 +152,9 @@ export default class KnowledgeChunksDAL {
     params: Schemas.SearchKnowledgeChunksByKeywordDALRequest,
   ) {
     const response: Schemas.KnowledgeChunkMatchesDALResponse = { isSuccess: false };
-    const metadata = {
-      companyId: params.companyId,
-      sourceCount: params.knowledgeSourceIds.length,
-      limit: params.limit,
-    };
 
     if (params.knowledgeSourceIds.length === 0) {
-      response.isSuccess = true;
-      response.message = "No knowledge sources to search";
-      response.matches = [];
-      return response;
+      return KnowledgeChunksDAL.noSourcesToSearch(response);
     }
 
     try {
@@ -190,22 +163,11 @@ export default class KnowledgeChunksDAL {
       const tsquery = sql`websearch_to_tsquery('english', ${params.query})`;
       const rank = sql<number>`ts_rank_cd(${knowledgeChunks.tsv}, ${tsquery})`.mapWith(Number);
       const conditions = [
-        eq(knowledgeChunks.companyId, params.companyId),
-        inArray(knowledgeChunks.knowledgeSourceId, params.knowledgeSourceIds),
-        eq(knowledgeChunks.embeddingModel, params.embeddingModel),
+        ...KnowledgeChunksDAL.searchConditions(params),
         sql`${knowledgeChunks.tsv} @@ ${tsquery}`,
-        eq(knowledgeDocuments.companyId, params.companyId),
-        eq(knowledgeDocuments.indexStatus, Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed),
       ];
       const rows = await tx
-        .select({
-          chunkId: knowledgeChunks.id,
-          documentPublicId: knowledgeDocuments.publicId,
-          title: knowledgeDocuments.title,
-          sourceUrl: knowledgeDocuments.sourceUrl,
-          headingPath: knowledgeChunks.headingPath,
-          text: knowledgeChunks.text,
-        })
+        .select(KnowledgeChunksDAL.matchColumns)
         .from(knowledgeChunks)
         .innerJoin(
           knowledgeDocuments,
@@ -226,7 +188,7 @@ export default class KnowledgeChunksDAL {
         action: Schemas.LogAction.SearchKnowledgeChunksByKeyword,
         message,
         error,
-        metadata,
+        metadata: KnowledgeChunksDAL.searchMetadata(params),
       });
       response.message = message;
     }
@@ -300,6 +262,53 @@ export default class KnowledgeChunksDAL {
       response.message = message;
     }
 
+    return response;
+  }
+
+  // DEV_NOTE: What both search sides return: the chunk and its document's citation fields
+  private static readonly matchColumns = {
+    chunkId: knowledgeChunks.id,
+    documentPublicId: knowledgeDocuments.publicId,
+    title: knowledgeDocuments.title,
+    sourceUrl: knowledgeDocuments.sourceUrl,
+    headingPath: knowledgeChunks.headingPath,
+    text: knowledgeChunks.text,
+  };
+
+  // DEV_NOTE: The filters both search sides share (pattern rule 3.26), in one place so they can't drift apart: the
+  // company on both tables, the given sources, the embedding model, and Indexed documents only
+  private static searchConditions(params: {
+    companyId: string;
+    knowledgeSourceIds: string[];
+    embeddingModel: string;
+  }): SQL[] {
+    return [
+      eq(knowledgeChunks.companyId, params.companyId),
+      inArray(knowledgeChunks.knowledgeSourceId, params.knowledgeSourceIds),
+      eq(knowledgeChunks.embeddingModel, params.embeddingModel),
+      eq(knowledgeDocuments.companyId, params.companyId),
+      eq(knowledgeDocuments.indexStatus, Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed),
+    ];
+  }
+
+  private static searchMetadata(params: {
+    companyId: string;
+    knowledgeSourceIds: string[];
+    limit: number;
+  }) {
+    return {
+      companyId: params.companyId,
+      sourceCount: params.knowledgeSourceIds.length,
+      limit: params.limit,
+    };
+  }
+
+  private static noSourcesToSearch(
+    response: Schemas.KnowledgeChunkMatchesDALResponse,
+  ): Schemas.KnowledgeChunkMatchesDALResponse {
+    response.isSuccess = true;
+    response.message = "No knowledge sources to search";
+    response.matches = [];
     return response;
   }
 }

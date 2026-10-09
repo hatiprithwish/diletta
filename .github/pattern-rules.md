@@ -1237,7 +1237,7 @@ redirect:\s*"follow"
 
 ### 3.26 Knowledge Search Stays Inside the Bot's Sources and Fenced [CRITICAL]
 
-**Rule:** Knowledge is searched only through `KnowledgeSearchRepo.search`, called only by the Conversation DO's `search_help_docs` tool on the running turn's config. The source filter is the bot's `knowledge.sourceIds` resolved to internal ids in the company (`KnowledgeSourcesDAL.getKnowledgeSourceIds`); no source left (or a blank query) means no hits and no model call. Both sides of the hybrid search (`KnowledgeChunksDAL.searchKnowledgeChunksByVector` / `…ByKeyword`) run in one `withTenant` and filter on company, source ids, `embedding_model = KNOWLEDGE_EMBEDDING_MODEL` and Indexed documents; the vector side sets `hnsw.iterative_scan` and `hnsw.ef_search` with `set_config(…, true)` (never per session) and orders by the distance alone. Fusion and the score cut live in `KnowledgeRankingProvider` (pure), reranking in `KnowledgeRerankProvider`; rerank scores are never stored. Every Workers AI call made (failed too) gets its `model_calls` row with the search's chatbot, user, conversation and turn, written in `waitUntil` and never counted in the company budget. Results reach the model only through `SearchHelpDocsProvider.toModelText` (inside `<search_results>`, marked as data, fence tags defused) and reach the read model only as `content.citations` for the `[n]` markers the reply uses (`SearchHelpDocsProvider.citedBy`). The query text is never logged.
+**Rule:** Knowledge is searched only through `KnowledgeSearchRepo.search`, called only by the Conversation DO's `search_help_docs` tool on the running turn's config. The source filter is the bot's `knowledge.sourceIds` resolved to internal ids in the company (`KnowledgeSourcesDAL.getKnowledgeSourceIds`); no source left (or a blank query) means no hits and no model call. Both sides of the hybrid search (`KnowledgeChunksDAL.searchKnowledgeChunksByVector` / `…ByKeyword`) run in one `withTenant` and filter on company, source ids, `embedding_model = KNOWLEDGE_EMBEDDING_MODEL` and Indexed documents; the vector side sets `hnsw.iterative_scan` and `hnsw.ef_search` with `set_config(…, true)` (never per session) and orders by the distance alone. Fusion and the score cut live in `KnowledgeRankingProvider` (pure), reranking in `KnowledgeRerankProvider`; rerank scores are never stored. Every Workers AI call made (failed too) gets its `model_calls` row with the search's chatbot, user, conversation and turn, written in `waitUntil` and never counted in the company budget. The tool's output (stored in the transcript, streamed to the widget) carries citations only (`SearchHelpDocsProvider.toOutput`); excerpt text stays in the running turn's memory (`ActiveTurn.searchExcerpts`) and reaches only the model, through `SearchHelpDocsProvider.toModelText` (inside `<search_results>`, marked as data, fence tags defused). The read model gets only `content.citations` for the `[n]` markers the reply uses (`SearchHelpDocsProvider.citedBy`). Rerank scores are probabilities as Workers AI returns them; a score outside [0, 1] is refused, never re-mapped. The query text is never logged.
 
 **Violations:**
 
@@ -1245,6 +1245,7 @@ redirect:\s*"follow"
 - Taking the source list from anywhere but the turn's loaded config (a client value, another bot's config), or resolving source ids outside the company
 - `SET hnsw.*` / `set_config('hnsw.…', …, false)` (session-wide on a pooled connection), or an ORDER BY on the vector side that the HNSW index can't serve
 - Passing chunk text to the model outside the fence, or returning the tool's raw JSON as its model output
+- Chunk text in the tool's output (it is stored and streamed to the widget), or excerpts kept anywhere but the running turn's memory
 - A search call with no `model_calls` row, or a search call counted against the company budget
 - Storing rerank scores, or citations for results the reply didn't cite
 - Logging the search query or chunk text
@@ -1263,7 +1264,8 @@ SET\s+(?!LOCAL)hnsw\.
 - ❌ const hits = await tx.select().from(knowledgeChunks).where(eq(knowledgeChunks.companyId, companyId)); // no source filter
 - ❌ execute: async ({ query }) => JSON.stringify(hits) // chunk text unfenced
 - ❌ AppLogger.info({ message: "Searched", metadata: { query } })
-- ✅ toModelOutput: ({ output }) => ({ type: "text", value: SearchHelpDocsProvider.toModelText(output) })
+- ❌ return { status, results: hits }; // excerpt text in the output reaches the widget
+- ✅ toModelOutput: ({ toolCallId, output }) => ({ type: "text", value: SearchHelpDocsProvider.toModelText(output, this.turnSearchExcerpts(toolCallId)) })
 ```
 
 **Fix:** Mirror `repositories/KnowledgeSearchRepo.ts`, `durable-objects/ConversationDO.ts` (`getTools`, `searchHelpDocs`) and `providers/searchHelpDocs.ts` (`docs/runbooks/knowledge.md`).

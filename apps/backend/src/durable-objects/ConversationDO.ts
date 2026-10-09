@@ -51,7 +51,8 @@ const CLOSING_MESSAGE = "This conversation is closing";
 // the turn's loop (stopWhen) once a cap is used up. turnTimeoutSeconds bounds the whole turn (AI SDK timeout).
 //
 // Knowledge (M2-6): search_help_docs runs KnowledgeSearchRepo on the turn's config (its sources and topK) and numbers
-// the hits across the turn. The model reads them inside an untrusted fence (SearchHelpDocsProvider), and the read model
+// the hits across the turn. The tool's output (transcript, widget) carries citations only; the excerpts stay in the
+// running turn's memory and reach the model alone, inside an untrusted fence (SearchHelpDocsProvider). The read model
 // keeps the citations each reply's [n] markers point at.
 //
 // Read model: after every turn and on every wake, the transcript past the synced position is written to messages
@@ -92,23 +93,18 @@ export class ConversationDO extends Think<Env> {
   }
 
   // DEV_NOTE: Every turn's tool set (Think calls this at turn start). beforeTurn decides whether the tool is active.
-  // toModelOutput also renders searches from earlier turns when Think rebuilds the history, where the stored output is
-  // read back untyped, so it is parsed first.
+  // The output (transcript, widget) carries citations only; toModelOutput adds the excerpts the running turn holds for
+  // that call. A search from an earlier turn has none, so the model sees only what it found (SearchHelpDocsProvider).
   getTools(): ToolSet {
     return {
       [Schemas.SEARCH_HELP_DOCS_TOOL_NAME]: tool({
         description: SearchHelpDocsProvider.description,
         inputSchema: Schemas.ZSearchHelpDocsInput,
-        execute: async ({ query }) => await this.searchHelpDocs(query),
-        toModelOutput: ({ output }) => {
-          const parsed = Schemas.ZSearchHelpDocsOutput.safeParse(output);
-          return {
-            type: "text",
-            value: SearchHelpDocsProvider.toModelText(
-              parsed.success ? parsed.data : SearchHelpDocsProvider.unavailableOutput,
-            ),
-          };
-        },
+        execute: async ({ query }, { toolCallId }) => await this.searchHelpDocs(query, toolCallId),
+        toModelOutput: ({ toolCallId, output }) => ({
+          type: "text",
+          value: SearchHelpDocsProvider.toModelText(output, this.turnSearchExcerpts(toolCallId)),
+        }),
       }),
     };
   }
@@ -342,6 +338,7 @@ export class ConversationDO extends Think<Env> {
       spec: null,
       caps: null,
       citationCount: 0,
+      searchExcerpts: {},
     };
     this.patchRuntimeState({
       lastActivityAt: Date.now(),
@@ -372,6 +369,7 @@ export class ConversationDO extends Think<Env> {
       spec: prepared.spec,
       caps: prepared.caps,
       citationCount: 0,
+      searchExcerpts: {},
     };
     return true;
   }
@@ -667,11 +665,13 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: One knowledge search for the running turn, on the turn's config: its sources and topK. Hits are numbered
-  // once the search returns, with no await between reading and moving the turn's count, so two searches in one step
-  // get separate numbers. A failed search (logged by the Repo) or one without a turn tells the model search is
-  // unavailable; nothing is thrown, so the turn goes on.
-  private async searchHelpDocs(query: string): Promise<Schemas.SearchHelpDocsOutput> {
+  // DEV_NOTE: One knowledge search for the running turn, on the turn's config: its sources and topK. A failed search
+  // (logged by the Repo) or one without a turn tells the model search is unavailable; nothing is thrown, so the turn
+  // goes on.
+  private async searchHelpDocs(
+    query: string,
+    toolCallId: string,
+  ): Promise<Schemas.SearchHelpDocsOutput> {
     const turn = this.activeTurn;
     const state = this.getRuntimeState();
     if (!turn?.spec || !state || !ConversationDO.hasKnowledge(turn.spec)) {
@@ -687,13 +687,35 @@ export class ConversationDO extends Think<Env> {
       topK: turn.spec.knowledge.topK,
       query,
     });
-    const current = this.activeTurn;
-    if (!searched.isSuccess || !searched.hits || current?.turnId !== turn.turnId) {
+    if (!searched.isSuccess || !searched.hits) {
       return SearchHelpDocsProvider.unavailableOutput;
     }
-    const output = SearchHelpDocsProvider.toOutput(searched.hits, current.citationCount + 1);
-    current.citationCount += output.results.length;
-    return output;
+    return this.recordSearch(turn.turnId, toolCallId, searched.hits);
+  }
+
+  // DEV_NOTE: Numbers a finished search's hits after the turn's earlier ones and keeps their excerpts for the model,
+  // in one step with no await, so two searches in one step get separate numbers. The turn is replaced whole, as
+  // everywhere else; a search that outlived its turn (cancelled, timed out) changes nothing.
+  private recordSearch(
+    turnId: string,
+    toolCallId: string,
+    hits: Schemas.KnowledgeSearchHit[],
+  ): Schemas.SearchHelpDocsOutput {
+    const turn = this.activeTurn;
+    if (!turn || turn.turnId !== turnId) return SearchHelpDocsProvider.unavailableOutput;
+    const excerpts = SearchHelpDocsProvider.toExcerpts(hits, turn.citationCount + 1);
+    this.activeTurn = {
+      ...turn,
+      citationCount: turn.citationCount + excerpts.length,
+      searchExcerpts: { ...turn.searchExcerpts, [toolCallId]: excerpts },
+    };
+    return SearchHelpDocsProvider.toOutput(excerpts);
+  }
+
+  // DEV_NOTE: The excerpts of one of the running turn's searches; undefined for an earlier turn's search
+  private turnSearchExcerpts(toolCallId: string): Schemas.SearchHelpDocsExcerpt[] | undefined {
+    const excerpts = this.activeTurn?.searchExcerpts;
+    return excerpts && Object.hasOwn(excerpts, toolCallId) ? excerpts[toolCallId] : undefined;
   }
 
   private static hasKnowledge(spec: Schemas.ConfigSpec): boolean {

@@ -1,4 +1,8 @@
-import type { KnowledgeChunkMatch, KnowledgeSearchHit } from "./KnowledgeSearchCommon";
+import type {
+  FusedKnowledgeChunk,
+  KnowledgeSearchHit,
+  KnowledgeSearchModelCalls,
+} from "./KnowledgeSearchCommon";
 import type { KnowledgeModelCall } from "../knowledgeIngestion";
 import type { ApiResponse } from "../common";
 
@@ -15,15 +19,27 @@ export interface KnowledgeRerankResponse extends ApiResponse {
   call?: KnowledgeModelCall;
 }
 
-// DEV_NOTE: Server-side only — KnowledgeSearchRepo internals: what a search may look in (the company's public id for
-// the gateway metadata, and the internal ids of the bot's sources that exist in the company), then what each side of
-// the hybrid search matched
+// DEV_NOTE: Server-side only — KnowledgeSearchRepo's steps. Every field past ApiResponse is optional, so a failed
+// withTenant (a plain ApiResponse) is assignable to the step's type and callers read the fields without narrowing.
+// scope: the company's public id (gateway metadata) and the internal ids of the bot's sources in the company.
 export interface KnowledgeSearchScopeResponse extends ApiResponse {
   companyPublicId?: string;
   knowledgeSourceIds?: string[];
 }
 
+// DEV_NOTE: The query's embedding, and the call that made it (failed too) for its model_calls row
+export interface KnowledgeSearchEmbeddingResponse extends ApiResponse {
+  embedding?: number[];
+  calls: KnowledgeSearchModelCalls;
+}
+
+// DEV_NOTE: The two sides' matches fused by reciprocal rank, best first, at most KNOWLEDGE_SEARCH_RERANK_CANDIDATES
 export interface KnowledgeSearchCandidatesResponse extends ApiResponse {
-  vectorMatches?: KnowledgeChunkMatch[];
-  keywordMatches?: KnowledgeChunkMatch[];
+  candidates?: FusedKnowledgeChunk[];
+}
+
+// DEV_NOTE: One rerank score per candidate in candidate order, and the call that made them (failed too)
+export interface KnowledgeSearchRerankResponse extends ApiResponse {
+  scores?: number[];
+  calls: KnowledgeSearchModelCalls;
 }

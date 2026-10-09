@@ -9,8 +9,8 @@ const SEARCH_TOOL_PART_TYPE = `tool-${Schemas.SEARCH_HELP_DOCS_TOOL_NAME}`;
 // re-syncs from there after every turn and on every wake: a failed write, or a turn cut by an eviction (every deploy),
 // is caught up on later instead of being lost. Writes are idempotent per Think message id.
 //
-// Citations (M2-6): a reply's search_help_docs results sit in its own message, as tool parts before its text. Each
-// written reply keeps the results its [n] markers cite (SearchHelpDocsProvider.citedBy), looked up in every search of
+// Citations (M2-6): a reply's search_help_docs citations sit in its own message, as tool parts before its text. Each
+// written reply keeps the ones its [n] markers cite (SearchHelpDocsProvider.citedBy), looked up in every search of
 // its turn so far; a reply that cites none is written with its text only.
 export default class TranscriptProvider {
   static toEntries(messages: UIMessage[]): Schemas.TranscriptEntry[] {
@@ -21,13 +21,13 @@ export default class TranscriptProvider {
         .map((part) => (part.type === "text" ? part.text : ""))
         .join("")
         .trim(),
-      searchResults: message.parts.flatMap((part) => TranscriptProvider.searchResultsOf(part)),
+      searchCitations: message.parts.flatMap((part) => TranscriptProvider.searchCitationsOf(part)),
     }));
   }
 
-  // DEV_NOTE: The results of one finished search_help_docs call; anything else (another part, a call still running or
-  // failed, an output of the wrong shape) has none
-  private static searchResultsOf(part: UIMessage["parts"][number]): Schemas.SearchHelpDocsResult[] {
+  // DEV_NOTE: The citations of one finished search_help_docs call (its output never carries excerpt text); anything
+  // else (another part, a call still running or failed, an output of the wrong shape) has none
+  private static searchCitationsOf(part: UIMessage["parts"][number]): Schemas.KnowledgeCitation[] {
     const isSearch =
       part.type === SEARCH_TOOL_PART_TYPE ||
       (part.type === "dynamic-tool" && part.toolName === Schemas.SEARCH_HELP_DOCS_TOOL_NAME);
@@ -61,7 +61,7 @@ export default class TranscriptProvider {
 
     const turns: Schemas.TranscriptTurn[] = [];
     let current: Schemas.TranscriptTurn | null = null;
-    let turnSearchResults: Schemas.SearchHelpDocsResult[] = [];
+    let turnSearchCitations: Schemas.KnowledgeCitation[] = [];
     for (const entry of params.entries.slice(start)) {
       if (entry.role === "user" || !current) {
         const isUser = entry.role === "user";
@@ -75,15 +75,15 @@ export default class TranscriptProvider {
           lastEntryId: entry.id,
         };
         turns.push(current);
-        turnSearchResults = [];
+        turnSearchCitations = [];
       }
 
       current.lastEntryId = entry.id;
-      turnSearchResults = [...turnSearchResults, ...entry.searchResults];
+      turnSearchCitations = [...turnSearchCitations, ...entry.searchCitations];
       if (entry.role !== "other" && entry.text.length > 0) {
         const citations =
           entry.role === "assistant"
-            ? SearchHelpDocsProvider.citedBy(entry.text, turnSearchResults)
+            ? SearchHelpDocsProvider.citedBy(entry.text, turnSearchCitations)
             : [];
         current.messages.push({
           sessionMessageId: entry.id,

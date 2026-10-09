@@ -46,10 +46,12 @@ The bot's config lists the sources it may search (`knowledge.sourceIds`, public 
 | Scope    | The listed sources that exist in the company, whatever their status: pausing a source stops its syncs, not its search. A source from another company or a deleted one matches nothing. If none is left, the search returns nothing and makes no model call.                    |
 | Retrieve | The query is embedded (bge-m3), then two searches run in one transaction: by meaning (pgvector HNSW, cosine) and by words (Postgres full-text, `english`, headings weighted above body). Each returns its best 40 chunks of Indexed documents embedded with the current model. |
 | Fuse     | Reciprocal rank fusion (k = 60) merges the two lists into the top 20.                                                                                                                                                                                                          |
-| Rerank   | `@cf/baai/bge-reranker-base` scores each of the 20 against the query (0 to 1). Scores are never stored.                                                                                                                                                                        |
+| Rerank   | `@cf/baai/bge-reranker-base` scores each of the 20 against the query. Workers AI returns probabilities (0 to 1; a relevant passage scores near 1, an unrelated one near 0). Scores are never stored.                                                                           |
 | Cut      | Results scoring under `KNOWLEDGE_SEARCH_MIN_SCORE` (0.2) are dropped, then the best `topK` go to the model. If none are left, the model is told to say it doesn't know.                                                                                                        |
 
-The model reads the results inside a `<search_results>` fence that marks them as data, not instructions, so a page can't steer the bot. Results are numbered across the turn, and the model cites them as `[1]`, `[2]`. The reply saved in `messages.content.citations` keeps only the sources its markers point at (document public id, title, URL), which is what the widget's Sources list shows.
+The model reads the excerpts inside a `<search_results>` fence that marks them as data, not instructions, so a page can't steer the bot. Results are numbered across the turn, and the model cites them as `[1]`, `[2]`. The reply saved in `messages.content.citations` keeps only the sources its markers point at (document public id, title, URL), which is what the widget's Sources list shows.
+
+Excerpt text never leaves the server. The tool's output, which the transcript stores and the widget receives for its search step, carries only each result's number, document id, title and URL; the excerpts stay in the conversation's memory for the running turn and go only to the model. In a later turn the model sees an earlier search only as the titles it found, and searches again if it needs the content. This also keeps old excerpts out of every later turn's input.
 
 If a search fails (Workers AI or the database), the model is told search is unavailable and says so. The worker log has the reason (`SearchKnowledge`, metadata `reason`); the query text is never logged.
 
@@ -111,5 +113,5 @@ pnpm --filter backend exec wrangler r2 object delete diletta-files-staging/<key>
 - No audit events for source changes yet (M4-9).
 - The same page listed under both `www.` and the bare domain is stored twice (one document per URL).
 - Search: questions it couldn't answer don't feed doc gaps yet (M5).
-- Search: Workers AI doesn't document whether its reranker returns raw logits or probabilities. `KnowledgeRerankProvider` treats an answer whose scores all lie in 0–1 as probabilities and applies a sigmoid otherwise. Check this against a real answer before tuning the min score.
-- Search: the widget receives the tool's input and results as stream parts (it shows the search step). These are the company's own docs, never internal ids.
+- Search: the widget receives the model's search query (the tool's input) for its search step. Titles and URLs of the results go with it; excerpt text never does.
+- Search: the reranker's answer carries `usage.prompt_tokens`, but rows are still Estimated at one token per character (an overcount).
