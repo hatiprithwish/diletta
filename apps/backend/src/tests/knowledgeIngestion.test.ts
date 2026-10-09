@@ -17,7 +17,7 @@ import {
 } from "@/db/tables";
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
-import KnowledgeEmbedCallsProvider from "@/providers/knowledgeEmbedCalls";
+import KnowledgeModelCallsProvider from "@/providers/knowledgeModelCalls";
 import BudgetRepo from "@/repositories/BudgetRepo";
 import KnowledgeIngestionRepo from "@/repositories/KnowledgeIngestionRepo";
 import KnowledgeSourcesRepo from "@/repositories/KnowledgeSourcesRepo";
@@ -252,7 +252,7 @@ beforeEach(() => {
   });
   mocks.embed.mockReset();
   mocks.embed.mockImplementation(async (_env: Env, params: { texts: string[] }) => {
-    const calls: Schemas.KnowledgeEmbedCall[] = [];
+    const calls: Schemas.KnowledgeModelCall[] = [];
     for (let i = 0; i < params.texts.length; i += 50) {
       const batch = params.texts.slice(i, i + 50);
       calls.push({
@@ -541,10 +541,13 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
   });
 
   it("rolls back every embed row when one can't be written", async () => {
-    const price = KnowledgeEmbedCallsProvider.price()!;
+    const price = KnowledgeModelCallsProvider.price(Schemas.KNOWLEDGE_EMBEDDING_MODEL)!;
     const result = await withTenant(getDbClient(env), "999999999999", async (tx) => {
-      return await KnowledgeEmbedCallsProvider.record(tx, {
+      return await KnowledgeModelCallsProvider.record(tx, {
         companyId: "999999999999",
+        links: { chatbotId: null, chatbotUserId: null, conversationId: null, turnId: null },
+        taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
+        model: Schemas.KNOWLEDGE_EMBEDDING_MODEL,
         price,
         calls: [{ inputTokens: 1, latencyMs: 1, gatewayLogId: null, errorCode: null }],
       });

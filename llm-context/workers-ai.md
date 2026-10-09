@@ -4,6 +4,7 @@ Index: [workers-ai/llms.txt](https://developers.cloudflare.com/workers-ai/llms.t
 
 - [Bindings (env.AI)](https://developers.cloudflare.com/workers-ai/configuration/bindings/)
 - [bge-m3 model page](https://developers.cloudflare.com/workers-ai/models/bge-m3/)
+- [bge-reranker-base model page](https://developers.cloudflare.com/workers-ai/models/bge-reranker-base/)
 - [Pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)
 - [Markdown conversion (toMarkdown)](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/)
 - [Markdown conversion: supported formats](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/)
@@ -13,8 +14,9 @@ Index: [workers-ai/llms.txt](https://developers.cloudflare.com/workers-ai/llms.t
 
 ## How Diletta uses it
 
-- The only platform-paid model calls (architecture baseline). Bound as `AI` in every env. Two calls, each in one file (pattern rule 3.10):
-  - `env.AI.run("@cf/baai/bge-m3", { text: string[] }, { gateway: { id: env.AI_GATEWAY_NAME, metadata } })` in `providers/knowledgeEmbed.ts`. Output `{ data: number[][], shape }`, 1024 dims (`halfvec(1024)`); no usage is returned, so each call's row is usage Estimated at one token per input character (+2 special tokens). `env.AI.aiGatewayLogId` holds the call's gateway log id. Batches of `KNOWLEDGE_EMBED_BATCH_SIZE`.
+- The only platform-paid model calls (architecture baseline). Bound as `AI` in every env. Three calls, each in one file (pattern rule 3.10):
+  - `env.AI.run("@cf/baai/bge-m3", { text: string[] }, { gateway: { id: env.AI_GATEWAY_NAME, metadata } })` in `providers/knowledgeEmbed.ts`. Output `{ data: number[][], shape }`, 1024 dims (`halfvec(1024)`); no usage is returned, so each call's row is usage Estimated at one token per input character (+2 special tokens). `env.AI.aiGatewayLogId` holds the call's gateway log id. Batches of `KNOWLEDGE_EMBED_BATCH_SIZE`. Used for ingestion (`knowledge.embed`) and a search's query (`search.embed`); the task type goes in the gateway metadata.
+  - `env.AI.run("@cf/baai/bge-reranker-base", { query, contexts: { text }[], top_k }, { gateway })` in `providers/knowledgeRerank.ts` (M2-6, `search.rerank`). Output `{ response: { id, score }[] }`, best first, `id` = the context's index. Input is capped at 512 tokens per (query, context) pair. The generated `Ai_Cf_Baai_Bge_Reranker_Base_Input` type (worker-configuration.d.ts) has lost its `query` field, though the model requires it: pass the input as a variable (no excess-property check), never with a cast. Workers AI doesn't say whether `score` is a logit or already sigmoid-mapped; the provider treats an all-0–1 answer as probabilities and applies the sigmoid otherwise. No usage returned: Estimated at one token per character of query + context (+3 per pair).
   - `env.AI.toMarkdown({ name, blob })` in `providers/knowledgeExtract.ts`, for HTML, PDF and DOCX only (the file name's extension picks the converter). Result `{ format: "markdown", data }` or `{ format: "error", error }`. Image conversion runs models and is billed, so images are never sent. Markdown and plain text are read as UTF-8 without it.
-- Price (2026-10-09): bge-m3 $0.012 per M input tokens (`PLATFORM_MODEL_PRICES`). Embed rows are tier Embed, provider `workers_ai`, and are left out of the company budget seed.
+- Price (2026-10-09): bge-m3 $0.012 per M input tokens; bge-reranker-base $0.00311 per M input tokens (its model page; the pricing table rounds it to $0.003) (`PLATFORM_MODEL_PRICES`). Rows are tier Embed, provider `workers_ai`, written by `KnowledgeModelCallsProvider`, and are left out of the company budget seed.
 - AI bindings always run remotely, even in `wrangler dev` (needs `wrangler login`). Tests set `remoteBindings: false` in `vitest.config.mts` and mock the knowledge providers, so no test reaches Workers AI or opens a remote session.

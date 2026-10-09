@@ -6,15 +6,18 @@ import type {
   TurnContext,
 } from "@cloudflare/think";
 import type { Connection, ConnectionContext } from "agents";
-import type { LanguageModel } from "ai";
+import { tool } from "ai";
+import type { LanguageModel, ToolSet } from "ai";
 import TurnBudget from "@/budget/TurnBudget";
 import Constants from "@/config/Constants";
 import { BudgetDO } from "@/durable-objects/BudgetDO";
 import AppLogger from "@/providers/logger";
 import { ModelUnavailableError } from "@/providers/modelCallRecording";
+import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
 import TranscriptProvider from "@/providers/transcript";
 import WidgetFrameProvider from "@/providers/widgetFrames";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import KnowledgeSearchRepo from "@/repositories/KnowledgeSearchRepo";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
@@ -30,9 +33,10 @@ const CLOSING_MESSAGE = "This conversation is closing";
 //
 // Trust: the widget route authenticates the companion JWT and checks the conversation is the user's own before it
 // forwards the upgrade here (ADR 0001), so every socket is verified, and the session arrives in a header only the
-// worker sets. Think is locked down for a public widget (pattern rule 3.23): no workspace, bash, MCP or other tools,
-// no reasoning or identity frames, safe error text only (every model failure is a ModelUnavailableError), and every
-// inbound frame goes through WidgetFrameProvider's allowlist before Think sees it.
+// worker sets. Think is locked down for a public widget (pattern rule 3.23): no workspace, bash or MCP tools, no
+// reasoning or identity frames, safe error text only (every model failure is a ModelUnavailableError), and every
+// inbound frame goes through WidgetFrameProvider's allowlist before Think sees it. The one tool is search_help_docs
+// (M2-6), active only for a bot whose config lists knowledge sources.
 //
 // A turn: admitted only when no other turn runs and the conversation isn't closing. Its ULID is minted and stored, and
 // the activity time moves. The turn's config is checked and loaded fresh (a publish, a paused chatbot or company takes
@@ -45,6 +49,10 @@ const CLOSING_MESSAGE = "This conversation is closing";
 // refusal is "unavailable"; either way nothing is saved. The admitted turn gets a TurnBudget, which the router checks
 // before every model call (turn output tokens and cost, conversation cost) on top of BudgetDO's reserve, and which ends
 // the turn's loop (stopWhen) once a cap is used up. turnTimeoutSeconds bounds the whole turn (AI SDK timeout).
+//
+// Knowledge (M2-6): search_help_docs runs KnowledgeSearchRepo on the turn's config (its sources and topK) and numbers
+// the hits across the turn. The model reads them inside an untrusted fence (SearchHelpDocsProvider), and the read model
+// keeps the citations each reply's [n] markers point at.
 //
 // Read model: after every turn and on every wake, the transcript past the synced position is written to messages
 // (TranscriptProvider), so a failed write or a turn cut by an eviction is caught up on later.
@@ -83,6 +91,28 @@ export class ConversationDO extends Think<Env> {
     return this.activeTurn?.spec ? ConversationDO.buildInstructions(this.activeTurn.spec) : "";
   }
 
+  // DEV_NOTE: Every turn's tool set (Think calls this at turn start). beforeTurn decides whether the tool is active.
+  // toModelOutput also renders searches from earlier turns when Think rebuilds the history, where the stored output is
+  // read back untyped, so it is parsed first.
+  getTools(): ToolSet {
+    return {
+      [Schemas.SEARCH_HELP_DOCS_TOOL_NAME]: tool({
+        description: SearchHelpDocsProvider.description,
+        inputSchema: Schemas.ZSearchHelpDocsInput,
+        execute: async ({ query }) => await this.searchHelpDocs(query),
+        toModelOutput: ({ output }) => {
+          const parsed = Schemas.ZSearchHelpDocsOutput.safeParse(output);
+          return {
+            type: "text",
+            value: SearchHelpDocsProvider.toModelText(
+              parsed.success ? parsed.data : SearchHelpDocsProvider.unavailableOutput,
+            ),
+          };
+        },
+      }),
+    };
+  }
+
   beforeTurn(_ctx: TurnContext): TurnConfig {
     const turn = this.activeTurn;
     if (!turn?.model || !turn.spec || !turn.caps) {
@@ -95,7 +125,9 @@ export class ConversationDO extends Think<Env> {
     return {
       model: turn.model,
       instructions: ConversationDO.buildInstructions(turn.spec),
-      activeTools: [],
+      activeTools: ConversationDO.hasKnowledge(turn.spec)
+        ? [Schemas.SEARCH_HELP_DOCS_TOOL_NAME]
+        : [],
       maxSteps: turn.spec.limits.maxStepsPerTurn,
       stopWhen: () => caps.isExhausted(),
       timeout: { totalMs: turn.spec.limits.turnTimeoutSeconds * 1000 },
@@ -302,7 +334,15 @@ export class ConversationDO extends Think<Env> {
     }
 
     const turnId = Utility.generateUlid();
-    this.activeTurn = { requestId, turnId, userMessageId, model: null, spec: null, caps: null };
+    this.activeTurn = {
+      requestId,
+      turnId,
+      userMessageId,
+      model: null,
+      spec: null,
+      caps: null,
+      citationCount: 0,
+    };
     this.patchRuntimeState({
       lastActivityAt: Date.now(),
       turnIds: { ...state.turnIds, [userMessageId]: turnId },
@@ -331,6 +371,7 @@ export class ConversationDO extends Think<Env> {
       model: prepared.model,
       spec: prepared.spec,
       caps: prepared.caps,
+      citationCount: 0,
     };
     return true;
   }
@@ -626,15 +667,52 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: The trusted system prompt: the company's persona, then its procedures. Knowledge (M2-6) and tools (M3)
-  // add their parts later.
+  // DEV_NOTE: One knowledge search for the running turn, on the turn's config: its sources and topK. Hits are numbered
+  // once the search returns, with no await between reading and moving the turn's count, so two searches in one step
+  // get separate numbers. A failed search (logged by the Repo) or one without a turn tells the model search is
+  // unavailable; nothing is thrown, so the turn goes on.
+  private async searchHelpDocs(query: string): Promise<Schemas.SearchHelpDocsOutput> {
+    const turn = this.activeTurn;
+    const state = this.getRuntimeState();
+    if (!turn?.spec || !state || !ConversationDO.hasKnowledge(turn.spec)) {
+      return SearchHelpDocsProvider.unavailableOutput;
+    }
+    const searched = await new KnowledgeSearchRepo(this.env, this.ctx).search({
+      companyId: state.session.companyId,
+      chatbotId: state.session.chatbotId,
+      chatbotUserId: state.session.chatbotUserId,
+      conversationId: state.session.conversationId,
+      turnId: turn.turnId,
+      sourcePublicIds: turn.spec.knowledge.sourceIds,
+      topK: turn.spec.knowledge.topK,
+      query,
+    });
+    const current = this.activeTurn;
+    if (!searched.isSuccess || !searched.hits || current?.turnId !== turn.turnId) {
+      return SearchHelpDocsProvider.unavailableOutput;
+    }
+    const output = SearchHelpDocsProvider.toOutput(searched.hits, current.citationCount + 1);
+    current.citationCount += output.results.length;
+    return output;
+  }
+
+  private static hasKnowledge(spec: Schemas.ConfigSpec): boolean {
+    return spec.knowledge.sourceIds.length > 0;
+  }
+
+  // DEV_NOTE: The trusted system prompt: the company's persona, then its procedures, then how to use the help docs
+  // when the bot has knowledge (M2-6). Tools (M3) add their part later.
   private static buildInstructions(spec: Schemas.ConfigSpec): string {
     const procedures = spec.procedures.map(
       (procedure) =>
         `### ${procedure.name}\nWhen to use: ${procedure.whenToUse}\nSteps:\n${procedure.steps}`,
     );
-    return procedures.length > 0
-      ? `${spec.persona.instructions}\n\n## Procedures\n\n${procedures.join("\n\n")}`
-      : spec.persona.instructions;
+    return [
+      spec.persona.instructions,
+      procedures.length > 0 ? `## Procedures\n\n${procedures.join("\n\n")}` : null,
+      ConversationDO.hasKnowledge(spec) ? SearchHelpDocsProvider.instructions : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join("\n\n");
   }
 }

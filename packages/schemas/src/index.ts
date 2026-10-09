@@ -26,6 +26,7 @@ export * from "./knowledgeSources";
 export * from "./knowledgeDocuments";
 export * from "./knowledgeChunks";
 export * from "./knowledgeIngestion";
+export * from "./knowledgeSearch";
 export * from "./files";
 export * from "./docGapClusters";
 export * from "./docGaps";

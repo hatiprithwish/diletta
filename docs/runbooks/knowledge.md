@@ -1,6 +1,8 @@
-# Knowledge ingestion
+# Knowledge ingestion and search
 
 A company's knowledge comes from sources: a sitemap, a single URL, or uploaded files (M2-5). Each sync turns them into documents (one per page or file, bytes in R2) and chunks (searchable pieces with a bge-m3 embedding). A page whose text hasn't changed since the last sync is skipped: no chunking and no embed call.
+
+During a chat, the model searches the chunks of the bot's own sources with the `search_help_docs` tool and cites what it uses (M2-6, see [Search](#search)).
 
 ## One-time setup (per environment)
 
@@ -35,16 +37,42 @@ A paused source can't sync until it's resumed (`status: 1`). Resuming an upload 
 
 Formats: HTML, PDF and DOCX are converted by Workers AI `toMarkdown`; Markdown and plain text are decoded by their byte-order mark or charset. Uploads are at most 10 MB (the request is refused with 413 before it's read), and a PDF or DOCX must really be one (400 otherwise).
 
+## Search
+
+The bot's config lists the sources it may search (`knowledge.sourceIds`, public ids) and how many results the model gets (`knowledge.topK`, default 5). A bot with no sources isn't offered the tool at all. When it has sources, the model calls `search_help_docs` with a query it writes, and the search runs:
+
+| Step     | What happens                                                                                                                                                                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Scope    | The listed sources that exist in the company, whatever their status: pausing a source stops its syncs, not its search. A source from another company or a deleted one matches nothing. If none is left, the search returns nothing and makes no model call.                    |
+| Retrieve | The query is embedded (bge-m3), then two searches run in one transaction: by meaning (pgvector HNSW, cosine) and by words (Postgres full-text, `english`, headings weighted above body). Each returns its best 40 chunks of Indexed documents embedded with the current model. |
+| Fuse     | Reciprocal rank fusion (k = 60) merges the two lists into the top 20.                                                                                                                                                                                                          |
+| Rerank   | `@cf/baai/bge-reranker-base` scores each of the 20 against the query (0 to 1). Scores are never stored.                                                                                                                                                                        |
+| Cut      | Results scoring under `KNOWLEDGE_SEARCH_MIN_SCORE` (0.2) are dropped, then the best `topK` go to the model. If none are left, the model is told to say it doesn't know.                                                                                                        |
+
+The model reads the results inside a `<search_results>` fence that marks them as data, not instructions, so a page can't steer the bot. Results are numbered across the turn, and the model cites them as `[1]`, `[2]`. The reply saved in `messages.content.citations` keeps only the sources its markers point at (document public id, title, URL), which is what the widget's Sources list shows.
+
+If a search fails (Workers AI or the database), the model is told search is unavailable and says so. The worker log has the reason (`SearchKnowledge`, metadata `reason`); the query text is never logged.
+
+Tuning: the constants live in `apps/backend/src/config/Constants.ts` (`KNOWLEDGE_SEARCH_*`). The min score is a starting value; the M5 evals will tune it.
+
 ## Cost
 
-Embeddings are the only model calls the platform pays for: `@cf/baai/bge-m3`, $0.012 per million input tokens (2026-10-09). Each Workers AI call writes one `model_calls` row (tier 4 Embed, provider `workers_ai`, usage Estimated at one token per character, which overcounts). They are left out of the company's budget.
+The only model calls the platform pays for are knowledge's Workers AI calls (2026-10-09 prices):
+
+| Task              | Model                        | Price                       | Calls                             |
+| ----------------- | ---------------------------- | --------------------------- | --------------------------------- |
+| `knowledge.embed` | `@cf/baai/bge-m3`            | $0.012 per M input tokens   | one per 50 chunks indexed         |
+| `search.embed`    | `@cf/baai/bge-m3`            | $0.012 per M input tokens   | one per search                    |
+| `search.rerank`   | `@cf/baai/bge-reranker-base` | $0.00311 per M input tokens | one per search with any candidate |
+
+Each call writes one `model_calls` row (tier 4 Embed, provider `workers_ai`, usage Estimated at one token per character, which overcounts), failed calls too. A search's rows carry its chatbot, user, conversation and turn. They are left out of the company's budget, and the Usage page shows them as included.
 
 ```sql
--- Embedding spend per company this month (owner connection)
-SELECT c.public_id, count(*) AS calls, sum(m.input_tokens) AS tokens, sum(m.cost_usd) AS cost_usd
+-- Knowledge spend per company and task this month (owner connection)
+SELECT c.public_id, m.task_type, count(*) AS calls, sum(m.input_tokens) AS tokens, sum(m.cost_usd) AS cost_usd
 FROM model_calls m JOIN companies c ON c.id = m.company_id
-WHERE m.task_type = 'knowledge.embed' AND m.created_at >= date_trunc('month', now() AT TIME ZONE 'UTC')
-GROUP BY c.public_id ORDER BY cost_usd DESC;
+WHERE m.tier = 4 AND m.created_at >= date_trunc('month', now() AT TIME ZONE 'UTC')
+GROUP BY c.public_id, m.task_type ORDER BY cost_usd DESC;
 ```
 
 ## Operations
@@ -82,3 +110,6 @@ pnpm --filter backend exec wrangler r2 object delete diletta-files-staging/<key>
 - Converted HTML keeps navigation and footer text, which ends up in chunks.
 - No audit events for source changes yet (M4-9).
 - The same page listed under both `www.` and the bare domain is stored twice (one document per URL).
+- Search: questions it couldn't answer don't feed doc gaps yet (M5).
+- Search: Workers AI doesn't document whether its reranker returns raw logits or probabilities. `KnowledgeRerankProvider` treats an answer whose scores all lie in 0–1 as probabilities and applies a sigmoid otherwise. Check this against a real answer before tuning the min score.
+- Search: the widget receives the tool's input and results as stream parts (it shows the search step). These are the company's own docs, never internal ids.

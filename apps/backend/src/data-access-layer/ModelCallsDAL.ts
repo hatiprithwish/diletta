@@ -130,8 +130,8 @@ export default class ModelCallsDAL {
 
   // DEV_NOTE: BudgetDO's seed (M2-4): the spend already recorded for the company since the start of its billing period.
   // A Pending or Unknown row adds its cost as it stands (0 until backfilled); the seed runs once per period, and every
-  // call after it is counted by BudgetDO's own reservations. Tier Embed rows (Workers AI embeddings, M2-5) are left
-  // out: the platform pays for them, not the company's key.
+  // call after it is counted by BudgetDO's own reservations. Tier Embed rows (Workers AI embeddings, M2-5, and the
+  // search's query embedding and rerank, M2-6) are left out: the platform pays for them, not the company's key.
   async getModelCallCostSum(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetModelCallCostSumDALRequest,

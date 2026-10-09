@@ -15,6 +15,26 @@ export type DeleteKnowledgeChunksByDocumentsDALRequest = {
   knowledgeDocumentIds: string[];
 };
 
+// DEV_NOTE: The two sides of the hybrid search (M2-6). Both match only the given sources' chunks of Indexed documents
+// that were embedded with embeddingModel (models are never mixed), and return at most limit matches, best first.
+// efSearch is the HNSW candidate list size for the vector side (≥ limit).
+export type SearchKnowledgeChunksByVectorDALRequest = {
+  companyId: string;
+  knowledgeSourceIds: string[];
+  embeddingModel: string;
+  embedding: number[];
+  limit: number;
+  efSearch: number;
+};
+
+export type SearchKnowledgeChunksByKeywordDALRequest = {
+  companyId: string;
+  knowledgeSourceIds: string[];
+  embeddingModel: string;
+  query: string;
+  limit: number;
+};
+
 export type DeleteKnowledgeChunksBySourceDALRequest = {
   companyId: string;
   knowledgeSourceId: string;

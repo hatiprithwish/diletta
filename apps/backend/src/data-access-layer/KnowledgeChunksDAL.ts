@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { knowledgeChunks, knowledgeDocuments } from "@/db/tables";
@@ -7,7 +7,9 @@ import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo, and every
 // query filters on companyId (defence in depth on top of RLS). knowledge_chunks is derived: a changed document's
-// chunks are deleted and written again in one transaction, never updated in place.
+// chunks are deleted and written again in one transaction, never updated in place. The two search methods are the
+// sides of the hybrid search (M2-6): each matches only chunks of the given sources, embedded with the given model, whose
+// document is in the company and Indexed, and returns them best first with their document's citation fields.
 export default class KnowledgeChunksDAL {
   async createKnowledgeChunks(
     tx: NodePgTransaction<EmptyRelations>,
@@ -75,6 +77,153 @@ export default class KnowledgeChunksDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateKnowledgeChunks,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async searchKnowledgeChunksByVector(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.SearchKnowledgeChunksByVectorDALRequest,
+  ) {
+    const response: Schemas.KnowledgeChunkMatchesDALResponse = { isSuccess: false };
+    const metadata = {
+      companyId: params.companyId,
+      sourceCount: params.knowledgeSourceIds.length,
+      limit: params.limit,
+    };
+
+    if (params.knowledgeSourceIds.length === 0) {
+      response.isSuccess = true;
+      response.message = "No knowledge sources to search";
+      response.matches = [];
+      return response;
+    }
+
+    try {
+      // DEV_NOTE: The company and source filters apply after the HNSW scan, so a plain scan could return far fewer than
+      // limit rows; an iterative scan keeps scanning until limit rows pass them. Both settings last for this transaction
+      // only (set_config(…, true)). relaxed_order may return rows slightly out of distance order, so they are sorted
+      // again below.
+      await tx.execute(
+        sql`select set_config('hnsw.iterative_scan', 'relaxed_order', true), set_config('hnsw.ef_search', ${String(params.efSearch)}, true)`,
+      );
+
+      const distance =
+        sql<number>`${knowledgeChunks.embedding} <=> ${JSON.stringify(params.embedding)}::halfvec`.mapWith(
+          Number,
+        );
+      const conditions = [
+        eq(knowledgeChunks.companyId, params.companyId),
+        inArray(knowledgeChunks.knowledgeSourceId, params.knowledgeSourceIds),
+        eq(knowledgeChunks.embeddingModel, params.embeddingModel),
+        isNotNull(knowledgeChunks.embedding),
+        eq(knowledgeDocuments.companyId, params.companyId),
+        eq(knowledgeDocuments.indexStatus, Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed),
+      ];
+      const rows = await tx
+        .select({
+          chunkId: knowledgeChunks.id,
+          documentPublicId: knowledgeDocuments.publicId,
+          title: knowledgeDocuments.title,
+          sourceUrl: knowledgeDocuments.sourceUrl,
+          headingPath: knowledgeChunks.headingPath,
+          text: knowledgeChunks.text,
+          distance,
+        })
+        .from(knowledgeChunks)
+        .innerJoin(
+          knowledgeDocuments,
+          eq(knowledgeDocuments.id, knowledgeChunks.knowledgeDocumentId),
+        )
+        .where(and(...conditions))
+        // DEV_NOTE: Ordered by the distance alone, so the HNSW index serves it
+        .orderBy(distance)
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Knowledge chunks matched by vector";
+      response.matches = rows
+        .sort((a, b) => a.distance - b.distance)
+        .map(({ distance: _distance, ...match }) => match);
+    } catch (error) {
+      const message = "Unknown error in searching knowledge chunks by vector";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.SearchKnowledgeChunksByVector,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async searchKnowledgeChunksByKeyword(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.SearchKnowledgeChunksByKeywordDALRequest,
+  ) {
+    const response: Schemas.KnowledgeChunkMatchesDALResponse = { isSuccess: false };
+    const metadata = {
+      companyId: params.companyId,
+      sourceCount: params.knowledgeSourceIds.length,
+      limit: params.limit,
+    };
+
+    if (params.knowledgeSourceIds.length === 0) {
+      response.isSuccess = true;
+      response.message = "No knowledge sources to search";
+      response.matches = [];
+      return response;
+    }
+
+    try {
+      // DEV_NOTE: websearch_to_tsquery never fails on user text (quotes, "or", "-" are read as web search syntax); a
+      // query of stop words only matches nothing. The same 'english' config as the generated tsv column.
+      const tsquery = sql`websearch_to_tsquery('english', ${params.query})`;
+      const rank = sql<number>`ts_rank_cd(${knowledgeChunks.tsv}, ${tsquery})`.mapWith(Number);
+      const conditions = [
+        eq(knowledgeChunks.companyId, params.companyId),
+        inArray(knowledgeChunks.knowledgeSourceId, params.knowledgeSourceIds),
+        eq(knowledgeChunks.embeddingModel, params.embeddingModel),
+        sql`${knowledgeChunks.tsv} @@ ${tsquery}`,
+        eq(knowledgeDocuments.companyId, params.companyId),
+        eq(knowledgeDocuments.indexStatus, Schemas.KnowledgeDocumentIndexStatusIntEnum.Indexed),
+      ];
+      const rows = await tx
+        .select({
+          chunkId: knowledgeChunks.id,
+          documentPublicId: knowledgeDocuments.publicId,
+          title: knowledgeDocuments.title,
+          sourceUrl: knowledgeDocuments.sourceUrl,
+          headingPath: knowledgeChunks.headingPath,
+          text: knowledgeChunks.text,
+        })
+        .from(knowledgeChunks)
+        .innerJoin(
+          knowledgeDocuments,
+          eq(knowledgeDocuments.id, knowledgeChunks.knowledgeDocumentId),
+        )
+        .where(and(...conditions))
+        // DEV_NOTE: id breaks rank ties, so the same query always ranks the same way
+        .orderBy(desc(rank), asc(knowledgeChunks.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Knowledge chunks matched by keyword";
+      response.matches = rows;
+    } catch (error) {
+      const message = "Unknown error in searching knowledge chunks by keyword";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.SearchKnowledgeChunksByKeyword,
         message,
         error,
         metadata,
