@@ -641,7 +641,7 @@ export const modelCalls = table(
     turnId: t.text("turn_id"), // ULID from the Conversation DO
     taskType: t.text("task_type").$type<Schemas.ModelTaskTypeEnum>().notNull(), // route.intent, qa.answer, eval.judge…
     tier: t.smallint().$type<Schemas.ModelCallTierIntEnum>().notNull(),
-    provider: t.text().$type<Schemas.ModelProviderEnum>().notNull(),
+    provider: t.text().$type<Schemas.ModelCallProvider>().notNull(), // company key provider, or workers_ai (embeddings)
     model: t.text().notNull(),
     gatewayLogId: t.text("gateway_log_id"),
     inputTokens: t.integer("input_tokens").notNull().default(0),
@@ -821,7 +821,7 @@ export const files = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
-    ownerType: t.text("owner_type").notNull(),
+    ownerType: t.text("owner_type").$type<Schemas.FileOwnerTypeEnum>().notNull(),
     ownerId: t.bigint("owner_id", { mode: "string" }).notNull(), // → <owner_type>.id
     filename: t.text(),
     mime: t.text().notNull(),

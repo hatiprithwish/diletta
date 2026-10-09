@@ -1,7 +1,11 @@
 import z from "zod";
 import { ModelProviderEnum } from "../companySecrets";
 import { ModelTierEnum } from "../configSpec";
-import { ModelCallTierIntEnum } from "../modelCalls";
+import {
+  ModelCallTierIntEnum,
+  PlatformModelProviderEnum,
+  type ModelCallProvider,
+} from "../modelCalls";
 
 // DEV_NOTE: Why the router handed out no model. The caller (Conversation DO) shows every one of them to the widget
 // as MODEL_UNAVAILABLE_MESSAGE; the reason is logged, never shown.
@@ -193,6 +197,34 @@ export function getModelPrice(provider: ModelProviderEnum, model: string): Model
   return Object.hasOwn(prices, model) ? (prices[model] ?? null) : null;
 }
 
+// DEV_NOTE: Platform-paid models (embeddings), priced like MODEL_PRICES so cost goes through computeModelCallCostUsd.
+// Input-only: output and cache prices are 0 (an embedding has no output; cacheWrite equals input, so the backfill's
+// dearer-of rule reads input). Workers AI list prices as of 2026-10-09
+// (developers.cloudflare.com/workers-ai/platform/pricing). They never reach a company's budget (tier Embed is left out
+// of BudgetRepo's seed), but every call still gets its model_calls row.
+export const PLATFORM_MODEL_PRICES: Record<
+  PlatformModelProviderEnum,
+  Record<string, ModelPrice>
+> = {
+  [PlatformModelProviderEnum.WorkersAi]: {
+    "@cf/baai/bge-m3": {
+      inputUsdPerMTok: 0.012,
+      outputUsdPerMTok: 0,
+      cacheReadUsdPerMTok: 0,
+      cacheWriteUsdPerMTok: 0.012,
+    },
+  },
+};
+
+// DEV_NOTE: The price of any model_calls row (routed or platform). Own-property lookup, as getModelPrice.
+export function getModelCallPrice(provider: ModelCallProvider, model: string): ModelPrice | null {
+  if (provider === PlatformModelProviderEnum.WorkersAi) {
+    const prices = PLATFORM_MODEL_PRICES[provider];
+    return Object.hasOwn(prices, model) ? (prices[model] ?? null) : null;
+  }
+  return getModelPrice(provider, model);
+}
+
 // Token counts of one call. inputTokens is the whole prompt, cache reads and writes included.
 export interface ModelCallUsage {
   inputTokens: number;
@@ -216,7 +248,13 @@ const COST_DECIMALS = 6;
 // DEV_NOTE: Cost of one call in USD, as the decimal string model_calls.cost_usd stores. The prompt splits into
 // uncached input, cache reads and cache writes, each at its own price. Negative or non-finite counts are treated
 // as 0, and the uncached part never goes below 0 even if a provider reports more cached tokens than its total.
-export function computeModelCallCostUsd(price: ModelPrice, usage: ModelCallUsage): string {
+// isRoundedUp rounds up to the column's last decimal instead of to the nearest: a cheap call (a small Workers AI
+// embedding costs under $0.0000005) is then stored at $0.000001, never as $0.
+export function computeModelCallCostUsd(
+  price: ModelPrice,
+  usage: ModelCallUsage,
+  isRoundedUp = false,
+): string {
   const count = (value: number) => (Number.isFinite(value) && value > 0 ? value : 0);
   const inputTokens = count(usage.inputTokens);
   const cacheReadTokens = count(usage.cacheReadTokens);
@@ -236,6 +274,10 @@ export function computeModelCallCostUsd(price: ModelPrice, usage: ModelCallUsage
       outputTokens * prices.outputUsdPerMTok) /
     TOKENS_PER_MILLION;
 
+  if (isRoundedUp) {
+    const scale = 10 ** COST_DECIMALS;
+    return (Math.ceil(cost * scale - 1e-9) / scale).toFixed(COST_DECIMALS);
+  }
   return cost.toFixed(COST_DECIMALS);
 }
 

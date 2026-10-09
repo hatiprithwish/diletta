@@ -739,7 +739,7 @@ FOREIGN KEY
 
 ### 3.10 Model Calls Only Through the Router [CRITICAL]
 
-**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Usage-status rules live only in `ModelCallRecordingProvider`: a call billed without usage (stream cut or cancelled, connection lost, a finish without totals, an unreadable 2xx) is written `usage_status` Pending for the Cron backfill, never Reported at $0; only a 4xx/5xx refusal is Reported at 0. Every model failure reaches the caller as `ModelUnavailableError` (an abort stays an abort): Think sends a stream error's message to the widget verbatim. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
+**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Usage-status rules live only in `ModelCallRecordingProvider`: a call billed without usage (stream cut or cancelled, connection lost, a finish without totals, an unreadable 2xx) is written `usage_status` Pending for the Cron backfill, never Reported at $0; only a 4xx/5xx refusal is Reported at 0. Every model failure reaches the caller as `ModelUnavailableError` (an abort stays an abort): Think sends a stream error's message to the widget verbatim. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search: `env.AI.run` only in `providers/knowledgeEmbed.ts` (bge-m3, `KNOWLEDGE_EMBEDDING_MODEL`), `env.AI.toMarkdown` only in `providers/knowledgeExtract.ts` (HTML, PDF, DOCX; never an image, which would run a model). Each embed call gets its `model_calls` row (tier Embed, provider `workers_ai`, usage `Estimated`, priced from `PLATFORM_MODEL_PRICES` rounded up), left out of the company budget seed.
 
 **Violations:**
 
@@ -753,7 +753,8 @@ FOREIGN KEY
 - Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape, on a 403, or through the general `updateCompanySecret` (it would invalidate a key the admin replaced meanwhile)
 - Writing a `model_calls` row as Reported with zero usage for a call that reached the provider without a refusal (use Pending with the gateway log id, or Unknown)
 - Logging the decrypted company key or the gateway token, or passing either anywhere but the provider SDK settings
-- `env.AI.run(...)` with a non-embedding model, or anywhere except knowledge ingestion/search
+- `env.AI.run(...)` with a non-embedding model, or anywhere but `providers/knowledgeEmbed.ts`; `env.AI.toMarkdown(...)` anywhere but `providers/knowledgeExtract.ts`, or on an image
+- An embed call with no `model_calls` row, or one written at $0 (price it with `computeModelCallCostUsd(…, true)`)
 - A Think `getModel()` that builds a provider client itself instead of asking the router
 - A provider API key read from `env` (platform key) for a company's model call
 
@@ -762,7 +763,7 @@ FOREIGN KEY
 ```regex
 from\s+["'](openai|@anthropic-ai/sdk|@google/genai|@google/generative-ai|@mistralai/[^"']+|cohere-ai|groq-sdk|@ai-sdk/(?!react)[^"']+)["']
 api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|gateway\.ai\.cloudflare\.com
-env\.AI\.run\(
+env\.AI\.(run|toMarkdown)\(
 ```
 
 **Examples:**
@@ -1194,6 +1195,42 @@ BUDGET_DO\.getByName
 
 ---
 
+### 3.25 Knowledge Ingestion Skips Unchanged Text [CRITICAL]
+
+**Rule:** A knowledge source syncs only through `KnowledgeSourcesRepo.startSync` (route, upload, Cron): the source row is locked `FOR UPDATE` and claimed (Syncing) unless Paused or already syncing (stale after `KNOWLEDGE_SYNC_STALE_MS`), then one `KnowledgeSyncWorkflow` instance starts (`KnowledgeSyncWorkflowProvider`); a failed start puts the source in Failed. Every workflow step calls `KnowledgeIngestionRepo`, and step results carry ids and outcomes only, never page text or bytes. Per item: fetch (`KnowledgeFetchProvider`: http(s), the source's own host, capped in time and size) or read from R2 → convert (`KnowledgeExtractProvider`) → normalize → `content_hash` = sha256 of the text. An Indexed document whose hash matches is Unchanged: zero chunking and zero embed calls. A changed one is chunked (`KnowledgeChunkerProvider`, pure) and embedded (`KnowledgeEmbedProvider`), then stored in one transaction that re-locks the source and requires Syncing (pause and delete take the same lock), with its file row and R2 object (`KnowledgeDocumentFilesProvider`, key `fileR2Key`), and its chunks deleted and rewritten. R2 objects of deleted files go after the commit; an object written by a rolled-back transaction is deleted. Source URLs are public http(s) domains (`ZKnowledgeSourceUrl`).
+
+**Violations:**
+
+- Embedding or re-chunking a document without first comparing its `content_hash`, or hashing the bytes instead of the normalized text
+- Creating a `KnowledgeSyncWorkflow` instance anywhere but `KnowledgeSyncWorkflowProvider.start`, or without claiming the source first
+- Writing documents or chunks without locking the source row and checking it is still Syncing in the same transaction
+- Returning page text, markdown or bytes from a workflow step
+- A fetch in ingestion without a timeout and a byte cap, following a URL off the source's host, or a source URL schema that accepts IP literals or single-label hosts
+- Updating `knowledge_chunks` in place instead of delete + insert, or chunks whose `knowledge_source_id` differs from their document's
+- Deleting a file row and its R2 object in the other order (object first), or leaving an object written by a rolled-back transaction
+- A `files` row for a knowledge document whose `owner_id` isn't the document's id after its transaction
+
+**Detection Pattern:**
+
+```regex
+KNOWLEDGE_SYNC_WORKFLOW\.create\((?!.*knowledgeSyncWorkflow\.ts)
+FILES_BUCKET\.(put|delete|get)\((?!.*fileStorage\.ts)
+update\(knowledgeChunks\)
+```
+
+**Examples:**
+
+```
+- ❌ await env.KNOWLEDGE_SYNC_WORKFLOW.create({ params }); // in a route, no claim
+- ❌ const embedded = await KnowledgeEmbedProvider.embed(env, { texts }); // before checking existing.contentHash
+- ❌ return await step.do("item-0", () => ({ text })); // page text in workflow state
+- ✅ if (existing && existing.contentHash === contentHash && existing.indexStatus === Indexed) { /* touch lastSyncedAt only */ }
+```
+
+**Fix:** Mirror `repositories/KnowledgeIngestionRepo.ts`, `repositories/KnowledgeSourcesRepo.ts` and `workflows/KnowledgeSyncWorkflow.ts` (`docs/runbooks/knowledge.md`).
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1281,5 +1318,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion)
 Maintainer: hatiprithwish

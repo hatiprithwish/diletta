@@ -14,6 +14,7 @@ export enum LogCategory {
   ModelRouter = "ModelRouter",
   Conversation = "Conversation",
   Budget = "Budget",
+  Knowledge = "Knowledge",
 }
 
 export enum LogAction {
@@ -129,6 +130,55 @@ export enum LogAction {
   ReserveBudget = "ReserveBudget",
   SettleBudget = "SettleBudget",
   ExpireBudgetReservation = "ExpireBudgetReservation",
+
+  // Knowledge sources
+  CreateKnowledgeSource = "CreateKnowledgeSource",
+  GetKnowledgeSourceDetails = "GetKnowledgeSourceDetails",
+  ListKnowledgeSources = "ListKnowledgeSources",
+  CountKnowledgeSources = "CountKnowledgeSources",
+  UpdateKnowledgeSource = "UpdateKnowledgeSource",
+  SetKnowledgeSourceSyncState = "SetKnowledgeSourceSyncState",
+  DeleteKnowledgeSource = "DeleteKnowledgeSource",
+  GetDueKnowledgeSources = "GetDueKnowledgeSources",
+  StartKnowledgeSync = "StartKnowledgeSync",
+  StartDueKnowledgeSyncs = "StartDueKnowledgeSyncs",
+
+  // Knowledge documents and chunks
+  CreateKnowledgeDocument = "CreateKnowledgeDocument",
+  GetKnowledgeDocumentDetails = "GetKnowledgeDocumentDetails",
+  GetKnowledgeDocumentBySourceUrl = "GetKnowledgeDocumentBySourceUrl",
+  UpdateKnowledgeDocument = "UpdateKnowledgeDocument",
+  ListKnowledgeDocuments = "ListKnowledgeDocuments",
+  CountKnowledgeDocuments = "CountKnowledgeDocuments",
+  GetKnowledgeDocumentsBySource = "GetKnowledgeDocumentsBySource",
+  GetUnlistedKnowledgeDocuments = "GetUnlistedKnowledgeDocuments",
+  DeleteKnowledgeDocuments = "DeleteKnowledgeDocuments",
+  DeleteKnowledgeDocumentsBySource = "DeleteKnowledgeDocumentsBySource",
+  UploadKnowledgeDocument = "UploadKnowledgeDocument",
+  CreateKnowledgeChunks = "CreateKnowledgeChunks",
+  DeleteKnowledgeChunks = "DeleteKnowledgeChunks",
+
+  // Knowledge ingestion
+  RunKnowledgeSync = "RunKnowledgeSync",
+  ListKnowledgeSyncItems = "ListKnowledgeSyncItems",
+  IngestKnowledgeSyncItem = "IngestKnowledgeSyncItem",
+  FetchKnowledgePage = "FetchKnowledgePage",
+  ListSitemapUrls = "ListSitemapUrls",
+  ExtractKnowledgeText = "ExtractKnowledgeText",
+  EmbedKnowledgeChunks = "EmbedKnowledgeChunks",
+  PruneKnowledgeDocuments = "PruneKnowledgeDocuments",
+  FinishKnowledgeSync = "FinishKnowledgeSync",
+
+  // Files
+  CreateFile = "CreateFile",
+  SetFileOwner = "SetFileOwner",
+  UpdateFileContent = "UpdateFileContent",
+  GetFile = "GetFile",
+  GetFiles = "GetFiles",
+  DeleteFiles = "DeleteFiles",
+  PutFileObject = "PutFileObject",
+  GetFileObject = "GetFileObject",
+  DeleteFileObjects = "DeleteFileObjects",
 
   // Chatbot configs
   GetPublishedChatbotConfig = "GetPublishedChatbotConfig",

@@ -24,6 +24,9 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      // DEV_NOTE: No remote proxy session: the AI binding (Workers AI, M2-5) would otherwise open one on the platform's
+      // Cloudflare account at startup. No test reaches Workers AI; they mock the knowledge providers that call it.
+      remoteBindings: false,
       // DEV_NOTE: Test-only bindings, never declared in wrangler.jsonc. NEON_POOLER_URL: the withTenant
       // leak test runs through Neon's -pooler endpoint because local mode skips Hyperdrive's pool.
       // DATABASE_URL: the owner role (BYPASSRLS), for fixtures, cleanup and schema checks only; the code

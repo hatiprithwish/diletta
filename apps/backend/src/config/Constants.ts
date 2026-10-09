@@ -36,6 +36,7 @@ export default class Constants {
   // wrangler.jsonc triggers.crons exactly. The every-minute one also runs the model_calls usage backfill.
   static readonly OUTBOX_SWEEP_CRON = "* * * * *";
   static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
+  static readonly KNOWLEDGE_RESYNC_CRON = "0 * * * *";
 
   // DEV_NOTE: Widget auth (M2-1, ADR 0001). The companion JWT rides in Sec-WebSocket-Protocol on the upgrade. A token
   // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of
@@ -103,4 +104,34 @@ export default class Constants {
   // this, so a stuck close never fires in a loop
   static readonly CONVERSATION_CLOSE_RETRY_MS = 60_000;
   static readonly CONVERSATION_TITLE_MAX_CHARS = 80;
+
+  // DEV_NOTE: Knowledge ingestion (M2-5). One KnowledgeSyncWorkflow per source sync lists the source's items (at most
+  // KNOWLEDGE_MAX_ITEMS_PER_SYNC: a sitemap's same-host page URLs, following nested sitemap indexes
+  // KNOWLEDGE_SITEMAP_MAX_DEPTH deep, or an upload source's documents), then fetches, converts, hashes, chunks and
+  // embeds one item per step. Each fetch is capped in time and size. A source stuck in Syncing for
+  // KNOWLEDGE_SYNC_STALE_MS (its workflow died) may be claimed again. An upload source re-lists its Pending documents
+  // after each round (files uploaded mid-sync), at most KNOWLEDGE_SYNC_MAX_ROUNDS rounds.
+  static readonly KNOWLEDGE_MAX_ITEMS_PER_SYNC = 500;
+  static readonly KNOWLEDGE_SITEMAP_MAX_DEPTH = 2;
+  static readonly KNOWLEDGE_SITEMAP_MAX_BYTES = 10 * 1024 * 1024;
+  static readonly KNOWLEDGE_PAGE_MAX_BYTES = 5 * 1024 * 1024;
+  static readonly KNOWLEDGE_FETCH_TIMEOUT_MS = 15_000;
+  static readonly KNOWLEDGE_FETCH_USER_AGENT = "DilettaBot/1.0 (knowledge sync)";
+  static readonly KNOWLEDGE_SYNC_STALE_MS = 6 * 60 * 60_000;
+  static readonly KNOWLEDGE_SYNC_MAX_ROUNDS = 3;
+  // DEV_NOTE: The hourly Cron starts at most this many due syncs per run; the rest wait for the next hour
+  static readonly KNOWLEDGE_RESYNC_BATCH_SIZE = 100;
+  static readonly KNOWLEDGE_DAILY_SYNC_MS = 24 * 60 * 60_000;
+  static readonly KNOWLEDGE_WEEKLY_SYNC_MS = 7 * 24 * 60 * 60_000;
+
+  // DEV_NOTE: Chunking (KnowledgeChunkerProvider): sections split at markdown headings, packed up to
+  // KNOWLEDGE_CHUNK_TARGET_CHARS (~400 tokens) with KNOWLEDGE_CHUNK_OVERLAP_CHARS carried into the next chunk of the
+  // same section. A document past KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT keeps its first chunks only (logged).
+  static readonly KNOWLEDGE_CHUNK_TARGET_CHARS = 1_600;
+  static readonly KNOWLEDGE_CHUNK_OVERLAP_CHARS = 200;
+  static readonly KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT = 400;
+  static readonly KNOWLEDGE_TITLE_MAX_CHARS = 200;
+
+  // DEV_NOTE: Embedding (KnowledgeEmbedProvider): texts per Workers AI call (one model_calls row each)
+  static readonly KNOWLEDGE_EMBED_BATCH_SIZE = 50;
 }

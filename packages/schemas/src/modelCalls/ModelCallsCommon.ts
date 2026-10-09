@@ -22,13 +22,27 @@ export const MODEL_CALL_TIER_LABEL_MAP: Record<ModelCallTierIntEnum, ModelCallTi
   [ModelCallTierIntEnum.Embed]: ModelCallTierLabelEnum.Embed,
 };
 
-// DEV_NOTE: What a model call is for (model_calls.task_type, text in the DB). Embeddings (knowledge.embed) run on
-// Workers AI, not through the router; M2-5 adds them here with their provider.
+// DEV_NOTE: What a model call is for (model_calls.task_type, text in the DB). knowledge.embed runs on Workers AI
+// (platform-paid, tier Embed), not through the router: KnowledgeEmbedProvider writes its rows.
 export enum ModelTaskTypeEnum {
   RouteIntent = "route.intent",
   QaAnswer = "qa.answer",
   EvalJudge = "eval.judge",
+  KnowledgeEmbed = "knowledge.embed",
 }
+
+// DEV_NOTE: Providers the platform pays for itself (model_calls.provider). Never a company model key provider: a
+// company can't store a key for one, and the router never routes to one.
+export enum PlatformModelProviderEnum {
+  WorkersAi = "workers_ai",
+}
+
+// DEV_NOTE: model_calls.provider: a company key provider (routed calls) or a platform provider (embeddings)
+export const ZModelCallProvider = z.union([
+  z.enum(ModelProviderEnum),
+  z.enum(PlatformModelProviderEnum),
+]);
+export type ModelCallProvider = z.infer<typeof ZModelCallProvider>;
 
 // DEV_NOTE: Where the row's tokens and cost came from.
 //   Reported: the provider's own usage (the stream's finish part or the generate result), or a call the provider
@@ -39,11 +53,14 @@ export enum ModelTaskTypeEnum {
 //     input and cache-write prices (an overcount, never an under).
 //   Unknown: no usage could be found (no log id, or none in the log within the backfill window). Cost stays 0 and an
 //     error is logged; the budget must not read 0 as free.
+//   Estimated: counted by us as an upper bound because the provider returns no usage (Workers AI embeddings: one
+//     token per input character, more than the tokenizer ever produces). An overcount, never an under.
 export enum ModelCallUsageStatusIntEnum {
   Reported = 1,
   Pending = 2,
   Backfilled = 3,
   Unknown = 4,
+  Estimated = 5,
 }
 
 export enum ModelCallUsageStatusLabelEnum {
@@ -51,6 +68,7 @@ export enum ModelCallUsageStatusLabelEnum {
   Pending = "Pending",
   Backfilled = "Backfilled",
   Unknown = "Unknown",
+  Estimated = "Estimated",
 }
 
 export const MODEL_CALL_USAGE_STATUS_LABEL_MAP: Record<
@@ -61,6 +79,7 @@ export const MODEL_CALL_USAGE_STATUS_LABEL_MAP: Record<
   [ModelCallUsageStatusIntEnum.Pending]: ModelCallUsageStatusLabelEnum.Pending,
   [ModelCallUsageStatusIntEnum.Backfilled]: ModelCallUsageStatusLabelEnum.Backfilled,
   [ModelCallUsageStatusIntEnum.Unknown]: ModelCallUsageStatusLabelEnum.Unknown,
+  [ModelCallUsageStatusIntEnum.Estimated]: ModelCallUsageStatusLabelEnum.Estimated,
 };
 
 // Whole Model Call Body — DB shape (enums stored as integers)
@@ -79,7 +98,7 @@ export const ZModelCall = z.object({
   turnId: z.string().nullable(),
   taskType: z.enum(ModelTaskTypeEnum),
   tier: z.enum(ModelCallTierIntEnum),
-  provider: z.enum(ModelProviderEnum),
+  provider: ZModelCallProvider,
   model: z.string(),
   gatewayLogId: z.string().nullable(),
   inputTokens: z.number().int().min(0),

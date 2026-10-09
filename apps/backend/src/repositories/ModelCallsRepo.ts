@@ -145,7 +145,7 @@ export default class ModelCallsRepo {
   ): Promise<Schemas.ModelCallUsageStatusIntEnum> {
     const isPastWindow =
       now - modelCall.createdAt.getTime() > Constants.MODEL_CALL_BACKFILL_MAX_AGE_MS;
-    const price = Schemas.getModelPrice(modelCall.provider, modelCall.model);
+    const price = Schemas.getModelCallPrice(modelCall.provider, modelCall.model);
     const usage =
       modelCall.gatewayLogId && price
         ? await AiGatewayProvider.getLogUsage(this.env, modelCall.gatewayLogId)

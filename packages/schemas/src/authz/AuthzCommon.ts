@@ -6,6 +6,12 @@ export enum AuthzActionEnum {
   ChatbotCreate = "chatbot.create",
   ChatbotUpdate = "chatbot.update",
 
+  // Knowledge sources and their documents (company-scoped)
+  KnowledgeSourceRead = "knowledge_source.read",
+  KnowledgeSourceCreate = "knowledge_source.create",
+  KnowledgeSourceUpdate = "knowledge_source.update",
+  KnowledgeSourceDelete = "knowledge_source.delete",
+
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
   CompanyList = "company.list",
