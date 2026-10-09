@@ -80,7 +80,8 @@ const ZUsd = (max: number) => z.number().positive().max(max);
 
 // DEV_NOTE: Checked before the next model call (BudgetDO and the Conversation DO). Every field is optional (an
 // omitted one gets the platform default on load) and bounded, because the runtime trusts these values. Company
-// spending_budget is a companies column, not part of the bot config, and stays the outer wall.
+// spending_budget is a companies column, not part of the bot config, and stays the outer wall. maxTokensPerTurn counts
+// the turn's output tokens only (M2-4).
 export const ZConfigLimitsV1 = z.strictObject({
   maxStepsPerTurn: ZCount(50).optional(),
   maxTokensPerTurn: ZCount(1_000_000).optional(),

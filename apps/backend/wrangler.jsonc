@@ -22,11 +22,19 @@
     },
   },
   // DEV_NOTE: Conversation DO (M2-2), one per conversation, built on Think (SQLite-backed). Reached only through the
-  // widget route (GET /widget/ws), never routed publicly. Bindings don't inherit, so each env declares its own.
+  // widget route (GET /widget/ws), never routed publicly. BudgetDO (M2-4), one per company (SQLite kv): reserve before
+  // and settle after every model call; reached only from the worker and the Conversation DO. Bindings don't inherit,
+  // so each env declares its own; migrations do (top level only).
   "durable_objects": {
-    "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+    "bindings": [
+      { "name": "CONVERSATION_DO", "class_name": "ConversationDO" },
+      { "name": "BUDGET_DO", "class_name": "BudgetDO" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConversationDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ConversationDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["BudgetDO"] },
+  ],
   // DEV_NOTE: Local dev + tests use the staging branch. wrangler/vitest connect directly via
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE from apps/backend/.env.
   "hyperdrive": [
@@ -62,7 +70,10 @@
     "staging": {
       "name": "diletta-worker-staging",
       "durable_objects": {
-        "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+        "bindings": [
+          { "name": "CONVERSATION_DO", "class_name": "ConversationDO" },
+          { "name": "BUDGET_DO", "class_name": "BudgetDO" },
+        ],
       },
       "hyperdrive": [
         {
@@ -116,7 +127,10 @@
     "production": {
       "name": "diletta-worker",
       "durable_objects": {
-        "bindings": [{ "name": "CONVERSATION_DO", "class_name": "ConversationDO" }],
+        "bindings": [
+          { "name": "CONVERSATION_DO", "class_name": "ConversationDO" },
+          { "name": "BUDGET_DO", "class_name": "BudgetDO" },
+        ],
       },
       "hyperdrive": [
         {

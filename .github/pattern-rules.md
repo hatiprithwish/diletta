@@ -1154,6 +1154,46 @@ workspaceBash\s*=\s*true|includeMcpTools\s*=\s*true|fetchTools\s*=\s*\{
 
 ---
 
+### 3.24 Every Model Call Reserved Against the Budget [CRITICAL]
+
+**Rule:** Every provider call a routed model makes (each retry too) is sized and held before it goes out, and a refused call never reaches the provider. `ModelCallRecordingProvider` estimates the prompt once per call, asks `budget.reserve` per attempt and sends that attempt with the hold's `maxOutputTokens`. `ModelCallBudgetProvider` is the only place a hold is sized, reserved and settled: input at the plain input rate, output cut to the caller's output tokens and cost left (refused under `MODEL_CALL_MIN_OUTPUT_TOKENS`), held by `GetModelRequest.caps` (the Conversation DO's `TurnBudget`) and then `BudgetDO.reserve`; each record settles its own hold. A call whose usage isn't known keeps its whole cost hold (never free) and counts no output tokens; an unsettled hold expires into spend. `maxTokensPerTurn` counts output tokens only. `BudgetDO` (one per company, reached only via `BudgetDO.forCompany`) is the only place company and chatbot-user spend is counted live: it Zod-parses every request, charges expired holds before reading the ledger for a check, keeps its arithmetic in `BudgetLedgerProvider` (pure, micro-dollars), reads Neon only through `BudgetRepo.getBudgetSeed` (NULL `spending_budget` = `DEFAULT_SPENDING_BUDGET_USD`), backs off a failed read for `BUDGET_LOAD_RETRY_MS`, and fails closed (`Unavailable`). The Conversation DO checks its own caps before routing and `BudgetDO.admitTurn` after it; a rate refusal answers `BUDGET_RATE_LIMIT_MESSAGE`, anything else `unavailable`, and the message isn't saved.
+
+**Violations:**
+
+- A model call that sends before `budget.reserve` resolves, a refused hold that still calls the provider (or retries), or an attempt sent with a `maxOutputTokens` other than its hold's
+- Sizing, pricing or settling a hold outside `ModelCallBudgetProvider`, or a `ModelCallRecordingProvider.createMiddleware` without a real `budget` outside its unit test
+- A `GetModelRequest` from the Conversation DO with `caps: null`
+- Counting money in float dollars inside the budget path instead of micro-dollars (`usdToMicros`), or rounding a hold down
+- Settling a Pending / Unknown call at 0, or releasing an expired reservation instead of charging it
+- Reading BudgetDO's ledger for a check before its expired holds are charged, or an `await` between reading BudgetDO's state and writing it
+- Storing an RPC request in BudgetDO without parsing it (`ZReserveBudgetRequest` etc.)
+- A refusal treated as allowed when BudgetDO can't be reached or read (fail open)
+- `env.BUDGET_DO.getByName(…)` anywhere but `BudgetDO.forCompany`
+- Counting prompt tokens against `maxTokensPerTurn`, or using up a rate slot before the turn's model is routed
+- Turn or conversation caps checked only once per turn instead of before every call, or `turnTimeoutSeconds` left out of `beforeTurn`
+- Reading a company's budget or spend for BudgetDO outside `BudgetRepo` (tenant data, `withTenant`)
+
+**Detection Pattern:**
+
+```regex
+createMiddleware\(\{(?![\s\S]{0,200}budget)
+caps:\s*null
+BUDGET_DO\.getByName
+```
+
+**Examples:**
+
+```
+- ❌ const reserved = await stub.reserve(req).catch(() => ({ isSuccess: true }));
+- ❌ spentUsd += Number(costUsd);
+- ❌ const ledger = this.getLedger(); const reservations = this.liveReservations(now); // stale ledger
+- ✅ budget: { reserve: (estimate) => ModelCallBudgetProvider.reserve(this.env, { request: params, price, estimate }) }
+```
+
+**Fix:** Route through `ModelRouterRepo.getModel` with the turn's `TurnBudget`; mirror `providers/modelCallBudget.ts`, `durable-objects/BudgetDO.ts` and `providers/budgetLedger.ts` (`docs/runbooks/budget.md`).
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1241,5 +1281,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget)
 Maintainer: hatiprithwish

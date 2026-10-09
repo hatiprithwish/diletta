@@ -19,6 +19,7 @@ export * from "./messages";
 export * from "./toolCalls";
 export * from "./modelCalls";
 export * from "./modelRouter";
+export * from "./budget";
 export * from "./feedback";
 export * from "./changeRequests";
 export * from "./knowledgeSources";

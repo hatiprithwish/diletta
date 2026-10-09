@@ -315,6 +315,8 @@ eRegister goes live when every box below is ticked.
 - [ ] Approval expiry and undo window default values (M3-4, M3-7)
 - [ ] Load test target: concurrent conversations per company (M6-5)
 - [ ] Cluster size that opens a Quality item (M5-6)
+- [ ] Budget alerts at 50 / 80 / 100% of `spending_budget` (Cron in the architecture): no task owns them after M2-4. Fold into M6-6, or a new task? (see `docs/runbooks/budget.md` › Known gaps)
+- [ ] Loop guard (same tool + same args twice in a turn → stop) left out of M2-4 because no tools exist yet: add with the first tool calls (M3-1 / M3-4), in `ConversationDO.beforeTurn` `stopWhen`
 
 **Risks**
 

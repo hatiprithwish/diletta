@@ -10,11 +10,14 @@ import { ModelCallTierIntEnum } from "../modelCalls";
 //   ProviderError: a call failed at the provider or the gateway for any other reason (rate limit, overload, prompt
 //     too long, connection lost). Its text never reaches the widget.
 //   ServerError: the database, decryption or gateway config failed.
+//   BudgetExceeded: BudgetDO or the caller's caps refused the call before it reached the provider (M2-4); the
+//     refusal (BudgetRefusalEnum) is logged.
 export enum ModelRouterFailureEnum {
   ModelNotPriced = "ModelNotPriced",
   KeyUnavailable = "KeyUnavailable",
   ProviderError = "ProviderError",
   ServerError = "ServerError",
+  BudgetExceeded = "BudgetExceeded",
 }
 
 // DEV_NOTE: DESIGN.md §8 copy for the widget-Unavailable state (model key / provider failure)

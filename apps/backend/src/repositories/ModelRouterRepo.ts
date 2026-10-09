@@ -5,6 +5,7 @@ import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AiGatewayProvider from "@/providers/aiGateway";
 import CompanyKeyProvider from "@/providers/companyKey";
+import ModelCallBudgetProvider from "@/providers/modelCallBudget";
 import AppLogger from "@/providers/logger";
 import ModelCallRecordingProvider from "@/providers/modelCallRecording";
 import ModelKeyFailureProvider from "@/providers/modelKeyFailure";
@@ -20,6 +21,9 @@ import * as Schemas from "@app/schemas";
 //   4. AiGatewayProvider builds the provider-native model on AI Gateway, wrapped by ModelCallRecordingProvider: each
 //      call is recorded (ModelCallsRepo.recordModelCall, in waitUntil), every failure becomes a ModelUnavailableError,
 //      and a key the provider rejects runs the key-failure step (ModelKeyFailureProvider) before the error leaves.
+//   5. budget (M2-4): every provider call (each retry too) is sized and held first by ModelCallBudgetProvider: the
+//      caller's caps (request.caps), then the company's BudgetDO. A refusal raises BudgetExceeded and the call never
+//      reaches the provider. Each record settles its own hold (the whole hold when usage isn't known).
 // Every response failure is shown to the widget as MODEL_UNAVAILABLE_MESSAGE; the reason is logged only.
 export default class ModelRouterRepo {
   private env: Env;
@@ -102,7 +106,17 @@ export default class ModelRouterRepo {
       metadata: ModelRouterRepo.gatewayMetadata(params),
       middleware: ModelCallRecordingProvider.createMiddleware({
         provider,
-        onRecord: (record) => {
+        budget: {
+          reserve: (estimate) =>
+            ModelCallBudgetProvider.reserve(this.env, { request: params, price, estimate }),
+        },
+        onRecord: (record, hold) => {
+          ModelCallBudgetProvider.settle(this.env, this.ctx, {
+            request: params,
+            price,
+            record,
+            hold,
+          });
           this.ctx.waitUntil(this.modelCallsRepo.recordModelCall({ context, record }));
         },
         onRejectedKey: async () => {

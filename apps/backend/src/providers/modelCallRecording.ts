@@ -4,6 +4,11 @@ import AiGatewayProvider from "@/providers/aiGateway";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
+// DEV_NOTE: The provider call options a middleware sees (the provider package isn't a direct dependency)
+type LanguageModelV4CallOptions = Parameters<
+  NonNullable<LanguageModelMiddleware["transformParams"]>
+>[0]["params"];
+
 // DEV_NOTE: The only error a routed model's call ever raises, so no provider or gateway text (a 429 body, "prompt is
 // too long: 212345 tokens", a stack) reaches the widget: Think sends a stream error's message to every socket as is.
 // message is always MODEL_UNAVAILABLE_MESSAGE; failure says why, and the original error stays as cause for logs only.
@@ -29,31 +34,49 @@ export class ModelUnavailableError extends Error {
 // before the call starts streaming, honouring retry-after (capped) and the caller's abort. They happen here because the
 // SDK only retries its own retryable errors, and the middleware must hand it the safe error instead.
 // A rejected company key runs onRejectedKey before the error leaves, so the next turn already finds no active key.
+// Budget (M2-4): the prompt is estimated once per call; before each attempt (retries too) budget.reserve sizes and
+// holds it, and the attempt is sent with the hold's maxOutputTokens (never more than MODEL_CALL_MAX_OUTPUT_TOKENS or the
+// caller's own setting), straight to the wrapped model so a retry can get a fresh size. A refused attempt never reaches
+// the provider and raises BudgetExceeded (not retried, not recorded: nothing was called). Each record carries its
+// attempt's hold, so the caller settles exactly that hold.
 export default class ModelCallRecordingProvider {
   static createMiddleware(params: {
     provider: Schemas.ModelProviderEnum;
-    onRecord: (record: Schemas.ModelCallRecord) => void;
+    budget: {
+      reserve: (estimate: Schemas.ModelCallEstimate) => Promise<Schemas.ModelCallHoldResponse>;
+    };
+    onRecord: (record: Schemas.ModelCallRecord, hold: Schemas.ModelCallHold) => void;
     onRejectedKey: (error: unknown) => Promise<void>;
   }): LanguageModelMiddleware {
-    const record = (outcome: {
-      usage: Schemas.ModelCallUsage | null;
-      isRefused: boolean;
-      gatewayLogId: string | null;
-      startedAt: number;
-      errorCode: string | null;
-    }) => {
+    const record = (
+      hold: Schemas.ModelCallHold,
+      outcome: {
+        usage: Schemas.ModelCallUsage | null;
+        isRefused: boolean;
+        gatewayLogId: string | null;
+        startedAt: number;
+        errorCode: string | null;
+      },
+    ) => {
       const isRefusedWithoutUsage = outcome.isRefused && outcome.usage === null;
-      params.onRecord({
-        usage: isRefusedWithoutUsage ? Schemas.ZERO_MODEL_CALL_USAGE : outcome.usage,
-        usageStatus: ModelCallRecordingProvider.usageStatus(outcome),
-        gatewayLogId: outcome.gatewayLogId,
-        latencyMs: Date.now() - outcome.startedAt,
-        errorCode: outcome.errorCode,
-      });
+      params.onRecord(
+        {
+          usage: isRefusedWithoutUsage ? Schemas.ZERO_MODEL_CALL_USAGE : outcome.usage,
+          usageStatus: ModelCallRecordingProvider.usageStatus(outcome),
+          gatewayLogId: outcome.gatewayLogId,
+          latencyMs: Date.now() - outcome.startedAt,
+          errorCode: outcome.errorCode,
+        },
+        hold,
+      );
     };
 
-    const recordFailedAttempt = (error: unknown, startedAt: number) => {
-      record({
+    const recordFailedAttempt = (
+      hold: Schemas.ModelCallHold,
+      error: unknown,
+      startedAt: number,
+    ) => {
+      record(hold, {
         usage: null,
         isRefused: AiGatewayProvider.isRefusedCall(error),
         gatewayLogId: AiGatewayProvider.getGatewayLogIdFromError(error),
@@ -71,17 +94,40 @@ export default class ModelCallRecordingProvider {
       return new ModelUnavailableError(Schemas.ModelRouterFailureEnum.KeyUnavailable, error);
     };
 
-    // DEV_NOTE: Runs one provider call with retries; resolves with its result and when that attempt started
+    // DEV_NOTE: The attempt's hold, or the safe error when the budget refuses it (the provider is never called)
+    const reserve = async (estimate: Schemas.ModelCallEstimate): Promise<Schemas.ModelCallHold> => {
+      const held = await params.budget.reserve(estimate);
+      if (!held.isSuccess) {
+        throw new ModelUnavailableError(
+          Schemas.ModelRouterFailureEnum.BudgetExceeded,
+          new Error(`Budget refused the call: ${held.refusal}`),
+        );
+      }
+      return held.hold;
+    };
+
+    // DEV_NOTE: Runs one provider call with retries, each attempt held first and sent with its hold's output cap;
+    // resolves with its result, its hold and when that attempt started
     const withRetries = async <TResult>(
-      attempt: () => PromiseLike<TResult>,
-      signal: AbortSignal | undefined,
-    ): Promise<{ result: TResult; startedAt: number }> => {
+      attempt: (callOptions: LanguageModelV4CallOptions) => PromiseLike<TResult>,
+      callOptions: LanguageModelV4CallOptions,
+    ): Promise<{ result: TResult; hold: Schemas.ModelCallHold; startedAt: number }> => {
+      const signal = callOptions.abortSignal;
+      const estimate: Schemas.ModelCallEstimate = {
+        inputTokens: ModelCallRecordingProvider.estimateInputTokens(callOptions),
+        requestedMaxOutputTokens: Math.min(
+          callOptions.maxOutputTokens ?? Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+          Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+        ),
+      };
       for (let retry = 0; ; retry++) {
+        const hold = await reserve(estimate);
         const startedAt = Date.now();
         try {
-          return { result: await attempt(), startedAt };
+          const result = await attempt({ ...callOptions, maxOutputTokens: hold.maxOutputTokens });
+          return { result, hold, startedAt };
         } catch (error) {
-          recordFailedAttempt(error, startedAt);
+          recordFailedAttempt(hold, error, startedAt);
           const canRetry =
             retry < Constants.MODEL_CALL_MAX_RETRIES &&
             AiGatewayProvider.isRetryable(error) &&
@@ -95,9 +141,12 @@ export default class ModelCallRecordingProvider {
     };
 
     return {
-      wrapGenerate: async ({ doGenerate, params: callOptions }) => {
-        const { result, startedAt } = await withRetries(doGenerate, callOptions.abortSignal);
-        record({
+      wrapGenerate: async ({ model, params: callOptions }) => {
+        const { result, hold, startedAt } = await withRetries(
+          (options) => model.doGenerate(options),
+          callOptions,
+        );
+        record(hold, {
           usage: AiGatewayProvider.toModelCallUsage(result.usage),
           isRefused: false,
           gatewayLogId: AiGatewayProvider.getGatewayLogId(result.response?.headers),
@@ -106,11 +155,12 @@ export default class ModelCallRecordingProvider {
         });
         return result;
       },
-      wrapStream: async ({ doStream, params: callOptions }) => {
-        const { result: streamResult, startedAt } = await withRetries(
-          doStream,
-          callOptions.abortSignal,
-        );
+      wrapStream: async ({ model, params: callOptions }) => {
+        const {
+          result: streamResult,
+          hold,
+          startedAt,
+        } = await withRetries((options) => model.doStream(options), callOptions);
 
         // DEV_NOTE: Usage arrives in the stream's finish part. The record is made once, when the stream ends, fails or
         // is cancelled. An error part is replaced with a ModelUnavailableError before Think reads it (no retry once
@@ -130,7 +180,7 @@ export default class ModelCallRecordingProvider {
           },
           mapError: (error) => ModelCallRecordingProvider.toUnavailable(error),
           onEnd: ({ wasCancelled, error }) => {
-            record({
+            record(hold, {
               usage,
               isRefused: false,
               gatewayLogId,
@@ -144,6 +194,15 @@ export default class ModelCallRecordingProvider {
         return { ...streamResult, stream };
       },
     };
+  }
+
+  // DEV_NOTE: The prompt's size in tokens, over- rather than under-estimated: every character of the prompt and the
+  // tool definitions as JSON (structure included) at BUDGET_CHARS_PER_INPUT_TOKEN characters per token. Used only to
+  // size a hold, once per call; the real count comes back with the call's usage.
+  static estimateInputTokens(callOptions: LanguageModelV4CallOptions): number {
+    const characters =
+      JSON.stringify(callOptions.prompt).length + JSON.stringify(callOptions.tools ?? []).length;
+    return Math.ceil(characters / Constants.BUDGET_CHARS_PER_INPUT_TOKEN);
   }
 
   // DEV_NOTE: Any failure as the one error the widget may see. An abort stays an abort.

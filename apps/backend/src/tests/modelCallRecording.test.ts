@@ -42,16 +42,53 @@ const generated = (text: string) => ({
   response: { headers: { "cf-aig-log-id": "log-ok" } },
 });
 
-function wrapped(model: MockLanguageModelV4, onRejectedKey = vi.fn(async () => {})) {
+// DEV_NOTE: An allow-all budget unless a test passes its own: every attempt gets a hold of the size it asked for (or
+// the sizes in outputCaps, one per attempt), and the estimates are kept so a test can see what was asked
+function allowAllBudget(outputCaps: number[] = []) {
+  const reservations: Schemas.ModelCallEstimate[] = [];
+  return {
+    reservations,
+    budget: {
+      reserve: vi.fn(
+        async (estimate: Schemas.ModelCallEstimate): Promise<Schemas.ModelCallHoldResponse> => {
+          reservations.push(estimate);
+          const maxOutputTokens =
+            outputCaps[reservations.length - 1] ?? estimate.requestedMaxOutputTokens;
+          return {
+            isSuccess: true,
+            hold: {
+              reservationId: `reservation-${reservations.length}`,
+              amountMicros: 1,
+              outputTokens: maxOutputTokens,
+              maxOutputTokens,
+            },
+          };
+        },
+      ),
+    },
+  };
+}
+
+function wrapped(
+  model: MockLanguageModelV4,
+  onRejectedKey = vi.fn(async () => {}),
+  budget: ReturnType<typeof allowAllBudget>["budget"] = allowAllBudget().budget,
+) {
   const records: Schemas.ModelCallRecord[] = [];
+  const settledReservationIds: string[] = [];
   return {
     records,
+    settledReservationIds,
     onRejectedKey,
     model: wrapLanguageModel({
       model,
       middleware: ModelCallRecordingProvider.createMiddleware({
         provider: Schemas.ModelProviderEnum.Anthropic,
-        onRecord: (record) => records.push(record),
+        budget,
+        onRecord: (record, hold) => {
+          records.push(record);
+          settledReservationIds.push(hold.reservationId);
+        },
         onRejectedKey,
       }),
     }),
@@ -348,6 +385,85 @@ describe("ModelCallRecordingProvider retries", () => {
       generateText({ model, prompt: "Hi", abortSignal: abort.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe("ModelCallRecordingProvider budget", () => {
+  it("refuses a call the budget won't hold before it reaches the provider", async () => {
+    const doGenerate = vi.fn(async () => generated("Never sent"));
+    const budget = {
+      reserve: vi.fn(
+        async (_estimate: Schemas.ModelCallEstimate): Promise<Schemas.ModelCallHoldResponse> => ({
+          isSuccess: false,
+          refusal: Schemas.BudgetRefusalEnum.CompanyBudget,
+        }),
+      ),
+    };
+    const { model, records } = wrapped(
+      new MockLanguageModelV4({ doGenerate }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await expect(generateText({ model, prompt: "Hi" })).rejects.toMatchObject({
+      name: "ModelUnavailableError",
+      message: Schemas.MODEL_UNAVAILABLE_MESSAGE,
+      failure: Schemas.ModelRouterFailureEnum.BudgetExceeded,
+    });
+    expect(doGenerate).not.toHaveBeenCalled();
+    // DEV_NOTE: Nothing was called, so nothing is recorded, and a refusal is never retried
+    expect(records).toEqual([]);
+    expect(budget.reserve).toHaveBeenCalledOnce();
+  });
+
+  it("holds every attempt, retries included, each sent with its own hold's output cap", async () => {
+    const sentMaxOutputTokens: (number | undefined)[] = [];
+    const { budget, reservations } = allowAllBudget([500, 300]);
+    const { model, settledReservationIds } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async (options) => {
+          sentMaxOutputTokens.push(options.maxOutputTokens);
+          if (sentMaxOutputTokens.length === 1)
+            throw apiError(529, { type: "error", error: { type: "overloaded_error" } });
+          return generated("Second time lucky");
+        },
+      }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await generateText({ model, prompt: "Hi" });
+
+    expect(sentMaxOutputTokens).toEqual([500, 300]);
+    expect(settledReservationIds).toEqual(["reservation-1", "reservation-2"]);
+    // DEV_NOTE: The prompt is estimated once per call; each attempt is held on the same estimate
+    expect(reservations[1]).toEqual(reservations[0]);
+  });
+
+  it("asks for no more than the caller's own setting or the platform output cap", async () => {
+    const { budget, reservations } = allowAllBudget();
+    const { model } = wrapped(
+      new MockLanguageModelV4({ doGenerate: async () => generated("Short") }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await generateText({ model, prompt: "Hi", maxOutputTokens: 1_000_000 });
+    await generateText({ model, prompt: "Hi", maxOutputTokens: 50 });
+
+    expect(reservations.map((estimate) => estimate.requestedMaxOutputTokens)).toEqual([
+      Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+      50,
+    ]);
+    expect(reservations[0]?.inputTokens).toBeGreaterThan(0);
+  });
+
+  it("estimates a longer prompt as more tokens, never fewer than its characters / 3", () => {
+    const prompt = "x".repeat(3_000);
+    const estimate = ModelCallRecordingProvider.estimateInputTokens({
+      prompt: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+    expect(estimate).toBeGreaterThanOrEqual(1_000);
   });
 });
 

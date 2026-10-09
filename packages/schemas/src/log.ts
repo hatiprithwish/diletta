@@ -13,6 +13,7 @@ export enum LogCategory {
   Widget = "Widget",
   ModelRouter = "ModelRouter",
   Conversation = "Conversation",
+  Budget = "Budget",
 }
 
 export enum LogAction {
@@ -119,6 +120,15 @@ export enum LogAction {
   SyncReadModel = "SyncReadModel",
   CloseIdleConversation = "CloseIdleConversation",
   GetGatewayLogUsage = "GetGatewayLogUsage",
+
+  // Budget
+  GetModelCallCostSum = "GetModelCallCostSum",
+  GetBudgetSeed = "GetBudgetSeed",
+  LoadBudgetLedger = "LoadBudgetLedger",
+  AdmitBudgetTurn = "AdmitBudgetTurn",
+  ReserveBudget = "ReserveBudget",
+  SettleBudget = "SettleBudget",
+  ExpireBudgetReservation = "ExpireBudgetReservation",
 
   // Chatbot configs
   GetPublishedChatbotConfig = "GetPublishedChatbotConfig",

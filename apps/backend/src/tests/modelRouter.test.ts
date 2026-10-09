@@ -197,6 +197,7 @@ function request(
     taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
     tier: null,
     routing: anthropicRouting,
+    caps: null,
     ...overrides,
   };
 }

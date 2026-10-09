@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -118,6 +118,45 @@ export default class ModelCallsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateModelCall,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: BudgetDO's seed (M2-4): the spend already recorded for the company since the start of its billing period.
+  // A Pending or Unknown row adds its cost as it stands (0 until backfilled); the seed runs once per period, and every
+  // call after it is counted by BudgetDO's own reservations.
+  async getModelCallCostSum(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetModelCallCostSumDALRequest,
+  ) {
+    const response: Schemas.ModelCallCostSumDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.companyId, params.companyId),
+        gte(modelCalls.createdAt, params.from),
+      ];
+      const [sum] = await tx
+        .select({
+          totalCostUsd: sql<string>`coalesce(sum(${modelCalls.costUsd}), 0)::numeric(14, 6)`,
+        })
+        .from(modelCalls)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Model call cost sum fetched successfully";
+      response.totalCostUsd = sum?.totalCostUsd ?? "0.000000";
+    } catch (error) {
+      const message = "Unknown error in fetching model call cost sum";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetModelCallCostSum,
         message,
         error,
         metadata: params,
