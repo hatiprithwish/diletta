@@ -199,11 +199,14 @@ export default class AiGatewayProvider {
       : null;
   }
 
-  // DEV_NOTE: True when the provider (or the gateway) answered the call with an error status. Providers don't bill a
-  // request they refuse, so such a call has no usage to recover. Anything else (connection lost, timeout, abort, an
-  // unreadable body) may have been billed.
+  // DEV_NOTE: True when the provider (or the gateway) answered the call with an error status (4xx / 5xx). Providers
+  // don't bill a request they refuse, so such a call has no usage to recover. Anything else may have been billed:
+  // connection lost, timeout, abort, or a 2xx whose body couldn't be read or parsed (the SDK raises that as an
+  // APICallError carrying the 2xx status).
   static isRefusedCall(error: unknown): boolean {
-    return APICallError.isInstance(error) && error.statusCode !== undefined;
+    return (
+      APICallError.isInstance(error) && error.statusCode !== undefined && error.statusCode >= 400
+    );
   }
 
   // DEV_NOTE: True only when the provider itself said the company's key is bad, matched on the provider's own error
@@ -246,7 +249,9 @@ export default class AiGatewayProvider {
     return "unknown";
   }
 
-  // DEV_NOTE: The SDK's usage → our counts. Providers leave fields undefined when they don't report them.
+  // DEV_NOTE: The SDK's usage → our counts, or null when the provider reported none. A stream that ends without the
+  // provider's usage still emits a finish part (OpenAI Responses without response.completed, for one) with every total
+  // undefined; that is "no usage", never zero, so the call goes to the backfill instead of being priced at $0.
   static toModelCallUsage(usage: {
     inputTokens: {
       total: number | undefined;
@@ -254,13 +259,22 @@ export default class AiGatewayProvider {
       cacheWrite: number | undefined;
     };
     outputTokens: { total: number | undefined };
-  }): Schemas.ModelCallUsage {
+  }): Schemas.ModelCallUsage | null {
+    if (usage.inputTokens.total === undefined) {
+      return null;
+    }
     return {
-      inputTokens: usage.inputTokens.total ?? 0,
+      inputTokens: usage.inputTokens.total,
       cacheReadTokens: usage.inputTokens.cacheRead ?? 0,
       cacheWriteTokens: usage.inputTokens.cacheWrite ?? 0,
       outputTokens: usage.outputTokens.total ?? 0,
     };
+  }
+
+  // DEV_NOTE: A call the caller stopped (Think's cancel aborts the fetch). Kept as is, never re-wrapped, so Think still
+  // sees an abort and ends the turn as aborted rather than failed.
+  static isAbort(error: unknown): boolean {
+    return error instanceof Error && error.name === "AbortError";
   }
 
   private static async getGatewayToken(env: Env): Promise<string | null> {

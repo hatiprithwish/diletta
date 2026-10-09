@@ -7,10 +7,13 @@ import { ModelCallTierIntEnum } from "../modelCalls";
 // as MODEL_UNAVAILABLE_MESSAGE; the reason is logged, never shown.
 //   ModelNotPriced: the config's model is missing from MODEL_PRICES, so its cost can't be counted.
 //   KeyUnavailable: no active model key for the provider, or the provider rejected it. Opens a system issue.
+//   ProviderError: a call failed at the provider or the gateway for any other reason (rate limit, overload, prompt
+//     too long, connection lost). Its text never reaches the widget.
 //   ServerError: the database, decryption or gateway config failed.
 export enum ModelRouterFailureEnum {
   ModelNotPriced = "ModelNotPriced",
   KeyUnavailable = "KeyUnavailable",
+  ProviderError = "ProviderError",
   ServerError = "ServerError",
 }
 
@@ -238,3 +241,11 @@ export const ZAiGatewayLogResponse = z.looseObject({
     .optional(),
 });
 export type AiGatewayLogResponse = z.infer<typeof ZAiGatewayLogResponse>;
+
+// DEV_NOTE: The activity_log detail of a system issue's opened / provider_added events: which provider's key failed.
+// Read back to know which providers the open issue already covers (never by searching the note's free text).
+export const ZModelKeyFailureDetail = z.object({
+  provider: z.enum(ModelProviderEnum),
+  reason: z.enum(ModelKeyFailureReasonEnum),
+});
+export type ModelKeyFailureDetail = z.infer<typeof ZModelKeyFailureDetail>;

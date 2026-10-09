@@ -739,7 +739,7 @@ FOREIGN KEY
 
 ### 3.10 Model Calls Only Through the Router [CRITICAL]
 
-**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. A call billed without usage (stream cut or cancelled, connection lost) is written `usage_status` Pending for the Cron backfill, never Reported at $0. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
+**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Usage-status rules live only in `ModelCallRecordingProvider`: a call billed without usage (stream cut or cancelled, connection lost, a finish without totals, an unreadable 2xx) is written `usage_status` Pending for the Cron backfill, never Reported at $0; only a 4xx/5xx refusal is Reported at 0. Every model failure reaches the caller as `ModelUnavailableError` (an abort stays an abort): Think sends a stream error's message to the widget verbatim. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search.
 
 **Violations:**
 
@@ -747,6 +747,8 @@ FOREIGN KEY
 - `fetch` to a provider API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, …) or to `gateway.ai.cloudflare.com` outside `providers/aiGateway.ts`
 - A model call that skips the router's middleware (no `model_calls` row), or a cost computed outside `computeModelCallCostUsd`
 - A fallback price (0 or a default) for a model missing from `MODEL_PRICES`
+- Letting a provider or gateway error (or its message) out of a routed model's call unwrapped, or deciding a usage status outside `ModelCallRecordingProvider`
+- Deciding which providers a system issue covers from its note text instead of its activity events
 - Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape, on a 403, or through the general `updateCompanySecret` (it would invalidate a key the admin replaced meanwhile)
 - Writing a `model_calls` row as Reported with zero usage for a call that reached the provider without a refusal (use Pending with the gateway log id, or Unknown)
 - Logging the decrypted company key or the gateway token, or passing either anywhere but the provider SDK settings
@@ -1124,7 +1126,7 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 
 ### 3.23 Conversation DO Stays Server-Authoritative [CRITICAL]
 
-**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools: []` until tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `webSocketMessage`'s allowlist before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames. Everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time; its config and routed model are prepared before Think saves the message. Every turn's user and assistant messages go to the `messages` read model with the turn's ULID. Runtime state changes go through `patchRuntimeState` (no await between read and write).
+**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools: []` until tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames; everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
 
 **Violations:**
 
@@ -1134,6 +1136,9 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 - Calling a model outside `ModelRouterRepo.getModel` (pattern rule 3.10), or running a turn without a fresh `loadTurnConfig`
 - Writing the read model anywhere but `ConversationsRepo.recordTurn`, or reading `messages` into a turn (the Think session is the source of truth)
 - `this.configure({ ...state, … })` with a `state` read before an `await`
+- Checking company, chatbot or conversation status only at connect time (they change while a socket is open)
+- An auto-close or retry scheduled at a time that may already have passed
+- Recording a turn's messages only once with no catch-up (a failed write or an eviction loses them)
 - Keeping the host bearer token in Think state, `configure`, SQLite or a connection attachment (pattern rule 3.11)
 
 **Detection Pattern:**

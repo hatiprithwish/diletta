@@ -29,14 +29,19 @@ import withTenant from "@/db/withTenant";
 import worker from "@/index";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
+import ConversationsRepo from "@/repositories/ConversationsRepo";
+import Constants from "@/config/Constants";
 import Utility from "@/utils/Utility";
 import {
+  STREAM_HEADERS,
   anthropicStream,
+  anthropicStreamHead,
   gatewayRequests,
   mockCloudflare,
   mockedRequests,
+  sse,
 } from "@/tests/helpers/gateway";
-import { type TestKey, claimsFor, createKey, seedJwks, signToken } from "@/tests/helpers/widgetJwt";
+import { claimsFor, createKey, seedJwks, signToken } from "@/tests/helpers/widgetJwt";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -64,7 +69,7 @@ const END_TO_END_TIMEOUT_MS = 90_000;
 const PERSONA = "You help facility managers with their registers.";
 const createdCompanyIds: string[] = [];
 let ownerPool: Pool | null = null;
-let rsaKey: TestKey;
+let rsaKey: Awaited<ReturnType<typeof createKey>>;
 
 async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Promise<T> {
   ownerPool ??= new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
@@ -94,15 +99,8 @@ function configBody(persona: string): Schemas.ConfigSpecV1Input {
   };
 }
 
-interface Tenant {
-  companyId: string;
-  chatbotId: string;
-  chatbotPublicId: string;
-  issuer: string;
-}
-
 async function publishConfig(
-  tenant: Tenant,
+  tenant: { companyId: string; chatbotId: string },
   persona: string,
   configVersion: number,
 ): Promise<string> {
@@ -136,7 +134,7 @@ async function publishConfig(
   });
 }
 
-async function createTenant(options: { hasModelKey: boolean }): Promise<Tenant> {
+async function createTenant(options: { hasModelKey: boolean }) {
   const created = await new CompaniesRepo(env).createCompany({
     company: { name: `Conversation test ${crypto.randomUUID()}` },
   });
@@ -196,14 +194,15 @@ async function createTenant(options: { hasModelKey: boolean }): Promise<Tenant> 
   return tenant;
 }
 
-interface Frame {
-  type: string;
-  [key: string]: unknown;
-}
+// DEV_NOTE: One frame from the DO, parsed: Think's chat frames and our own (WidgetServerMessage)
+const parseFrame = (data: string) => JSON.parse(data) as Record<string, unknown> & { type: string };
 
 // DEV_NOTE: A widget socket through the worker. frames keeps everything received; waitFor resolves with the first
 // frame (already received or still to come) that matches.
-async function connect(tenant: Tenant, options: { conversation?: string; sub?: string } = {}) {
+async function connect(
+  tenant: Awaited<ReturnType<typeof createTenant>>,
+  options: { conversation?: string; sub?: string; headers?: Record<string, string> } = {},
+) {
   const token = await signToken(
     rsaKey,
     claimsFor(tenant.issuer, { sub: options.sub ?? "host-user-1" }),
@@ -215,6 +214,7 @@ async function connect(tenant: Tenant, options: { conversation?: string; sub?: s
         Upgrade: "websocket",
         Origin: ORIGIN,
         "Sec-WebSocket-Protocol": `${Schemas.WIDGET_SUBPROTOCOL}, ${token}`,
+        ...options.headers,
       },
     }),
     env,
@@ -227,10 +227,13 @@ async function connect(tenant: Tenant, options: { conversation?: string; sub?: s
 
   const socket = response.webSocket;
   socket.accept();
-  const frames: Frame[] = [];
-  const waiters: { match: (frame: Frame) => boolean; resolve: (frame: Frame) => void }[] = [];
+  const frames: ReturnType<typeof parseFrame>[] = [];
+  const waiters: {
+    match: (frame: ReturnType<typeof parseFrame>) => boolean;
+    resolve: (frame: ReturnType<typeof parseFrame>) => void;
+  }[] = [];
   socket.addEventListener("message", (event) => {
-    const frame = JSON.parse(event.data as string) as Frame;
+    const frame = parseFrame(event.data as string);
     frames.push(frame);
     for (const waiter of [...waiters]) {
       if (waiter.match(frame)) {
@@ -242,8 +245,8 @@ async function connect(tenant: Tenant, options: { conversation?: string; sub?: s
   const closed = new Promise<number>((resolve) => {
     socket.addEventListener("close", (event) => resolve(event.code));
   });
-  const waitFor = (match: (frame: Frame) => boolean) =>
-    new Promise<Frame>((resolve, reject) => {
+  const waitFor = (match: (frame: ReturnType<typeof parseFrame>) => boolean) =>
+    new Promise<ReturnType<typeof parseFrame>>((resolve, reject) => {
       const seen = frames.find(match);
       if (seen) return resolve(seen);
       const timer = setTimeout(
@@ -265,8 +268,6 @@ async function connect(tenant: Tenant, options: { conversation?: string; sub?: s
   return { status: response.status, socket, frames, waitFor, closed };
 }
 
-type Socket = NonNullable<Awaited<ReturnType<typeof connect>>["socket"]>;
-
 function chatRequest(requestId: string, history: Record<string, unknown>[]): string {
   return JSON.stringify({
     type: Schemas.WidgetChatFrameTypeEnum.ChatRequest,
@@ -281,12 +282,14 @@ const userMessage = (id: string, text: string) => ({
   parts: [{ type: "text", text }],
 });
 
-const isTurnDone = (requestId: string) => (frame: Frame) =>
+const isTurnDone = (requestId: string) => (frame: ReturnType<typeof parseFrame>) =>
   frame.type === "cf_agent_use_chat_response" && frame.id === requestId && frame.done === true;
 
 async function sendTurn(
-  socket: Socket,
-  waitFor: (match: (frame: Frame) => boolean) => Promise<Frame>,
+  socket: WebSocket,
+  waitFor: (
+    match: (frame: ReturnType<typeof parseFrame>) => boolean,
+  ) => Promise<ReturnType<typeof parseFrame>>,
   requestId: string,
   history: Record<string, unknown>[],
 ) {
@@ -351,6 +354,31 @@ async function waitForAnswered(conversationPublicId: string) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Turn never finished");
+}
+
+// DEV_NOTE: Forces the DO's idle clock back past the auto-close deadline
+async function makeIdle(conversationPublicId: string) {
+  const stub = await getAgentByName(env.CONVERSATION_DO, conversationPublicId);
+  await runInDurableObject(stub, (instance) => {
+    const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+    instance.configure<Schemas.ConversationRuntimeState>({
+      ...state,
+      lastActivityAt: Date.now() - Constants.CONVERSATION_IDLE_CLOSE_MS - 60_000,
+    });
+  });
+  return stub;
+}
+
+// DEV_NOTE: When the pending auto-close will run, in epoch ms
+async function getAutoCloseTime(conversationPublicId: string) {
+  const stub = await getAgentByName(env.CONVERSATION_DO, conversationPublicId);
+  return await runInDurableObject(stub, (instance) => {
+    const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+    const schedule = state.closeScheduleId
+      ? instance.getSchedule(state.closeScheduleId)
+      : undefined;
+    return schedule?.type === "scheduled" ? schedule.time * 1000 : null;
+  });
 }
 
 beforeAll(async () => {
@@ -707,6 +735,352 @@ describe("Conversation auto-close", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect((await getConversation(hello.conversation.publicId))?.outcome).toBe(
       Schemas.ConversationOutcomeIntEnum.Abandoned,
     );
+  });
+});
+
+describe("Conversation DO failures stay safe", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  const RAW_PROVIDER_TEXT = "prompt is too long: 212345 tokens > 200000 maximum";
+
+  it("never sends a provider's error text to the widget, mid-stream or before it", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    let answer: "mid-stream" | "refused" = "mid-stream";
+    mockCloudflare((mocked) => {
+      if (answer === "refused") {
+        return Response.json(
+          { type: "error", error: { type: "rate_limit_error", message: RAW_PROVIDER_TEXT } },
+          { status: 429 },
+        );
+      }
+      const failure = sse({
+        type: "error",
+        error: { type: "overloaded_error", message: RAW_PROVIDER_TEXT },
+      });
+      return new Response([...anthropicStreamHead(String(mocked.body?.model)), failure].join(""), {
+        headers: STREAM_HEADERS,
+      });
+    });
+    const { socket, waitFor, frames } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    await waitFor((frame) => frame.type === "conversation");
+
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Hi")]);
+    answer = "refused";
+    await sendTurn(socket, waitFor, "req-2", [userMessage("user-2", "Again")]);
+
+    const sent = JSON.stringify(frames);
+    expect(sent).not.toContain("prompt is too long");
+    expect(sent).not.toContain("rate_limit_error");
+    expect(sent).toContain(Schemas.MODEL_UNAVAILABLE_MESSAGE);
+    socket.close(1000);
+  });
+
+  it("stops answering once the chatbot is paused or the company churns, with the socket still open", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, frames } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    await waitFor((frame) => frame.type === "conversation");
+    const unavailableCount = () => frames.filter((frame) => frame.type === "unavailable").length;
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(chatbots)
+        .set({ status: Schemas.ChatbotStatusIntEnum.Paused })
+        .where(eq(chatbots.id, tenant.chatbotId));
+    });
+    socket.send(chatRequest("req-1", [userMessage("user-1", "Hello?")]));
+    await waitFor(() => unavailableCount() === 1);
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(chatbots)
+        .set({ status: Schemas.ChatbotStatusIntEnum.Active })
+        .where(eq(chatbots.id, tenant.chatbotId));
+      await ownerDb
+        .update(companies)
+        .set({ status: Schemas.CompanyStatusIntEnum.Churned })
+        .where(eq(companies.id, tenant.companyId));
+    });
+    socket.send(chatRequest("req-2", [userMessage("user-2", "Hello again?")]));
+    await waitFor(() => unavailableCount() === 2);
+
+    expect(gatewayRequests()).toHaveLength(0);
+    socket.close(1000);
+  });
+
+  it("tells the widget its conversation was closed elsewhere and saves nothing", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, closed } = await connect(tenant);
+    if (!socket || !waitFor || !closed) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(conversations)
+        .set({ status: Schemas.ConversationStatusIntEnum.Closed })
+        .where(eq(conversations.publicId, publicId));
+    });
+    socket.send(chatRequest("req-1", [userMessage("user-1", "Still there?")]));
+
+    expect(await waitFor((frame) => frame.type === "closed")).toEqual({ type: "closed" });
+    expect(await closed).toBe(1000);
+    expect(await getTranscript(publicId)).toHaveLength(0);
+  });
+});
+
+describe("Conversation read model resync", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  it("catches up a turn whose read-model write failed, under its original turn id", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const recordTurn = ConversationsRepo.prototype.recordTurn;
+    const spy = vi
+      .spyOn(ConversationsRepo.prototype, "recordTurn")
+      .mockResolvedValueOnce({ isSuccess: false, message: "Database unavailable" });
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "First")]);
+    spy.mockImplementation(recordTurn);
+    await sendTurn(socket, waitFor, "req-2", [userMessage("user-2", "Second")]);
+
+    const conversation = await getConversation(publicId);
+    const rows = await waitForReadModel(conversation?.id ?? "", 4);
+    expect(rows.map((row) => row.sessionMessageId)).toEqual(
+      (await getTranscript(publicId)).map((message) => message.id),
+    );
+    const calls = await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb
+          .select()
+          .from(modelCalls)
+          .where(eq(modelCalls.conversationId, conversation?.id ?? "")),
+    );
+    expect([...new Set(rows.map((row) => row.turnId))].sort()).toEqual(
+      calls.map((call) => call.turnId).sort(),
+    );
+    socket.close(1000);
+  });
+
+  it("rebuilds the read model from the transcript on wake, after it fell behind", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Remember this")]);
+    socket.close(1000);
+    const conversation = await getConversation(publicId);
+    await waitForReadModel(conversation?.id ?? "", 2);
+
+    // DEV_NOTE: As after a lost write: the rows are gone and the DO's position says nothing is synced
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.delete(messages).where(eq(messages.conversationId, conversation?.id ?? ""));
+    });
+    const stub = await getAgentByName(env.CONVERSATION_DO, publicId);
+    await runInDurableObject(stub, async (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({ ...state, syncedMessageCount: 0 });
+      await instance.onStart();
+    });
+
+    const rows = await getReadModel(conversation?.id ?? "");
+    expect(rows.map((row) => Schemas.ZMessageContent.parse(row.content).text)).toEqual([
+      "Remember this",
+      "Streamed",
+    ]);
+    expect(rows[0]?.turnId).toBe(rows[1]?.turnId);
+  });
+});
+
+describe("Conversation auto-close timing", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  it("retries a failed close later, not in a loop, and keeps the conversation usable", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    vi.spyOn(ConversationsRepo.prototype, "closeConversation").mockResolvedValueOnce({
+      isSuccess: false,
+      message: "Database unavailable",
+    });
+
+    const stub = await makeIdle(publicId);
+    const before = Date.now();
+    await runInDurableObject(stub, async (instance) => await instance.closeIfIdle());
+
+    expect((await getConversation(publicId))?.status).toBe(Schemas.ConversationStatusIntEnum.Open);
+    expect(await getAutoCloseTime(publicId)).toBeGreaterThanOrEqual(
+      before + Constants.CONVERSATION_CLOSE_RETRY_MS - 1_000,
+    );
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Still here")]);
+    socket.close(1000);
+  });
+
+  it("waits for a turn still running at the deadline, retrying no sooner than the backoff", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    mockCloudflare(async (mocked) => {
+      await held;
+      return anthropicStream(String(mocked.body?.model));
+    });
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+
+    socket.send(chatRequest("req-1", [userMessage("user-1", "Slow one")]));
+    await waitFor(() => gatewayRequests().length === 1);
+    const stub = await makeIdle(publicId);
+    const before = Date.now();
+    await runInDurableObject(stub, async (instance) => await instance.closeIfIdle());
+
+    expect((await getConversation(publicId))?.status).toBe(Schemas.ConversationStatusIntEnum.Open);
+    expect(await getAutoCloseTime(publicId)).toBeGreaterThanOrEqual(
+      before + Constants.CONVERSATION_CLOSE_RETRY_MS - 1_000,
+    );
+    release();
+    await waitFor(isTurnDone("req-1"));
+    socket.close(1000);
+  });
+
+  it("refuses a message that arrives while the conversation is being closed", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    const closeConversation = ConversationsRepo.prototype.closeConversation;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    vi.spyOn(ConversationsRepo.prototype, "closeConversation").mockImplementation(async function (
+      this: ConversationsRepo,
+      params,
+    ) {
+      await held;
+      return await closeConversation.call(this, params);
+    });
+
+    const stub = await makeIdle(publicId);
+    const closing = runInDurableObject(stub, async (instance) => await instance.closeIfIdle());
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    socket.send(chatRequest("req-1", [userMessage("user-1", "Wait!")]));
+    const refused = await waitFor((frame) => frame.type === "error");
+    expect(refused.message).toBe("This conversation is closing");
+
+    release();
+    await closing;
+    expect((await getConversation(publicId))?.status).toBe(
+      Schemas.ConversationStatusIntEnum.Closed,
+    );
+    expect(gatewayRequests()).toHaveLength(0);
+  });
+});
+
+describe("Conversation trust boundaries", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  it("refuses a socket that reaches the DO without a valid session for it", async () => {
+    const tenant = await createTenant({ hasModelKey: false });
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = await waitFor((frame) => frame.type === "conversation");
+    const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
+    socket.close(1000);
+    const stub = await getAgentByName(env.CONVERSATION_DO, publicId);
+
+    const sessions = [
+      null,
+      "not json",
+      JSON.stringify({
+        companyId: tenant.companyId,
+        chatbotId: tenant.chatbotId,
+        chatbotPublicId: tenant.chatbotPublicId,
+        chatbotName: "x",
+        chatbotUserId: "1",
+        conversationId: "1",
+        conversationPublicId: "another-conversation",
+      }),
+    ];
+    for (const session of sessions) {
+      const headers: Record<string, string> = { Upgrade: "websocket" };
+      if (session !== null) headers[Constants.CONVERSATION_SESSION_HEADER] = session;
+      const response = await stub.fetch(new Request("http://do/ws", { headers }));
+      const direct = response.webSocket;
+      if (!direct) throw new Error("No socket");
+      const code = new Promise<number>((resolve) =>
+        direct.addEventListener("close", (event) => resolve(event.code)),
+      );
+      direct.accept();
+      expect(await code).toBe(1008);
+    }
+  });
+
+  it("drops a session header the client sends itself", async () => {
+    const owner = await createTenant({ hasModelKey: false });
+    const victim = await createTenant({ hasModelKey: false });
+    const theirs = await connect(victim);
+    const theirHello = await theirs.waitFor!((frame) => frame.type === "conversation");
+    theirs.socket?.close(1000);
+    const victimPublicId = (theirHello as unknown as Schemas.WidgetConversationMessage).conversation
+      .publicId;
+    const victimConversation = await getConversation(victimPublicId);
+
+    const forged = JSON.stringify({
+      companyId: victim.companyId,
+      chatbotId: victim.chatbotId,
+      chatbotPublicId: victim.chatbotPublicId,
+      chatbotName: "x",
+      chatbotUserId: victimConversation?.chatbotUserId,
+      conversationId: victimConversation?.id,
+      conversationPublicId: victimPublicId,
+    });
+    const mine = await connect(owner, {
+      headers: { [Constants.CONVERSATION_SESSION_HEADER]: forged },
+    });
+    const myHello = await mine.waitFor!((frame) => frame.type === "conversation");
+
+    expect(
+      (myHello as unknown as Schemas.WidgetConversationMessage).conversation.publicId,
+    ).not.toBe(victimPublicId);
+    expect((myHello as unknown as Schemas.WidgetConversationMessage).chatbot.publicId).toBe(
+      owner.chatbotPublicId,
+    );
+    mine.socket?.close(1000);
+  });
+
+  it("closes a conversation it just created when the DO upgrade fails", async () => {
+    const tenant = await createTenant({ hasModelKey: false });
+    const get = env.CONVERSATION_DO.get.bind(env.CONVERSATION_DO);
+    vi.spyOn(env.CONVERSATION_DO, "get").mockImplementation((id, options) => {
+      const stub = get(id, options);
+      return new Proxy(stub, {
+        get: (target, property) =>
+          property === "fetch"
+            ? async () => new Response("down", { status: 500 })
+            : Reflect.get(target, property),
+      });
+    });
+
+    const { status } = await connect(tenant);
+
+    expect(status).toBe(500);
+    const [orphan] = await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb
+          .select()
+          .from(conversations)
+          .where(eq(conversations.companyId, tenant.companyId)),
+    );
+    expect(orphan).toMatchObject({
+      status: Schemas.ConversationStatusIntEnum.Closed,
+      outcome: Schemas.ConversationOutcomeIntEnum.Abandoned,
+    });
   });
 });
 

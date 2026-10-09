@@ -56,12 +56,17 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
     return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
   }
 
-  const started = await new ConversationsRepo(c.env).startOrResume({
+  const conversationsRepo = new ConversationsRepo(c.env);
+  const started = await conversationsRepo.startOrResume({
     identity: authenticated.identity,
     conversationPublicId: query.conversation ?? null,
   });
   if (!started.isSuccess || !started.session) {
-    return reject(started.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+    return reject(
+      Schemas.CONVERSATION_START_FAILURE_WIDGET_AUTH_MAP[
+        started.failure ?? Schemas.ConversationStartFailureEnum.ServerError
+      ],
+    );
   }
   const { session } = started;
   if (started.outboxId) {
@@ -72,6 +77,18 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
       }),
     );
   }
+
+  // DEV_NOTE: A conversation this request created but no socket ever reached would stay Open with no DO to auto-close
+  // it, so it is closed again (Abandoned) when the upgrade fails
+  const failUpgrade = async () => {
+    if (started.isNew) {
+      await conversationsRepo.closeConversation({
+        session,
+        outcome: Schemas.ConversationOutcomeIntEnum.Abandoned,
+      });
+    }
+    return reject(Schemas.WidgetAuthFailureEnum.ServerError);
+  };
 
   try {
     // DEV_NOTE: A fresh header set: nothing the client sent beyond the upgrade itself reaches the DO, so it can't
@@ -95,7 +112,7 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
         message: "Conversation DO refused the upgrade",
         metadata: { conversationPublicId: session.conversationPublicId, status: upgraded.status },
       });
-      return reject(Schemas.WidgetAuthFailureEnum.ServerError);
+      return await failUpgrade();
     }
 
     return new Response(null, {
@@ -111,7 +128,7 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
       error,
       metadata: { conversationPublicId: session.conversationPublicId },
     });
-    return reject(Schemas.WidgetAuthFailureEnum.ServerError);
+    return await failUpgrade();
   }
 });
 

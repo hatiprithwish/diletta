@@ -1,21 +1,28 @@
 import { vi } from "vitest";
 
-// DEV_NOTE: Shared by the model router and conversation suites. Stand-in for AI Gateway (model calls) and the Cloudflare API (gateway logs). respond builds the answer
-// for each request to either host; every other URL goes to the real fetch untouched.
-export interface MockedRequest {
-  url: string;
-  method: string;
-  headers: Headers;
-  body: Record<string, unknown> | null;
-  signal: AbortSignal | null;
+// DEV_NOTE: Shared by the model router and conversation suites. Stand-in for AI Gateway (model calls) and the
+// Cloudflare API (gateway logs). respond builds the answer for each request to either host; every other URL goes to the
+// real fetch untouched.
+function recordRequest(url: string, init: RequestInit | undefined) {
+  return {
+    url,
+    method: init?.method ?? "GET",
+    headers: new Headers(init?.headers),
+    body:
+      typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
+    signal: init?.signal ?? null,
+  };
 }
-export const mockedRequests: MockedRequest[] = [];
+
+export const mockedRequests: ReturnType<typeof recordRequest>[] = [];
 export const gatewayRequests = () =>
   mockedRequests.filter((mocked) => mocked.url.startsWith("https://gateway.ai.cloudflare.com/"));
 
 // DEV_NOTE: Reads the fetch arguments directly rather than through new Request(input, init): workerd's Request
 // rejects some init values real fetch accepts (redirect: "error")
-export function mockCloudflare(respond: (request: MockedRequest) => Response | Promise<Response>) {
+export function mockCloudflare(
+  respond: (request: ReturnType<typeof recordRequest>) => Response | Promise<Response>,
+) {
   const realFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -25,14 +32,7 @@ export function mockCloudflare(respond: (request: MockedRequest) => Response | P
     if (!isMocked) {
       return await realFetch(input, init);
     }
-    const recorded: MockedRequest = {
-      url,
-      method: init?.method ?? "GET",
-      headers: new Headers(init?.headers),
-      body:
-        typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
-      signal: init?.signal ?? null,
-    };
+    const recorded = recordRequest(url, init);
     mockedRequests.push(recorded);
     return await respond(recorded);
   });

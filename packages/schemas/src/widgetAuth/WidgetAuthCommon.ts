@@ -1,5 +1,6 @@
 import z from "zod";
 import type { CompanyConnectionEnvironmentIntEnum } from "../companyConnections";
+import { ConversationStartFailureEnum } from "../conversations/ConversationsResponse";
 
 // DEV_NOTE: The companion JWT's aud. A platform constant, never stored per connection: a host signs every widget
 // token for this audience, so a token minted for another service (same issuer, other aud) is rejected.
@@ -38,6 +39,15 @@ export const WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP: Record<
   [WidgetAuthFailureEnum.Forbidden]: 403,
   [WidgetAuthFailureEnum.NotFound]: 404,
   [WidgetAuthFailureEnum.ServerError]: 500,
+};
+
+// DEV_NOTE: A conversation that can't be started or resumed answers like the auth checks before it
+export const CONVERSATION_START_FAILURE_WIDGET_AUTH_MAP: Record<
+  ConversationStartFailureEnum,
+  WidgetAuthFailureEnum
+> = {
+  [ConversationStartFailureEnum.NotFound]: WidgetAuthFailureEnum.NotFound,
+  [ConversationStartFailureEnum.ServerError]: WidgetAuthFailureEnum.ServerError,
 };
 
 // JOSE header of the companion JWT. kid is required: it picks the key out of the issuer's JWKS.

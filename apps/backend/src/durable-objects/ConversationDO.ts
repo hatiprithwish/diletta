@@ -6,35 +6,42 @@ import type {
   TurnContext,
 } from "@cloudflare/think";
 import type { Connection, ConnectionContext } from "agents";
-import type { LanguageModel, UIMessage } from "ai";
+import type { LanguageModel } from "ai";
 import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
+import { ModelUnavailableError } from "@/providers/modelCallRecording";
+import TranscriptProvider from "@/providers/transcript";
+import WidgetFrameProvider from "@/providers/widgetFrames";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
-import ModelRouterRepo, { ModelUnavailableError } from "@/repositories/ModelRouterRepo";
+import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: Shown for any turn failure that isn't the model being unavailable. The reason is logged, never sent.
+// DEV_NOTE: Widget-facing texts. The reason behind each is logged, never sent.
 const TURN_FAILED_MESSAGE = "Something went wrong. Please try again.";
 const UNSUPPORTED_FRAME_MESSAGE = "Unsupported message";
 const TURN_IN_PROGRESS_MESSAGE = "A reply is still in progress";
+const CLOSING_MESSAGE = "This conversation is closing";
 
 // DEV_NOTE: The Conversation DO (M2-2): one per conversation, named by conversations.public_id, built on Think. The
-// Think session (DO SQLite) is the transcript's source of truth; messages in Neon is its read model, written after
-// every turn with the turn's ULID.
+// Think session (DO SQLite) is the transcript's source of truth; messages in Neon is its read model.
 //
 // Trust: the widget route authenticates the companion JWT and checks the conversation is the user's own before it
 // forwards the upgrade here (ADR 0001), so every socket is verified, and the session arrives in a header only the
-// worker sets. Think is then locked down for a public widget: no workspace or bash tools, no tools at all yet, no
-// reasoning sent, no identity frame, and inbound frames go through an allowlist (webSocketMessage) before Think sees
-// them, because Think would otherwise let a client clear or rewrite the transcript, push tools or set state. A chat
-// request is rebuilt to carry only its newest user message, so the DO's session is the only history.
+// worker sets. Think is locked down for a public widget (pattern rule 3.23): no workspace, bash, MCP or other tools,
+// no reasoning or identity frames, safe error text only (every model failure is a ModelUnavailableError), and every
+// inbound frame goes through WidgetFrameProvider's allowlist before Think sees it.
 //
-// A turn: the frame is admitted only when no other turn is running; the published config is read fresh (a publish
-// takes effect at the next turn), the turn's ULID minted, and the model routed through ModelRouterRepo on the company's
-// key. If any of that fails the message isn't saved and the widget gets "unavailable". After the reply, its user and
-// assistant messages go to the read model, and the auto-close alarm is re-armed: idle for
-// CONVERSATION_IDLE_CLOSE_MS → Closed (Answered if any reply completed, else Abandoned).
+// A turn: admitted only when no other turn runs and the conversation isn't closing. Its ULID is minted and stored, and
+// the activity time moves. The turn's config is checked and loaded fresh (a publish, a paused chatbot or company takes
+// effect here) and the model routed through ModelRouterRepo; if either fails the message isn't saved and the widget
+// gets "unavailable" (or "closed").
+//
+// Read model: after every turn and on every wake, the transcript past the synced position is written to messages
+// (TranscriptProvider), so a failed write or a turn cut by an eviction is caught up on later.
+//
+// Auto-close: idle for CONVERSATION_IDLE_CLOSE_MS → Closed (Answered if any reply completed, else Abandoned). A close
+// that can't act yet retries no sooner than CONVERSATION_CLOSE_RETRY_MS.
 //
 // Never kept here: the host bearer token (M3-8 holds it in a plain field, in memory only).
 export class ConversationDO extends Think<Env> {
@@ -44,19 +51,20 @@ export class ConversationDO extends Think<Env> {
   includeMcpTools = false;
   sendReasoning = false;
   // DEV_NOTE: Durable recovery can't resume a turn here: its config and routed model live in memory and are gone
-  // after an eviction. An interrupted turn is sealed at once with safe text; the user sends the message again.
+  // after an eviction. An interrupted turn is sealed at once with safe text; the read-model sync records what was saved.
   chatRecovery = { maxAttempts: 0, terminalMessage: TURN_FAILED_MESSAGE };
 
-  // DEV_NOTE: The turn being prepared or run: at most one (frames are refused while it is set). In memory only: a
-  // turn keeps the DO awake, and an evicted turn is not recovered (chatRecovery).
+  // DEV_NOTE: The turn being prepared or run: at most one. In memory only (a turn keeps the DO awake).
   private activeTurn: {
     requestId: string;
     turnId: string;
     userMessageId: string;
-    userText: string;
     model: LanguageModel | null;
     spec: Schemas.ConfigSpec | null;
   } | null = null;
+  private isClosing = false;
+  private isSyncing = false;
+  private isSyncRequested = false;
 
   getModel(): LanguageModel {
     if (!this.activeTurn?.model) {
@@ -88,6 +96,17 @@ export class ConversationDO extends Think<Env> {
     };
   }
 
+  // DEV_NOTE: Every wake (after hibernation or an eviction): catch the read model up, and make sure an auto-close is
+  // pending
+  async onStart(): Promise<void> {
+    const state = this.getRuntimeState();
+    if (!state || state.isClosed) return;
+    await this.syncReadModel();
+    if (!state.closeScheduleId) {
+      await this.armAutoClose();
+    }
+  }
+
   async onConnect(connection: Connection, ctx: ConnectionContext): Promise<void> {
     const header = ctx.request.headers.get(Constants.CONVERSATION_SESSION_HEADER);
     const parsed = Schemas.ZConversationSession.safeParse(
@@ -105,23 +124,26 @@ export class ConversationDO extends Think<Env> {
     }
     const session = parsed.data;
 
-    let state = this.getRuntimeState();
-    if (!state) {
-      state = {
+    const existing = this.getRuntimeState();
+    if (existing && existing.session.conversationId !== session.conversationId) {
+      connection.close(1008, "Not allowed");
+      return;
+    }
+    if (!existing) {
+      this.configure<Schemas.ConversationRuntimeState>({
         session,
         lastActivityAt: Date.now(),
         hasAnswer: false,
         closeScheduleId: null,
         isClosed: false,
-      };
-      this.configure<Schemas.ConversationRuntimeState>(state);
+        syncedMessageCount: 0,
+        turnIds: {},
+        lastSyncedTurnId: null,
+      });
       await this.armAutoClose();
-    } else if (state.session.conversationId !== session.conversationId) {
-      connection.close(1008, "Not allowed");
-      return;
     }
 
-    if (state.isClosed) {
+    if (this.getRuntimeState()?.isClosed) {
       this.send(connection, { type: "closed" });
       connection.close(1000, "Conversation closed");
       return;
@@ -134,13 +156,30 @@ export class ConversationDO extends Think<Env> {
     });
   }
 
-  // DEV_NOTE: Every inbound frame passes here before Agents and Think see it (Agents installs its own handler only
-  // when the class has none). Allowed: a chat request (rebuilt, see admitChatRequest), cancel and stream-resume frames.
-  // Anything else gets an error frame and goes no further.
+  // DEV_NOTE: Every inbound frame passes here before Agents and Think see it (Agents installs its own handler only when
+  // the class has none)
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const admitted = await this.admitFrame(ws, message);
-    if (admitted !== null) {
-      await this.lifecycle.webSocketMessage(ws, admitted);
+    const admission = WidgetFrameProvider.admit(
+      message,
+      new Set(this.messages.map((stored) => stored.id)),
+    );
+
+    if (admission.kind === "refuse") {
+      AppLogger.warn({
+        category: Schemas.LogCategory.Conversation,
+        action: Schemas.LogAction.FilterWidgetFrame,
+        message: admission.reason,
+        metadata: { conversationPublicId: this.name },
+      });
+      this.reply(ws, { type: "error", message: UNSUPPORTED_FRAME_MESSAGE });
+      return;
+    }
+    if (admission.kind === "pass") {
+      await this.lifecycle.webSocketMessage(ws, admission.frame);
+      return;
+    }
+    if (await this.startTurn(ws, admission.requestId, admission.message.id)) {
+      await this.lifecycle.webSocketMessage(ws, admission.frame);
     }
   }
 
@@ -149,7 +188,7 @@ export class ConversationDO extends Think<Env> {
   }
 
   // DEV_NOTE: Its return value is sent to every client as the failed turn's error, so only safe text leaves. A turn
-  // that failed after its user message was saved still goes to the read model.
+  // that failed after its user message was saved still ends (and reaches the read model).
   onChatError(error: unknown, ctx?: ChatErrorContext): unknown {
     const isUnavailable = error instanceof ModelUnavailableError;
     AppLogger.error({
@@ -160,7 +199,7 @@ export class ConversationDO extends Think<Env> {
       metadata: {
         conversationPublicId: this.name,
         stage: ctx?.stage ?? null,
-        isUnavailable,
+        failure: isUnavailable ? error.failure : null,
       },
     });
     if (ctx?.requestId) {
@@ -169,11 +208,12 @@ export class ConversationDO extends Think<Env> {
     return isUnavailable ? Schemas.MODEL_UNAVAILABLE_MESSAGE : TURN_FAILED_MESSAGE;
   }
 
-  // DEV_NOTE: Scheduled (schedule()); public because the scheduler calls it by name. Re-arms itself when activity
-  // moved the deadline since it was set.
+  // DEV_NOTE: Scheduled (schedule()); public because the scheduler calls it by name. Closing is marked before the first
+  // await, so no message is admitted into a conversation on its way to Closed; if the database write fails the mark is
+  // lifted and the close retried later.
   async closeIfIdle(): Promise<void> {
     const state = this.getRuntimeState();
-    if (!state || state.isClosed) return;
+    if (!state || state.isClosed || this.isClosing) return;
 
     const idleMs = Date.now() - state.lastActivityAt;
     if (idleMs < Constants.CONVERSATION_IDLE_CLOSE_MS || this.activeTurn) {
@@ -182,133 +222,108 @@ export class ConversationDO extends Think<Env> {
       return;
     }
 
-    const closed = await this.conversationsRepo().closeConversation({
-      session: state.session,
-      outcome: state.hasAnswer
-        ? Schemas.ConversationOutcomeIntEnum.Answered
-        : Schemas.ConversationOutcomeIntEnum.Abandoned,
-    });
-    if (!closed.isSuccess && !closed.isNotFound) {
-      // DEV_NOTE: The database write failed (logged by the DAL): try again later rather than closing half-way
-      this.patchRuntimeState({ closeScheduleId: null });
-      await this.armAutoClose();
-      return;
-    }
+    this.isClosing = true;
+    try {
+      await this.syncReadModel();
+      const current = this.getRuntimeState() ?? state;
+      const closed = await this.conversationsRepo().closeConversation({
+        session: current.session,
+        outcome: current.hasAnswer
+          ? Schemas.ConversationOutcomeIntEnum.Answered
+          : Schemas.ConversationOutcomeIntEnum.Abandoned,
+      });
+      if (!closed.isSuccess && !closed.isNotFound) {
+        AppLogger.error({
+          category: Schemas.LogCategory.Conversation,
+          action: Schemas.LogAction.CloseIdleConversation,
+          message: closed.message ?? "Conversation not closed; retrying later",
+          metadata: { conversationPublicId: this.name },
+        });
+        this.patchRuntimeState({ closeScheduleId: null });
+        await this.armAutoClose();
+        return;
+      }
 
-    this.patchRuntimeState({ isClosed: true, closeScheduleId: null });
-    for (const connection of this.getConnections()) {
-      this.send(connection, { type: "closed" });
-      connection.close(1000, "Conversation closed");
+      this.patchRuntimeState({ isClosed: true, closeScheduleId: null });
+      for (const connection of this.getConnections()) {
+        this.send(connection, { type: "closed" });
+        connection.close(1000, "Conversation closed");
+      }
+    } finally {
+      this.isClosing = false;
     }
   }
 
-  // DEV_NOTE: The frame to hand on (rebuilt for a chat request), or null when it was refused
-  private async admitFrame(ws: WebSocket, message: string | ArrayBuffer): Promise<string | null> {
-    if (typeof message !== "string" || message.length > Constants.WIDGET_FRAME_MAX_BYTES) {
-      this.reply(ws, { type: "error", message: UNSUPPORTED_FRAME_MESSAGE });
-      return null;
-    }
-    const json = Utility.parseJson(message);
-    const envelope = Schemas.ZWidgetFrameEnvelope.safeParse(json);
-    if (!envelope.success) {
-      this.reply(ws, { type: "error", message: UNSUPPORTED_FRAME_MESSAGE });
-      return null;
-    }
-
-    if (envelope.data.type === Schemas.WidgetChatFrameTypeEnum.ChatRequest) {
-      return await this.admitChatRequest(ws, json);
-    }
-    if (Schemas.ZWidgetPassThroughFrame.safeParse(json).success) {
-      return message;
-    }
-
-    AppLogger.warn({
-      category: Schemas.LogCategory.Conversation,
-      action: Schemas.LogAction.FilterWidgetFrame,
-      message: "Frame type not allowed",
-      metadata: { conversationPublicId: this.name, frameType: envelope.data.type.slice(0, 64) },
-    });
-    this.reply(ws, { type: "error", message: UNSUPPORTED_FRAME_MESSAGE });
-    return null;
-  }
-
-  // DEV_NOTE: A new user turn. Rebuilt to carry only the newest message, as plain text with the client's id (which
-  // must be new: Think would otherwise overwrite the stored message with that id), and nothing else from the body
-  // (no client tools, no custom fields). The config and the model are ready before Think saves the message.
-  private async admitChatRequest(ws: WebSocket, json: unknown): Promise<string | null> {
+  // DEV_NOTE: Admits a new user turn: refused while the conversation is closed or closing or another turn runs. The
+  // turn's ULID and the activity time are stored first (so the read model and the auto-close see this turn even if the
+  // DO is evicted), then the config and the model are prepared. false = refused; the widget was told why.
+  private async startTurn(
+    ws: WebSocket,
+    requestId: string,
+    userMessageId: string,
+  ): Promise<boolean> {
     const state = this.getRuntimeState();
     if (!state || state.isClosed) {
       this.reply(ws, { type: "closed" });
       ws.close(1000, "Conversation closed");
-      return null;
+      return false;
+    }
+    if (this.isClosing) {
+      this.reply(ws, { type: "error", message: CLOSING_MESSAGE });
+      return false;
     }
     if (this.activeTurn) {
       this.reply(ws, { type: "error", message: TURN_IN_PROGRESS_MESSAGE });
-      return null;
+      return false;
     }
 
-    const frame = Schemas.ZWidgetChatRequestFrame.safeParse(json);
-    const body = frame.success
-      ? Schemas.ZWidgetChatRequestBody.safeParse(Utility.parseJson(frame.data.init.body))
-      : null;
-    const newest = body?.success
-      ? Schemas.ZWidgetUserMessage.safeParse(body.data.messages[body.data.messages.length - 1])
-      : null;
-    const text = newest?.success
-      ? newest.data.parts
-          .map((part) => part.text)
-          .join("\n")
-          .trim()
-      : "";
-    if (
-      !frame.success ||
-      !newest?.success ||
-      text.length === 0 ||
-      text.length > Schemas.WIDGET_MESSAGE_MAX_CHARS ||
-      this.messages.some((message) => message.id === newest.data.id)
-    ) {
-      this.reply(ws, { type: "error", message: UNSUPPORTED_FRAME_MESSAGE });
-      return null;
-    }
-
-    const turn = {
-      requestId: frame.data.id,
-      turnId: Utility.generateUlid(),
-      userMessageId: newest.data.id,
-      userText: text,
-      model: null,
-      spec: null,
-    };
-    this.activeTurn = turn;
-
-    const prepared = await this.prepareTurn(state.session, turn.turnId);
-    if (!prepared) {
-      this.activeTurn = null;
-      this.reply(ws, { type: "unavailable", message: Schemas.MODEL_UNAVAILABLE_MESSAGE });
-      return null;
-    }
-    this.activeTurn = { ...turn, model: prepared.model, spec: prepared.spec };
-
-    return JSON.stringify({
-      type: Schemas.WidgetChatFrameTypeEnum.ChatRequest,
-      id: frame.data.id,
-      init: {
-        method: "POST",
-        body: JSON.stringify({
-          messages: [{ id: newest.data.id, role: "user", parts: [{ type: "text", text }] }],
-        }),
-      },
+    const turnId = Utility.generateUlid();
+    this.activeTurn = { requestId, turnId, userMessageId, model: null, spec: null };
+    this.patchRuntimeState({
+      lastActivityAt: Date.now(),
+      turnIds: { ...state.turnIds, [userMessageId]: turnId },
     });
+
+    const prepared = await this.prepareTurn(state.session, turnId);
+    if (!prepared.isSuccess) {
+      this.activeTurn = null;
+      const { [userMessageId]: _dropped, ...turnIds } = this.getRuntimeState()?.turnIds ?? {};
+      this.patchRuntimeState({ turnIds });
+      if (prepared.isClosed) {
+        this.reply(ws, { type: "closed" });
+        ws.close(1000, "Conversation closed");
+      } else {
+        this.reply(ws, { type: "unavailable", message: Schemas.MODEL_UNAVAILABLE_MESSAGE });
+      }
+      return false;
+    }
+
+    this.activeTurn = {
+      requestId,
+      turnId,
+      userMessageId,
+      model: prepared.model,
+      spec: prepared.spec,
+    };
+    return true;
   }
 
-  // DEV_NOTE: The published config (read fresh: a publish takes effect here) and the routed model. null when the
-  // chatbot can't answer: nothing published, or no usable model (the router logs it and opens the system issue).
+  // DEV_NOTE: The turn's config (re-checking conversation, chatbot and company) and the routed model. isClosed when the
+  // conversation was closed elsewhere; otherwise a failure means the chatbot can't answer (logged by the Repos; the
+  // router opens the system issue for a key failure).
   private async prepareTurn(
     session: Schemas.ConversationSession,
     turnId: string,
-  ): Promise<{ spec: Schemas.ConfigSpec; model: LanguageModel } | null> {
+  ): Promise<
+    | { isSuccess: true; spec: Schemas.ConfigSpec; model: LanguageModel }
+    | { isSuccess: false; isClosed: boolean }
+  > {
     const config = await this.conversationsRepo().loadTurnConfig({ session });
-    if (!config.isSuccess || !config.spec) return null;
+    if (!config.isSuccess || !config.spec) {
+      const isClosed = config.failure === Schemas.TurnConfigFailureEnum.ConversationClosed;
+      if (isClosed) this.patchRuntimeState({ isClosed: true });
+      return { isSuccess: false, isClosed };
+    }
 
     const routed = await new ModelRouterRepo(this.env, this.ctx).getModel({
       companyId: session.companyId,
@@ -321,79 +336,108 @@ export class ConversationDO extends Think<Env> {
       tier: null,
       routing: config.spec.routing,
     });
-    if (!routed.isSuccess) return null;
-    return { spec: config.spec, model: routed.model };
+    if (!routed.isSuccess) return { isSuccess: false, isClosed: false };
+    return { isSuccess: true, spec: config.spec, model: routed.model };
   }
 
   // DEV_NOTE: Ends the active turn once (onChatResponse, or onChatError for a turn that failed before a response):
-  // its user message and, if there is one, the reply go to the read model with the turn's ULID; then the activity
-  // bookkeeping and the auto-close alarm.
+  // stores the activity and the outcome before releasing the turn, then catches the read model up and re-arms the
+  // auto-close
   private async finishTurn(
     requestId: string,
     status: ChatResponseResult["status"],
-    reply: UIMessage | null,
+    reply: ChatResponseResult["message"] | null,
   ): Promise<void> {
     const turn = this.activeTurn;
     const state = this.getRuntimeState();
     if (!turn || turn.requestId !== requestId || !state) return;
 
-    const messages: Schemas.TurnMessage[] = [];
-    const userMessage = this.messages.find((message) => message.id === turn.userMessageId);
-    if (userMessage) {
-      messages.push({
-        sessionMessageId: userMessage.id,
-        role: Schemas.MessageRoleIntEnum.User,
-        content: { text: ConversationDO.textOf(userMessage) },
-      });
-    }
-    const replyText = reply ? ConversationDO.textOf(reply) : "";
-    if (reply && replyText.length > 0) {
-      messages.push({
-        sessionMessageId: reply.id,
-        role: Schemas.MessageRoleIntEnum.Assistant,
-        content: { text: replyText },
-      });
-    }
-
-    // DEV_NOTE: The activity is stored before the turn is released and before any await, so an auto-close that
-    // fires meanwhile already sees this turn (and its answer)
+    const replyText = reply ? (TranscriptProvider.toEntries([reply])[0]?.text ?? "") : "";
     this.patchRuntimeState({
       lastActivityAt: Date.now(),
       hasAnswer: state.hasAnswer || (status === "completed" && replyText.length > 0),
     });
     this.activeTurn = null;
 
-    if (messages.length > 0) {
-      const recorded = await this.conversationsRepo().recordTurn({
-        session: state.session,
-        turnId: turn.turnId,
-        messages,
-        title: turn.userText.slice(0, Constants.CONVERSATION_TITLE_MAX_CHARS),
-      });
-      if (!recorded.isSuccess) {
-        AppLogger.error({
-          category: Schemas.LogCategory.Conversation,
-          action: Schemas.LogAction.RecordTurn,
-          message: recorded.message ?? "Turn not recorded in the read model",
-          metadata: { conversationPublicId: this.name, turnId: turn.turnId },
-        });
-      }
-    }
-
+    await this.syncReadModel();
     await this.armAutoClose();
   }
 
-  // DEV_NOTE: One pending auto-close at a time: the previous schedule is cancelled before the new one is set
+  // DEV_NOTE: Writes the transcript past the synced position to the read model, turn by turn, advancing the position
+  // only after a turn's write commits; a failure stops here and the next turn or wake retries. A running turn is left
+  // out until it ends. One sync at a time; a call made meanwhile runs once more after it.
+  private async syncReadModel(): Promise<void> {
+    if (this.isSyncing) {
+      this.isSyncRequested = true;
+      return;
+    }
+    this.isSyncing = true;
+    try {
+      do {
+        this.isSyncRequested = false;
+        const state = this.getRuntimeState();
+        if (!state) return;
+
+        const entries = TranscriptProvider.toEntries(this.messages);
+        const activeUserMessageId = this.activeTurn?.userMessageId;
+        const activeIndex = activeUserMessageId
+          ? entries.findIndex((entry) => entry.id === activeUserMessageId)
+          : -1;
+        const turns = TranscriptProvider.unsyncedTurns({
+          entries: activeIndex >= 0 ? entries.slice(0, activeIndex) : entries,
+          syncedCount: state.syncedMessageCount,
+          turnIds: state.turnIds,
+          lastSyncedTurnId: state.lastSyncedTurnId,
+          mintTurnId: () => Utility.generateUlid(),
+          titleMaxChars: Constants.CONVERSATION_TITLE_MAX_CHARS,
+        });
+
+        for (const turn of turns) {
+          const recorded = await this.conversationsRepo().recordTurn({
+            session: state.session,
+            turnId: turn.turnId,
+            messages: turn.messages,
+            title: turn.title,
+          });
+          if (!recorded.isSuccess) {
+            AppLogger.error({
+              category: Schemas.LogCategory.Conversation,
+              action: Schemas.LogAction.SyncReadModel,
+              message: recorded.message ?? "Turn not recorded in the read model; retrying later",
+              metadata: { conversationPublicId: this.name, turnId: turn.turnId },
+            });
+            return;
+          }
+          const current = this.getRuntimeState();
+          if (!current) return;
+          const turnIds = { ...current.turnIds };
+          if (turn.userMessageId !== null) delete turnIds[turn.userMessageId];
+          this.patchRuntimeState({
+            syncedMessageCount: current.syncedMessageCount + turn.entryCount,
+            turnIds,
+            lastSyncedTurnId: turn.turnId,
+          });
+        }
+      } while (this.isSyncRequested);
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  // DEV_NOTE: One pending auto-close at a time: the previous schedule is cancelled before the new one is set. It runs
+  // at the idle deadline, but never sooner than CONVERSATION_CLOSE_RETRY_MS from now, so a deadline already passed
+  // (a turn still running, a failed close) can't make it fire in a loop.
   private async armAutoClose(): Promise<void> {
     const state = this.getRuntimeState();
     if (!state || state.isClosed) return;
     if (state.closeScheduleId) {
       await this.cancelSchedule(state.closeScheduleId);
     }
-    const scheduled = await this.schedule(
-      new Date(state.lastActivityAt + Constants.CONVERSATION_IDLE_CLOSE_MS),
-      "closeIfIdle",
+    const runAt = Math.max(
+      state.lastActivityAt + Constants.CONVERSATION_IDLE_CLOSE_MS,
+      Date.now() + Constants.CONVERSATION_CLOSE_RETRY_MS,
     );
+    const scheduled = await this.schedule(new Date(runAt), "closeIfIdle");
     this.patchRuntimeState({ closeScheduleId: scheduled.id });
   }
 
@@ -426,8 +470,8 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: The trusted system prompt: the company's persona, then its procedures. Knowledge (M2-6) and tools
-  // (M3) add their parts later.
+  // DEV_NOTE: The trusted system prompt: the company's persona, then its procedures. Knowledge (M2-6) and tools (M3)
+  // add their parts later.
   private static buildInstructions(spec: Schemas.ConfigSpec): string {
     const procedures = spec.procedures.map(
       (procedure) =>
@@ -436,12 +480,5 @@ export class ConversationDO extends Think<Env> {
     return procedures.length > 0
       ? `${spec.persona.instructions}\n\n## Procedures\n\n${procedures.join("\n\n")}`
       : spec.persona.instructions;
-  }
-
-  private static textOf(message: UIMessage): string {
-    return message.parts
-      .map((part) => (part.type === "text" ? part.text : ""))
-      .join("")
-      .trim();
   }
 }

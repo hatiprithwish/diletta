@@ -4,13 +4,6 @@ import Constants from "@/config/Constants";
 
 // DEV_NOTE: Companion JWT fixtures shared by the widget suites: keys generated per run, tokens signed with them, and
 // each issuer's JWKS seeded straight into the JWKS_CACHE KV (miniflare), so no test fetches a real JWKS.
-export interface TestKey {
-  kid: string;
-  alg: Schemas.WidgetJwtAlgorithmEnum;
-  privateKey: CryptoKey;
-  jwk: Schemas.Jwk;
-}
-
 export function base64Url(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = "";
@@ -25,7 +18,7 @@ export async function createKey(
   alg: Schemas.WidgetJwtAlgorithmEnum,
   kid: string,
   modulusLength = 2048,
-): Promise<TestKey> {
+) {
   const pair = (await crypto.subtle.generateKey(
     alg === Schemas.WidgetJwtAlgorithmEnum.RS256
       ? {
@@ -62,7 +55,7 @@ export function claimsFor(issuer: string, overrides: Record<string, unknown> = {
 }
 
 export async function signToken(
-  key: TestKey,
+  key: Awaited<ReturnType<typeof createKey>>,
   claims: Record<string, unknown>,
   headerOverrides: Record<string, unknown> = {},
 ): Promise<string> {

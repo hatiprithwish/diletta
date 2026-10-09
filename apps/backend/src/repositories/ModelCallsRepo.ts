@@ -8,16 +8,28 @@ import AiGatewayProvider from "@/providers/aiGateway";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: Usage backfill for model_calls (M2-3). A call that reached the provider but ended without usage (stream
-// cut or cancelled, connection lost) was still billed, so its row is Pending, never a silent $0. The per-minute Cron
-// reads each Pending row's AI Gateway log once the row is MODEL_CALL_BACKFILL_MIN_AGE_MS old (the log is written after
-// the call):
-//   - log with token counts → Backfilled: tokens_in (no cache split in the log, so priced at the full input price:
-//     an overcount, never an under) and tokens_out, costed from MODEL_PRICES.
+const ZERO_USAGE: Schemas.ModelCallUsage = {
+  inputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  outputTokens: 0,
+};
+
+// DEV_NOTE: model_calls (M2-3): one row per call of a routed model, and the usage backfill.
+//
+// recordModelCall writes what the recording middleware (ModelCallRecordingProvider) saw, priced from MODEL_PRICES.
+//
+// A call that reached the provider but ended without usage (stream cut or cancelled, connection lost) was still
+// billed, so its row is Pending, never a silent $0. The per-minute Cron reads each Pending row's AI Gateway log once
+// the row is MODEL_CALL_BACKFILL_MIN_AGE_MS old (the log is written after the call):
+//   - log with token counts → Backfilled. The log's tokens_in has no cache split, so every input token is priced at
+//     the dearer of the input and cache-write prices (cache writes cost more on Anthropic): an overcount, never an
+//     under. tokens_out at the output price.
 //   - no log or no counts yet → stays Pending; past MODEL_CALL_BACKFILL_MAX_AGE_MS → Unknown + an error log.
 //   - a failed lookup (API down, bad token) → stays Pending and is retried next minute, until the max age.
 // The Pending read spans companies (withPlatform, pattern rule 3.15); each row is settled in its own company's
-// withTenant, and only while still Pending, so overlapping sweeps never settle a row twice.
+// withTenant, and only while still Pending, so overlapping sweeps never settle a row twice. Lookups run
+// MODEL_CALL_BACKFILL_CONCURRENCY at a time, so a batch of slow ones still finishes well inside a minute.
 export default class ModelCallsRepo {
   private env: Env;
   private db: NodePgDatabase;
@@ -27,6 +39,68 @@ export default class ModelCallsRepo {
     this.env = env;
     this.db = getDbClient(env);
     this.dal = new ModelCallsDAL();
+  }
+
+  // DEV_NOTE: Runs in the router's waitUntil, so it never throws: a failed write is logged and the call itself is
+  // unaffected. An Unknown row is logged as an error too: its cost of 0 isn't a real price.
+  async recordModelCall(params: {
+    context: Schemas.ModelCallContext;
+    record: Schemas.ModelCallRecord;
+  }): Promise<void> {
+    const { context, record } = params;
+    const { request } = context;
+    const metadata = {
+      companyId: request.companyId,
+      conversationId: request.conversationId,
+      turnId: request.turnId,
+      provider: context.provider,
+      model: context.model,
+      errorCode: record.errorCode,
+    };
+
+    if (record.usageStatus === Schemas.ModelCallUsageStatusIntEnum.Unknown) {
+      AppLogger.error({
+        category: Schemas.LogCategory.ModelRouter,
+        action: Schemas.LogAction.RecordModelCall,
+        message: "Model call ended without usage or a gateway log id; its cost is unknown",
+        metadata,
+      });
+    }
+
+    const usage = record.usage ?? ZERO_USAGE;
+    const result = await withTenant(this.db, request.companyId, async (tx) => {
+      return await this.dal.createModelCall(tx, {
+        companyId: request.companyId,
+        chatbotId: request.chatbotId,
+        chatbotUserId: request.chatbotUserId,
+        conversationId: request.conversationId,
+        evalRunId: request.evalRunId,
+        turnId: request.turnId,
+        taskType: request.taskType,
+        tier: Schemas.MODEL_TIER_CALL_TIER_MAP[context.tier],
+        provider: context.provider,
+        model: context.model,
+        gatewayLogId: record.gatewayLogId,
+        inputTokens: usage.inputTokens,
+        outputTokens: record.usage ? usage.outputTokens : null,
+        cachedTokens: usage.cacheReadTokens,
+        costUsd: Schemas.computeModelCallCostUsd(context.price, usage),
+        latencyMs: record.latencyMs,
+        // DEV_NOTE: The router never escalates on its own; the turn loop picks the tier and will pass this when it
+        // retries a turn on a higher tier
+        wasEscalated: false,
+        errorCode: record.errorCode,
+        usageStatus: record.usageStatus,
+      });
+    });
+    if (!result.isSuccess) {
+      AppLogger.error({
+        category: Schemas.LogCategory.ModelRouter,
+        action: Schemas.LogAction.RecordModelCall,
+        message: result.message ?? "Model call not recorded",
+        metadata,
+      });
+    }
   }
 
   // DEV_NOTE: companyIds limits the sweep to some companies (tests on the shared staging branch); the Cron passes null
@@ -45,22 +119,25 @@ export default class ModelCallsRepo {
       return { isSuccess: false, message: pending.message };
     }
 
-    let backfilledCount = 0;
-    let unknownCount = 0;
-    let stillPendingCount = 0;
-    for (const modelCall of pending.modelCalls) {
-      const outcome = await this.backfillOne(modelCall, now);
-      if (outcome === Schemas.ModelCallUsageStatusIntEnum.Backfilled) backfilledCount++;
-      else if (outcome === Schemas.ModelCallUsageStatusIntEnum.Unknown) unknownCount++;
-      else stillPendingCount++;
-    }
+    const outcomes: Schemas.ModelCallUsageStatusIntEnum[] = [];
+    const queue = [...pending.modelCalls];
+    const worker = async () => {
+      for (let modelCall = queue.shift(); modelCall; modelCall = queue.shift()) {
+        outcomes.push(await this.backfillOne(modelCall, now));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Constants.MODEL_CALL_BACKFILL_CONCURRENCY }, async () => await worker()),
+    );
 
+    const count = (status: Schemas.ModelCallUsageStatusIntEnum) =>
+      outcomes.filter((outcome) => outcome === status).length;
     return {
       isSuccess: true,
       message: "Pending model call usage processed",
-      backfilledCount,
-      unknownCount,
-      stillPendingCount,
+      backfilledCount: count(Schemas.ModelCallUsageStatusIntEnum.Backfilled),
+      unknownCount: count(Schemas.ModelCallUsageStatusIntEnum.Unknown),
+      stillPendingCount: count(Schemas.ModelCallUsageStatusIntEnum.Pending),
     };
   }
 
@@ -84,10 +161,12 @@ export default class ModelCallsRepo {
         usageStatus: Schemas.ModelCallUsageStatusIntEnum.Backfilled,
         inputTokens,
         outputTokens,
+        // DEV_NOTE: Every input token counted as a cache write: computeModelCallCostUsd prices those at
+        // cacheWriteUsdPerMTok, which the price table keeps ≥ the input price (ModelRouterCommon.test)
         costUsd: Schemas.computeModelCallCostUsd(price, {
           inputTokens,
           cacheReadTokens: 0,
-          cacheWriteTokens: 0,
+          cacheWriteTokens: inputTokens,
           outputTokens,
         }),
       });

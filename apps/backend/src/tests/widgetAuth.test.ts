@@ -13,7 +13,6 @@ import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
 import Constants from "@/config/Constants";
 import Utility from "@/utils/Utility";
 import {
-  type TestKey,
   base64Url,
   claimsFor,
   createKey,
@@ -60,10 +59,10 @@ let secondChatbotA = "";
 let pausedChatbotA = "";
 let chatbotOfB = "";
 
-let rsaKey: TestKey;
-let ecKey: TestKey;
-let otherRsaKey: TestKey; // same kid as rsaKey, different key pair: a forged signature
-let weakRsaKey: TestKey; // 1024-bit modulus
+let rsaKey: Awaited<ReturnType<typeof createKey>>;
+let ecKey: Awaited<ReturnType<typeof createKey>>;
+let otherRsaKey: Awaited<ReturnType<typeof createKey>>; // same kid as rsaKey, different key pair: a forged signature
+let weakRsaKey: Awaited<ReturnType<typeof createKey>>; // 1024-bit modulus
 
 async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   const pool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });

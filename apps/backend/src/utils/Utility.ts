@@ -111,19 +111,22 @@ export default class Utility {
     return false;
   }
 
-  // DEV_NOTE: Passes every chunk of a stream through unchanged, shows each to onChunk, and calls onEnd exactly once:
-  // when the stream finishes, fails (error set, and passed on to the reader) or is cancelled by the reader
-  // (wasCancelled).
+  // DEV_NOTE: Passes a stream through chunk by chunk. onChunk sees each chunk and returns the one to pass on (the same,
+  // or a replacement); mapError replaces the error a failing source raises before the reader gets it. onEnd runs
+  // exactly once: when the stream finishes, fails (error set) or is cancelled by the reader (wasCancelled).
   static observeStream<TChunk>(
     source: ReadableStream<TChunk>,
-    onChunk: (chunk: TChunk) => void,
-    onEnd: (end: { wasCancelled: boolean; error: unknown }) => void,
+    handlers: {
+      onChunk: (chunk: TChunk) => TChunk;
+      onEnd: (end: { wasCancelled: boolean; error: unknown }) => void;
+      mapError: (error: unknown) => unknown;
+    },
   ): ReadableStream<TChunk> {
     let hasEnded = false;
     const end = (wasCancelled: boolean, error: unknown) => {
       if (hasEnded) return;
       hasEnded = true;
-      onEnd({ wasCancelled, error });
+      handlers.onEnd({ wasCancelled, error });
     };
     const reader = source.getReader();
 
@@ -136,11 +139,10 @@ export default class Utility {
             controller.close();
             return;
           }
-          onChunk(value);
-          controller.enqueue(value);
+          controller.enqueue(handlers.onChunk(value));
         } catch (error) {
           end(false, error);
-          controller.error(error);
+          controller.error(handlers.mapError(error));
         }
       },
       async cancel(reason) {

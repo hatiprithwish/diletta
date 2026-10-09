@@ -6,6 +6,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { APICallError, generateText, streamText } from "ai";
 import * as Schemas from "@app/schemas";
+import Constants from "@/config/Constants";
 import ModelCallsDAL from "@/data-access-layer/ModelCallsDAL";
 import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import getDbClient from "@/db/dbClient";
@@ -26,7 +27,8 @@ import AiGatewayProvider from "@/providers/aiGateway";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ModelCallsRepo from "@/repositories/ModelCallsRepo";
-import ModelRouterRepo, { ModelUnavailableError } from "@/repositories/ModelRouterRepo";
+import ModelRouterRepo from "@/repositories/ModelRouterRepo";
+import { ModelUnavailableError } from "@/providers/modelCallRecording";
 import Utility from "@/utils/Utility";
 import {
   anthropicBrokenStream,
@@ -105,14 +107,7 @@ async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Pro
   return await run(drizzle({ client: ownerPool }));
 }
 
-interface Fixture {
-  companyId: string;
-  chatbotId: string;
-  chatbotUserId: string;
-  conversationId: string;
-}
-
-async function createFixture(): Promise<Fixture> {
+async function createFixture() {
   const created = await new CompaniesRepo(env).createCompany({
     company: { name: `Test company ${crypto.randomUUID()}` },
   });
@@ -189,7 +184,7 @@ const mixedRouting: Schemas.ConfigSpec["routing"] = {
 };
 
 function request(
-  fixture: Fixture,
+  fixture: Awaited<ReturnType<typeof createFixture>>,
   overrides: Partial<Schemas.GetModelRequest> = {},
 ): Schemas.GetModelRequest {
   return {
@@ -727,7 +722,12 @@ describe("ModelRouterRepo key-failure path", () => {
       prompt: "Hi",
       maxRetries: 0,
     });
-    await expect(failed).rejects.not.toBeInstanceOf(ModelUnavailableError);
+    // DEV_NOTE: Every failure reaches the caller as the one safe error; only a rejected key is KeyUnavailable
+    await expect(failed).rejects.toMatchObject({
+      name: "ModelUnavailableError",
+      message: Schemas.MODEL_UNAVAILABLE_MESSAGE,
+      failure: Schemas.ModelRouterFailureEnum.ProviderError,
+    });
     await settle();
 
     expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Active);
@@ -745,7 +745,12 @@ describe("ModelRouterRepo key-failure path", () => {
       prompt: "Hi",
       maxRetries: 0,
     });
-    await expect(failed).rejects.not.toBeInstanceOf(ModelUnavailableError);
+    // DEV_NOTE: Every failure reaches the caller as the one safe error; only a rejected key is KeyUnavailable
+    await expect(failed).rejects.toMatchObject({
+      name: "ModelUnavailableError",
+      message: Schemas.MODEL_UNAVAILABLE_MESSAGE,
+      failure: Schemas.ModelRouterFailureEnum.ProviderError,
+    });
     await settle();
 
     expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Active);
@@ -813,6 +818,78 @@ describe("ModelRouterRepo key-failure path", () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]?.note).toContain("Anthropic");
     expect(issues[0]?.note?.match(/OpenAI/g)).toHaveLength(1);
+
+    // DEV_NOTE: Which providers the issue covers is kept in its events, not read off the note
+    const events = await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb
+          .select()
+          .from(activityLog)
+          .where(eq(activityLog.entityId, issues[0]?.id ?? "")),
+    );
+    expect(events.map((event) => event.entityAction).sort()).toEqual(["opened", "provider_added"]);
+    expect(
+      events.map((event) => Schemas.ZModelKeyFailureDetail.parse(event.detail).provider).sort(),
+    ).toEqual([Schemas.ModelProviderEnum.Anthropic, Schemas.ModelProviderEnum.OpenAI]);
+  });
+
+  it("doesn't take an admin's edit of the note for a covered provider", async () => {
+    const fixture = await createFixture();
+    const { ctx, settle } = createCtx();
+    const router = new ModelRouterRepo(routerEnv(), ctx);
+
+    await router.getModel(request(fixture));
+    await settle();
+    // DEV_NOTE: The note now names OpenAI, but no OpenAI key has failed yet
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(qualityIssues)
+        .set({ note: "Triage: check the OpenAI and Anthropic keys" })
+        .where(eq(qualityIssues.companyId, fixture.companyId));
+    });
+    await router.getModel(request(fixture, { routing: mixedRouting }));
+    await settle();
+
+    const [issue] = await getQualityIssues(fixture.companyId);
+    expect(issue?.note).toContain("There's no active OpenAI model key");
+  });
+
+  it("invalidates a Google key the provider answers API_KEY_INVALID, end to end", async () => {
+    const fixture = await createFixture();
+    const keyPublicId = await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Google);
+    mockCloudflare(() =>
+      Response.json(
+        {
+          error: {
+            code: 400,
+            message: "API key not valid. Please pass a valid API key.",
+            status: "INVALID_ARGUMENT",
+            details: [
+              { "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "API_KEY_INVALID" },
+            ],
+          },
+        },
+        { status: 400 },
+      ),
+    );
+    const { ctx, settle } = createCtx();
+
+    const failed = generateText({
+      model: await routeOrThrow(
+        new ModelRouterRepo(routerEnv(), ctx),
+        request(fixture, { routing: mixedRouting, tier: Schemas.ModelTierEnum.Small }),
+      ),
+      prompt: "Hi",
+      maxRetries: 0,
+    });
+    await expect(failed).rejects.toMatchObject({
+      failure: Schemas.ModelRouterFailureEnum.KeyUnavailable,
+    });
+    await settle();
+
+    expect(await getSecretStatus(keyPublicId)).toBe(Schemas.CompanySecretStatusIntEnum.Invalid);
+    const [issue] = await getQualityIssues(fixture.companyId);
+    expect(issue?.note).toContain("Google rejected the model key");
   });
 
   it("invalidates once and opens one issue when two calls on the same key are rejected at once", async () => {
@@ -841,7 +918,7 @@ describe("ModelRouterRepo key-failure path", () => {
 
 describe("ModelCallsRepo.backfillPendingUsage", () => {
   async function insertPendingCall(
-    fixture: Fixture,
+    fixture: Awaited<ReturnType<typeof createFixture>>,
     gatewayLogId: string | null,
     ageMs: number,
   ): Promise<string> {
@@ -904,12 +981,12 @@ describe("ModelCallsRepo.backfillPendingUsage", () => {
       unknownCount: 2,
       stillPendingCount: 1,
     });
-    // 1000 input × $2 + 100 output × $10, per 1M (no cache split in the log: full input price)
+    // 1000 input × $2.5 (the cache-write price, the dearer: no cache split in the log) + 100 output × $10, per 1M
     expect(await getCall(withLog)).toMatchObject({
       usageStatus: Schemas.ModelCallUsageStatusIntEnum.Backfilled,
       inputTokens: 1000,
       outputTokens: 100,
-      costUsd: "0.003000",
+      costUsd: "0.003500",
     });
     expect((await getCall(tooYoung))?.usageStatus).toBe(
       Schemas.ModelCallUsageStatusIntEnum.Pending,
@@ -935,6 +1012,66 @@ describe("ModelCallsRepo.backfillPendingUsage", () => {
       companyIds: [fixture.companyId],
     });
     expect(again).toMatchObject({ backfilledCount: 0, unknownCount: 0, stillPendingCount: 1 });
+  });
+
+  it("works through more Pending rows than one batch, a batch per sweep", async () => {
+    const fixture = await createFixture();
+    const rows = Constants.MODEL_CALL_BACKFILL_BATCH_SIZE + 10;
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.insert(modelCalls).values(
+        Array.from({ length: rows }, (_, index) => ({
+          publicId: Utility.generatePublicId(),
+          companyId: fixture.companyId,
+          taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
+          tier: Schemas.ModelCallTierIntEnum.Mid,
+          provider: Schemas.ModelProviderEnum.Anthropic,
+          model: "claude-sonnet-5-5",
+          gatewayLogId: `log-${index}`,
+          usageStatus: Schemas.ModelCallUsageStatusIntEnum.Pending,
+          createdAt: new Date(Date.now() - 2 * 60_000 - index),
+        })),
+      );
+    });
+    mockCloudflare(() =>
+      Response.json({ success: true, result: { tokens_in: 10, tokens_out: 1 } }),
+    );
+    const repo = new ModelCallsRepo(routerEnv());
+
+    const first = await repo.backfillPendingUsage({ companyIds: [fixture.companyId] });
+    const second = await repo.backfillPendingUsage({ companyIds: [fixture.companyId] });
+
+    expect(first.backfilledCount).toBe(Constants.MODEL_CALL_BACKFILL_BATCH_SIZE);
+    expect(second.backfilledCount).toBe(10);
+    const pending = (await getModelCalls(fixture.companyId)).filter(
+      (call) => call.usageStatus === Schemas.ModelCallUsageStatusIntEnum.Pending,
+    );
+    expect(pending).toHaveLength(0);
+  });
+
+  it("settles each row once when sweeps overlap", async () => {
+    const fixture = await createFixture();
+    const publicIds = await Promise.all(
+      Array.from(
+        { length: 5 },
+        async () => await insertPendingCall(fixture, "log-shared", 2 * 60_000),
+      ),
+    );
+    mockCloudflare(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return Response.json({ success: true, result: { tokens_in: 10, tokens_out: 1 } });
+    });
+
+    const results = await Promise.all([
+      new ModelCallsRepo(routerEnv()).backfillPendingUsage({ companyIds: [fixture.companyId] }),
+      new ModelCallsRepo(routerEnv()).backfillPendingUsage({ companyIds: [fixture.companyId] }),
+    ]);
+
+    expect(results.reduce((sum, result) => sum + (result.backfilledCount ?? 0), 0)).toBe(5);
+    for (const publicId of publicIds) {
+      expect((await getCall(publicId))?.usageStatus).toBe(
+        Schemas.ModelCallUsageStatusIntEnum.Backfilled,
+      );
+    }
   });
 
   it("keeps a row Pending while the log lookup fails", async () => {

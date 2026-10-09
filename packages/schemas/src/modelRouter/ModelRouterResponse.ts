@@ -1,5 +1,6 @@
 import type { ApiResponse } from "../common";
-import type { CompanySecret, DecryptedCompanySecretResponse } from "../companySecrets";
+import type { DecryptedCompanySecretResponse } from "../companySecrets";
+import type { UsedModelKey } from "./ModelRouterRequest";
 import type { ModelRouterFailureEnum } from "./ModelRouterCommon";
 
 // DEV_NOTE: Server-side only (never crosses an API). TModel is the AI SDK LanguageModel, which @app/schemas doesn't
@@ -13,7 +14,7 @@ export type GetModelResponse<TModel> =
 // gateway provider and nowhere else. companySecret identifies exactly which value was used (iv + key version change on
 // every replacement), so a late rejection can only invalidate that value, never one the admin put in since.
 export interface DecryptedModelKeyResponse extends DecryptedCompanySecretResponse {
-  companySecret?: Pick<CompanySecret, "publicId" | "iv" | "encryptionKeyVersion">;
+  companySecret?: UsedModelKey;
 }
 
 // DEV_NOTE: Server-side only (ModelRouterRepo key-failure path). qualityIssueId and outboxId are set when this

@@ -1,5 +1,6 @@
 import z from "zod";
 import { ZConversationSession } from "./ConversationsCommon";
+import type { TurnMessage } from "../messages";
 
 // DEV_NOTE: The longest user message the widget may send, in characters. Platform constant; the composer enforces
 // it too, the DO is the guard.
@@ -58,13 +59,47 @@ export const ZWidgetPassThroughFrame = z.looseObject({
   id: z.string().min(1).max(100).optional(),
 });
 
+// DEV_NOTE: Server-side only — what the widget frame allowlist decided (WidgetFrameProvider.admit). pass: hand the
+// frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. refuse: drop it
+// and tell the widget (reason is logged only).
+export type WidgetFrameAdmission =
+  | { kind: "pass"; frame: string }
+  | { kind: "chat"; requestId: string; message: { id: string; text: string }; frame: string }
+  | { kind: "refuse"; reason: string };
+
+// DEV_NOTE: Server-side only — one Think transcript message reduced to what the read model keeps (TranscriptProvider)
+export interface TranscriptEntry {
+  id: string;
+  role: "user" | "assistant" | "other";
+  text: string;
+}
+
+// DEV_NOTE: Server-side only — the next slice of the transcript to write to the read model: one turn (a user message
+// and what followed it) with the ULID it was admitted under (a new one when that was lost, e.g. after an eviction).
+// userMessageId is null for a slice with no user message: a reply that arrived after its user message was synced,
+// written under the last synced turn's id. title is the user message's text, cut to the title length.
+export interface TranscriptTurn {
+  turnId: string;
+  userMessageId: string | null;
+  messages: TurnMessage[];
+  title: string | null;
+  // Number of transcript entries this turn covers, to advance the synced count
+  entryCount: number;
+}
+
 // DEV_NOTE: Server-side only — what the Conversation DO keeps in its own storage between wakes: who it serves, the
-// auto-close bookkeeping, and whether it is closed. Internal ids; never the host bearer token.
+// auto-close bookkeeping, whether it is closed, and the read-model sync position. syncedMessageCount is how many
+// transcript messages (in order) are in messages; turnIds maps a user message id to the turn ULID it was admitted
+// under, until that turn is synced; lastSyncedTurnId takes a late reply. Internal ids only; never the host bearer
+// token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
   hasAnswer: z.boolean(),
   closeScheduleId: z.string().nullable(),
   isClosed: z.boolean(),
+  syncedMessageCount: z.number().int().min(0),
+  turnIds: z.record(z.string(), z.string()),
+  lastSyncedTurnId: z.string().nullable(),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;

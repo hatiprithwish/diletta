@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import { chatbotUsers, chatbots, conversations } from "@/db/tables";
+import { activityLog, chatbotConfigs, chatbotUsers, chatbots, conversations } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -137,19 +137,59 @@ export default class ConversationsDAL {
     return response;
   }
 
+  // DEV_NOTE: No DB foreign keys — the activity row must exist in the company (it is a root: no parent of its own)
   async setConversationRootLog(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.SetConversationRootLogDALRequest,
   ) {
+    const conditions = [
+      eq(activityLog.id, params.rootLogId),
+      eq(activityLog.companyId, params.companyId),
+    ];
+    const missing = await this.findMissing(
+      tx,
+      Schemas.LogAction.SetConversationRootLog,
+      params,
+      "Activity log not found",
+      async () =>
+        await tx
+          .select({ id: activityLog.id })
+          .from(activityLog)
+          .where(and(...conditions))
+          .limit(1),
+    );
+    if (missing) return missing;
     return await this.update(tx, params, Schemas.LogAction.SetConversationRootLog, {
       rootLogId: params.rootLogId,
     });
   }
 
+  // DEV_NOTE: No DB foreign keys — the config must exist in the company and belong to the conversation's chatbot
   async setConversationConfig(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.SetConversationConfigDALRequest,
   ) {
+    const conditions = [
+      eq(chatbotConfigs.id, params.chatbotConfigId),
+      eq(chatbotConfigs.companyId, params.companyId),
+      eq(chatbotConfigs.chatbotId, conversations.chatbotId),
+      eq(conversations.publicId, params.publicId),
+      eq(conversations.companyId, params.companyId),
+    ];
+    const missing = await this.findMissing(
+      tx,
+      Schemas.LogAction.SetConversationConfig,
+      params,
+      "Chatbot config not found",
+      async () =>
+        await tx
+          .select({ id: chatbotConfigs.id })
+          .from(chatbotConfigs)
+          .innerJoin(conversations, eq(conversations.chatbotId, chatbotConfigs.chatbotId))
+          .where(and(...conditions))
+          .limit(1),
+    );
+    if (missing) return missing;
     return await this.update(tx, params, Schemas.LogAction.SetConversationConfig, {
       chatbotConfigId: params.chatbotConfigId,
     });
@@ -183,6 +223,37 @@ export default class ConversationsDAL {
       },
       eq(conversations.status, Schemas.ConversationStatusIntEnum.Open),
     );
+  }
+
+  // DEV_NOTE: A reference check before an update: the failed response when lookup finds no row (or fails), else null
+  private async findMissing(
+    tx: NodePgTransaction<EmptyRelations>,
+    action: Schemas.LogAction,
+    params: Schemas.FindConversationDALRequest,
+    notFoundMessage: string,
+    lookup: () => Promise<{ id: string }[]>,
+  ): Promise<Schemas.ConversationDALResponse | null> {
+    try {
+      const [row] = await lookup();
+      if (row) return null;
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action,
+        message: notFoundMessage,
+        metadata: params,
+      });
+      return { isSuccess: false, message: notFoundMessage };
+    } catch (error) {
+      const message = "Unknown error in checking a conversation reference";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action,
+        message,
+        error,
+        metadata: params,
+      });
+      return { isSuccess: false, message };
+    }
   }
 
   // DEV_NOTE: One conversation found by publicId within its company (plus an optional extra condition); updatedAt is

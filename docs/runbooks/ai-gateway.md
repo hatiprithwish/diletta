@@ -49,7 +49,7 @@ Gateways created from 2026-09-24 keep logs under Workers Logs retention; M6-1 se
 
 A call that reached the provider but ended without usage (stream cut or cancelled, connection lost) was still billed, so its `model_calls` row is written **Pending** (`usage_status = 2`) instead of a silent $0. The per-minute Cron (`ModelCallUsageBackfillCron` → `ModelCallsRepo.backfillPendingUsage`) reads each Pending row's gateway log by `gateway_log_id` once the row is a minute old:
 
-- Log with token counts → **Backfilled** (3). `tokens_in` has no cache split, so it's priced at the full input price (an overcount, never an undercount).
+- Log with token counts → **Backfilled** (3). `tokens_in` has no cache split, so every input token is priced at the dearer of the input and cache-write prices (an overcount, never an undercount). Lookups run 10 at a time.
 - No log or no counts yet → stays Pending. After 1 hour → **Unknown** (4) with an error log; cost stays 0 and the budget must not read it as free.
 - Lookup fails (API down, token without Read) → stays Pending and retries each minute until the hour is up.
 

@@ -1,6 +1,8 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotUsersDAL from "@/data-access-layer/ChatbotUsersDAL";
+import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
+import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
 import getDbClient from "@/db/dbClient";
@@ -10,9 +12,10 @@ import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Conversations (M2-2). The widget route calls startOrResume after WidgetAuthRepo.authenticate, before it
-// forwards the upgrade to the Conversation DO, so the DO only ever serves a verified user its own conversation. The DO
-// calls the rest: the published config at each turn (a publish takes effect at the next turn), the turn's messages
-// into the read model, and the auto-close. Every id is internal and comes from the verified identity or the session,
+// forwards the upgrade to the Conversation DO, so the DO only ever serves a verified user its own conversation (and
+// closeConversation when that upgrade then fails). The DO calls the rest: the turn's config (re-checking the
+// conversation, chatbot and company as they are now, so pausing a chatbot or a company stops an open socket at its
+// next message), the read model, and the auto-close. Every id is internal and comes from the verified identity or the session,
 // never from the client; the client names a conversation only by publicId, and only one of its own.
 export default class ConversationsRepo {
   private db: NodePgDatabase;
@@ -20,6 +23,8 @@ export default class ConversationsRepo {
   private conversationsDal: ConversationsDAL;
   private chatbotConfigsDal: ChatbotConfigsDAL;
   private messagesDal: MessagesDAL;
+  private companiesDal: CompaniesDAL;
+  private chatbotsDal: ChatbotsDAL;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
@@ -27,6 +32,8 @@ export default class ConversationsRepo {
     this.conversationsDal = new ConversationsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.messagesDal = new MessagesDAL();
+    this.companiesDal = new CompaniesDAL();
+    this.chatbotsDal = new ChatbotsDAL();
   }
 
   // DEV_NOTE: The verified user's chatbot_users row (created on first visit, display name kept current), then either
@@ -40,7 +47,11 @@ export default class ConversationsRepo {
     const { identity } = params;
     const chatbotUser = await this.upsertChatbotUser(identity);
     if (!chatbotUser.isSuccess || !chatbotUser.chatbotUser) {
-      return this.reject(Schemas.WidgetAuthFailureEnum.ServerError, chatbotUser.message, identity);
+      return this.reject(
+        Schemas.ConversationStartFailureEnum.ServerError,
+        chatbotUser.message,
+        identity,
+      );
     }
     const chatbotUserId = chatbotUser.chatbotUser.id;
 
@@ -58,8 +69,8 @@ export default class ConversationsRepo {
               isSuccess: false,
               message: found.message,
               failure: found.isNotFound
-                ? Schemas.WidgetAuthFailureEnum.NotFound
-                : Schemas.WidgetAuthFailureEnum.ServerError,
+                ? Schemas.ConversationStartFailureEnum.NotFound
+                : Schemas.ConversationStartFailureEnum.ServerError,
             };
           }
           const { conversation } = found;
@@ -71,13 +82,14 @@ export default class ConversationsRepo {
             return {
               isSuccess: false,
               message: "Conversation is closed or not this user's",
-              failure: Schemas.WidgetAuthFailureEnum.NotFound,
+              failure: Schemas.ConversationStartFailureEnum.NotFound,
             };
           }
           return {
             isSuccess: true,
             message: "Conversation resumed",
             session: this.toSession(identity, chatbotUserId, conversation),
+            isNew: false,
           };
         }
 
@@ -122,6 +134,7 @@ export default class ConversationsRepo {
           isSuccess: true,
           message: "Conversation started",
           session: this.toSession(identity, chatbotUserId, rooted.conversation),
+          isNew: true,
           outboxId: event.outboxId,
         };
       },
@@ -129,7 +142,7 @@ export default class ConversationsRepo {
 
     if (!result.isSuccess) {
       return this.reject(
-        result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError,
+        result.failure ?? Schemas.ConversationStartFailureEnum.ServerError,
         result.message,
         identity,
       );
@@ -137,20 +150,62 @@ export default class ConversationsRepo {
     return result;
   }
 
-  // DEV_NOTE: The config this turn runs on: the chatbot's published config, read fresh every turn, so a publish takes
-  // effect at the next one. Loaded through loadConfigSpec (upgraded, validated, platform defaults filled in). When
-  // the published config changed, conversations.chatbot_config_id follows it. isNotFound when nothing is published.
+  // DEV_NOTE: The config this turn runs on, after checking the conversation, chatbot and company as they are now (the
+  // socket may have opened long before): an open conversation, an active chatbot of an active company. Then the
+  // chatbot's published config, read fresh every turn so a publish takes effect at the next one, loaded through
+  // loadConfigSpec (upgraded, validated, platform defaults filled in); conversations.chatbot_config_id follows it.
   async loadTurnConfig(params: {
     session: Schemas.ConversationSession;
   }): Promise<Schemas.LoadTurnConfigResponse> {
     const { session } = params;
+    const refuse = (failure: Schemas.TurnConfigFailureEnum, message?: string) => ({
+      isSuccess: false,
+      message,
+      failure,
+    });
+
     return await withTenant(this.db, session.companyId, async (tx) => {
+      const current = await this.conversationsDal.getConversationDetails(tx, {
+        companyId: session.companyId,
+        publicId: session.conversationPublicId,
+      });
+      if (!current.isSuccess || !current.conversation) {
+        return refuse(Schemas.TurnConfigFailureEnum.ServerError, current.message);
+      }
+      if (current.conversation.status !== Schemas.ConversationStatusIntEnum.Open) {
+        return refuse(Schemas.TurnConfigFailureEnum.ConversationClosed, "Conversation is closed");
+      }
+
+      const company = await this.companiesDal.getCompanyDetails(tx, {
+        companyId: session.companyId,
+      });
+      const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
+        companyId: session.companyId,
+        publicId: session.chatbotPublicId,
+      });
+      if (!company.isSuccess || !chatbot.isSuccess) {
+        return chatbot.isNotFound
+          ? refuse(Schemas.TurnConfigFailureEnum.ChatbotUnavailable, chatbot.message)
+          : refuse(Schemas.TurnConfigFailureEnum.ServerError, company.message ?? chatbot.message);
+      }
+      if (
+        company.company?.status !== Schemas.CompanyStatusIntEnum.Active ||
+        chatbot.chatbot?.status !== Schemas.ChatbotStatusIntEnum.Active
+      ) {
+        return refuse(
+          Schemas.TurnConfigFailureEnum.ChatbotUnavailable,
+          "Chatbot or company is not active",
+        );
+      }
+
       const published = await this.chatbotConfigsDal.getPublishedChatbotConfig(tx, {
         companyId: session.companyId,
         chatbotId: session.chatbotId,
       });
       if (!published.isSuccess || !published.chatbotConfig) {
-        return { isSuccess: false, message: published.message, isNotFound: published.isNotFound };
+        return published.isNotFound
+          ? refuse(Schemas.TurnConfigFailureEnum.NoPublishedConfig, published.message)
+          : refuse(Schemas.TurnConfigFailureEnum.ServerError, published.message);
       }
       const { chatbotConfig } = published;
 
@@ -170,16 +225,9 @@ export default class ConversationsRepo {
             schemaVersion: chatbotConfig.schemaVersion,
           },
         });
-        return { isSuccess: false, message: loaded.message };
+        return refuse(Schemas.TurnConfigFailureEnum.ServerError, loaded.message);
       }
 
-      const current = await this.conversationsDal.getConversationDetails(tx, {
-        companyId: session.companyId,
-        publicId: session.conversationPublicId,
-      });
-      if (!current.isSuccess || !current.conversation) {
-        return { isSuccess: false, message: current.message };
-      }
       if (current.conversation.chatbotConfigId !== chatbotConfig.id) {
         const updated = await this.conversationsDal.setConversationConfig(tx, {
           companyId: session.companyId,
@@ -233,7 +281,8 @@ export default class ConversationsRepo {
     });
   }
 
-  // DEV_NOTE: The auto-close. A conversation already closed stays as it is (isNotFound).
+  // DEV_NOTE: The auto-close, and the widget route closing a conversation it created whose DO upgrade then failed. A
+  // conversation already closed stays as it is (isNotFound).
   async closeConversation(params: {
     session: Schemas.ConversationSession;
     outcome: Schemas.ConversationOutcomeIntEnum;
@@ -247,25 +296,6 @@ export default class ConversationsRepo {
           outcome: params.outcome,
         });
       return result;
-    });
-  }
-
-  // DEV_NOTE: Server-side only (the DO's read model check and the M4-4 transcript): one page of the conversation's
-  // messages, oldest first
-  async getMessages(params: {
-    session: Schemas.ConversationSession;
-    pageNo: number;
-    pageSize: number;
-  }): Promise<Schemas.MessagesDALResponse> {
-    const { session } = params;
-    return await withTenant(this.db, session.companyId, async (tx) => {
-      return await this.messagesDal.getMessages(tx, {
-        companyId: session.companyId,
-        conversationId: session.conversationId,
-        pageNo: params.pageNo,
-        pageSize: Math.min(params.pageSize, Schemas.MAX_PAGE_SIZE),
-        sortDirection: Schemas.SortDirection.Asc,
-      });
     });
   }
 
@@ -328,7 +358,7 @@ export default class ConversationsRepo {
   }
 
   private reject(
-    failure: Schemas.WidgetAuthFailureEnum,
+    failure: Schemas.ConversationStartFailureEnum,
     message: string | undefined,
     identity: Schemas.WidgetIdentity,
   ): Schemas.StartConversationResponse {
@@ -338,7 +368,7 @@ export default class ConversationsRepo {
       message: message ?? "Conversation could not be started",
       metadata: { companyId: identity.companyId, chatbotId: identity.chatbotId },
     };
-    if (failure === Schemas.WidgetAuthFailureEnum.ServerError) {
+    if (failure === Schemas.ConversationStartFailureEnum.ServerError) {
       AppLogger.error(entry);
     } else {
       AppLogger.warn(entry);

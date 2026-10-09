@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { activityLog, companies } from "@/db/tables";
@@ -6,7 +6,7 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
-// and every query filters on companyId (defence in depth on top of RLS). activity_log is append-only: insert only.
+// and every query filters on companyId (defence in depth on top of RLS). activity_log is append-only: insert, and read by entity.
 // Critical events reach it through CriticalEventProvider, which writes the event_outbox row in the same tx.
 export default class ActivityLogDAL {
   async createActivityLog(
@@ -86,6 +86,44 @@ export default class ActivityLogDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateActivityLog,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every log row of one entity, oldest first (IDX_activity_log_entity_id). Not paged: an entity gathers a
+  // handful of events (an issue: opened, a provider added per failing key).
+  async getActivityLogsByEntity(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActivityLogsByEntityDALRequest,
+  ) {
+    const response: Schemas.ActivityLogsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.companyId, params.companyId),
+        eq(activityLog.entityType, params.entityType),
+        eq(activityLog.entityId, params.entityId),
+      ];
+      const activityLogs = await tx
+        .select()
+        .from(activityLog)
+        .where(and(...conditions))
+        .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+
+      response.isSuccess = true;
+      response.message = "Activity logs fetched successfully";
+      response.activityLogs = activityLogs;
+    } catch (error) {
+      const message = "Unknown error in fetching activity logs";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActivityLogsByEntity,
         message,
         error,
         metadata: params,

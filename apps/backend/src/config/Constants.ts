@@ -61,6 +61,7 @@ export default class Constants {
   static readonly MODEL_CALL_BACKFILL_MIN_AGE_MS = 60_000;
   static readonly MODEL_CALL_BACKFILL_MAX_AGE_MS = 60 * 60_000;
   static readonly MODEL_CALL_BACKFILL_BATCH_SIZE = 50;
+  static readonly MODEL_CALL_BACKFILL_CONCURRENCY = 10;
   static readonly AI_GATEWAY_LOG_FETCH_TIMEOUT_MS = 5_000;
 
   // DEV_NOTE: Conversation DO (M2-2). The widget route hands the verified session to the DO in this header, which it
@@ -70,5 +71,8 @@ export default class Constants {
   static readonly CONVERSATION_SESSION_HEADER = "x-diletta-conversation-session";
   static readonly WIDGET_FRAME_MAX_BYTES = 64 * 1024;
   static readonly CONVERSATION_IDLE_CLOSE_MS = 30 * 60_000;
+  // DEV_NOTE: When the auto-close can't act yet (a turn is running, the database failed), it tries again no sooner than
+  // this, so a stuck close never fires in a loop
+  static readonly CONVERSATION_CLOSE_RETRY_MS = 60_000;
   static readonly CONVERSATION_TITLE_MAX_CHARS = 80;
 }

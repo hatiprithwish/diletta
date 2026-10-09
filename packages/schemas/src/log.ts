@@ -115,6 +115,8 @@ export enum LogAction {
   CreateGatewayModel = "CreateGatewayModel",
   RecordModelCall = "RecordModelCall",
   HandleModelKeyFailure = "HandleModelKeyFailure",
+  SyncReadModel = "SyncReadModel",
+  CloseIdleConversation = "CloseIdleConversation",
   GetGatewayLogUsage = "GetGatewayLogUsage",
 
   // Chatbot configs
@@ -139,6 +141,7 @@ export enum LogAction {
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",
+  GetActivityLogsByEntity = "GetActivityLogsByEntity",
   CreateEventOutbox = "CreateEventOutbox",
   GetEventOutboxByDedupeKey = "GetEventOutboxByDedupeKey",
   LockEventOutboxDedupeKey = "LockEventOutboxDedupeKey",
