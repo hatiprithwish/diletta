@@ -42,16 +42,49 @@ const generated = (text: string) => ({
   response: { headers: { "cf-aig-log-id": "log-ok" } },
 });
 
-function wrapped(model: MockLanguageModelV4, onRejectedKey = vi.fn(async () => {})) {
+// DEV_NOTE: An allow-all budget unless a test passes its own: every attempt gets a hold, and the holds are kept so a
+// test can see what was reserved and which hold each record settles
+function allowAllBudget() {
+  const reservations: Schemas.ModelCallEstimate[] = [];
+  return {
+    reservations,
+    budget: {
+      maxOutputTokens: () => Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+      reserve: vi.fn(
+        async (estimate: Schemas.ModelCallEstimate): Promise<Schemas.ModelCallReservation> => {
+          reservations.push(estimate);
+          return {
+            isSuccess: true,
+            reservationId: `reservation-${reservations.length}`,
+            amountMicros: 1,
+            tokens: estimate.inputTokens + estimate.maxOutputTokens,
+          };
+        },
+      ),
+    },
+  };
+}
+
+function wrapped(
+  model: MockLanguageModelV4,
+  onRejectedKey = vi.fn(async () => {}),
+  budget: ReturnType<typeof allowAllBudget>["budget"] = allowAllBudget().budget,
+) {
   const records: Schemas.ModelCallRecord[] = [];
+  const settledReservationIds: string[] = [];
   return {
     records,
+    settledReservationIds,
     onRejectedKey,
     model: wrapLanguageModel({
       model,
       middleware: ModelCallRecordingProvider.createMiddleware({
         provider: Schemas.ModelProviderEnum.Anthropic,
-        onRecord: (record) => records.push(record),
+        budget,
+        onRecord: (record, reservation) => {
+          records.push(record);
+          settledReservationIds.push(reservation.reservationId);
+        },
         onRejectedKey,
       }),
     }),
@@ -348,6 +381,121 @@ describe("ModelCallRecordingProvider retries", () => {
       generateText({ model, prompt: "Hi", abortSignal: abort.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe("ModelCallRecordingProvider budget", () => {
+  it("refuses a call the budget won't hold before it reaches the provider", async () => {
+    const doGenerate = vi.fn(async () => generated("Never sent"));
+    const budget = {
+      maxOutputTokens: () => Constants.MODEL_CALL_MAX_OUTPUT_TOKENS,
+      reserve: vi.fn(
+        async (_estimate: Schemas.ModelCallEstimate): Promise<Schemas.ModelCallReservation> => ({
+          isSuccess: false,
+          refusal: Schemas.BudgetRefusalEnum.CompanyBudget,
+        }),
+      ),
+    };
+    const { model, records } = wrapped(
+      new MockLanguageModelV4({ doGenerate }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await expect(generateText({ model, prompt: "Hi" })).rejects.toMatchObject({
+      name: "ModelUnavailableError",
+      message: Schemas.MODEL_UNAVAILABLE_MESSAGE,
+      failure: Schemas.ModelRouterFailureEnum.BudgetExceeded,
+    });
+    expect(doGenerate).not.toHaveBeenCalled();
+    // DEV_NOTE: Nothing was called, so nothing is recorded, and a refusal is never retried
+    expect(records).toEqual([]);
+    expect(budget.reserve).toHaveBeenCalledOnce();
+  });
+
+  it("reserves every attempt, retries included, and each record settles its own hold", async () => {
+    let calls = 0;
+    const { budget, reservations } = allowAllBudget();
+    const { model, settledReservationIds } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          calls += 1;
+          if (calls === 1)
+            throw apiError(529, { type: "error", error: { type: "overloaded_error" } });
+          return generated("Second time lucky");
+        },
+      }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await generateText({ model, prompt: "Hi" });
+
+    expect(reservations).toHaveLength(2);
+    expect(settledReservationIds).toEqual(["reservation-1", "reservation-2"]);
+  });
+
+  it("caps the output at the turn's tokens left and sizes the hold on that cap", async () => {
+    let sentMaxOutputTokens: number | undefined;
+    const { budget, reservations } = allowAllBudget();
+    budget.maxOutputTokens = () => 120;
+    const { model } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async (options) => {
+          sentMaxOutputTokens = options.maxOutputTokens;
+          return generated("Short");
+        },
+      }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await generateText({ model, prompt: "Hi", maxOutputTokens: 50_000 });
+
+    expect(sentMaxOutputTokens).toBe(120);
+    expect(reservations[0]?.maxOutputTokens).toBe(120);
+    expect(reservations[0]?.inputTokens).toBeGreaterThan(0);
+  });
+
+  it("never asks for more than the platform output cap", async () => {
+    let sentMaxOutputTokens: number | undefined;
+    const { model } = wrapped(
+      new MockLanguageModelV4({
+        doGenerate: async (options) => {
+          sentMaxOutputTokens = options.maxOutputTokens;
+          return generated("Short");
+        },
+      }),
+    );
+
+    await generateText({ model, prompt: "Hi", maxOutputTokens: 1_000_000 });
+
+    expect(sentMaxOutputTokens).toBe(Constants.MODEL_CALL_MAX_OUTPUT_TOKENS);
+  });
+
+  it("refuses a turn with no tokens left without asking the budget", async () => {
+    const doGenerate = vi.fn(async () => generated("Never sent"));
+    const { budget } = allowAllBudget();
+    budget.maxOutputTokens = () => 0;
+    const { model } = wrapped(
+      new MockLanguageModelV4({ doGenerate }),
+      vi.fn(async () => {}),
+      budget,
+    );
+
+    await expect(generateText({ model, prompt: "Hi" })).rejects.toMatchObject({
+      failure: Schemas.ModelRouterFailureEnum.BudgetExceeded,
+    });
+    expect(budget.reserve).not.toHaveBeenCalled();
+    expect(doGenerate).not.toHaveBeenCalled();
+  });
+
+  it("estimates a longer prompt as more tokens, never fewer than its characters / 3", () => {
+    const prompt = "x".repeat(3_000);
+    const estimate = ModelCallRecordingProvider.estimateInputTokens({
+      prompt: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+    expect(estimate).toBeGreaterThanOrEqual(1_000);
   });
 });
 

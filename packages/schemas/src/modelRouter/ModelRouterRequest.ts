@@ -1,3 +1,4 @@
+import type { ModelCallCaps } from "../budget";
 import type { CompanySecret, ModelProviderEnum } from "../companySecrets";
 import type { ConfigSpec, ModelTierEnum } from "../configSpec";
 import type { ModelCallUsageStatusIntEnum, ModelTaskTypeEnum } from "../modelCalls";
@@ -7,7 +8,9 @@ import type { ModelCallUsage, ModelKeyFailureReasonEnum, ModelPrice } from "./Mo
 // the eval runner (ModelRouterRepo.getModel). Every id is internal and resolved server-side (WidgetIdentity, the
 // conversation row). chatbotId / chatbotUserId / conversationId are null for a background job, evalRunId for anything
 // but an eval. tier null = the routing's defaultTier. routing comes from the chatbot's loaded config spec
-// (loadConfigSpec), so the router never reads chatbot_configs itself.
+// (loadConfigSpec), so the router never reads chatbot_configs itself. Every call of the routed model reserves against
+// the company's BudgetDO (M2-4); caps adds the caller's own limits on top (the Conversation DO's turn and conversation
+// caps), null for a caller without any.
 export interface GetModelRequest {
   companyId: string;
   chatbotId: string | null;
@@ -18,6 +21,7 @@ export interface GetModelRequest {
   taskType: ModelTaskTypeEnum;
   tier: ModelTierEnum | null;
   routing: ConfigSpec["routing"];
+  caps: ModelCallCaps | null;
 }
 
 // DEV_NOTE: Server-side only — the exact company key value a model was built with. iv and key version change on every

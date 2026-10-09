@@ -11,6 +11,7 @@ import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
 import { ModelUnavailableError } from "@/providers/modelCallRecording";
 import TranscriptProvider from "@/providers/transcript";
+import TurnBudgetProvider from "@/providers/turnBudget";
 import WidgetFrameProvider from "@/providers/widgetFrames";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
@@ -37,6 +38,13 @@ const CLOSING_MESSAGE = "This conversation is closing";
 // effect here) and the model routed through ModelRouterRepo; if either fails the message isn't saved and the widget
 // gets "unavailable" (or "closed").
 //
+// Budget (M2-4): before the model is routed, the turn must pass the conversation's own caps (conversationTurnsPerHour,
+// conversationCostCapUsd, from the runtime state) and BudgetDO.admitTurn (the user's message rate, room left in the
+// company budget and the user's daily cap). A rate limit tells the widget to wait (BUDGET_RATE_LIMIT_MESSAGE); any other
+// refusal is "unavailable"; either way nothing is saved. The admitted turn gets a TurnBudgetProvider, which the router
+// checks before every model call (turn tokens and cost, conversation cost) on top of BudgetDO's reserve, and which ends
+// the turn's loop (stopWhen) once a cap is used up. turnTimeoutSeconds bounds the whole turn (AI SDK timeout).
+//
 // Read model: after every turn and on every wake, the transcript past the synced position is written to messages
 // (TranscriptProvider), so a failed write or a turn cut by an eviction is caught up on later.
 //
@@ -55,7 +63,7 @@ export class ConversationDO extends Think<Env> {
   chatRecovery = { maxAttempts: 0, terminalMessage: TURN_FAILED_MESSAGE };
 
   // DEV_NOTE: The turn being prepared or run: at most one. In memory only (a turn keeps the DO awake).
-  private activeTurn: Schemas.ActiveTurn<LanguageModel> | null = null;
+  private activeTurn: Schemas.ActiveTurn<LanguageModel, TurnBudgetProvider> | null = null;
   private isClosing = false;
   private syncInFlight: Promise<boolean> | null = null;
   private isSyncRequested = false;
@@ -76,17 +84,20 @@ export class ConversationDO extends Think<Env> {
 
   beforeTurn(_ctx: TurnContext): TurnConfig {
     const turn = this.activeTurn;
-    if (!turn?.model || !turn.spec) {
+    if (!turn?.model || !turn.spec || !turn.caps) {
       throw new ModelUnavailableError(
         Schemas.ModelRouterFailureEnum.ServerError,
         new Error("Turn was not prepared"),
       );
     }
+    const caps = turn.caps;
     return {
       model: turn.model,
       instructions: ConversationDO.buildInstructions(turn.spec),
       activeTools: [],
       maxSteps: turn.spec.limits.maxStepsPerTurn,
+      stopWhen: () => caps.isExhausted(),
+      timeout: { totalMs: turn.spec.limits.turnTimeoutSeconds * 1000 },
     };
   }
 
@@ -134,6 +145,8 @@ export class ConversationDO extends Think<Env> {
         lastSyncedMessageId: null,
         turnIds: {},
         lastSyncedTurnId: null,
+        turnStartedAts: [],
+        spentMicros: 0,
       });
       await this.armAutoClose();
     }
@@ -288,7 +301,7 @@ export class ConversationDO extends Think<Env> {
     }
 
     const turnId = Utility.generateUlid();
-    this.activeTurn = { requestId, turnId, userMessageId, model: null, spec: null };
+    this.activeTurn = { requestId, turnId, userMessageId, model: null, spec: null, caps: null };
     this.patchRuntimeState({
       lastActivityAt: Date.now(),
       turnIds: { ...state.turnIds, [userMessageId]: turnId },
@@ -302,6 +315,8 @@ export class ConversationDO extends Think<Env> {
       if (prepared.isClosed) {
         this.reply(ws, { type: "closed" });
         ws.close(1000, "Conversation closed");
+      } else if (prepared.refusal && Schemas.BUDGET_RATE_LIMIT_REFUSALS.has(prepared.refusal)) {
+        this.reply(ws, { type: "error", message: Schemas.BUDGET_RATE_LIMIT_MESSAGE });
       } else {
         this.reply(ws, { type: "unavailable", message: Schemas.MODEL_UNAVAILABLE_MESSAGE });
       }
@@ -314,24 +329,45 @@ export class ConversationDO extends Think<Env> {
       userMessageId,
       model: prepared.model,
       spec: prepared.spec,
+      caps: prepared.caps,
     };
     return true;
   }
 
-  // DEV_NOTE: The turn's config (re-checking conversation, chatbot and company) and the routed model. isClosed when the
-  // conversation was closed elsewhere; otherwise a failure means the chatbot can't answer (logged by the Repos; the
-  // router opens the system issue for a key failure).
+  // DEV_NOTE: The turn's config (re-checking conversation, chatbot and company), its budget admission and the routed
+  // model. isClosed when the conversation was closed elsewhere; refusal when a budget or rate limit said no; otherwise
+  // a failure means the chatbot can't answer (logged by the Repos; the router opens the system issue for a key failure).
   private async prepareTurn(
     session: Schemas.ConversationSession,
     turnId: string,
-  ): Promise<Schemas.PreparedTurn<LanguageModel>> {
+  ): Promise<Schemas.PreparedTurn<LanguageModel, TurnBudgetProvider>> {
     const config = await this.conversationsRepo().loadTurnConfig({ session });
     if (!config.isSuccess || !config.spec) {
       const isClosed = config.failure === Schemas.TurnConfigFailureEnum.ConversationClosed;
       if (isClosed) this.patchRuntimeState({ isClosed: true });
-      return { isSuccess: false, isClosed };
+      return { isSuccess: false, isClosed, refusal: null };
     }
 
+    const refusal = await this.admitTurnBudget(session, config.spec.limits);
+    if (refusal) {
+      AppLogger.warn({
+        category: Schemas.LogCategory.Conversation,
+        action: Schemas.LogAction.RunTurn,
+        message: "Turn refused by its budget",
+        metadata: { conversationPublicId: this.name, turnId, refusal },
+      });
+      return { isSuccess: false, isClosed: false, refusal };
+    }
+
+    const caps = new TurnBudgetProvider({
+      limits: config.spec.limits,
+      getConversationSpentMicros: () => this.getRuntimeState()?.spentMicros ?? 0,
+      onSpent: (costMicros) => {
+        this.patchRuntimeState({
+          spentMicros: (this.getRuntimeState()?.spentMicros ?? 0) + costMicros,
+        });
+      },
+    });
     const routed = await new ModelRouterRepo(this.env, this.ctx).getModel({
       companyId: session.companyId,
       chatbotId: session.chatbotId,
@@ -342,9 +378,61 @@ export class ConversationDO extends Think<Env> {
       taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
       tier: null,
       routing: config.spec.routing,
+      caps,
     });
-    if (!routed.isSuccess) return { isSuccess: false, isClosed: false };
-    return { isSuccess: true, spec: config.spec, model: routed.model };
+    if (!routed.isSuccess) return { isSuccess: false, isClosed: false, refusal: null };
+    return { isSuccess: true, spec: config.spec, model: routed.model, caps };
+  }
+
+  // DEV_NOTE: The conversation's own caps first (no I/O), then BudgetDO (an unreachable one refuses: fail closed). An
+  // admitted turn's start time is stored for conversationTurnsPerHour. null = admitted.
+  private async admitTurnBudget(
+    session: Schemas.ConversationSession,
+    limits: Schemas.ConfigSpec["limits"],
+  ): Promise<Schemas.BudgetRefusalEnum | null> {
+    const state = this.getRuntimeState();
+    if (!state) return Schemas.BudgetRefusalEnum.Unavailable;
+    const now = Date.now();
+    const recentTurns = state.turnStartedAts.filter(
+      (startedAt) => now - startedAt < Constants.BUDGET_TURN_WINDOW_MS,
+    );
+    if (recentTurns.length >= limits.conversationTurnsPerHour) {
+      return Schemas.BudgetRefusalEnum.ConversationTurnRate;
+    }
+    if (state.spentMicros >= Schemas.usdToMicros(limits.conversationCostCapUsd)) {
+      return Schemas.BudgetRefusalEnum.ConversationCost;
+    }
+
+    let admitted: Schemas.BudgetAdmissionResponse;
+    try {
+      admitted = await this.env.BUDGET_DO.getByName(session.companyId).admitTurn({
+        companyId: session.companyId,
+        chatbotUserId: session.chatbotUserId,
+        userMessagesPerMinute: limits.userMessagesPerMinute,
+        userDailyCostCapUsd: limits.userDailyCostCapUsd,
+      });
+    } catch (error) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Budget,
+        action: Schemas.LogAction.AdmitBudgetTurn,
+        message: "BudgetDO unreachable; turn refused",
+        error,
+        metadata: { conversationPublicId: this.name },
+      });
+      return Schemas.BudgetRefusalEnum.Unavailable;
+    }
+    if (!admitted.isSuccess) {
+      return admitted.refusal ?? Schemas.BudgetRefusalEnum.Unavailable;
+    }
+
+    const current = this.getRuntimeState()?.turnStartedAts ?? [];
+    this.patchRuntimeState({
+      turnStartedAts: [
+        ...current.filter((startedAt) => now - startedAt < Constants.BUDGET_TURN_WINDOW_MS),
+        now,
+      ],
+    });
+    return null;
   }
 
   // DEV_NOTE: Ends the active turn once (onChatResponse, or onChatError for a turn that failed before a response):

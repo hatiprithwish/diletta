@@ -82,8 +82,12 @@ async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Pro
   return await run(drizzle({ client: ownerPool }));
 }
 
-function configBody(persona: string): Schemas.ConfigSpecV1Input {
+function configBody(
+  persona: string,
+  limits?: Schemas.ConfigSpecV1Input["limits"],
+): Schemas.ConfigSpecV1Input {
   return {
+    ...(limits ? { limits } : {}),
     persona: { instructions: persona },
     procedures: [
       {
@@ -109,8 +113,9 @@ async function publishConfig(
   tenant: { companyId: string; chatbotId: string },
   persona: string,
   configVersion: number,
+  limits?: Schemas.ConfigSpecV1Input["limits"],
 ): Promise<string> {
-  const normalized = Schemas.normalizeConfigBody(configBody(persona));
+  const normalized = Schemas.normalizeConfigBody(configBody(persona, limits));
   if (!normalized.body || !normalized.schemaVersion) throw new Error("Config body invalid");
   return await withOwnerDb(async (ownerDb) => {
     await ownerDb
@@ -280,6 +285,27 @@ async function connect(
     });
 
   return { status: response.status, socket, frames, waitFor, closed };
+}
+
+// DEV_NOTE: Polls, since no frame marks the moment a call goes out (the budget is reserved first, M2-4)
+async function waitForGatewayRequests(count: number) {
+  for (let attempt = 0; attempt < 150; attempt++) {
+    if (gatewayRequests().length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Gateway requests never reached ${count}`);
+}
+
+// DEV_NOTE: model_calls rows are written in waitUntil, after the turn's last frame
+async function waitForModelCalls(conversationId: string, count: number) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const calls = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(modelCalls).where(eq(modelCalls.conversationId, conversationId)),
+    );
+    if (calls.length >= count) return calls;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`model_calls never reached ${count}`);
 }
 
 function chatRequest(requestId: string, history: Record<string, unknown>[]): string {
@@ -587,7 +613,7 @@ describe("Conversation DO turns", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     await waitFor((frame) => frame.type === "conversation");
 
     socket.send(chatRequest("req-1", [userMessage("user-1", "First")]));
-    await waitFor(() => gatewayRequests().length === 1);
+    await waitForGatewayRequests(1);
     socket.send(chatRequest("req-2", [userMessage("user-2", "Second")]));
     const refused = await waitFor((frame) => frame.type === "error");
     expect(refused.message).toBe("A reply is still in progress");
@@ -615,6 +641,107 @@ describe("Conversation DO turns", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(await getTranscript(hello.conversation.publicId)).toHaveLength(0);
     const conversation = await getConversation(hello.conversation.publicId);
     expect(await getReadModel(conversation?.id ?? "")).toHaveLength(0);
+    socket.close(1000);
+  });
+});
+
+describe("Conversation budget", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  it("answers 'unavailable' and saves nothing once the company budget is used up", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(companies)
+        .set({ spendingBudget: "0.000000" })
+        .where(eq(companies.id, tenant.companyId)),
+    );
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = (await waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+
+    socket.send(chatRequest("req-1", [userMessage("user-1", "Hello?")]));
+    const unavailable = await waitFor((frame) => frame.type === "unavailable");
+    expect(unavailable.message).toBe(Schemas.MODEL_UNAVAILABLE_MESSAGE);
+
+    expect(gatewayRequests()).toHaveLength(0);
+    expect(await getTranscript(hello.conversation.publicId)).toHaveLength(0);
+    socket.close(1000);
+  });
+
+  it("asks the user to wait when they send faster than their message rate", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    await publishConfig(tenant, PERSONA, 2, { userMessagesPerMinute: 1 });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = (await waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "First")]);
+    socket.send(chatRequest("req-2", [userMessage("user-2", "Second")]));
+    const refused = await waitFor(
+      (frame) => frame.type === "error" && frame.message === Schemas.BUDGET_RATE_LIMIT_MESSAGE,
+    );
+    expect(refused.message).toBe(Schemas.BUDGET_RATE_LIMIT_MESSAGE);
+
+    expect(gatewayRequests()).toHaveLength(1);
+    expect(await getTranscript(hello.conversation.publicId)).toHaveLength(2);
+    socket.close(1000);
+  });
+
+  it("caps a call's output at the turn's tokens left", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    await publishConfig(tenant, PERSONA, 2, { maxTokensPerTurn: 2_000 });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    await waitFor((frame) => frame.type === "conversation");
+
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Hello?")]);
+
+    const maxTokens = Number(gatewayRequests()[0]?.body?.max_tokens);
+    expect(maxTokens).toBeGreaterThan(0);
+    expect(maxTokens).toBeLessThan(2_000);
+    socket.close(1000);
+  });
+
+  it("keeps the conversation's spend and refuses a turn once it reaches its cap", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    await publishConfig(tenant, PERSONA, 2, { conversationCostCapUsd: 0.5 });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = (await waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    const publicId = hello.conversation.publicId;
+
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Hello?")]);
+    await waitForAnswered(publicId);
+
+    // DEV_NOTE: The DO's count of the conversation's spend matches what model_calls records for it
+    const conversation = await getConversation(publicId);
+    const calls = await waitForModelCalls(conversation?.id ?? "", 1);
+    const stub = await getAgentByName(env.CONVERSATION_DO, publicId);
+    const spentMicros = await runInDurableObject(
+      stub,
+      (instance) => Schemas.ZConversationRuntimeState.parse(instance.getConfig()).spentMicros,
+    );
+    expect(calls).toHaveLength(1);
+    expect(spentMicros).toBe(Schemas.usdToMicros(calls[0]?.costUsd ?? "0"));
+    expect(spentMicros).toBeGreaterThan(0);
+
+    await runInDurableObject(stub, (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({ ...state, spentMicros: 500_000 });
+    });
+    socket.send(chatRequest("req-2", [userMessage("user-2", "Again?")]));
+    const unavailable = await waitFor((frame) => frame.type === "unavailable");
+    expect(unavailable.message).toBe(Schemas.MODEL_UNAVAILABLE_MESSAGE);
+    expect(gatewayRequests()).toHaveLength(1);
     socket.close(1000);
   });
 });
@@ -967,7 +1094,7 @@ describe("Conversation auto-close timing", { timeout: END_TO_END_TIMEOUT_MS }, (
     const publicId = (hello as unknown as Schemas.WidgetConversationMessage).conversation.publicId;
 
     socket.send(chatRequest("req-1", [userMessage("user-1", "Slow one")]));
-    await waitFor(() => gatewayRequests().length === 1);
+    await waitForGatewayRequests(1);
     const stub = await makeIdle(publicId);
     const before = Date.now();
     await runInDurableObject(stub, async (instance) => await instance.closeIfIdle());

@@ -1,4 +1,5 @@
 import z from "zod";
+import type { BudgetRefusalEnum } from "../budget";
 import type { ConfigSpec } from "../configSpec";
 import { ZConversationSession } from "./ConversationsCommon";
 import type { TurnMessage } from "../messages";
@@ -96,26 +97,30 @@ export interface UnsyncedTranscript {
 }
 
 // DEV_NOTE: Server-side only — the turn the Conversation DO is preparing or running (at most one). TModel is the AI
-// SDK LanguageModel (@app/schemas doesn't depend on it). model and spec are null while the turn is being prepared.
-export interface ActiveTurn<TModel> {
+// SDK LanguageModel (@app/schemas doesn't depend on it); TCaps the turn's budget (TurnBudgetProvider, M2-4). model,
+// spec and caps are null while the turn is being prepared.
+export interface ActiveTurn<TModel, TCaps> {
   requestId: string;
   turnId: string;
   userMessageId: string;
   model: TModel | null;
   spec: ConfigSpec | null;
+  caps: TCaps | null;
 }
 
-// DEV_NOTE: Server-side only — a prepared turn's config and routed model, or why it can't run (isClosed: the
-// conversation was closed elsewhere)
-export type PreparedTurn<TModel> =
-  | { isSuccess: true; spec: ConfigSpec; model: TModel }
-  | { isSuccess: false; isClosed: boolean };
+// DEV_NOTE: Server-side only — a prepared turn's config, routed model and budget, or why it can't run (isClosed: the
+// conversation was closed elsewhere; refusal: a budget or rate limit said no, null for any other failure)
+export type PreparedTurn<TModel, TCaps> =
+  | { isSuccess: true; spec: ConfigSpec; model: TModel; caps: TCaps }
+  | { isSuccess: false; isClosed: boolean; refusal: BudgetRefusalEnum | null };
 
 // DEV_NOTE: Server-side only — what the Conversation DO keeps in its own storage between wakes: who it serves, the
 // auto-close bookkeeping, whether it is closed, and the read-model sync position. lastSyncedMessageId is the last
 // transcript message written to messages (an id, not an index: Think may load an empty or windowed view); turnIds maps
 // a user message id to the turn ULID it was admitted under, until that turn is synced; lastSyncedTurnId takes a late
-// reply. Internal ids only; never the host bearer token.
+// reply. Budget (M2-4): turnStartedAts holds the start times of the turns admitted in the last hour
+// (conversationTurnsPerHour) and spentMicros the conversation's settled model spend (conversationCostCapUsd), both
+// defaulted so a conversation stored before M2-4 still parses. Internal ids only; never the host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
@@ -125,5 +130,7 @@ export const ZConversationRuntimeState = z.object({
   lastSyncedMessageId: z.string().nullable(),
   turnIds: z.record(z.string(), z.string()),
   lastSyncedTurnId: z.string().nullable(),
+  turnStartedAts: z.array(z.number().int()).default([]),
+  spentMicros: z.number().int().min(0).default(0),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;
