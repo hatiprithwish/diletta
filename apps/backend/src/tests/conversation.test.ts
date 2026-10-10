@@ -15,6 +15,7 @@ import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
+import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import getDbClient from "@/db/dbClient";
 import {
   activityLog,
@@ -37,9 +38,11 @@ import worker from "@/index";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import FeedbackRepo from "@/repositories/FeedbackRepo";
 import KnowledgeSearchRepo from "@/repositories/KnowledgeSearchRepo";
 import Constants from "@/config/Constants";
+import CriticalEventProvider from "@/providers/criticalEvent";
 import WidgetFrameProvider from "@/providers/widgetFrames";
 import Utility from "@/utils/Utility";
 import {
@@ -1753,6 +1756,8 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(recorded.isSuccess).toBe(false);
     expect(recorded.isNotFound).toBe(true);
     expect((await repo.listConversationFeedback({ session })).ratings).toEqual([]);
+    expect(await getUserIssues(owner.companyId)).toEqual([]);
+    expect(await getUserIssues(other.companyId)).toEqual([]);
 
     const db = getDbClient(env);
     const planted: Schemas.FeedbackDALResponse = await withTenant(
@@ -1895,6 +1900,181 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(answers().filter((frame) => frame.rating === null)).toHaveLength(1);
     expect(recordFeedback).toHaveBeenCalledTimes(flood - 1);
     socket.close(1000);
+  });
+
+  // DEV_NOTE: M2-8 — a thumbs-down opens one user quality issue (feedback_id set) and its quality_issue.opened event
+  async function getUserIssues(companyId: string) {
+    return await withOwnerDb(async (ownerDb) => {
+      const conditions = [
+        eq(qualityIssues.companyId, companyId),
+        eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.User),
+      ];
+      return await ownerDb
+        .select()
+        .from(qualityIssues)
+        .where(and(...conditions));
+    });
+  }
+
+  async function getIssueOpenedEvents(companyId: string) {
+    return await withOwnerDb(async (ownerDb) => {
+      const conditions = [
+        eq(eventOutbox.companyId, companyId),
+        eq(eventOutbox.eventType, "quality_issue.opened"),
+      ];
+      return await ownerDb
+        .select({ outbox: eventOutbox, log: activityLog })
+        .from(eventOutbox)
+        .innerJoin(activityLog, eq(activityLog.id, eventOutbox.activityLogId))
+        .where(and(...conditions));
+    });
+  }
+
+  it("opens one user issue with feedback_id on a thumbs-down, kept through Up and a second Down", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, frames, publicId, replyId } = await ratedReply(tenant);
+    const answers = () =>
+      frames.filter((frame) => frame.type === "feedback" && frame.messageId === replyId);
+
+    const relayEvents = vi.spyOn(EventOutboxRepo.prototype, "relayEvents");
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Down));
+    await waitFor(isFeedbackFor(replyId, Schemas.FeedbackRatingIntEnum.Down));
+
+    const [rating] = await getFeedbackRows(tenant.companyId);
+    const conversation = await getConversation(publicId);
+    if (!rating || !conversation) throw new Error("Rating not stored");
+    const issues = await getUserIssues(tenant.companyId);
+    expect(issues).toHaveLength(1);
+    const [issue] = issues;
+    expect(issue?.feedbackId).toBe(rating.id);
+    expect(issue?.conversationId).toBe(conversation.id);
+    expect(issue?.status).toBe(Schemas.QualityIssueStatusIntEnum.Open);
+    expect(issue?.issueType).toBeNull();
+    expect(issue?.note).toBeNull();
+    expect(issue?.createdBy).toBeNull();
+
+    const events = await getIssueOpenedEvents(tenant.companyId);
+    expect(events).toHaveLength(1);
+    expect(conversation.rootLogId).not.toBeNull();
+    expect(events[0]?.outbox.dedupeKey).toBe(`quality_issue.opened:${issue?.publicId}`);
+    expect(events[0]?.log).toMatchObject({
+      actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+      actorId: conversation.chatbotUserId,
+      entityType: "quality_issue",
+      entityId: issue?.id,
+      entityAction: "opened",
+      parentLogId: conversation.rootLogId,
+      rootLogId: conversation.rootLogId,
+    });
+    // DEV_NOTE: The DO relays the event right after the commit, before it answers the frame
+    expect(relayEvents).toHaveBeenCalledTimes(1);
+    expect(relayEvents).toHaveBeenCalledWith({
+      companyId: tenant.companyId,
+      outboxIds: [events[0]?.outbox.id],
+    });
+    expect(events[0]?.log.detail).toMatchObject({
+      source: Schemas.QualityIssueSourceIntEnum.User,
+      conversationId: conversation.id,
+      messageId: rating.messageId,
+      feedbackId: rating.id,
+    });
+
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    await waitFor(isFeedbackFor(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    expect(await getUserIssues(tenant.companyId)).toEqual(issues);
+
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Down));
+    await waitFor(() => answers().length === 3);
+    expect(answers().map((frame) => frame.rating)).toEqual([
+      Schemas.FeedbackRatingIntEnum.Down,
+      Schemas.FeedbackRatingIntEnum.Up,
+      Schemas.FeedbackRatingIntEnum.Down,
+    ]);
+    const ratings = await getFeedbackRows(tenant.companyId);
+    expect(ratings).toHaveLength(1);
+    expect(ratings[0]?.rating).toBe(Schemas.FeedbackRatingIntEnum.Down);
+    expect(await getUserIssues(tenant.companyId)).toEqual(issues);
+    expect(await getIssueOpenedEvents(tenant.companyId)).toHaveLength(1);
+    expect(relayEvents).toHaveBeenCalledTimes(1);
+    socket.close(1000);
+  });
+
+  it("opens no issue for a thumbs-up", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, replyId } = await ratedReply(tenant);
+
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    await waitFor(isFeedbackFor(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    expect(await getFeedbackRows(tenant.companyId)).toHaveLength(1);
+    expect(await getUserIssues(tenant.companyId)).toEqual([]);
+    expect(await getIssueOpenedEvents(tenant.companyId)).toEqual([]);
+    socket.close(1000);
+  });
+
+  it.each([
+    {
+      failing: "the issue",
+      fail: () =>
+        vi.spyOn(QualityIssuesDAL.prototype, "createUserQualityIssue").mockResolvedValue({
+          isSuccess: false,
+          message: "Unknown error in creating user quality issue",
+        }),
+    },
+    {
+      failing: "its event",
+      fail: () =>
+        vi.spyOn(CriticalEventProvider, "record").mockResolvedValue({
+          isSuccess: false,
+          message: "Unknown error in creating event outbox",
+        }),
+    },
+  ])("rolls the thumbs-down back when $failing can't be saved", async ({ fail }) => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, replyId } = await ratedReply(tenant);
+
+    // DEV_NOTE: Armed after the conversation started, so only the rating's own write fails
+    const failed = fail();
+    const relayEvents = vi.spyOn(EventOutboxRepo.prototype, "relayEvents");
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Down));
+    await waitFor(isFeedbackFor(replyId, null));
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(relayEvents).not.toHaveBeenCalled();
+    expect(await getFeedbackRows(tenant.companyId)).toEqual([]);
+    expect(await getUserIssues(tenant.companyId)).toEqual([]);
+    expect(await getIssueOpenedEvents(tenant.companyId)).toEqual([]);
+    socket.close(1000);
+  });
+
+  it("never opens an issue on a rating of another conversation (as diletta_app)", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const first = await ratedReply(tenant);
+    first.socket.send(feedbackFrame(first.replyId, Schemas.FeedbackRatingIntEnum.Up));
+    await first.waitFor(isFeedbackFor(first.replyId, Schemas.FeedbackRatingIntEnum.Up));
+    first.socket.close(1000);
+    const second = await ratedReply(tenant);
+    second.socket.close(1000);
+
+    const [rating] = await getFeedbackRows(tenant.companyId);
+    const otherConversation = await getConversation(second.publicId);
+    if (!rating || !otherConversation) throw new Error("Rating or conversation missing");
+    const created: Schemas.UserQualityIssueDALResponse = await withTenant(
+      getDbClient(env),
+      tenant.companyId,
+      async (tx) => {
+        return await new QualityIssuesDAL().createUserQualityIssue(tx, {
+          companyId: tenant.companyId,
+          conversationId: otherConversation.id,
+          feedbackId: rating.id,
+        });
+      },
+    );
+    expect(created.isSuccess).toBe(false);
+    expect(created.message).toBe("Feedback not found in the conversation");
+    expect(await getUserIssues(tenant.companyId)).toEqual([]);
   });
 });
 

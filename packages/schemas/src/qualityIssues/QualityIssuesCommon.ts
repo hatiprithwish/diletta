@@ -72,6 +72,25 @@ export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
   [QualityIssueTypeIntEnum.Injection]: QualityIssueTypeLabelEnum.Injection,
 };
 
+// DEV_NOTE: The activity_log / event_outbox names of quality issue events, shared by every writer (ModelKeyFailureProvider,
+// UserQualityIssueProvider) so an event type or dedupe key is spelled once: the dedupe key is what makes a repeat a no-op.
+export const QUALITY_ISSUE_ENTITY_TYPE = "quality_issue";
+
+export enum QualityIssueEntityActionEnum {
+  Opened = "opened",
+  ProviderAdded = "provider_added",
+}
+
+export const qualityIssueEventType = (action: QualityIssueEntityActionEnum): string =>
+  `${QUALITY_ISSUE_ENTITY_TYPE}.${action}`;
+
+// DEV_NOTE: <event type>:<issue publicId>[:<part>…], e.g. quality_issue.provider_added:<publicId>:<provider>
+export const qualityIssueEventDedupeKey = (
+  action: QualityIssueEntityActionEnum,
+  qualityIssuePublicId: string,
+  ...parts: string[]
+): string => [qualityIssueEventType(action), qualityIssuePublicId, ...parts].join(":");
+
 // Whole Quality Issue Body — DB shape (enums stored as integers)
 // DEV_NOTE: id, companyId, conversationId, changeRequestId, feedbackId, evalCaseId, createdBy and updatedBy are
 // internal bigint ids — used by DAL/Repo only, NEVER sent to a client. CHECKs tie feedbackId to source = User,

@@ -6,13 +6,14 @@ import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
 import Constants from "@/config/Constants";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import UserQualityIssueProvider from "@/providers/userQualityIssue";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Feedback (M2-7): a visitor's thumbs on a reply, from the widget's feedback frame through the Conversation
 // DO. Every internal id comes from the DO's verified session; the widget names the reply only by its Think message id,
 // and only a synced reply of this very conversation matches, so a visitor can rate nothing but their own replies.
-// M2-8 adds the quality issue a thumbs-down opens.
+// A thumbs-down also opens a user quality issue (M2-8, UserQualityIssueProvider) in the same transaction.
 export default class FeedbackRepo {
   private db: NodePgDatabase;
   private feedbackDal: FeedbackDAL;
@@ -32,7 +33,10 @@ export default class FeedbackRepo {
 
   // DEV_NOTE: The reply (an assistant message of the session's conversation, by Think message id) gets the rating, the
   // user's earlier one on it replaced. Statuses are re-checked on every rating, never only at connect (rule 3.23): the
-  // conversation must still be open, the company and chatbot active. failure says why nothing was stored.
+  // conversation must still be open, the company and chatbot active. failure says why nothing was stored. A Down opens
+  // the rating's user issue (status Open, untriaged) and its quality_issue.opened event, or rolls the rating back with
+  // them; the issue stays when the visitor later switches to Up, and a second Down opens nothing new (M2-8). outboxId
+  // is the event to relay after the commit.
   async recordFeedback(params: {
     session: Schemas.ConversationSession;
     sessionMessageId: string;
@@ -114,12 +118,24 @@ export default class FeedbackRepo {
       if (!saved.isSuccess || !saved.feedback) {
         return refuse(Schemas.RecordFeedbackFailureEnum.ServerError, saved.message);
       }
+      const rating = { messageId: params.sessionMessageId, rating: saved.feedback.rating };
+      if (saved.feedback.rating !== Schemas.FeedbackRatingIntEnum.Down) {
+        return { isSuccess: true, message: saved.message, rating };
+      }
 
-      return {
-        isSuccess: true,
-        message: saved.message,
-        rating: { messageId: params.sessionMessageId, rating: saved.feedback.rating },
-      };
+      const opened = await UserQualityIssueProvider.open(tx, {
+        companyId: session.companyId,
+        conversationId: session.conversationId,
+        conversationRootLogId: conversation.conversation.rootLogId,
+        chatbotUserId: session.chatbotUserId,
+        messageId: found.chatMessage.id,
+        feedbackId: saved.feedback.id,
+      });
+      if (!opened.isSuccess) {
+        throw new TenantRollbackError(opened.message ?? "User quality issue not opened");
+      }
+
+      return { isSuccess: true, message: saved.message, rating, outboxId: opened.outboxId };
     });
   }
 

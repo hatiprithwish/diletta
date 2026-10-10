@@ -17,6 +17,7 @@ import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
 import TranscriptProvider from "@/providers/transcript";
 import WidgetFrameProvider from "@/providers/widgetFrames";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import FeedbackRepo from "@/repositories/FeedbackRepo";
 import KnowledgeSearchRepo from "@/repositories/KnowledgeSearchRepo";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
@@ -60,7 +61,8 @@ const CLOSING_MESSAGE = "This conversation is closing";
 // (TranscriptProvider), so a failed write or a turn cut by an eviction is caught up on later.
 //
 // Feedback (M2-7): the widget's feedback frame rates one reply. The read model is caught up first (the reply must be
-// in messages), then FeedbackRepo stores it; the widget gets the stored rating back, or null when it wasn't saved.
+// in messages), then FeedbackRepo stores it (a thumbs-down with its user quality issue, M2-8); the widget gets the
+// stored rating back, or null when it wasn't saved.
 // The ratings already given go out with the conversation frame on connect (read by the worker before the upgrade).
 //
 // Auto-close: idle for CONVERSATION_IDLE_CLOSE_MS → Closed (Answered if any reply completed, else Abandoned). A close
@@ -464,6 +466,16 @@ export class ConversationDO extends Think<Env> {
         ws.close(1000, "Conversation closed");
       }
       return;
+    }
+    // DEV_NOTE: A thumbs-down's quality_issue.opened event (M2-8), relayed after the commit; the Cron sweep publishes it
+    // if this relay never runs
+    if (recorded.outboxId) {
+      this.ctx.waitUntil(
+        new EventOutboxRepo(this.env).relayEvents({
+          companyId: state.session.companyId,
+          outboxIds: [recorded.outboxId],
+        }),
+      );
     }
     this.reply(ws, { type: "feedback", messageId, rating: recorded.rating.rating });
   }

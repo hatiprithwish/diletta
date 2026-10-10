@@ -113,6 +113,7 @@ export enum LogAction {
   LockOpenSystemQualityIssue = "LockOpenSystemQualityIssue",
   GetOpenSystemQualityIssue = "GetOpenSystemQualityIssue",
   CreateSystemQualityIssue = "CreateSystemQualityIssue",
+  CreateUserQualityIssue = "CreateUserQualityIssue",
   UpdateQualityIssueNote = "UpdateQualityIssueNote",
 
   // Model router

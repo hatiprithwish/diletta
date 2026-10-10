@@ -5,3 +5,9 @@ import type { ApiResponse } from "../common";
 export interface QualityIssueDALResponse extends ApiResponse {
   qualityIssue?: QualityIssue;
 }
+
+// DEV_NOTE: On success isCreated is always set: true = opened now, false = the feedback row already had its issue (a
+// visitor rating Down again), returned as it is
+export interface UserQualityIssueDALResponse extends QualityIssueDALResponse {
+  isCreated?: boolean;
+}

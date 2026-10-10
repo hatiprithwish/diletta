@@ -7,8 +7,6 @@ import Constants from "@/config/Constants";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
-const QUALITY_ISSUE_ENTITY = "quality_issue";
-
 // DEV_NOTE: The model router's key-failure step, in the caller's transaction (pattern rule 1.1: a provider may hold a
 // self-contained multi-DAL step a Repo runs inside its own tx; it never opens one). It never throws; a failure comes back as isSuccess false and the Repo
 // rolls back.
@@ -96,9 +94,9 @@ export default class ModelKeyFailureProvider {
       companyId: request.companyId,
       actorType: Schemas.ActivityLogActorTypeIntEnum.System,
       actorId: null,
-      entityType: QUALITY_ISSUE_ENTITY,
+      entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
       entityId: qualityIssue.id,
-      entityAction: "opened",
+      entityAction: Schemas.QualityIssueEntityActionEnum.Opened,
       entityVersion: null,
       parentLogId: null,
       rootLogId: null,
@@ -108,8 +106,11 @@ export default class ModelKeyFailureProvider {
         issueType,
         conversationId: request.conversationId,
       },
-      eventType: "quality_issue.opened",
-      dedupeKey: `quality_issue.opened:${qualityIssue.publicId}`,
+      eventType: Schemas.qualityIssueEventType(Schemas.QualityIssueEntityActionEnum.Opened),
+      dedupeKey: Schemas.qualityIssueEventDedupeKey(
+        Schemas.QualityIssueEntityActionEnum.Opened,
+        qualityIssue.publicId,
+      ),
     });
     if (!event.isSuccess || !event.outboxId) {
       return { isSuccess: false, message: event.message };
@@ -136,7 +137,7 @@ export default class ModelKeyFailureProvider {
     const { qualityIssue, detail } = params;
     const logs = await ModelKeyFailureProvider.activityLogDal.getActivityLogsByEntity(tx, {
       companyId: params.companyId,
-      entityType: QUALITY_ISSUE_ENTITY,
+      entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
       entityId: qualityIssue.id,
       limit: Constants.ACTIVITY_LOGS_BY_ENTITY_LIMIT,
     });
@@ -165,15 +166,19 @@ export default class ModelKeyFailureProvider {
       companyId: params.companyId,
       actorType: Schemas.ActivityLogActorTypeIntEnum.System,
       actorId: null,
-      entityType: QUALITY_ISSUE_ENTITY,
+      entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
       entityId: qualityIssue.id,
-      entityAction: "provider_added",
+      entityAction: Schemas.QualityIssueEntityActionEnum.ProviderAdded,
       entityVersion: null,
       parentLogId: null,
       rootLogId: null,
       detail,
-      eventType: "quality_issue.provider_added",
-      dedupeKey: `quality_issue.provider_added:${qualityIssue.publicId}:${detail.provider}`,
+      eventType: Schemas.qualityIssueEventType(Schemas.QualityIssueEntityActionEnum.ProviderAdded),
+      dedupeKey: Schemas.qualityIssueEventDedupeKey(
+        Schemas.QualityIssueEntityActionEnum.ProviderAdded,
+        qualityIssue.publicId,
+        detail.provider,
+      ),
     });
     if (!event.isSuccess || !event.outboxId) {
       return { isSuccess: false, message: event.message };
