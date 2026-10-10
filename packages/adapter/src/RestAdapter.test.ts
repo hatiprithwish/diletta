@@ -6,6 +6,7 @@ import RestAdapter from "./RestAdapter";
 // scripted fault (none = answer normally). "applyThenDrop" applies the write and then loses the answer (the case
 // that makes a retried commit dangerous); "drop" loses the request before it is applied.
 type Fault =
+  | { kind: "none" }
   | { kind: "applyThenDrop" }
   | { kind: "drop" }
   | { kind: "status"; status: number; headers?: Record<string, string>; body?: string };
@@ -19,7 +20,9 @@ interface SeenRequest {
 }
 
 class FakeHost {
-  records = new Map<string, { amount: number }>([["r1", { amount: 10 }]]);
+  records = new Map<string, Record<string, unknown>>([["r1", { amount: 10, email: "old@x.com" }]]);
+  // How the host stores a write's body (identity by default; e.g. lowercasing an email)
+  store: (body: Record<string, unknown>) => Record<string, unknown> = (body) => body;
   // Writes the host actually applied
   appliedWrites = 0;
   requests: SeenRequest[] = [];
@@ -50,7 +53,7 @@ class FakeHost {
     const key = headers.get(Schemas.HOST_IDEMPOTENCY_KEY_HEADER);
     let result = key && this.supportsIdempotencyKey ? this.keyResults.get(key) : undefined;
     if (result === undefined) {
-      Object.assign(record, body as { amount: number });
+      Object.assign(record, this.store(body as Record<string, unknown>));
       this.appliedWrites++;
       result = { data: { ...record } };
       if (key) this.keyResults.set(key, result);
@@ -61,6 +64,10 @@ class FakeHost {
 
   writes() {
     return this.requests.filter((request) => request.method !== "GET");
+  }
+
+  reads() {
+    return this.requests.filter((request) => request.method === "GET");
   }
 }
 
@@ -77,8 +84,10 @@ const TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2ln";
 const readbackOp: Schemas.ToolReadbackOp = {
   method: Schemas.ToolOpMethodEnum.Get,
   path: "/records/{args.recordId}",
-  compare: { amount: "data.amount" },
+  compare: { amount: "data.amount", email: "data.email" },
 };
+
+const BEFORE = { data: { amount: 10, email: "old@x.com" } };
 
 function rendered(request: Partial<Schemas.RenderedToolRequest>): Schemas.RenderedToolRequest {
   return { method: Schemas.ToolOpMethodEnum.Get, path: "/records/r1", query: {}, ...request };
@@ -90,7 +99,10 @@ const commitRequest = rendered({
 });
 
 function appliedCheck(args: Record<string, unknown>): Schemas.HostAppliedCheck {
-  return { request: rendered({}), expectations: Schemas.getCommitExpectations(readbackOp, args) };
+  return {
+    request: rendered({}),
+    expectations: Schemas.getCommitCheckExpectations(readbackOp, args, BEFORE),
+  };
 }
 
 let host: FakeHost;
@@ -145,6 +157,9 @@ describe("RestAdapter.create", () => {
       "Connection is not a REST connection",
     );
     expect(create({ baseUrl: null }).message).toBe("Connection has no base URL");
+    expect(create({ baseUrl: "http://host.example.com" }).message).toBe(
+      "Base URL must be https with no query or credentials",
+    );
     expect(create({ authType: Schemas.CompanyConnectionAuthTypeEnum.ApiKeyHeader }).message).toBe(
       "Auth type api_key_header is not supported yet",
     );
@@ -247,9 +262,6 @@ describe("RestAdapter reads", () => {
       const response = await adapter().execute(read({ path }));
       expect(response.outcome).toBe(Schemas.HostCallOutcomeEnum.Failed);
     }
-    expect((await adapter({ baseUrl: "http://host.example.com" }).execute(read())).outcome).toBe(
-      Schemas.HostCallOutcomeEnum.Failed,
-    );
     expect((await adapter().execute(read({ body: { a: 1 } }))).message).toBe("A GET has no body");
     expect(host.requests).toHaveLength(0);
   });
@@ -377,6 +389,7 @@ describe("Retried commit never writes twice", () => {
         mayHaveLanded: true,
       });
       expect(host.writes()).toHaveLength(1);
+      expect(host.appliedWrites).toBe(1);
 
       const empty = await adapter().execute(
         commit(emulated, { isResume: true, appliedCheck: appliedCheck({}) }),
@@ -386,6 +399,67 @@ describe("Retried commit never writes twice", () => {
         message: "Nothing to compare the readback with",
       });
       expect(host.writes()).toHaveLength(1);
+    });
+
+    it("never resends a write that landed but reads back in another form", async () => {
+      // DEV_NOTE: The host lowercases emails: the readback shows neither the sent nor the earlier value
+      host.store = (body) => ({ ...body, email: String(body.email).toLowerCase() });
+      host.faults = [{ kind: "applyThenDrop" }];
+      const response = await adapter().execute(
+        commit(emulated, {
+          request: rendered({
+            method: Schemas.ToolOpMethodEnum.Patch,
+            body: { email: "Bob@x.com" },
+          }),
+          appliedCheck: appliedCheck({ email: "Bob@x.com" }),
+        }),
+      );
+      expect(response).toMatchObject({
+        isSuccess: false,
+        outcome: Schemas.HostCallOutcomeEnum.Unknown,
+        message: "Readback matches neither the written nor the earlier values",
+        mayHaveLanded: true,
+      });
+      expect(host.writes()).toHaveLength(1);
+      expect(host.appliedWrites).toBe(1);
+    });
+
+    it("checks the last uncertain attempt too: landed then → AlreadyApplied", async () => {
+      // DEV_NOTE: Every request takes the next fault: each lost write is followed by its readback check
+      host.faults = [
+        { kind: "drop" },
+        { kind: "none" },
+        { kind: "drop" },
+        { kind: "none" },
+        { kind: "applyThenDrop" },
+      ];
+      const response = await adapter().execute(commit(emulated));
+      expect(response).toMatchObject({
+        outcome: Schemas.HostCallOutcomeEnum.AlreadyApplied,
+        attempts: 3,
+      });
+      expect(host.reads()).toHaveLength(3);
+      expect(host.appliedWrites).toBe(1);
+    });
+
+    it("fails, not Unknown, when every attempt failed and the last check shows nothing landed", async () => {
+      // DEV_NOTE: Every request takes the next fault: each 503 write is followed by its readback check
+      host.faults = [
+        { kind: "status", status: 503 },
+        { kind: "none" },
+        { kind: "status", status: 503 },
+        { kind: "none" },
+        { kind: "status", status: 503 },
+      ];
+      const response = await adapter().execute(commit(emulated));
+      expect(response).toMatchObject({
+        isSuccess: false,
+        outcome: Schemas.HostCallOutcomeEnum.Failed,
+        attempts: 3,
+        mayHaveLanded: false,
+      });
+      expect(host.reads()).toHaveLength(3);
+      expect(host.appliedWrites).toBe(0);
     });
 
     it("passes on a missing token during the check, still marked as possibly landed", async () => {
@@ -408,10 +482,7 @@ describe("Retried commit never writes twice", () => {
       expect((await adapter().execute(commit(emulated, { appliedCheck: null }))).message).toBe(
         "Emulated idempotency needs a readback check",
       );
-      const postCheck = {
-        request: commitRequest,
-        expectations: appliedCheck({ amount: 1 }).expectations,
-      };
+      const postCheck = { ...appliedCheck({ amount: 1 }), request: commitRequest };
       expect((await adapter().execute(commit(emulated, { appliedCheck: postCheck }))).message).toBe(
         "A readback is a GET",
       );
@@ -505,14 +576,13 @@ describe("RestAdapter.undo", () => {
     host.supportsIdempotencyKey = false;
     host.records.get("r1")!.amount = 12.5;
     host.faults = [{ kind: "applyThenDrop" }];
-    const before = { data: { amount: 10 } };
     const response = await adapter().undo({
       request: rendered({ method: Schemas.ToolOpMethodEnum.Patch, body: { amount: 10 } }),
       idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.Emulated,
       idempotencyKey: "cr_01J9ZK:undo",
       appliedCheck: {
         request: rendered({}),
-        expectations: Schemas.getUndoExpectations(readbackOp, { amount: 12.5 }, before),
+        expectations: Schemas.getUndoCheckExpectations(readbackOp, { amount: 12.5 }, BEFORE),
       },
       isResume: false,
     });

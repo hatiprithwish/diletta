@@ -41,6 +41,34 @@ export function getUndoExpectations(
   }));
 }
 
+// DEV_NOTE: What the Emulated "did it land?" check compares (HostAppliedCheck): landed = the step's own values, notLanded
+// = the values the step replaces. A commit sets args over the read-before values; its undo sets the read-before values
+// back over args, so the two swap.
+export interface ReadbackCheckExpectations {
+  landed: ReadbackExpectation[];
+  notLanded: ReadbackExpectation[];
+}
+
+export function getCommitCheckExpectations(
+  readbackOp: ToolReadbackOp,
+  args: Record<string, unknown>,
+  before: unknown,
+): ReadbackCheckExpectations {
+  return {
+    landed: getCommitExpectations(readbackOp, args),
+    notLanded: getUndoExpectations(readbackOp, args, before),
+  };
+}
+
+export function getUndoCheckExpectations(
+  readbackOp: ToolReadbackOp,
+  args: Record<string, unknown>,
+  before: unknown,
+): ReadbackCheckExpectations {
+  const commit = getCommitCheckExpectations(readbackOp, args, before);
+  return { landed: commit.notLanded, notLanded: commit.landed };
+}
+
 // DEV_NOTE: JSON equality: same type, numbers by value, arrays in order, objects by key set regardless of key order
 function isJsonEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;

@@ -1385,14 +1385,15 @@ A hit is a violation outside its home: `.insert(toolDefinitions)` / `.update(too
 
 ### 3.30 Host Calls Only Through @app/adapter [CRITICAL]
 
-**Rule:** Every call to a company's host API goes through `@app/adapter` (`RestAdapter`, M3-2) with a request from `Schemas.renderToolOp`. The host bearer token reaches a request only through an AuthStrategy in `AUTH_STRATEGIES`, which matches `Schemas.SUPPORTED_AUTH_TYPES`. A write passes its tool's `idempotency_mode` and a key, an Emulated write its `appliedCheck`, and a write that may have landed (`mayHaveLanded`, or a step interrupted mid-call) is called again only with `isResume: true`, never as a fresh write. An Emulated write tool's readback_op and inverse_op never read `{result.*}`.
+**Rule:** Every call to a company's host API goes through `@app/adapter` (`RestAdapter`, M3-2) with a request from `Schemas.renderToolOp`. The host bearer token reaches a request only through an AuthStrategy in `AUTH_STRATEGIES`, which matches `Schemas.SUPPORTED_AUTH_TYPES`. A write passes its tool's `idempotency_mode` and a key, an Emulated write its `appliedCheck` (both sides: `getCommitCheckExpectations` / `getUndoCheckExpectations`), and a write that may have landed (`mayHaveLanded` on any non-success outcome, `TokenNeeded` / `TokenRejected` included, or a step interrupted mid-call) is called again only with `isResume: true`, never as a fresh write. An Emulated write tool's readback_op and inverse_op never read `{result.*}`.
 
 **Violations:**
 
 - `fetch(` to a host URL (a connection's `base_url`, or anything built from a tool op) outside `packages/adapter/src/`
 - Following redirects, or building a host URL by string concatenation instead of `buildHostUrl`
 - An `Authorization` header built outside an AuthStrategy, or a token in a `HostCallResponse` message, a log or an error
-- A new auth type in `SUPPORTED_AUTH_TYPES` without its strategy in `AUTH_STRATEGIES` (or the reverse), or a connection saved with an auth type that has none
+- A new auth type in `SUPPORTED_AUTH_TYPES` without its strategy in `AUTH_STRATEGIES` (or the reverse); a connection saved, or a tool definition saved or activated on a connection, whose auth settings fail `getAuthConfigIssue`
+- An Emulated resend decided on a readback mismatch alone: only a readback that still shows the replaced values (`notLanded`) allows a resend
 - Retrying a write in the caller (a loop around `execute` / `undo`) instead of the adapter's mode rules, or resending a write that may have landed with `isResume: false`
 - An `idempotency_mode` None write resent after an `Unknown` outcome
 - A risk / idempotency check on a tool definition without `getToolRiskOpsIssue(risk, idempotencyMode, ops)`
@@ -1413,6 +1414,7 @@ A hit is a violation outside its home: host calls and auth headers only in `pack
 - ❌ await fetch(`${connection.baseUrl}${rendered.request.path}`, { headers: { Authorization: `Bearer ${this.hostToken}` } })
 - ❌ for (let i = 0; i < 3; i++) { const r = await adapter.execute(call); if (r.isSuccess) break; }
 - ✅ const created = RestAdapter.create({ connection, getHostToken: () => this.hostToken });
+- ❌ await adapter.execute({ ...call, isResume: false }); // after a TokenNeeded refresh: drops mayHaveLanded
 - ✅ await adapter.execute({ risk, request, idempotencyMode, idempotencyKey, appliedCheck, isResume: response.mayHaveLanded === true })
 ```
 

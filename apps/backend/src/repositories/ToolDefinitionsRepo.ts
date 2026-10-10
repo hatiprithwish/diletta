@@ -167,7 +167,7 @@ export default class ToolDefinitionsRepo {
   }
 
   // DEV_NOTE: The connection must be the company's and able to serve tool calls: Active, a REST connection, with a
-  // base_url (every op path is relative to it)
+  // base_url (every op path is relative to it), and auth settings the adapter accepts (getAuthConfigIssue)
   private async resolveConnection(
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string; connectionPublicId: string },
@@ -196,6 +196,18 @@ export default class ToolDefinitionsRepo {
         response: this.refuse(
           Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
           "Connection can't serve tool calls: it must be an active REST connection with a base URL",
+        ),
+      };
+    }
+    // DEV_NOTE: The adapter refuses a connection whose auth type has no AuthStrategy or whose auth_config doesn't fit it
+    // (a row saved before M3-2 may hold either), so such a connection can't serve tool calls either
+    const authIssue = Schemas.getAuthConfigIssue(connection);
+    if (authIssue) {
+      return {
+        isSuccess: false,
+        response: this.refuse(
+          Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
+          `Connection can't serve tool calls: ${authIssue}`,
         ),
       };
     }

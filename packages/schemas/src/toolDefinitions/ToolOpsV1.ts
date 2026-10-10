@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   TOOL_OP_DOT_PATH_PATTERN,
+  collectTemplateStrings,
   ToolOpPlaceholderRootEnum,
   findToolOpPlaceholders,
   findMalformedToolOpPlaceholders,
@@ -103,21 +104,6 @@ export const ZToolInputSchemaV1 = z
     });
   });
 
-// Every string in a template value with its path, for the reference checks
-function collectStrings(
-  value: unknown,
-  path: (string | number)[],
-  out: { text: string; path: (string | number)[] }[],
-) {
-  if (typeof value === "string") {
-    out.push({ text: value, path });
-  } else if (Array.isArray(value)) {
-    value.forEach((item, index) => collectStrings(item, [...path, index], out));
-  } else if (value !== null && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) collectStrings(item, [...path, key], out);
-  }
-}
-
 // DEV_NOTE: Which placeholder roots each op may read. call_op runs first, so it has the model's args only. readback_op
 // runs before the call (read-before) and after it (read-after), so {result.*} is there only after; a readback that
 // needs the call's result (a created record's id) has no read-before (M3-4). inverse_op runs after both.
@@ -146,9 +132,9 @@ export const ZToolOpsV1 = z
       if (!op) continue;
 
       const strings: { text: string; path: (string | number)[] }[] = [];
-      collectStrings(op.path, [opKey, "path"], strings);
-      collectStrings(op.query, [opKey, "query"], strings);
-      if ("bodyMap" in op) collectStrings(op.bodyMap, [opKey, "bodyMap"], strings);
+      collectTemplateStrings(op.path, [opKey, "path"], strings);
+      collectTemplateStrings(op.query, [opKey, "query"], strings);
+      if ("bodyMap" in op) collectTemplateStrings(op.bodyMap, [opKey, "bodyMap"], strings);
 
       for (const { text, path } of strings) {
         for (const token of findUnknownToolOpRoots(text)) {

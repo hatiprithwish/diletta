@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { SEARCH_HELP_DOCS_TOOL_NAME } from "../knowledgeSearch/KnowledgeSearchCommon";
 import { ZToolOps, type ToolInverseOp, type ToolOps, type ToolReadbackOp } from "./ToolOpsRegistry";
-import { ToolOpPlaceholderRootEnum, findToolOpPlaceholders } from "./ToolOpPlaceholders";
+import {
+  ToolOpPlaceholderRootEnum,
+  collectTemplateStrings,
+  findToolOpPlaceholders,
+} from "./ToolOpPlaceholders";
 
 export enum ToolDefinitionRiskIntEnum {
   Read = 1,
@@ -122,8 +126,8 @@ export const ZToolDefinitionSortColumn = z.enum(ToolDefinitionSortColumn);
 //   InvalidOps: the ops don't parse at the current schema version, or don't fit the risk (a read tool has no readback
 //     or inverse op, every write has a readback op).
 //   ConnectionNotFound: the connection isn't one of the company's.
-//   ConnectionUnavailable: the connection can't serve a tool call: it is Disabled, or not a REST connection with a
-//     base_url (op paths are relative to it).
+//   ConnectionUnavailable: the connection can't serve a tool call: it is Disabled, not a REST connection with a
+//     base_url (op paths are relative to it), or its auth type / auth_config has no AuthStrategy (getAuthConfigIssue).
 export enum ToolDefinitionFailureEnum {
   NotDraft = "NotDraft",
   DraftExists = "DraftExists",
@@ -155,16 +159,11 @@ export const ZToolDefinitionName = z
 
 // Whether an op reads the call_op response anywhere ({result.*} in its path, query or body)
 function readsCallResult(op: ToolReadbackOp | ToolInverseOp): boolean {
-  const strings: string[] = [];
-  const collect = (value: unknown) => {
-    if (typeof value === "string") strings.push(value);
-    else if (Array.isArray(value)) value.forEach(collect);
-    else if (value !== null && typeof value === "object") Object.values(value).forEach(collect);
-  };
-  collect(op.path);
-  collect(op.query);
-  if ("bodyMap" in op) collect(op.bodyMap);
-  return strings.some((text) =>
+  const strings: { text: string; path: (string | number)[] }[] = [];
+  collectTemplateStrings(op.path, [], strings);
+  collectTemplateStrings(op.query, [], strings);
+  if ("bodyMap" in op) collectTemplateStrings(op.bodyMap, [], strings);
+  return strings.some(({ text }) =>
     findToolOpPlaceholders(text).some(
       (placeholder) => placeholder.root === ToolOpPlaceholderRootEnum.Result,
     ),
