@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 
 // DEV_NOTE: Why the budget refused a turn or a model call (M2-4). Logged only: the widget sees
 // BUDGET_RATE_LIMIT_MESSAGE for the two rate limits and MODEL_UNAVAILABLE_MESSAGE for everything else.

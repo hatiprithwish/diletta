@@ -1,11 +1,14 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { zValidator } from "@hono/zod-validator";
 import { getAgentByName } from "agents";
 import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
+import FeedbackRepo from "@/repositories/FeedbackRepo";
 import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
+import WidgetBootstrapRepo from "@/repositories/WidgetBootstrapRepo";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
 
@@ -16,6 +19,9 @@ import * as Schemas from "@app/schemas";
 // that conversation's DO, with the verified session in a header this route always sets itself. A failure is an HTTP
 // status with a generic body (401 / 403 / 404 / 500); which check failed is logged, never sent. The answer selects
 // 'diletta.v1' only, so the token is never echoed.
+//
+// GET /bootstrap (M2-7, ADR 0002) is the one HTTP call: what the widget shows before a conversation exists. Same
+// token, same WidgetAuthRepo checks, sent as Authorization: Bearer (still never in the URL); it creates nothing.
 const WidgetRoutes = new Hono<AppContext>();
 
 const FAILURE_BODY: Record<Schemas.WidgetAuthFailureEnum, string> = {
@@ -24,6 +30,62 @@ const FAILURE_BODY: Record<Schemas.WidgetAuthFailureEnum, string> = {
   [Schemas.WidgetAuthFailureEnum.NotFound]: "Not found",
   [Schemas.WidgetAuthFailureEnum.ServerError]: "Server error",
 };
+
+// DEV_NOTE: Host pages call /bootstrap cross-origin, and which origins may is per connection, known only once the token
+// is verified. So CORS answers any origin, without credentials (no cookies; the token is the only credential), and
+// the data itself is gated by WidgetAuthRepo: a token's connection must list the request's Origin, else 403 with a
+// generic body.
+WidgetRoutes.use(
+  "/bootstrap",
+  cors({
+    origin: (origin) => origin,
+    allowMethods: ["GET", "OPTIONS"],
+    allowHeaders: ["Authorization"],
+    maxAge: 600,
+    credentials: false,
+  }),
+);
+
+WidgetRoutes.get(
+  "/bootstrap",
+  zValidator("query", Schemas.ZWidgetBootstrapApiRequest),
+  async (c) => {
+    const reject = (failure: Schemas.WidgetAuthFailureEnum) =>
+      c.json(
+        { isSuccess: false, message: FAILURE_BODY[failure] },
+        Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
+      );
+
+    const authorization = c.req.header("Authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+    if (!token) {
+      return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
+    }
+
+    const query = c.req.valid("query");
+    const authenticated = await new WidgetAuthRepo(c.env).authenticate({
+      token,
+      origin: c.req.header("Origin") ?? null,
+      chatbotPublicId: query.chatbot ?? null,
+    });
+    if (!authenticated.isSuccess || !authenticated.identity) {
+      return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+    }
+
+    const result = await new WidgetBootstrapRepo(c.env).getBootstrap({
+      identity: authenticated.identity,
+    });
+    if (!result.isSuccess || !result.bootstrap) {
+      return reject(result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+    }
+    const response: Schemas.WidgetBootstrapApiResponse = {
+      isSuccess: true,
+      message: result.message,
+      bootstrap: result.bootstrap,
+    };
+    return c.json(response, 200);
+  },
+);
 
 WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
@@ -90,13 +152,20 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
     return reject(Schemas.WidgetAuthFailureEnum.ServerError);
   };
 
+  // DEV_NOTE: A resumed conversation's ratings, for the widget's thumbs (a new one has none). A failed read sends none
+  // rather than refusing the chat (logged by the DAL).
+  const feedback = started.isNew
+    ? []
+    : ((await new FeedbackRepo(c.env).listConversationFeedback({ session })).ratings ?? []);
+
   try {
     // DEV_NOTE: A fresh header set: nothing the client sent beyond the upgrade itself reaches the DO, so it can't
-    // pose as another session or pass its own session header
+    // pose as another session or pass its own session or feedback header
     const headers = new Headers({
       Upgrade: "websocket",
       Connection: "Upgrade",
       [Constants.CONVERSATION_SESSION_HEADER]: JSON.stringify(session),
+      [Constants.CONVERSATION_FEEDBACK_HEADER]: JSON.stringify(feedback),
     });
     for (const name of ["Sec-WebSocket-Key", "Sec-WebSocket-Version", "Origin"]) {
       const value = c.req.header(name);

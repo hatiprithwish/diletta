@@ -13,6 +13,7 @@ import { getAgentByName } from "agents";
 import * as Schemas from "@app/schemas";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
+import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
 import getDbClient from "@/db/dbClient";
 import {
@@ -26,6 +27,7 @@ import {
   companySecrets,
   conversations,
   eventOutbox,
+  feedback,
   messages,
   modelCalls,
   qualityIssues,
@@ -35,6 +37,7 @@ import worker from "@/index";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import FeedbackRepo from "@/repositories/FeedbackRepo";
 import KnowledgeSearchRepo from "@/repositories/KnowledgeSearchRepo";
 import Constants from "@/config/Constants";
 import WidgetFrameProvider from "@/providers/widgetFrames";
@@ -438,6 +441,7 @@ afterAll(async () => {
   try {
     if (companyIds.length === 0) return;
     await withOwnerDb(async (ownerDb) => {
+      await ownerDb.delete(feedback).where(inArray(feedback.companyId, companyIds));
       await ownerDb.delete(messages).where(inArray(messages.companyId, companyIds));
       await ownerDb.delete(modelCalls).where(inArray(modelCalls.companyId, companyIds));
       await ownerDb.delete(qualityIssues).where(inArray(qualityIssues.companyId, companyIds));
@@ -1606,6 +1610,167 @@ describe("Conversation DO after a wake or an eviction", { timeout: END_TO_END_TI
     const conversation = await getConversation(publicId);
     expect(conversation?.status).toBe(Schemas.ConversationStatusIntEnum.Closed);
     expect(await getReadModel(conversation?.id ?? "")).toHaveLength(2);
+  });
+});
+
+// DEV_NOTE: The widget's thumbs (M2-7): a feedback frame rates one finished reply of the socket's own conversation
+async function getFeedbackRows(companyId: string) {
+  return await withOwnerDb(
+    async (ownerDb) =>
+      await ownerDb.select().from(feedback).where(eq(feedback.companyId, companyId)),
+  );
+}
+
+const isFeedbackFor =
+  (messageId: string, rating: Schemas.FeedbackRatingIntEnum | null) =>
+  (frame: ReturnType<typeof parseFrame>) =>
+    frame.type === "feedback" && frame.messageId === messageId && frame.rating === rating;
+
+describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  it("stores one rating per reply, lets the user switch it, and sends it back on reconnect", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = (await waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    expect(hello.feedback).toEqual([]);
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Which are overdue?")]);
+    const reply = (await getTranscript(hello.conversation.publicId))[1];
+    if (!reply) throw new Error("No reply");
+
+    socket.send(
+      JSON.stringify({
+        type: "feedback",
+        messageId: reply.id,
+        rating: Schemas.FeedbackRatingIntEnum.Up,
+      }),
+    );
+    const up = await waitFor(isFeedbackFor(reply.id, Schemas.FeedbackRatingIntEnum.Up));
+    expect(up.rating).toBe(Schemas.FeedbackRatingIntEnum.Up);
+    socket.send(
+      JSON.stringify({
+        type: "feedback",
+        messageId: reply.id,
+        rating: Schemas.FeedbackRatingIntEnum.Down,
+      }),
+    );
+    const down = await waitFor(isFeedbackFor(reply.id, Schemas.FeedbackRatingIntEnum.Down));
+    expect(down.rating).toBe(Schemas.FeedbackRatingIntEnum.Down);
+
+    const rows = await getFeedbackRows(tenant.companyId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.rating).toBe(Schemas.FeedbackRatingIntEnum.Down);
+    const conversation = await getConversation(hello.conversation.publicId);
+    const readModel = await getReadModel(conversation?.id ?? "");
+    expect(rows[0]?.messageId).toBe(readModel.find((row) => row.sessionMessageId === reply.id)?.id);
+    socket.close(1000);
+
+    const again = await connect(tenant, { conversation: hello.conversation.publicId });
+    if (!again.socket || !again.waitFor) throw new Error("Not reconnected");
+    const resumed = (await again.waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    expect(resumed.feedback).toEqual([
+      { messageId: reply.id, rating: Schemas.FeedbackRatingIntEnum.Down },
+    ]);
+    again.socket.close(1000);
+  });
+
+  it("ignores a feedback header the client sends itself", async () => {
+    const tenant = await createTenant({ hasModelKey: false });
+    const { socket, waitFor } = await connect(tenant, {
+      headers: {
+        [Constants.CONVERSATION_FEEDBACK_HEADER]: JSON.stringify([
+          { messageId: "planted", rating: Schemas.FeedbackRatingIntEnum.Up },
+        ]),
+      },
+    });
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = (await waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    expect(hello.feedback).toEqual([]);
+    socket.close(1000);
+  });
+
+  it("saves nothing for a user message, an unknown id or a malformed frame", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(tenant);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    await waitFor((frame) => frame.type === "conversation");
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Which are overdue?")]);
+
+    for (const messageId of ["user-1", "no-such-message"]) {
+      socket.send(
+        JSON.stringify({ type: "feedback", messageId, rating: Schemas.FeedbackRatingIntEnum.Up }),
+      );
+      const answer = await waitFor(isFeedbackFor(messageId, null));
+      expect(answer.rating).toBeNull();
+    }
+    socket.send(JSON.stringify({ type: "feedback", messageId: "user-1", rating: 7 }));
+    const refused = await waitFor((frame) => frame.type === "error");
+    expect(refused.message).toBe("Unsupported message");
+    expect(await getFeedbackRows(tenant.companyId)).toEqual([]);
+    socket.close(1000);
+  });
+
+  it("never rates or reads another company's replies (as diletta_app)", async () => {
+    const owner = await createTenant({ hasModelKey: true });
+    const other = await createTenant({ hasModelKey: false });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor } = await connect(owner);
+    if (!socket || !waitFor) throw new Error("Not connected");
+    const hello = (await waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    await sendTurn(socket, waitFor, "req-1", [userMessage("user-1", "Which are overdue?")]);
+    const reply = (await getTranscript(hello.conversation.publicId))[1];
+    socket.close(1000);
+    const conversation = await getConversation(hello.conversation.publicId);
+    const rows = await waitForReadModel(conversation?.id ?? "", 2);
+    const replyRow = rows.find((row) => row.sessionMessageId === reply?.id);
+    if (!conversation || !replyRow) throw new Error("Reply not in the read model");
+
+    // DEV_NOTE: A session claiming the other company, pointed at the owner's conversation
+    const session: Schemas.ConversationSession = {
+      companyId: other.companyId,
+      chatbotId: other.chatbotId,
+      chatbotPublicId: other.chatbotPublicId,
+      chatbotName: "Registers bot",
+      chatbotUserId: conversation.chatbotUserId,
+      conversationId: conversation.id,
+      conversationPublicId: conversation.publicId,
+    };
+    const repo = new FeedbackRepo(env);
+    const recorded = await repo.recordFeedback({
+      session,
+      sessionMessageId: replyRow.sessionMessageId,
+      rating: Schemas.FeedbackRatingIntEnum.Down,
+    });
+    expect(recorded.isSuccess).toBe(false);
+    expect(recorded.isNotFound).toBe(true);
+    expect((await repo.listConversationFeedback({ session })).ratings).toEqual([]);
+
+    const db = getDbClient(env);
+    const planted: Schemas.FeedbackDALResponse = await withTenant(
+      db,
+      other.companyId,
+      async (tx) => {
+        return await new FeedbackDAL().upsertFeedback(tx, {
+          companyId: other.companyId,
+          messageId: replyRow.id,
+          chatbotUserId: conversation.chatbotUserId,
+          rating: Schemas.FeedbackRatingIntEnum.Down,
+        });
+      },
+    );
+    expect(planted.isSuccess).toBe(false);
+    expect(planted.message).toBe("Message not found");
+    expect(await getFeedbackRows(owner.companyId)).toEqual([]);
+    expect(await getFeedbackRows(other.companyId)).toEqual([]);
   });
 });
 

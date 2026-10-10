@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 import { ZActivityLogBase } from "../activityLog/ActivityLogCommon";
 
 export enum EventOutboxStatusIntEnum {

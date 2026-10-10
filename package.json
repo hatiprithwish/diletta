@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --parallel --filter web --filter backend dev",
     "dev:backend": "pnpm --filter backend dev",
+    "dev:widget": "pnpm --filter widget dev",
     "dev:web": "pnpm --filter web dev",
     "build:backend": "pnpm --filter backend build",
     "build:web": "pnpm --filter web build",

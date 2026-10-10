@@ -28,18 +28,22 @@ await configureLogger();
 
 const app = new Hono<{ Bindings: Env }>();
 
+// DEV_NOTE: The dashboard's CORS (ALLOWED_CORS_ORIGIN, with credentials). /widget/* is called from host pages, whose
+// origins are per connection (company_connections.allowed_origins), so WidgetRoutes sets its own.
 app.use((c, next) =>
-  cors({
-    origin: (origin) => {
-      const allowed = c.env.ALLOWED_CORS_ORIGIN.split(",");
-      return allowed.includes(origin) ? origin : null;
-    },
-    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "x-request-id"],
-    exposeHeaders: ["x-request-id"],
-    maxAge: 7200,
-    credentials: true,
-  })(c, next),
+  c.req.path.startsWith("/widget/")
+    ? next()
+    : cors({
+        origin: (origin) => {
+          const allowed = c.env.ALLOWED_CORS_ORIGIN.split(",");
+          return allowed.includes(origin) ? origin : null;
+        },
+        allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowHeaders: ["Content-Type", "Authorization", "x-request-id"],
+        exposeHeaders: ["x-request-id"],
+        maxAge: 7200,
+        credentials: true,
+      })(c, next),
 );
 app.use(requestId({ headerName: "x-request-id" }));
 

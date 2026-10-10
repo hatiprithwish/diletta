@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 import { ModelProviderEnum } from "../companySecrets";
 import { ModelTierEnum } from "../configSpec";
 import {

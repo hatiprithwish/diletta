@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 
 // DEV_NOTE: What owns a file (files.owner_type, text in the DB): owner_id is that table's internal id. The file is
 // purged with its owner (row + R2 object). Conversation images, eval transcripts and exports add theirs when they land.

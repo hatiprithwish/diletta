@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 import type { BudgetRefusalEnum } from "./BudgetCommon";
 
 // DEV_NOTE: Server-side only (BudgetDO RPC): never crosses an API, hence no "Api" in the file name. Every id is

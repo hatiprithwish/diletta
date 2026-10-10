@@ -128,3 +128,30 @@ describe("WidgetFrameProvider.admit other frames", () => {
     expect(WidgetFrameProvider.admit(new ArrayBuffer(4), none).kind).toBe("refuse");
   });
 });
+
+describe("WidgetFrameProvider.admit feedback", () => {
+  it("admits a rating for one reply, for the DO to store", () => {
+    const frame = JSON.stringify({
+      type: Schemas.WIDGET_FEEDBACK_FRAME_TYPE,
+      messageId: "reply-1",
+      rating: Schemas.FeedbackRatingIntEnum.Down,
+    });
+    expect(WidgetFrameProvider.admit(frame, none)).toEqual({
+      kind: "feedback",
+      messageId: "reply-1",
+      rating: Schemas.FeedbackRatingIntEnum.Down,
+    });
+  });
+
+  it("refuses a malformed rating", () => {
+    const refused = [
+      { type: Schemas.WIDGET_FEEDBACK_FRAME_TYPE, messageId: "reply-1", rating: 3 },
+      { type: Schemas.WIDGET_FEEDBACK_FRAME_TYPE, messageId: "", rating: 1 },
+      { type: Schemas.WIDGET_FEEDBACK_FRAME_TYPE, messageId: "x".repeat(101), rating: 1 },
+      { type: Schemas.WIDGET_FEEDBACK_FRAME_TYPE, rating: 1 },
+    ];
+    for (const frame of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(frame), none).kind).toBe("refuse");
+    }
+  });
+});

@@ -1091,12 +1091,13 @@ SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
 
 ### 3.22 Widget Identity Only From a Verified Companion JWT [CRITICAL]
 
-**Rule:** The widget authenticates before the WebSocket upgrade (ADR 0001): the companion JWT rides in `Sec-WebSocket-Protocol` as `['diletta.v1', <jwt>]` (never in a URL or query param), and `GET /widget/ws` answers with an HTTP status before any socket exists. `WidgetAuthRepo.authenticate` is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required; `crit` rejected) → issuer → `company_connections` row (`withPlatform`) → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer, body capped in bytes while streaming) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `nbf`, `iat`, lifetime ≤ 5 min → connection active and `Origin` in its `allowed_origins` → company active and the chatbot active, in `withTenant`. Every failure before the signature and claims pass is `Unauthorized` (401), so the status never tells an unsigned token whether an issuer is registered or an origin allowed. Claims are validated, never transformed (no `.trim()` on `sub`). The identity carries internal ids and stays server-side; the upgrade is forwarded to the Conversation DO only after `ConversationsRepo.startOrResume`, with a fresh header set the route builds itself. The response selects `diletta.v1` only; the token is never echoed, logged or stored.
+**Rule:** The widget authenticates before the WebSocket upgrade (ADR 0001): the companion JWT rides in `Sec-WebSocket-Protocol` as `['diletta.v1', <jwt>]` (never in a URL or query param), and `GET /widget/ws` answers with an HTTP status before any socket exists. `WidgetAuthRepo.authenticate` is the only way to a `WidgetIdentity`, in this order: decode with the algorithm allowlist (`WidgetJwtAlgorithmEnum`: RS256, ES256; `kid` required; `crit` rejected) → issuer → `company_connections` row (`withPlatform`) → signature against the issuer's JWKS through `JwksProvider` (KV-cached, fetched only for a registered issuer, body capped in bytes while streaming) → `aud = WIDGET_JWT_AUDIENCE`, `exp`, `nbf`, `iat`, lifetime ≤ 5 min → connection active and `Origin` in its `allowed_origins` → company active and the chatbot active, in `withTenant`. Every failure before the signature and claims pass is `Unauthorized` (401), so the status never tells an unsigned token whether an issuer is registered or an origin allowed. Claims are validated, never transformed (no `.trim()` on `sub`). The identity carries internal ids and stays server-side; the upgrade is forwarded to the Conversation DO only after `ConversationsRepo.startOrResume`, with a fresh header set the route builds itself. The response selects `diletta.v1` only; the token is never echoed, logged or stored. `GET /widget/bootstrap` (M2-7, ADR 0002) is the one other route that takes the token: as `Authorization: Bearer` only, through the same `authenticate`, with the same statuses and generic bodies, read-only (no chatbot user, conversation or event). `/widget/*` CORS is set by `WidgetRoutes` (never the dashboard's credentialed allowlist): any origin, `credentials: false`, only the `Authorization` header.
 
 **Violations:**
 
 - Reading the companion JWT from a URL or query string, or accepting a widget socket before `authenticate` and `startOrResume` succeed
-- Forwarding client headers to the Conversation DO, or letting a client-sent `CONVERSATION_SESSION_HEADER` through
+- Forwarding client headers to the Conversation DO, or letting a client-sent `CONVERSATION_SESSION_HEADER` or `CONVERSATION_FEEDBACK_HEADER` through
+- `/widget/bootstrap` reading the token from anywhere but `Authorization: Bearer`, skipping `authenticate`, writing any row, or answering with credentialed CORS
 - Routing the Conversation DO publicly (`routeAgentRequest`, `/agents/*`): it must be reachable only through `GET /widget/ws`
 - Trusting a decoded claim (`iss`, `sub`, `roles`, a `company` claim) before the signature and claims checks pass, other than `iss` to find the connection row
 - Fetching a JWKS (or any URL built from a token) for an issuer with no `company_connections` row, or with `redirect` other than `"error"`
@@ -1128,7 +1129,7 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 
 ### 3.23 Conversation DO Stays Server-Authoritative [CRITICAL]
 
-**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources; `[]` otherwise) until host tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames; everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
+**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources; `[]` otherwise) until host tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames, plus the widget's `feedback` frame (M2-7), which the DO stores itself through `FeedbackRepo` after syncing the read model (never handed to Think; a reply not synced in this conversation answers `rating: null`); everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
 
 **Violations:**
 
@@ -1270,6 +1271,37 @@ SET\s+(?!LOCAL)hnsw\.
 
 **Fix:** Mirror `repositories/KnowledgeSearchRepo.ts`, `durable-objects/ConversationDO.ts` (`getTools`, `searchHelpDocs`) and `providers/searchHelpDocs.ts` (`docs/runbooks/knowledge.md`).
 
+### 3.27 Widget Renders Data, Never Trusts It [CRITICAL]
+
+**Rule:** The widget (`apps/widget`, M2-7) runs on a host's page and reads from a socket and an API it doesn't control. Everything it receives is parsed before use: DO frames with `ZWidgetServerMessage`, the bootstrap with `ZWidgetBootstrapApiResponse`, tool outputs with their schema (`ZSearchHelpDocsOutput`), embed options with `ZWidgetEmbedConfig`. Reply text goes through the widget's own markdown parser (`lib/markdown.ts`) into React elements: no raw HTML, no images, links only `http(s):`/`mailto:` with `rel="noopener noreferrer nofollow"`. It lives in its shadow root: styles only through `prepareShadowCss`, nothing written to the host document but the `@property` rules and the fonts link (namespaced ids), no global listeners or `window` keys beyond `window.Diletta`. The companion JWT comes from `getToken` for every connect and every bootstrap read and is never stored (memory, `localStorage` or logs); `localStorage` holds only the saved conversation publicId. The socket opens only for a first message or a saved conversation, and a new conversation id is saved before anything is sent. One store per widget (`createWidgetStore`), never module state. The script-tag bundle stays within `WIDGET_BUNDLE_MAX_GZIP_BYTES` (`scripts/checkBundleSize.ts` fails the build).
+
+**Violations:**
+
+- Acting on a frame, bootstrap body or tool output without its Zod schema, or casting it
+- `dangerouslySetInnerHTML`, a markdown library or `innerHTML` for reply text, or a link with any other scheme
+- Writing styles or nodes into the host document beyond `#diletta-widget-properties` / `#diletta-widget-fonts`, or using `:root`/rem-sized CSS without `prepareShadowCss`
+- Keeping the token in state, storage or a module variable, or putting it in a URL
+- Opening the socket on page load or panel open without a saved conversation (it creates a conversation row)
+- A module-level store or singleton shared by widget instances
+- Raising the bundle budget, or skipping the size check, without updating the dev plan's open question
+
+**Detection Pattern:**
+
+```regex
+dangerouslySetInnerHTML|innerHTML\s*=|localStorage\.setItem\([^)]*token|react-markdown
+```
+
+**Examples:**
+
+```
+- ❌ const frame = JSON.parse(event.data) as WidgetServerMessage;
+- ❌ <div dangerouslySetInnerHTML={{ __html: reply }} />
+- ✅ const parsed = Schemas.ZWidgetServerMessage.safeParse(json); if (!parsed.success) return;
+- ✅ <Markdown text={message.text} isStreaming={message.isStreaming} />
+```
+
+**Fix:** Parse with the schema in `packages/schemas/src/widget/` or `widgetAuth/`, render through `components/Markdown.tsx`, and see `docs/runbooks/widget.md`.
+
 ---
 
 ## 4. ADDING NEW RULES
@@ -1359,5 +1391,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it)
 Maintainer: hatiprithwish

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "UNQ_feedback_message_id_chatbot_user_id" ON "feedback" ("message_id","chatbot_user_id");

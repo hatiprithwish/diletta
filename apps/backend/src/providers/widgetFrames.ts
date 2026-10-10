@@ -7,7 +7,8 @@ import Utility from "@/utils/Utility";
 //   - a chat request, rebuilt to carry only its newest message: a user text message with a new id (Think overwrites
 //     the stored message of an id it already has), ≤ WIDGET_MESSAGE_MAX_CHARS, and nothing else from the body (no
 //     client history, client tools, custom fields or regeneration);
-//   - cancel and stream-resume frames, unchanged.
+//   - cancel and stream-resume frames, unchanged;
+//   - the widget's own feedback frame (M2-7): a rating for one reply, which the DO stores itself (Think never sees it).
 // Everything else is refused with a reason for the log; the widget only learns the frame was refused.
 export default class WidgetFrameProvider {
   static admit(
@@ -29,6 +30,12 @@ export default class WidgetFrameProvider {
 
     if (envelope.data.type === Schemas.WidgetChatFrameTypeEnum.ChatRequest) {
       return WidgetFrameProvider.admitChatRequest(json, existingMessageIds);
+    }
+    if (envelope.data.type === Schemas.WIDGET_FEEDBACK_FRAME_TYPE) {
+      const feedback = Schemas.ZWidgetFeedbackFrame.safeParse(json);
+      return feedback.success
+        ? { kind: "feedback", messageId: feedback.data.messageId, rating: feedback.data.rating }
+        : { kind: "refuse", reason: "Malformed feedback" };
     }
     if (Schemas.ZWidgetPassThroughFrame.safeParse(json).success) {
       return { kind: "pass", frame: message };

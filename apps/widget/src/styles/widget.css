@@ -1,0 +1,6 @@
+/*
+ * The widget's styles: the Companion preset (theme tokens light + dark, type scale, radius) and the classes the
+ * widget's own files use. Compiled into the bundle (?inline) and adapted for its shadow root by prepareShadowCss.
+ */
+@import "@app/ui/globals.css";
+@source "../";

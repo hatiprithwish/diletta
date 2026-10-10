@@ -17,6 +17,7 @@ import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
 import TranscriptProvider from "@/providers/transcript";
 import WidgetFrameProvider from "@/providers/widgetFrames";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import FeedbackRepo from "@/repositories/FeedbackRepo";
 import KnowledgeSearchRepo from "@/repositories/KnowledgeSearchRepo";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
@@ -57,6 +58,10 @@ const CLOSING_MESSAGE = "This conversation is closing";
 //
 // Read model: after every turn and on every wake, the transcript past the synced position is written to messages
 // (TranscriptProvider), so a failed write or a turn cut by an eviction is caught up on later.
+//
+// Feedback (M2-7): the widget's feedback frame rates one reply. The read model is caught up first (the reply must be
+// in messages), then FeedbackRepo stores it; the widget gets the stored rating back, or null when it wasn't saved.
+// The ratings already given go out with the conversation frame on connect (read by the worker before the upgrade).
 //
 // Auto-close: idle for CONVERSATION_IDLE_CLOSE_MS → Closed (Answered if any reply completed, else Abandoned). A close
 // that can't act yet retries no sooner than CONVERSATION_CLOSE_RETRY_MS.
@@ -186,10 +191,16 @@ export class ConversationDO extends Think<Env> {
       return;
     }
 
+    // DEV_NOTE: The ratings the worker read before the upgrade (Constants.CONVERSATION_FEEDBACK_HEADER)
+    const feedbackHeader = ctx.request.headers.get(Constants.CONVERSATION_FEEDBACK_HEADER);
+    const feedback = Schemas.ZWidgetFeedbackRatings.safeParse(
+      feedbackHeader ? Utility.parseJson(feedbackHeader) : [],
+    );
     this.send(connection, {
       type: "conversation",
       conversation: { publicId: session.conversationPublicId },
       chatbot: { publicId: session.chatbotPublicId, name: session.chatbotName },
+      feedback: feedback.success ? feedback.data : [],
     });
   }
 
@@ -215,6 +226,10 @@ export class ConversationDO extends Think<Env> {
     }
     if (admission.kind === "pass") {
       await this.lifecycle.webSocketMessage(ws, admission.frame);
+      return;
+    }
+    if (admission.kind === "feedback") {
+      await this.recordFeedback(ws, admission.messageId, admission.rating);
       return;
     }
     if (!(await this.startTurn(ws, admission.requestId, admission.message.id))) {
@@ -372,6 +387,38 @@ export class ConversationDO extends Think<Env> {
       searchExcerpts: {},
     };
     return true;
+  }
+
+  // DEV_NOTE: Stores a rating for one reply (M2-7). The read model is synced first, so a reply that just finished is in
+  // messages; the running turn's reply never is (the sync leaves it out), so it can't be rated mid-stream. A rating
+  // FeedbackRepo can't match to a synced reply of this conversation, or can't save, answers null (logged).
+  private async recordFeedback(
+    ws: WebSocket,
+    messageId: string,
+    rating: Schemas.FeedbackRatingIntEnum,
+  ): Promise<void> {
+    const state = this.getRuntimeState();
+    if (!state || state.isClosed) {
+      this.reply(ws, { type: "feedback", messageId, rating: null });
+      return;
+    }
+    await this.syncReadModel();
+    const recorded = await new FeedbackRepo(this.env).recordFeedback({
+      session: state.session,
+      sessionMessageId: messageId,
+      rating,
+    });
+    if (!recorded.isSuccess || !recorded.rating) {
+      AppLogger.warn({
+        category: Schemas.LogCategory.Feedback,
+        action: Schemas.LogAction.RecordFeedback,
+        message: recorded.message ?? "Feedback not saved",
+        metadata: { conversationPublicId: this.name, isNotFound: recorded.isNotFound ?? false },
+      });
+      this.reply(ws, { type: "feedback", messageId, rating: null });
+      return;
+    }
+    this.reply(ws, { type: "feedback", messageId, rating: recorded.rating.rating });
   }
 
   // DEV_NOTE: The turn's config (re-checking conversation, chatbot and company), the routed model and its budget

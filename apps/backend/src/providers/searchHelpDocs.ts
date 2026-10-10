@@ -20,10 +20,6 @@ import * as Schemas from "@app/schemas";
 // Citations: each result carries a number n, counted across the turn's searches (a second search goes on from the
 // first one's last number). The model cites with [n]; citedBy keeps the results the reply text actually cites.
 const FENCE_TAG = /<(\s*\/?\s*(?:search_results|result)\b)/gi;
-// DEV_NOTE: [n] or [n, m], not right after a word character or a bracket (items[1], a[1][2]) and not followed by "("
-// (a markdown link [1](https://…)). Code spans and blocks are skipped before matching.
-const CITATION_MARKER = /(?<![\w\]])\[(\d+(?:\s*,\s*\d+)*)\](?!\()/g;
-const CODE = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;
 
 const UNAVAILABLE_TEXT =
   "The help docs search is unavailable right now. Tell the user you can't look this up at the moment.";
@@ -115,25 +111,14 @@ export default class SearchHelpDocsProvider {
     ].join("\n");
   }
 
-  // DEV_NOTE: The citations the text cites, once each, in number order. [n] and [n, m] both count; a number with no
-  // result behind it (a made-up marker) is ignored, and so are brackets in code or that index or link something.
+  // DEV_NOTE: The citations the text cites, once each, in number order (Schemas.citedBy, the same marker rules the
+  // widget reads). [n] and [n, m] both count; a number with no result behind it (a made-up marker) is ignored, and so
+  // are brackets in code or that index or link something.
   static citedBy(
     text: string,
     citations: Schemas.KnowledgeCitation[],
   ): Schemas.KnowledgeCitation[] {
-    const cited = new Set<number>();
-    for (const marker of text.replace(CODE, " ").matchAll(CITATION_MARKER)) {
-      for (const number of (marker[1] ?? "").split(",")) {
-        cited.add(Number(number.trim()));
-      }
-    }
-    const byNumber = new Map(citations.map((citation) => [citation.n, citation]));
-    return [...cited]
-      .sort((a, b) => a - b)
-      .flatMap((n) => {
-        const citation = byNumber.get(n);
-        return citation ? [SearchHelpDocsProvider.toCitation(citation)] : [];
-      });
+    return Schemas.citedBy(text, citations);
   }
 
   private static toCitation(citation: Schemas.KnowledgeCitation): Schemas.KnowledgeCitation {

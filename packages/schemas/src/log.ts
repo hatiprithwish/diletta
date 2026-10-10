@@ -15,6 +15,7 @@ export enum LogCategory {
   Conversation = "Conversation",
   Budget = "Budget",
   Knowledge = "Knowledge",
+  Feedback = "Feedback",
 }
 
 export enum LogAction {
@@ -71,6 +72,7 @@ export enum LogAction {
   GetJwks = "GetJwks",
   VerifyWidgetJwt = "VerifyWidgetJwt",
   AuthenticateWidget = "AuthenticateWidget",
+  GetWidgetBootstrap = "GetWidgetBootstrap",
 
   // Crypto
   ReadMasterKey = "ReadMasterKey",
@@ -205,6 +207,12 @@ export enum LogAction {
   // Messages
   CreateMessages = "CreateMessages",
   ListMessages = "ListMessages",
+  GetAssistantMessage = "GetAssistantMessage",
+
+  // Feedback
+  UpsertFeedback = "UpsertFeedback",
+  ListConversationFeedback = "ListConversationFeedback",
+  RecordFeedback = "RecordFeedback",
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",
