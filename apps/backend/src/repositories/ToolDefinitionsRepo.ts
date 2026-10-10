@@ -13,7 +13,8 @@ const STORED_OPS_INVALID_MESSAGE = "Stored tool ops are invalid";
 // (/operator/companies/:companyPublicId/tool-definitions). Tenant Repo: one withTenant per call on the company the
 // route named. A version's lifecycle mirrors chatbot_configs:
 //   create → version 1, Draft (a name already in use is refused: create a new version of it instead)
-//   edit → Draft only; ops are replaced as one unit and re-validated with the risk on the merged row
+//   edit → Draft only; ops are replaced as one unit and re-validated with the risk and idempotency mode on the
+//     merged row
 //   new version → copies a version into a Draft at the name's highest version + 1, at most one Draft per name
 //   status → Draft → Active, Active ↔ Disabled; an active or disabled version never changes again (a config pins it)
 //   delete → Draft only
@@ -117,9 +118,10 @@ export default class ToolDefinitionsRepo {
     return response;
   }
 
-  // DEV_NOTE: Client ops at the current schema version, checked against the risk they will be stored with
+  // DEV_NOTE: Client ops at the current schema version, checked against the risk and idempotency mode they will be
+  // stored with
   private normalizeOps(
-    risk: Schemas.ToolDefinitionRiskIntEnum,
+    tool: Pick<Schemas.ToolDefinition, "risk" | "idempotencyMode">,
     ops: unknown,
   ): Schemas.ToolOpsResult {
     const normalized = Schemas.normalizeToolOps(ops);
@@ -132,7 +134,7 @@ export default class ToolDefinitionsRepo {
         ),
       };
     }
-    const issue = Schemas.getToolRiskOpsIssue(risk, normalized.ops);
+    const issue = Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, normalized.ops);
     if (issue) {
       return {
         isSuccess: false,
@@ -142,14 +144,15 @@ export default class ToolDefinitionsRepo {
     return { isSuccess: true, ops: normalized.ops, schemaVersion: normalized.schemaVersion };
   }
 
-  // DEV_NOTE: The stored ops (loaded) must fit a risk: activation, and an edit that changes the risk alone
+  // DEV_NOTE: The stored ops (loaded) must fit a risk and idempotency mode: activation, and an edit that changes either
+  // without new ops
   private checkStoredOps(
     row: Schemas.ToolDefinitionRow,
-    risk: Schemas.ToolDefinitionRiskIntEnum,
+    tool: Pick<Schemas.ToolDefinition, "risk" | "idempotencyMode">,
   ): Schemas.ToolDefinitionStateResponse | null {
     const loaded = this.loadRowOps(row);
     if (!loaded.ops) return { isSuccess: false, message: STORED_OPS_INVALID_MESSAGE };
-    const issue = Schemas.getToolRiskOpsIssue(risk, loaded.ops);
+    const issue = Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, loaded.ops);
     return issue ? this.refuse(Schemas.ToolDefinitionFailureEnum.InvalidOps, issue) : null;
   }
 
@@ -199,22 +202,26 @@ export default class ToolDefinitionsRepo {
     return { isSuccess: true, connectionId: connection.id };
   }
 
-  // DEV_NOTE: The merged row of a Draft edit: new ops are normalised against the merged risk; a risk change alone must
-  // still fit the stored ops (a write tool needs its readback op). Returns the op columns to write (null = unchanged).
+  // DEV_NOTE: The merged row of a Draft edit: new ops are normalised against the merged risk and idempotency mode; a
+  // change of either alone must still fit the stored ops (a write tool needs its readback op, an Emulated one reads no
+  // {result.*}). Returns the op columns to write (null = unchanged).
   private checkDraftEdit(
     row: Schemas.ToolDefinitionRow,
     body: Schemas.UpdateToolDefinitionApiRequest["toolDefinition"],
   ):
     | { isSuccess: true; opsColumns: Schemas.ToolOpsColumns | null }
     | { isSuccess: false; response: Schemas.ToolDefinitionStateResponse } {
-    const risk = body.risk ?? row.risk;
+    const tool = {
+      risk: body.risk ?? row.risk,
+      idempotencyMode: body.idempotencyMode ?? row.idempotencyMode,
+    };
     if (body.ops) {
-      const ops = this.normalizeOps(risk, body.ops);
+      const ops = this.normalizeOps(tool, body.ops);
       if (!ops.isSuccess) return ops;
       return { isSuccess: true, opsColumns: this.toOpsColumns(ops.ops, ops.schemaVersion) };
     }
-    if (body.risk !== undefined) {
-      const refused = this.checkStoredOps(row, risk);
+    if (body.risk !== undefined || body.idempotencyMode !== undefined) {
+      const refused = this.checkStoredOps(row, tool);
       if (refused) return { isSuccess: false, response: refused };
     }
     return { isSuccess: true, opsColumns: null };
@@ -224,7 +231,7 @@ export default class ToolDefinitionsRepo {
     params: Schemas.CreateToolDefinitionApiRequest & { companyId: string; adminId: string },
   ): Promise<Schemas.CreateToolDefinitionApiResponse> {
     const body = params.toolDefinition;
-    const ops = this.normalizeOps(body.risk, body.ops);
+    const ops = this.normalizeOps(body, body.ops);
     if (!ops.isSuccess) return ops.response;
 
     return await withTenant(
@@ -396,7 +403,7 @@ export default class ToolDefinitionsRepo {
 
         const loaded = this.loadRowOps(source);
         if (!loaded.ops) return { isSuccess: false, message: STORED_OPS_INVALID_MESSAGE };
-        const ops = this.normalizeOps(source.risk, loaded.ops);
+        const ops = this.normalizeOps(source, loaded.ops);
         if (!ops.isSuccess) return ops.response;
 
         const nameParams = { companyId: params.companyId, name: source.name };
@@ -430,7 +437,7 @@ export default class ToolDefinitionsRepo {
   }
 
   // DEV_NOTE: Activating re-checks what a runtime call will need: the ops load at the current schema version and fit
-  // the risk, and the connection still exists and can serve calls (Active, REST, base_url). Setting the status a
+  // the risk and idempotency mode, and the connection still exists and can serve calls (Active, REST, base_url). Setting the status a
   // version already has is a no-op success.
   async setToolDefinitionStatus(
     params: Schemas.SetToolDefinitionStatusApiRequest & {
@@ -465,7 +472,7 @@ export default class ToolDefinitionsRepo {
         }
 
         if (params.status === Schemas.ToolDefinitionStatusIntEnum.Active) {
-          const refused = this.checkStoredOps(row, row.risk);
+          const refused = this.checkStoredOps(row, row);
           if (refused) return refused;
           if (row.connectionPublicId === null) {
             return this.refuse(

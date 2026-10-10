@@ -45,7 +45,7 @@ const connectionInput = (
   environment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
   baseUrl: "https://host.example.com/api",
   authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
-  authConfig: { header: "Authorization" },
+  authConfig: {},
   credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
   jwtIssuer: `https://${crypto.randomUUID()}.example.com`,
   allowedOrigins: ["https://app.example.com"],
@@ -92,7 +92,7 @@ describe("CompanyConnectionsRepo", () => {
     expect(created.companyConnection).not.toHaveProperty("companyId");
     expect(created.companyConnection).not.toHaveProperty("createdBy");
     expect(created.companyConnection).not.toHaveProperty("updatedBy");
-    expect(created.companyConnection?.authConfig).toEqual({ header: "Authorization" });
+    expect(created.companyConnection?.authConfig).toEqual({});
     expect(created.companyConnection?.resetOp).toBeNull();
     expect(created.companyConnection?.companyConnectionStatusLabel).toBe(
       Schemas.CompanyConnectionStatusLabelEnum.Active,
@@ -238,6 +238,57 @@ describe("CompanyConnectionsRepo", () => {
       companyConnection: { authConfig: null },
     });
     expect(update.success).toBe(false);
+  });
+
+  it("accepts only auth types with an AuthStrategy, with a valid config and credential scope", () => {
+    const parse = (overrides: Record<string, unknown>) =>
+      Schemas.ZCreateCompanyConnectionApiRequest.safeParse({
+        companyConnection: { ...connectionInput(), ...overrides },
+      }).success;
+
+    expect(parse({ authConfig: { header: "Authorization" } })).toBe(false);
+    expect(
+      parse({ credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.Company }),
+    ).toBe(false);
+    expect(
+      parse({
+        authType: Schemas.CompanyConnectionAuthTypeEnum.ApiKeyHeader,
+        authConfig: { header: "X-Api-Key" },
+        credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.Company,
+      }),
+    ).toBe(false);
+  });
+
+  it("checks a new auth config against the stored auth type", async () => {
+    const repo = new CompanyConnectionsRepo(env);
+    const created = await repo.createCompanyConnection({
+      companyId: companyA,
+      companyConnection: connectionInput(),
+    });
+    const publicId = created.companyConnection?.publicId ?? "";
+
+    const refused = await repo.updateCompanyConnection({
+      companyId: companyA,
+      publicId,
+      companyConnection: { authConfig: { header: "X-Token" } },
+    });
+    expect(refused.isSuccess).toBe(false);
+    expect(refused.message).toContain("Invalid auth config");
+
+    const accepted = await repo.updateCompanyConnection({
+      companyId: companyA,
+      publicId,
+      companyConnection: { authConfig: {} },
+    });
+    expect(accepted.isSuccess).toBe(true);
+    expect(accepted.companyConnection?.authConfig).toEqual({});
+
+    const missing = await repo.updateCompanyConnection({
+      companyId: companyB,
+      publicId,
+      companyConnection: { authConfig: {} },
+    });
+    expect(missing).toMatchObject({ isSuccess: false, message: "Company connection not found" });
   });
 
   it("requires a base URL unless the adapter is host-executed", () => {

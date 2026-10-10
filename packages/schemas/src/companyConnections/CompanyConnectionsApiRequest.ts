@@ -3,16 +3,23 @@ import {
   CompanyConnectionAdapterTypeIntEnum,
   CompanyConnectionStatusIntEnum,
   ZCompanyConnectionBase,
+  getAuthConfigIssue,
 } from "./CompanyConnectionsCommon";
 
-// DEV_NOTE: adapterType defaults to REST and resetOp to none. The refine mirrors CHK_company_connections_base_url.
+// DEV_NOTE: adapterType defaults to REST and resetOp to none. The refine mirrors CHK_company_connections_base_url;
+// the auth settings must name a built AuthStrategy (getAuthConfigIssue).
 export const ZCreateCompanyConnectionApiRequest = z.object({
-  companyConnection: ZCompanyConnectionBase.partial({ adapterType: true, resetOp: true }).refine(
-    (connection) =>
-      connection.baseUrl !== null ||
-      connection.adapterType === CompanyConnectionAdapterTypeIntEnum.HostExec,
-    { message: "Base URL is required", path: ["baseUrl"] },
-  ),
+  companyConnection: ZCompanyConnectionBase.partial({ adapterType: true, resetOp: true })
+    .refine(
+      (connection) =>
+        connection.baseUrl !== null ||
+        connection.adapterType === CompanyConnectionAdapterTypeIntEnum.HostExec,
+      { message: "Base URL is required", path: ["baseUrl"] },
+    )
+    .superRefine((connection, ctx) => {
+      const issue = getAuthConfigIssue(connection);
+      if (issue) ctx.addIssue({ code: "custom", message: issue, path: ["authConfig"] });
+    }),
 });
 export type CreateCompanyConnectionApiRequest = z.infer<typeof ZCreateCompanyConnectionApiRequest>;
 

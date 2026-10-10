@@ -254,6 +254,50 @@ describe("ToolDefinitionsRepo", () => {
     expect(deleteActive.failure).toBe(Schemas.ToolDefinitionFailureEnum.NotDraft);
   });
 
+  it("keeps an Emulated write's readback and inverse ops off {result.*}, on create and on the merged edit", async () => {
+    const repo = new ToolDefinitionsRepo(env);
+    const readsResult = Schemas.ZToolOps.parse({
+      ...writeOps(),
+      readbackOp: { ...writeOps().readbackOp!, path: "/records/{result.id}" },
+    });
+    const emulatedIssue = "An emulated-idempotency tool's readback op can't read {result.*}";
+
+    const createdEmulated = await repo.createToolDefinition({
+      companyId: companyA,
+      adminId: "1",
+      toolDefinition: { ...writeTool(uniqueName(), connectionA), ops: readsResult },
+    });
+    expect(createdEmulated).toEqual({
+      isSuccess: false,
+      message: emulatedIssue,
+      failure: Schemas.ToolDefinitionFailureEnum.InvalidOps,
+    });
+
+    const native = await repo.createToolDefinition({
+      companyId: companyA,
+      adminId: "1",
+      toolDefinition: {
+        ...writeTool(uniqueName(), connectionA),
+        idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.Native,
+        ops: readsResult,
+      },
+    });
+    expect(native.isSuccess).toBe(true);
+
+    // DEV_NOTE: A mode change alone is checked against the stored ops
+    const toEmulated = await repo.updateToolDefinition({
+      companyId: companyA,
+      publicId: native.toolDefinition!.publicId,
+      adminId: "1",
+      toolDefinition: { idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.Emulated },
+    });
+    expect(toEmulated).toMatchObject({
+      isSuccess: false,
+      message: emulatedIssue,
+      failure: Schemas.ToolDefinitionFailureEnum.InvalidOps,
+    });
+  });
+
   it("creates new versions as Drafts, one Draft per name, and walks the status transitions", async () => {
     const repo = new ToolDefinitionsRepo(env);
     const name = uniqueName();

@@ -10,14 +10,15 @@ import { ZPageApiRequest } from "../common";
 
 export const ZCreateToolDefinitionApiRequest = z.object({
   toolDefinition: ZToolDefinitionBase.superRefine((body, ctx) => {
-    const issue = getToolRiskOpsIssue(body.risk, body.ops);
+    const issue = getToolRiskOpsIssue(body.risk, body.idempotencyMode, body.ops);
     if (issue) ctx.addIssue({ code: "custom", message: issue, path: ["ops"] });
   }),
 });
 export type CreateToolDefinitionApiRequest = z.infer<typeof ZCreateToolDefinitionApiRequest>;
 
 // DEV_NOTE: Edits a Draft only. The name never changes (it is the tool's identity across versions); ops are replaced
-// as one unit. The risk rule is checked by the Repo on the merged row, since risk and ops may come separately.
+// as one unit. The risk rule is checked by the Repo on the merged row, since risk, idempotency mode and ops may
+// come separately.
 export const ZUpdateToolDefinitionApiRequest = z.object({
   toolDefinition: ZToolDefinitionBase.omit({ name: true })
     .partial()

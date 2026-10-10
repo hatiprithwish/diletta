@@ -7,7 +7,11 @@ import {
 } from "./ToolOpsRegistry";
 import { loadToolOps, normalizeToolOps, upgradeToolOps } from "./ToolOpsLoader";
 import { ToolOpMethodEnum, ZToolOpsV1, type ToolOpsV1Input } from "./ToolOpsV1";
-import { ToolDefinitionRiskIntEnum, getToolRiskOpsIssue } from "./ToolDefinitionsCommon";
+import {
+  ToolDefinitionIdempotencyModeIntEnum,
+  ToolDefinitionRiskIntEnum,
+  getToolRiskOpsIssue,
+} from "./ToolDefinitionsCommon";
 
 function validOps(): ToolOpsV1Input {
   return {
@@ -164,25 +168,73 @@ describe("normalizeToolOps (write path)", () => {
 });
 
 describe("getToolRiskOpsIssue", () => {
+  const none = ToolDefinitionIdempotencyModeIntEnum.None;
+
   it("ties readback and inverse ops to the risk", () => {
     const ops = ZToolOpsV1.parse(validOps());
-    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, ops)).toBeNull();
-    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Destructive, ops)).toBeNull();
-    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Read, ops)).toBe(
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, none, ops)).toBeNull();
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Destructive, none, ops)).toBeNull();
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Read, none, ops)).toBe(
       "A read tool has no readback op",
     );
     expect(
-      getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Read, { readbackOp: null, inverseOp: null }),
+      getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Read, none, {
+        readbackOp: null,
+        inverseOp: null,
+      }),
     ).toBeNull();
     expect(
-      getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Read, {
+      getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Read, none, {
         readbackOp: null,
         inverseOp: ops.inverseOp,
       }),
     ).toBe("A read tool has no inverse op");
     expect(
-      getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, { readbackOp: null, inverseOp: null }),
+      getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, none, {
+        readbackOp: null,
+        inverseOp: null,
+      }),
     ).toBe("A write tool needs a readback op");
+  });
+
+  it("keeps an emulated write's readback and inverse ops off {result.*}", () => {
+    const emulated = ToolDefinitionIdempotencyModeIntEnum.Emulated;
+    const ops = ZToolOpsV1.parse(validOps());
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, emulated, ops)).toBeNull();
+
+    const readsResult = {
+      ...ops,
+      readbackOp: { ...ops.readbackOp!, path: "/records/{result.id}" },
+    };
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, emulated, readsResult)).toBe(
+      "An emulated-idempotency tool's readback op can't read {result.*}",
+    );
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, none, readsResult)).toBeNull();
+    expect(
+      getToolRiskOpsIssue(
+        ToolDefinitionRiskIntEnum.Write,
+        ToolDefinitionIdempotencyModeIntEnum.Native,
+        readsResult,
+      ),
+    ).toBeNull();
+
+    const inverseReadsResult = {
+      ...ops,
+      inverseOp: { ...ops.inverseOp!, bodyMap: { nested: ["{result.data.amount}"] } },
+    };
+    expect(getToolRiskOpsIssue(ToolDefinitionRiskIntEnum.Write, emulated, inverseReadsResult)).toBe(
+      "An emulated-idempotency tool's inverse op can't read {result.*}",
+    );
+  });
+
+  it("ignores the idempotency mode of a read tool", () => {
+    expect(
+      getToolRiskOpsIssue(
+        ToolDefinitionRiskIntEnum.Read,
+        ToolDefinitionIdempotencyModeIntEnum.Emulated,
+        { readbackOp: null, inverseOp: null },
+      ),
+    ).toBeNull();
   });
 });
 
