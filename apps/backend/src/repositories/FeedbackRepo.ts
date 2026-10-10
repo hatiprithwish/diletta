@@ -148,7 +148,9 @@ export default class FeedbackRepo {
         entityId: issue.qualityIssue.id,
         entityAction: "opened",
         entityVersion: null,
-        parentLogId: null,
+        // DEV_NOTE: Turns write no log rows yet, so the issue hangs off the conversation's root (conversation.started);
+        // re-point the parent at the reply's turn once turns are logged
+        parentLogId: conversation.conversation.rootLogId,
         rootLogId: conversation.conversation.rootLogId,
         detail: {
           source: Schemas.QualityIssueSourceIntEnum.User,

@@ -1953,6 +1953,7 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
 
     const events = await getIssueOpenedEvents(tenant.companyId);
     expect(events).toHaveLength(1);
+    expect(conversation.rootLogId).not.toBeNull();
     expect(events[0]?.outbox.dedupeKey).toBe(`quality_issue.opened:${issue?.publicId}`);
     expect(events[0]?.log).toMatchObject({
       actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
@@ -1960,6 +1961,7 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
       entityType: "quality_issue",
       entityId: issue?.id,
       entityAction: "opened",
+      parentLogId: conversation.rootLogId,
       rootLogId: conversation.rootLogId,
     });
     expect(events[0]?.log.detail).toMatchObject({
