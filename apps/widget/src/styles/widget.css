@@ -1,0 +1,23 @@
+/*
+ * The widget's styles: the Companion preset (theme tokens light + dark, type scale, radius) and the classes the
+ * widget's own files use. Compiled into the bundle (?inline) and adapted for its shadow root by prepareShadowCss.
+ * The dev host and the tests aren't scanned, so their classes never ship.
+ */
+@import "@app/ui/globals.css";
+@source "../";
+@source not "../dev";
+@source not "../tests";
+
+/*
+ * The widget's own sizes from the design canvas (DESIGN.md §7) that the preset's scale doesn't have. Keep them out of
+ * cn() next to a text colour: cn only knows the preset's type scale and would merge a text-widget-* size as a colour.
+ */
+@theme {
+  --text-widget-row: 13px;
+  --text-widget-note: 11.5px;
+  --text-widget-index: 11px;
+  --text-widget-chip: 10.5px;
+  --radius-widget-bubble: 16px;
+  --radius-widget-field: 14px;
+  --radius-widget-caret: 2px;
+}

@@ -88,4 +88,65 @@ export default class MessagesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: One reply of a conversation by its Think message id (the id the widget holds). Only assistant messages
+  // match: a user message is never a reply to rate. isNotFound when there is none (not synced yet, or not a reply).
+  async getAssistantMessage(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindAssistantMessageDALRequest,
+  ) {
+    const response: Schemas.MessageDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(messages.companyId, params.companyId),
+        eq(messages.conversationId, params.conversationId),
+        eq(messages.sessionMessageId, params.sessionMessageId),
+        eq(messages.role, Schemas.MessageRoleIntEnum.Assistant),
+      ];
+      const [messageResponse] = await tx
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!messageResponse) {
+        // DEV_NOTE: An expected visitor path (a reply still streaming, or another conversation's), so a warning
+        const message = "Message not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetAssistantMessage,
+          message,
+          metadata: {
+            companyId: params.companyId,
+            conversationId: params.conversationId,
+            sessionMessageId: params.sessionMessageId,
+          },
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Message fetched successfully";
+      response.chatMessage = messageResponse;
+    } catch (error) {
+      const message = "Unknown error in fetching message";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetAssistantMessage,
+        message,
+        error,
+        metadata: {
+          companyId: params.companyId,
+          conversationId: params.conversationId,
+          sessionMessageId: params.sessionMessageId,
+        },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

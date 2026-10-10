@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 
 // DEV_NOTE: Derived from admins.company_id, never stored: NULL = operator, set = company admin.
 // There is no role column, so this is a string enum for API responses and can(), not a Status Enum.

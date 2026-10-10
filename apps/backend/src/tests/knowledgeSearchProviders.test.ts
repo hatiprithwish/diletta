@@ -345,25 +345,24 @@ describe("SearchHelpDocsProvider", () => {
       excerpts([hit("a", 0.9), hit("b", 0.8), hit("c", 0.7)]),
     ).results;
     expect(
-      SearchHelpDocsProvider.citedBy("Yes [3]. Also [1,3] and [ 2 ] and [9].", citations).map(
+      Schemas.citedBy("Yes [3]. Also [1,3] and [ 2 ] and [9].", citations).map(
         (citation) => citation.n,
       ),
     ).toEqual([1, 3]);
-    expect(SearchHelpDocsProvider.citedBy("Yes [1].", citations)[0]).toEqual({
+    expect(Schemas.citedBy("Yes [1].", citations)[0]).toEqual({
       n: 1,
       documentPublicId: "kd_a",
       title: "Doc a",
       sourceUrl: "https://docs.example.com/a",
     });
-    expect(SearchHelpDocsProvider.citedBy("No markers here.", citations)).toEqual([]);
+    expect(Schemas.citedBy("No markers here.", citations)).toEqual([]);
   });
 
   it("doesn't read indexes, links or code as citations", () => {
     const citations = SearchHelpDocsProvider.toOutput(
       excerpts([hit("a", 0.9), hit("b", 0.8), hit("c", 0.7)]),
     ).results;
-    const cited = (text: string) =>
-      SearchHelpDocsProvider.citedBy(text, citations).map((citation) => citation.n);
+    const cited = (text: string) => Schemas.citedBy(text, citations).map((citation) => citation.n);
     expect(cited("Use items[1] or matrix[2][3].")).toEqual([]);
     expect(cited("See [1](https://docs.example.com/a).")).toEqual([]);
     expect(cited("Run `list[2]` then:\n```\nrows[3]\n[1]\n```\nDone [2].")).toEqual([2]);

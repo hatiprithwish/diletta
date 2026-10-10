@@ -98,6 +98,15 @@ export default class Constants {
   // A frame over WIDGET_FRAME_MAX_BYTES is dropped unread. A conversation idle for CONVERSATION_IDLE_CLOSE_MS closes
   // (platform default). The title is the first user message, cut to CONVERSATION_TITLE_MAX_CHARS.
   static readonly CONVERSATION_SESSION_HEADER = "x-diletta-conversation-session";
+  // DEV_NOTE: The ratings the user gave a resumed conversation's replies (M2-7), read by the worker before the upgrade
+  // and relayed by the DO in its conversation frame, so connecting costs the DO no database read
+  static readonly CONVERSATION_FEEDBACK_HEADER = "x-diletta-conversation-feedback";
+  // DEV_NOTE: At most this many ratings go in that header (the newest replies'), keeping it well under the header size
+  // limit. A visitor gets at most FEEDBACK_FRAMES_PER_WINDOW feedback frames per FEEDBACK_WINDOW_MS per conversation;
+  // more are answered "not saved" without touching the database.
+  static readonly CONVERSATION_FEEDBACK_MAX_RATINGS = 100;
+  static readonly FEEDBACK_FRAMES_PER_WINDOW = 30;
+  static readonly FEEDBACK_WINDOW_MS = 60_000;
   static readonly WIDGET_FRAME_MAX_BYTES = 64 * 1024;
   static readonly CONVERSATION_IDLE_CLOSE_MS = 30 * 60_000;
   // DEV_NOTE: When the auto-close can't act yet (a turn is running, the database failed), it tries again no sooner than

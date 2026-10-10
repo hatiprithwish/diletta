@@ -5,3 +5,7 @@ import type { ApiResponse } from "../common";
 export interface MessagesDALResponse extends ApiResponse {
   messages?: Message[];
 }
+
+export interface MessageDALResponse extends ApiResponse {
+  chatMessage?: Message;
+}

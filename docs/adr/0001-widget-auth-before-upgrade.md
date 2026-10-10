@@ -1,6 +1,6 @@
 # ADR 0001: Widget auth before the WebSocket upgrade
 
-- Status: Accepted
+- Status: Accepted (failed-upgrade handling amended by ADR 0002)
 - Date: 2026-10-09
 - Task: M2-2 (Conversation DO on Think)
 - Changes: Architecture baseline, "Edge and identity": "Widget talks over WebSocket, JWT sent as the first message."

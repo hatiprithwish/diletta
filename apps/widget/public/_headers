@@ -1,0 +1,4 @@
+/diletta-widget.js
+  Cache-Control: public, max-age=300
+  Access-Control-Allow-Origin: *
+  X-Content-Type-Options: nosniff

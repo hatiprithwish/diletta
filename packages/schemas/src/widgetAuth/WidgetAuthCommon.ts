@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 import type { CompanyConnectionEnvironmentIntEnum } from "../companyConnections";
 import { ConversationStartFailureEnum } from "../conversations/ConversationsResponse";
 

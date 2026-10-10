@@ -66,7 +66,7 @@ importers:
         version: 1.34.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@cloudflare/think':
         specifier: 0.19.0
-        version: 0.19.0(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/provider@4.0.21)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(agents@0.24.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(react@19.2.8)(zod@4.4.3)
+        version: 0.19.0(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/provider@4.0.21)(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(agents@0.24.0(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(react@19.2.8)(zod@4.4.3)
       '@hono/zod-validator':
         specifier: ^0.8.0
         version: 0.8.0(hono@4.13.5)(zod@4.4.3)
@@ -81,7 +81,7 @@ importers:
         version: 2.3.2(@logtape/logtape@2.3.2)
       agents:
         specifier: 0.24.0
-        version: 0.24.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+        version: 0.24.0(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
       ai:
         specifier: 7.0.126
         version: 7.0.126(zod@4.4.3)
@@ -238,6 +238,100 @@ importers:
         specifier: ^4.127.0
         version: 4.127.0(@types/node@25.9.5)
 
+  apps/widget:
+    dependencies:
+      '@ai-sdk/react':
+        specifier: 4.0.129
+        version: 4.0.129(react@19.2.8)(zod@4.4.3)
+      '@app/schemas':
+        specifier: workspace:*
+        version: link:../../packages/schemas
+      '@app/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@cloudflare/think':
+        specifier: 0.19.0
+        version: 0.19.0(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/provider@4.0.21)(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(agents@0.24.0(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(react@19.2.8)(zod@4.4.3)
+      '@phosphor-icons/react':
+        specifier: ^2.1.10
+        version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      agents:
+        specifier: 0.24.0
+        version: 0.24.0(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+      ai:
+        specifier: 7.0.126
+        version: 7.0.126(zod@4.4.3)
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+      zustand:
+        specifier: ^5.0.15
+        version: 5.0.15(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.3.3
+        version: 4.3.3(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))
+      '@testing-library/jest-dom':
+        specifier: ^6.10.0
+        version: 6.10.0(@testing-library/dom@10.4.1)
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@testing-library/user-event':
+        specifier: ^14.6.6
+        version: 14.6.6(@testing-library/dom@10.4.1)
+      '@types/node':
+        specifier: ^25.9.5
+        version: 25.9.5
+      '@types/pg':
+        specifier: ^8.15.6
+        version: 8.15.6
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.5
+        version: 19.2.5(@types/react@19.2.18)
+      '@vitejs/plugin-react':
+        specifier: ^6.1.0
+        version: 6.1.0(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0)))(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))
+      eslint-plugin-react-hooks:
+        specifier: ^7.1.1
+        version: 7.1.1(eslint@10.9.1(jiti@2.7.0))
+      eslint-plugin-react-x:
+        specifier: ^5.18.6
+        version: 5.18.6(eslint@10.9.1(jiti@2.7.0))(typescript@6.0.3)
+      jsdom:
+        specifier: ^29.1.1
+        version: 29.1.1(@noble/hashes@1.8.0)
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
+      tailwindcss:
+        specifier: ^4.3.3
+        version: 4.3.3
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.2.2
+        version: 8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0)
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@25.9.5)(jsdom@29.1.1(@noble/hashes@1.8.0))(msw@2.14.6(@types/node@25.9.5)(typescript@6.0.3))(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))
+      wrangler:
+        specifier: ^4.127.0
+        version: 4.127.0(@types/node@25.9.5)
+
   packages/crypto:
     dependencies:
       '@app/schemas':
@@ -342,8 +436,26 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  '@ai-sdk/gateway@4.0.103':
+    resolution: {integrity: sha512-nnGTUHzPRQ14jhv9CL4OQrzcRBIFTBMIPKGIi9Z9u/4GtwSRxa/nxUX6np2Iwp5phOzO0a0njj/j9Jolf5AEaA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   '@ai-sdk/google@4.0.87':
     resolution: {integrity: sha512-s0tWc+QeSce7O2ZLm+VWSRQy16dGfqEcMIUxEWh+LFvXX3h0TLH8jxCQ2H1qhiBgTta+6A97eHPhBlRFu1xy+g==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/mcp@2.0.65':
+    resolution: {integrity: sha512-KQPNhSkDa7NBn+NRx+ymUXBz4ItMdD4Xr1nIi5KPpdIIptj71Ja38dmWdonZV9JIZQOL9vSF9X4y1SJKV7pbaw==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/mcp@2.0.66':
+    resolution: {integrity: sha512-wFAL5rL/CQljgrhrtpzvrmLJ1tY7Q3o9+SQR+02ZYff3jzXOpj3vfCdi6PjJ1jS3jDd8rkmE9QFlfOFKztI3pg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -363,6 +475,18 @@ packages:
   '@ai-sdk/provider@4.0.21':
     resolution: {integrity: sha512-UpbC9C1oht8dhfKPbVXSLRZS3DI8uk8n5v2uMjBPNIYGsC2kL045ywq7D8Hh9KgnH9rP5W/GxQdYtWScRouqlA==}
     engines: {node: '>=22'}
+
+  '@ai-sdk/react@4.0.129':
+    resolution: {integrity: sha512-aukELfTyiC7w1ANtDwxNzFN3j7GunuFmWzNh6gofC6YPBzaX7oMhCQxQ6XYr4vhvNQkPXHW6RiTkTZ1eW9KK6A==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      react: ^18 || ~19.0.1 || ~19.1.2 || ^19.2.1
+
+  '@ai-sdk/react@4.0.130':
+    resolution: {integrity: sha512-6nUGT2mWIPUK/s2nUJH0Hiu90Oqawwo2INAHekOi4hJBb8zhFJS0yMP0aRn/+UO9VmJT/v58d8rWSmGE3B6ApA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      react: ^18 || ~19.0.1 || ~19.1.2 || ^19.2.1
 
   '@apm-js-collab/code-transformer-bundler-plugins@0.7.4':
     resolution: {integrity: sha512-nAfOeZPSUAQvJa1iFT/5oCrTm5YQhMMrfCNthNnaXHZiOQhu1KGuLoIx7HtbAi3wfwaBYLaICPIeenIaEwcXIg==}
@@ -3609,6 +3733,12 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  ai@7.0.127:
+    resolution: {integrity: sha512-JNsNPk4ZvRGEJuqdVo2lYFkm7uAuf3p/RwKFWn1Wh/+IK3U1RyFWw2GXoFnhzqNfxEuj7XJB4WpIUhl1sHToWg==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   ajv-formats@2.1.1:
     resolution: {integrity: sha512-Wx0Kx52hxE7C18hkMEggYlEifqWZtYaRgouJor+WMdPnQyEK13vgEWyVNup7SoeeoLMsr4kf5h6dOW11I15MUA==}
     peerDependencies:
@@ -6242,6 +6372,11 @@ packages:
     peerDependencies:
       react: ^16.11.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
+  swr@2.5.1:
+    resolution: {integrity: sha512-BRw55e8r0B7SpDN20CAzoQAHl7y1yP7/Zt7oqUjMv0vSt2u2Xnkm88Ws+VypbV9BXHQVuSuyVq7zMjO16wSExw==}
+    peerDependencies:
+      react: ^16.11.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   symbol-tree@3.2.4:
     resolution: {integrity: sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==}
 
@@ -6276,6 +6411,10 @@ packages:
     resolution: {integrity: sha512-tPbLXTI6ohPASb/1YViL428oEHu6/qv1OxqYnfaonVCFHqx4+wCd95pHrQWsL5X4pl90CTyW9piSAsS2L0VoMw==}
     engines: {node: '>=10'}
     hasBin: true
+
+  throttleit@2.1.0:
+    resolution: {integrity: sha512-nt6AMGKW1p/70DF/hGBdJB57B8Tspmbp5gfJ8ilhLnt7kkr2ye7hzD6NVG8GGErk2HWF34igrL2CXmNIkzKqKw==}
+    engines: {node: '>=18'}
 
   tiny-invariant@1.3.3:
     resolution: {integrity: sha512-+FbBPE1o9QAYvviau/qC5SE3caw21q3xkvWKBtja5vgqOWIHHJ3ioaq1VPfn/Szqctz2bU/oYeKd9/z5BL+PVg==}
@@ -6871,11 +7010,36 @@ snapshots:
       '@vercel/oidc': 3.2.0
       zod: 4.4.3
 
+  '@ai-sdk/gateway@4.0.103(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
+      '@vercel/oidc': 3.2.0
+      zod: 4.4.3
+    optional: true
+
   '@ai-sdk/google@4.0.87(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.21
       '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
       zod: 4.4.3
+
+  '@ai-sdk/mcp@2.0.65(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
+      cross-spawn: 7.0.6
+      pkce-challenge: 5.0.1
+      zod: 4.4.3
+
+  '@ai-sdk/mcp@2.0.66(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
+      cross-spawn: 7.0.6
+      pkce-challenge: 5.0.1
+      zod: 4.4.3
+    optional: true
 
   '@ai-sdk/openai@4.0.83(zod@4.4.3)':
     dependencies:
@@ -6895,6 +7059,31 @@ snapshots:
   '@ai-sdk/provider@4.0.21':
     dependencies:
       json-schema: 0.4.0
+
+  '@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/mcp': 2.0.65(zod@4.4.3)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
+      ai: 7.0.126(zod@4.4.3)
+      react: 19.2.8
+      swr: 2.5.1(react@19.2.8)
+      throttleit: 2.1.0
+    transitivePeerDependencies:
+      - zod
+
+  '@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/mcp': 2.0.66(zod@4.4.3)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
+      ai: 7.0.127(zod@4.4.3)
+      react: 19.2.8
+      swr: 2.5.1(react@19.2.8)
+      throttleit: 2.1.0
+    transitivePeerDependencies:
+      - zod
+    optional: true
 
   '@apm-js-collab/code-transformer-bundler-plugins@0.7.4':
     dependencies:
@@ -7331,19 +7520,43 @@ snapshots:
       - ai
       - zod
 
-  '@cloudflare/think@0.19.0(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/provider@4.0.21)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(agents@0.24.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(react@19.2.8)(zod@4.4.3)':
+  '@cloudflare/think@0.19.0(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/provider@4.0.21)(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(agents@0.24.0(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(react@19.2.8)(zod@4.4.3)':
     dependencies:
       '@ai-sdk/anthropic': 4.0.71(zod@4.4.3)
       '@ai-sdk/openai': 4.0.83(zod@4.4.3)
       '@cloudflare/codemode': 0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
       '@cloudflare/shell': 0.4.3(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
-      agents: 0.24.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+      agents: 0.24.0(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
       ai: 7.0.126(zod@4.4.3)
       chat: 4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
       just-bash: 3.6.0
       workers-ai-provider: 4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.4.3))(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/openai@4.0.83(zod@4.4.3))(@ai-sdk/provider@4.0.21)(ai@7.0.126(zod@4.4.3))
       zod: 4.4.3
     optionalDependencies:
+      '@ai-sdk/react': 4.0.129(react@19.2.8)(zod@4.4.3)
+      react: 19.2.8
+    transitivePeerDependencies:
+      - '@ai-sdk/google'
+      - '@ai-sdk/provider'
+      - '@modelcontextprotocol/sdk'
+      - '@tanstack/ai'
+      - supports-color
+      - workflow
+
+  '@cloudflare/think@0.19.0(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/provider@4.0.21)(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(agents@0.24.0(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(react@19.2.8)(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/anthropic': 4.0.71(zod@4.4.3)
+      '@ai-sdk/openai': 4.0.83(zod@4.4.3)
+      '@cloudflare/codemode': 0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
+      '@cloudflare/shell': 0.4.3(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
+      agents: 0.24.0(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+      ai: 7.0.126(zod@4.4.3)
+      chat: 4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
+      just-bash: 3.6.0
+      workers-ai-provider: 4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.4.3))(@ai-sdk/google@4.0.87(zod@4.4.3))(@ai-sdk/openai@4.0.83(zod@4.4.3))(@ai-sdk/provider@4.0.21)(ai@7.0.126(zod@4.4.3))
+      zod: 4.4.3
+    optionalDependencies:
+      '@ai-sdk/react': 4.0.130(react@19.2.8)(zod@4.4.3)
       react: 19.2.8
     transitivePeerDependencies:
       - '@ai-sdk/google'
@@ -9951,7 +10164,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  agents@0.24.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3):
+  agents@0.24.0(@ai-sdk/react@4.0.129(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3):
     dependencies:
       '@babel/plugin-proposal-decorators': 8.0.2(@babel/core@7.29.7)
       '@cfworker/json-schema': 4.1.1
@@ -9969,6 +10182,38 @@ snapshots:
       yaml: 2.9.0
       zod: 4.4.3
     optionalDependencies:
+      '@ai-sdk/react': 4.0.129(react@19.2.8)(zod@4.4.3)
+      '@cloudflare/codemode': 0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
+      ai: 7.0.126(zod@4.4.3)
+      chat: 4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
+      just-bash: 3.6.0
+      react: 19.2.8
+      vite: 8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0)
+    transitivePeerDependencies:
+      - '@babel/core'
+      - '@babel/plugin-transform-runtime'
+      - '@babel/runtime'
+      - rolldown
+
+  agents@0.24.0(@ai-sdk/react@4.0.130(react@19.2.8)(zod@4.4.3))(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/codemode@0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(ai@7.0.126(zod@4.4.3))(chat@4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3))(just-bash@3.6.0)(react@19.2.8)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3):
+    dependencies:
+      '@babel/plugin-proposal-decorators': 8.0.2(@babel/core@7.29.7)
+      '@cfworker/json-schema': 4.1.1
+      '@modelcontextprotocol/client': 2.0.0
+      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      '@modelcontextprotocol/server': 2.0.0
+      '@rolldown/plugin-babel': 0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.2.6)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.12)(yaml@2.9.0))
+      capnweb: 0.12.0
+      cron-schedule: 6.0.0
+      esbuild: 0.28.2
+      mimetext: 3.0.28
+      nanoid: 5.1.16
+      partysocket: 1.3.0(react@19.2.8)
+      postal-mime: 2.7.6
+      yaml: 2.9.0
+      zod: 4.4.3
+    optionalDependencies:
+      '@ai-sdk/react': 4.0.130(react@19.2.8)(zod@4.4.3)
       '@cloudflare/codemode': 0.5.2(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
       ai: 7.0.126(zod@4.4.3)
       chat: 4.41.1(ai@7.0.126(zod@4.4.3))(zod@4.4.3)
@@ -9987,6 +10232,14 @@ snapshots:
       '@ai-sdk/provider': 4.0.21
       '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
       zod: 4.4.3
+
+  ai@7.0.127(zod@4.4.3):
+    dependencies:
+      '@ai-sdk/gateway': 4.0.103(zod@4.4.3)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
+      zod: 4.4.3
+    optional: true
 
   ajv-formats@2.1.1(ajv@8.20.0):
     optionalDependencies:
@@ -11421,7 +11674,7 @@ snapshots:
 
   magic-string@0.30.21:
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   map-obj@4.3.0: {}
 
@@ -12803,6 +13056,12 @@ snapshots:
       react: 19.2.8
       use-sync-external-store: 1.6.0(react@19.2.8)
 
+  swr@2.5.1(react@19.2.8):
+    dependencies:
+      dequal: 2.0.3
+      react: 19.2.8
+      use-sync-external-store: 1.6.0(react@19.2.8)
+
   symbol-tree@3.2.4: {}
 
   systeminformation@5.33.4: {}
@@ -12840,6 +13099,8 @@ snapshots:
       commander: 2.20.3
       source-map-support: 0.5.21
     optional: true
+
+  throttleit@2.1.0: {}
 
   tiny-invariant@1.3.3: {}
 

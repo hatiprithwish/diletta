@@ -1,11 +1,19 @@
 import { env, createExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { chatbots, companies, companyConnections } from "@/db/tables";
+import {
+  activityLog,
+  chatbotConfigs,
+  chatbots,
+  chatbotUsers,
+  companies,
+  companyConnections,
+  conversations,
+} from "@/db/tables";
 import worker from "@/index";
 import JwksProvider from "@/providers/jwks";
 import WidgetJwtProvider from "@/providers/widgetJwt";
@@ -50,6 +58,25 @@ const issuers = {
   noChatbot: randomIssuer(),
   fetchOk: randomIssuer(),
   fetchDown: randomIssuer(),
+};
+
+const BOOTSTRAP_CONFIG: Schemas.ConfigSpecV1Input = {
+  persona: { instructions: "You help facility managers with their registers." },
+  procedures: [],
+  tools: [],
+  approvalRules: [],
+  routing: {
+    small: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-haiku-4-5" },
+    mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-sonnet-5-5" },
+    top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-opus-5-5" },
+    defaultTier: Schemas.ModelTierEnum.Mid,
+  },
+  knowledge: { sourceIds: [] },
+  widget: {
+    greeting: "Hi, what do you need?",
+    suggestions: ["Which inspections are overdue?", "How do I add a custom field?"],
+    launcherLabel: "Ask about your registers",
+  },
 };
 
 const companyIds: string[] = [];
@@ -139,11 +166,27 @@ beforeAll(async () => {
         { publicId: Utility.generatePublicId(), companyId: paused, name: "P", isDefault: true },
         { publicId: Utility.generatePublicId(), companyId: churned, name: "C", isDefault: true },
       ])
-      .returning({ publicId: chatbots.publicId, name: chatbots.name });
-    defaultChatbotA = bots[0]!;
+      .returning({ id: chatbots.id, publicId: chatbots.publicId, name: chatbots.name });
+    defaultChatbotA = { publicId: bots[0]!.publicId, name: bots[0]!.name };
     secondChatbotA = bots[1]!.publicId;
     pausedChatbotA = bots[2]!.publicId;
     chatbotOfB = bots[3]!.publicId;
+
+    // DEV_NOTE: A published config for A's default chatbot only (the bootstrap reads its widget settings); A's second
+    // chatbot has none
+    const normalized = Schemas.normalizeConfigBody(BOOTSTRAP_CONFIG);
+    if (!normalized.body || !normalized.schemaVersion) throw new Error("Config body invalid");
+    await ownerDb.insert(chatbotConfigs).values({
+      publicId: Utility.generatePublicId(),
+      companyId: a,
+      chatbotId: bots[0]!.id,
+      configVersion: 1,
+      schemaVersion: normalized.schemaVersion,
+      status: Schemas.ChatbotConfigStatusIntEnum.Published,
+      body: normalized.body,
+      bodyHash: "test-bootstrap",
+      publishedAt: new Date(),
+    });
 
     const connection = (
       companyId: string,
@@ -181,6 +224,7 @@ afterAll(async () => {
     await ownerDb
       .delete(companyConnections)
       .where(inArray(companyConnections.companyId, companyIds));
+    await ownerDb.delete(chatbotConfigs).where(inArray(chatbotConfigs.companyId, companyIds));
     await ownerDb.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
     await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
   });
@@ -637,6 +681,16 @@ describe("GET /widget/ws", () => {
     }
   });
 
+  it("checks the token before the query: 401 without one, 400 only for a verified token", async () => {
+    const badQuery = `?conversation=${"x".repeat(65)}`;
+    expect((await upgrade({ query: badQuery, protocols: null })).status).toBe(401);
+    expect(
+      (await upgrade({ query: badQuery, protocols: [Schemas.WIDGET_SUBPROTOCOL, "not-a-jwt"] }))
+        .status,
+    ).toBe(401);
+    expect((await upgrade({ query: badQuery })).status).toBe(400);
+  });
+
   it("ignores a token in the URL", async () => {
     const token = await signToken(rsaKey, claimsFor(issuers.active));
     const response = await upgrade({
@@ -665,5 +719,132 @@ describe("GET /widget/ws", () => {
   it("answers 404 on a chatbot of another company", async () => {
     const response = await upgrade({ query: `?chatbot=${chatbotOfB}` });
     expect(response.status).toBe(404);
+  });
+});
+
+// DEV_NOTE: The widget's bootstrap read (M2-7, ADR 0002): the same token checks as the socket, the token in
+// Authorization: Bearer, CORS for any origin without credentials, and nothing created
+describe("GET /widget/bootstrap", () => {
+  async function bootstrap(
+    options: {
+      query?: string;
+      origin?: string | null;
+      authorization?: string | null;
+      method?: string;
+      headers?: Record<string, string>;
+    } = {},
+  ) {
+    const headers: Record<string, string> = { ...options.headers };
+    const origin = options.origin === undefined ? ORIGIN : options.origin;
+    if (origin !== null) headers["Origin"] = origin;
+    if (options.authorization !== null) {
+      headers["Authorization"] =
+        options.authorization ?? `Bearer ${await signToken(rsaKey, claimsFor(issuers.active))}`;
+    }
+    return await worker.fetch(
+      new Request(`http://localhost/widget/bootstrap${options.query ?? ""}`, {
+        method: options.method ?? "GET",
+        headers,
+      }),
+      env,
+      createExecutionContext(),
+    );
+  }
+
+  it("answers the default chatbot's name and widget settings, readable cross-origin", async () => {
+    const response = await bootstrap();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    expect(response.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    const body = Schemas.ZWidgetBootstrapApiResponse.parse(await response.json());
+    expect(body.bootstrap).toEqual({
+      chatbot: defaultChatbotA,
+      widget: {
+        greeting: "Hi, what do you need?",
+        suggestions: ["Which inspections are overdue?", "How do I add a custom field?"],
+        launcherLabel: "Ask about your registers",
+      },
+    });
+  });
+
+  it("answers widget null for a chatbot with no published config", async () => {
+    const response = await bootstrap({ query: `?chatbot=${secondChatbotA}` });
+    expect(response.status).toBe(200);
+    const body = Schemas.ZWidgetBootstrapApiResponse.parse(await response.json());
+    expect(body.bootstrap?.chatbot.publicId).toBe(secondChatbotA);
+    expect(body.bootstrap?.widget).toBeNull();
+  });
+
+  it("answers a preflight for any origin, allowing only the Authorization header", async () => {
+    const response = await bootstrap({
+      method: "OPTIONS",
+      authorization: null,
+      origin: "https://host.example.org",
+      headers: {
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+      },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://host.example.org");
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe("Authorization");
+  });
+
+  it("answers 401 without a bearer token, or with a bad one, with a generic body", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const expired = await signToken(
+      rsaKey,
+      claimsFor(issuers.active, { iat: now - 400, exp: now - 120 }),
+    );
+    for (const authorization of [null, "Basic abc", `Bearer ${expired}`]) {
+      const response = await bootstrap({ authorization });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ isSuccess: false, message: "Unauthorized" });
+    }
+  });
+
+  it("ignores a token in the URL", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    const response = await bootstrap({ query: `?token=${token}`, authorization: null });
+    expect(response.status).toBe(401);
+  });
+
+  it("answers 403 on an origin the connection doesn't allow, 404 on another company's chatbot", async () => {
+    expect((await bootstrap({ origin: "https://evil.example.com" })).status).toBe(403);
+    expect((await bootstrap({ origin: null })).status).toBe(403);
+    expect((await bootstrap({ query: `?chatbot=${chatbotOfB}` })).status).toBe(404);
+    expect((await bootstrap({ query: `?chatbot=${pausedChatbotA}` })).status).toBe(403);
+  });
+
+  it("creates nothing: no chatbot user, conversation or activity row", async () => {
+    const counts = async () => {
+      let found = { chatbotUsers: -1, conversations: -1, activity: -1 };
+      await withOwnerDb(async (ownerDb) => {
+        found = {
+          chatbotUsers: await ownerDb.$count(chatbotUsers, eq(chatbotUsers.companyId, companyA)),
+          conversations: await ownerDb.$count(conversations, eq(conversations.companyId, companyA)),
+          activity: await ownerDb.$count(activityLog, eq(activityLog.companyId, companyA)),
+        };
+      });
+      return found;
+    };
+    const before = await counts();
+    expect((await bootstrap()).status).toBe(200);
+    expect((await bootstrap({ query: `?chatbot=${secondChatbotA}` })).status).toBe(200);
+    expect(await counts()).toEqual(before);
+  });
+
+  it("checks the token before the query: 401 without one, 400 only for a verified token", async () => {
+    const badQuery = `?chatbot=${"x".repeat(65)}`;
+    expect((await bootstrap({ query: badQuery, authorization: null })).status).toBe(401);
+    expect((await bootstrap({ query: badQuery, authorization: "Bearer not-a-jwt" })).status).toBe(
+      401,
+    );
+    expect((await bootstrap({ query: badQuery })).status).toBe(400);
+  });
+
+  it("accepts the bearer scheme in any case", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    expect((await bootstrap({ authorization: `bearer ${token}` })).status).toBe(200);
   });
 });

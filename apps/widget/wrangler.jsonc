@@ -1,0 +1,20 @@
+{
+  // DEV_NOTE: The widget bundle host (M2-7): static assets only, no Worker code. dist/embed holds diletta-widget.js (the
+  // script-tag build) and its _headers. The top level is never deployed; CI deploys with --env staging / --env
+  // production, like the platform worker.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "diletta-widget-local",
+  "compatibility_date": "2026-06-11",
+  "assets": {
+    "directory": "./dist/embed",
+    "not_found_handling": "none",
+  },
+  "env": {
+    "staging": {
+      "name": "diletta-widget-staging",
+    },
+    "production": {
+      "name": "diletta-widget",
+    },
+  },
+}

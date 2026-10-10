@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 import { ZBytes } from "../common";
 
 export enum ChatbotUserSecretStatusIntEnum {

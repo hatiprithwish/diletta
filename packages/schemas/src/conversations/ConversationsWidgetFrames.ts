@@ -1,9 +1,11 @@
-import z from "zod";
+import { z } from "zod";
 import type { BudgetRefusalEnum } from "../budget";
 import type { ConfigSpec } from "../configSpec";
 import { ZConversationSession } from "./ConversationsCommon";
 import type { TurnMessage } from "../messages";
 import type { KnowledgeCitation, SearchHelpDocsExcerpt } from "../knowledgeSearch";
+import { ZWidgetFeedbackRating } from "../feedback";
+import type { FeedbackRatingIntEnum } from "../feedback";
 
 // DEV_NOTE: The longest user message the widget may send, in characters. Platform constant; the composer enforces
 // it too, the DO is the guard.
@@ -62,12 +64,22 @@ export const ZWidgetPassThroughFrame = z.looseObject({
   id: z.string().min(1).max(100).optional(),
 });
 
+// DEV_NOTE: The widget's own frame next to Think's (M2-7): a thumbs up or down on one reply, named by its Think message
+// id. Handled by the Conversation DO itself, never handed to Think.
+export const WIDGET_FEEDBACK_FRAME_TYPE = "feedback";
+
+export const ZWidgetFeedbackFrame = ZWidgetFeedbackRating.extend({
+  type: z.literal(WIDGET_FEEDBACK_FRAME_TYPE),
+});
+export type WidgetFeedbackFrame = z.infer<typeof ZWidgetFeedbackFrame>;
+
 // DEV_NOTE: Server-side only — what the widget frame allowlist decided (WidgetFrameProvider.admit). pass: hand the
-// frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. refuse: drop it
-// and tell the widget (reason is logged only).
+// frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. feedback: a
+// rating for the DO to store. refuse: drop it and tell the widget (reason is logged only).
 export type WidgetFrameAdmission =
   | { kind: "pass"; frame: string }
   | { kind: "chat"; requestId: string; message: { id: string; text: string }; frame: string }
+  | { kind: "feedback"; messageId: string; rating: FeedbackRatingIntEnum }
   | { kind: "refuse"; reason: string };
 
 // DEV_NOTE: Server-side only — one Think transcript message reduced to what the read model keeps (TranscriptProvider).

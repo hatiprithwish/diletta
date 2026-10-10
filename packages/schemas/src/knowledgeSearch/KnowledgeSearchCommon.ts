@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 import type { ModelTaskTypeEnum } from "../modelCalls";
 import type { KnowledgeModelCall } from "../knowledgeIngestion";
 import type { ModelPrice } from "../modelRouter";

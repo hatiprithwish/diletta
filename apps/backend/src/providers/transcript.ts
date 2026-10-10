@@ -1,6 +1,5 @@
 import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
-import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
 
 const SEARCH_TOOL_PART_TYPE = `tool-${Schemas.SEARCH_HELP_DOCS_TOOL_NAME}`;
 
@@ -10,7 +9,7 @@ const SEARCH_TOOL_PART_TYPE = `tool-${Schemas.SEARCH_HELP_DOCS_TOOL_NAME}`;
 // is caught up on later instead of being lost. Writes are idempotent per Think message id.
 //
 // Citations (M2-6): a reply's search_help_docs citations sit in its own message, as tool parts before its text. Each
-// written reply keeps the ones its [n] markers cite (SearchHelpDocsProvider.citedBy), looked up in every search of
+// written reply keeps the ones its [n] markers cite (Schemas.citedBy), looked up in every search of
 // its turn so far; a reply that cites none is written with its text only.
 export default class TranscriptProvider {
   static toEntries(messages: UIMessage[]): Schemas.TranscriptEntry[] {
@@ -82,9 +81,7 @@ export default class TranscriptProvider {
       turnSearchCitations = [...turnSearchCitations, ...entry.searchCitations];
       if (entry.role !== "other" && entry.text.length > 0) {
         const citations =
-          entry.role === "assistant"
-            ? SearchHelpDocsProvider.citedBy(entry.text, turnSearchCitations)
-            : [];
+          entry.role === "assistant" ? Schemas.citedBy(entry.text, turnSearchCitations) : [];
         current.messages.push({
           sessionMessageId: entry.id,
           role:

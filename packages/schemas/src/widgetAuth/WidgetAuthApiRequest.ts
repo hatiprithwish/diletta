@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 
 // DEV_NOTE: Query of the widget's WebSocket upgrade (GET /widget/ws). chatbot is the embed's chatbot publicId; without
 // it the company's default chatbot answers. It only picks a chatbot inside the company the verified token's issuer

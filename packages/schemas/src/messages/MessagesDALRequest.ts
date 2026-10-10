@@ -6,3 +6,9 @@ import type { Message, TurnMessage } from "./MessagesCommon";
 export type CreateMessagesDALRequest = Pick<Message, "companyId" | "conversationId" | "turnId"> & {
   messages: TurnMessage[];
 };
+
+// DEV_NOTE: One reply of a conversation by its Think message id (conversationId is internal, from the session)
+export type FindAssistantMessageDALRequest = Pick<
+  Message,
+  "companyId" | "conversationId" | "sessionMessageId"
+>;
