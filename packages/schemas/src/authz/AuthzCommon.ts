@@ -15,6 +15,12 @@ export enum AuthzActionEnum {
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
   CompanyList = "company.list",
+
+  // Tool definitions (operator only, on one company named by the route): curated from the host's API by operators
+  ToolDefinitionRead = "tool_definition.read",
+  ToolDefinitionCreate = "tool_definition.create",
+  ToolDefinitionUpdate = "tool_definition.update",
+  ToolDefinitionDelete = "tool_definition.delete",
 }
 
 // DEV_NOTE: Actions only an operator may perform. Everything else is company-scoped: an operator may perform it
@@ -22,6 +28,10 @@ export enum AuthzActionEnum {
 export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.CompanyCreate,
   AuthzActionEnum.CompanyList,
+  AuthzActionEnum.ToolDefinitionRead,
+  AuthzActionEnum.ToolDefinitionCreate,
+  AuthzActionEnum.ToolDefinitionUpdate,
+  AuthzActionEnum.ToolDefinitionDelete,
 ]);
 
 // DEV_NOTE: The company a resource belongs to (internal companies.id, resolved server-side). null = no single

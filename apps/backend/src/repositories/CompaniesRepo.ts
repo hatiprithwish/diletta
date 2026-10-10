@@ -72,6 +72,16 @@ export default class CompaniesRepo {
     });
   }
 
+  // DEV_NOTE: An operator route on one company (/operator/companies/:companyPublicId/…) names it by public id. The
+  // lookup crosses companies (no tenant context yet), so it runs in withPlatform; everything after it runs in
+  // withTenant on the resolved id. Any status: an operator may curate a paused or churned company.
+  async resolveCompanyId(params: { publicId: string }): Promise<Schemas.CompanyIdResponse> {
+    return await withPlatform(this.db, async (tx): Promise<Schemas.CompanyIdResponse> => {
+      const { company, ...rest } = await this.dal.getCompanyByPublicId(tx, params);
+      return { ...rest, companyId: company?.id };
+    });
+  }
+
   async getCompaniesCount(): Promise<Schemas.GetCompaniesCountApiResponse> {
     return await withPlatform(this.db, async (tx) => {
       return await this.dal.getCompaniesCount(tx);

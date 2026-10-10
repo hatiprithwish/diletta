@@ -336,6 +336,7 @@ export const toolDefinitions = table(
     version: t.integer().notNull(),
     description: t.text().notNull(),
     risk: t.smallint().$type<Schemas.ToolDefinitionRiskIntEnum>().notNull(),
+    schemaVersion: t.smallint("schema_version").notNull().default(1), // which ZToolOpsV<n> parses the op columns
     inputSchema: t.jsonb("input_schema").notNull(),
     callOp: t.jsonb("call_op").notNull(),
     readbackOp: t.jsonb("readback_op"),

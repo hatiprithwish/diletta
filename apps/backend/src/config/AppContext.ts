@@ -12,7 +12,8 @@ export interface AdminVariables {
   admin: Schemas.AdminContext;
 }
 
-// DEV_NOTE: Set by authorizeCompany only — the signed-in admin's internal companies.id, the withTenant key
+// DEV_NOTE: Set by authorizeCompany (the signed-in admin's company) or resolveOperatorCompany (the company an operator
+// route names) — the internal companies.id, the withTenant key
 export interface CompanyVariables {
   companyId: string;
 }

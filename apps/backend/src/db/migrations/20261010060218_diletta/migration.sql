@@ -1,0 +1,1 @@
+ALTER TABLE "tool_definitions" ADD COLUMN "schema_version" smallint DEFAULT 1 NOT NULL;
