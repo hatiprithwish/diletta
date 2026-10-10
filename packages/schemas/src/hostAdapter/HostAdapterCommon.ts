@@ -8,7 +8,7 @@ import type {
   ToolDefinitionRiskIntEnum,
 } from "../toolDefinitions/ToolDefinitionsCommon";
 import type { RenderedToolRequest } from "../toolDefinitions/ToolOpRenderer";
-import type { ReadbackExpectation } from "../toolDefinitions/ToolReadbackCompare";
+import type { ReadbackCheckExpectations } from "../toolDefinitions/ToolReadbackCompare";
 
 // DEV_NOTE: Host API calls (@app/adapter, M3-2). A failed or slow attempt is tried again at most HOST_CALL_MAX_RETRIES
 // times (when its idempotency mode allows it): after the host's Retry-After when it gives one (capped), else
@@ -28,12 +28,15 @@ export const HOST_IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7E]{1,255}$/;
 // DEV_NOTE: How a host call ended.
 //   Succeeded: the host answered 2xx (a write landed; body is its response when readable).
 //   AlreadyApplied: an Emulated write's readback showed the write had already landed, so it wasn't sent again.
-//   Refused: the host answered a 4xx that a retry won't change (403, 404, 422, …): the write didn't land.
+//   Refused: the host answered a 4xx that a retry won't change (403, 404, 422, …), and no earlier send may have landed.
 //   TokenNeeded: no usable host token in memory; nothing was sent with this attempt (M3-8 fetches one).
-//   TokenRejected: the host answered 401 to the token.
-//   Unknown: a write may or may not have landed (timeout, dropped connection, 5xx, retries used up): resume it later
-//     with isResume, or hand it to a human (Mode None never resends).
-//   Failed: the call couldn't be made or didn't succeed, and a write didn't land.
+//   TokenRejected: the host answered 401 to the token (or the token is malformed).
+//   Unknown: a write may or may not have landed (timeout, dropped connection, 5xx, retries used up, a readback that
+//     matches neither side): resume it later with isResume, or hand it to a human (Mode None never resends).
+//   Failed: the call couldn't be made or didn't succeed, and no send of a write may have landed.
+// Refused and Failed are never returned after a send that may have landed (those become Unknown). TokenNeeded and
+// TokenRejected are, so the token can be refreshed: for a write, read mayHaveLanded on every outcome that isn't a
+// success, and pass it as isResume on the next call for the step.
 export enum HostCallOutcomeEnum {
   Succeeded = "Succeeded",
   AlreadyApplied = "AlreadyApplied",
@@ -64,11 +67,14 @@ export interface CreateHostAdapterRequest {
   wait?: HostRetryWait;
 }
 
-// DEV_NOTE: The Emulated "did it land?" check: the tool's readback_op rendered with the args, and what its response
-// must show (getCommitExpectations for a commit, getUndoExpectations for an undo)
+// DEV_NOTE: The Emulated "did it land?" check: the tool's readback_op rendered with the args, and the values that prove
+// each side (getCommitCheckExpectations for a commit, getUndoCheckExpectations for an undo). Landed = the readback
+// shows the step's values; not landed = it still shows the values the step replaces. A readback that shows neither
+// (the host stored the value in another form: lowercased, rounded, "20.00" for 20) proves nothing, so the write is
+// never resent on it.
 export interface HostAppliedCheck {
   request: RenderedToolRequest;
-  expectations: ReadbackExpectation[];
+  expectations: ReadbackCheckExpectations;
 }
 
 // DEV_NOTE: A read: call_op of a read tool, or a readback_op. Always safe to send again.
@@ -103,7 +109,8 @@ export interface HostCallResponse extends ApiResponse {
   body?: unknown;
   // Requests this call sent for the step itself (an Emulated readback check isn't counted)
   attempts: number;
-  // A write only: whether one of its sends may have landed, so the next call for this step must pass isResume
+  // A write only, on every outcome: whether one of its sends may have landed. When true on an outcome that isn't a
+  // success (Unknown, TokenNeeded, TokenRejected), the next call for this step must pass isResume: true.
   mayHaveLanded?: boolean;
 }
 
@@ -164,8 +171,19 @@ export type HostAttemptResult =
 
 export type HostUrlResult = { isSuccess: true; url: URL } | { isSuccess: false; message: string };
 
-// DEV_NOTE: The Emulated "did it land?" check: Inconclusive = the readback couldn't be read or compared, so the
-// write is neither resent nor counted as landed
+// A connection's base_url, checked once when the adapter is created
+export type HostBaseUrlResult =
+  | { isSuccess: true; baseUrl: URL }
+  | { isSuccess: false; message: string };
+
+// DEV_NOTE: A write's progress across its attempts: requests sent, and whether one of them may have landed
+export interface HostWriteState {
+  attempts: number;
+  mayHaveLanded: boolean;
+}
+
+// DEV_NOTE: The Emulated "did it land?" check: Inconclusive = the readback couldn't be read, or matches neither side,
+// so the write is neither resent nor counted as landed
 export enum HostAppliedCheckStateEnum {
   Applied = "Applied",
   NotApplied = "NotApplied",

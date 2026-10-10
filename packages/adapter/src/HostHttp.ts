@@ -2,39 +2,58 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: One HTTP attempt against the host. Pure transport: no retries, no idempotency rules (RestAdapter).
 
+// DEV_NOTE: A connection's base_url as the adapter trusts it: https, no query, fragment or credentials. Checked once,
+// when the adapter is created.
+export function parseHostBaseUrl(baseUrl: string): Schemas.HostBaseUrlResult {
+  if (!URL.canParse(baseUrl)) return { isSuccess: false, message: "Invalid base URL" };
+  const parsed = new URL(baseUrl);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.username ||
+    parsed.password
+  ) {
+    return { isSuccess: false, message: "Base URL must be https with no query or credentials" };
+  }
+  return { isSuccess: true, baseUrl: parsed };
+}
+
 // DEV_NOTE: base_url + the rendered path (already encoded by renderToolOp). The result must stay on base_url's origin
 // and under its path, and must not have been changed by URL normalisation (an encoded "." / ".." segment), so a
 // placeholder value can never point a call (and its bearer token) anywhere else.
 export function buildHostUrl(
-  baseUrl: string,
+  baseUrl: URL,
   request: Schemas.RenderedToolRequest,
 ): Schemas.HostUrlResult {
-  if (!URL.canParse(baseUrl)) return { isSuccess: false, message: "Invalid base URL" };
-  const base = new URL(baseUrl);
-  if (base.protocol !== "https:" || base.search || base.hash || base.username || base.password) {
-    return { isSuccess: false, message: "Base URL must be https with no query or credentials" };
-  }
   if (!request.path.startsWith("/") || request.path.startsWith("//")) {
     return { isSuccess: false, message: "Path must start with a single /" };
   }
-  const basePath = base.pathname.replace(/\/+$/, "");
-  const expectedPath = basePath + request.path;
+  const expectedPath = baseUrl.pathname.replace(/\/+$/, "") + request.path;
 
-  const url = new URL(base.origin);
+  const url = new URL(baseUrl.origin);
   url.pathname = expectedPath;
-  if (url.origin !== base.origin || url.pathname !== expectedPath) {
+  if (url.origin !== baseUrl.origin || url.pathname !== expectedPath) {
     return { isSuccess: false, message: "Path leaves the connection's base URL" };
   }
   for (const [key, value] of Object.entries(request.query)) url.searchParams.append(key, value);
   return { isSuccess: true, url };
 }
 
+const HTTP_DATE_PATTERN = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,? /;
+
 // DEV_NOTE: Retry-After as delta seconds or an HTTP date, capped at HOST_CALL_RETRY_AFTER_MAX_MS; null if absent or
 // unreadable
 export function parseRetryAfterMs(value: string | null, now = Date.now()): number | null {
   if (value === null || value.trim() === "") return null;
   const trimmed = value.trim();
-  const ms = /^\d+$/.test(trimmed) ? Number(trimmed) * 1_000 : Date.parse(trimmed) - now;
+  // DEV_NOTE: An HTTP date starts with a day name (IMF-fixdate, RFC 850, asctime). Anything else that isn't whole
+  // seconds is unreadable: Date.parse takes "1.5" as a 2001 date, which would retry at once.
+  const ms = /^\d+$/.test(trimmed)
+    ? Number(trimmed) * 1_000
+    : HTTP_DATE_PATTERN.test(trimmed)
+      ? Date.parse(trimmed) - now
+      : Number.NaN;
   if (!Number.isFinite(ms)) return null;
   return Math.min(Math.max(ms, 0), Schemas.HOST_CALL_RETRY_AFTER_MAX_MS);
 }

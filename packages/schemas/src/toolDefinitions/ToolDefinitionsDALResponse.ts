@@ -13,7 +13,10 @@ export interface ToolDefinitionsDALResponse extends ApiResponse {
 
 // isSuccess with no connection = not one of the company's connections
 export interface ToolConnectionDALResponse extends ApiResponse {
-  connection?: Pick<CompanyConnection, "id" | "status" | "adapterType" | "baseUrl">;
+  connection?: Pick<
+    CompanyConnection,
+    "id" | "status" | "adapterType" | "baseUrl" | "authType" | "authConfig" | "credentialScope"
+  >;
 }
 
 // Every version of one tool name: the highest version (0 = none) and whether one of them is a Draft

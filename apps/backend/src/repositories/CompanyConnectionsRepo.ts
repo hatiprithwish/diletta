@@ -104,7 +104,9 @@ export default class CompanyConnectionsRepo {
   ): Promise<Schemas.UpdateCompanyConnectionApiResponse> {
     return await withTenant(this.db, params.companyId, async (tx) => {
       const { companyConnection } = params;
-      // DEV_NOTE: A new auth_config must fit the stored auth type and credential scope (both fixed at create)
+      // DEV_NOTE: A new auth_config must fit the stored auth type and credential scope (both fixed at create). A row saved
+      // before M3-2 with an auth type that has no AuthStrategy yet can't take any auth_config: it can't serve tool calls
+      // either way, so the fix is a new connection with a supported auth type.
       if (companyConnection.authConfig !== undefined) {
         const found = await this.dal.getCompanyConnectionDetails(tx, {
           companyId: params.companyId,

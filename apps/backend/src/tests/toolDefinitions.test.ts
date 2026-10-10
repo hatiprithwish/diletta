@@ -461,6 +461,65 @@ describe("ToolDefinitionsRepo", () => {
     expect(activated.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable);
   });
 
+  it("refuses a connection whose auth settings have no AuthStrategy, on create, move and activation", async () => {
+    const repo = new ToolDefinitionsRepo(env);
+    let hmac = "";
+    let badConfig = "";
+    let later = "";
+    // DEV_NOTE: Rows saved before M3-2 could hold any auth type or auth_config; written here on the owner connection
+    await withOwnerDb(async (ownerDb) => {
+      const rows = await ownerDb
+        .insert(companyConnections)
+        .values([
+          { ...connectionValues(companyA), authType: "hmac_signed", authConfig: { secret: "x" } },
+          { ...connectionValues(companyA), authConfig: { header: "X-Token" } },
+          connectionValues(companyA),
+        ])
+        .returning({ publicId: companyConnections.publicId });
+      hmac = rows[0]!.publicId;
+      badConfig = rows[1]!.publicId;
+      later = rows[2]!.publicId;
+    });
+
+    const created = await repo.createToolDefinition({
+      companyId: companyA,
+      adminId: "1",
+      toolDefinition: writeTool(uniqueName(), hmac),
+    });
+    expect(created).toEqual({
+      isSuccess: false,
+      message: "Connection can't serve tool calls: Auth type hmac_signed is not supported yet",
+      failure: Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
+    });
+
+    const draft = await repo.createToolDefinition({
+      companyId: companyA,
+      adminId: "1",
+      toolDefinition: writeTool(uniqueName(), later),
+    });
+    const moved = await repo.updateToolDefinition({
+      companyId: companyA,
+      publicId: draft.toolDefinition!.publicId,
+      adminId: "1",
+      toolDefinition: { connectionPublicId: badConfig },
+    });
+    expect(moved.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable);
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(companyConnections)
+        .set({ authType: "oauth2_cc" })
+        .where(eq(companyConnections.publicId, later));
+    });
+    const activated = await repo.setToolDefinitionStatus({
+      companyId: companyA,
+      publicId: draft.toolDefinition!.publicId,
+      adminId: "1",
+      status: Schemas.ToolDefinitionStatusIntEnum.Active,
+    });
+    expect(activated.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable);
+  });
+
   it("refuses to activate a version whose connection is gone", async () => {
     const repo = new ToolDefinitionsRepo(env);
     let doomed = "";

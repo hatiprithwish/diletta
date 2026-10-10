@@ -270,6 +270,9 @@ export default class ToolDefinitionsDAL {
           status: companyConnections.status,
           adapterType: companyConnections.adapterType,
           baseUrl: companyConnections.baseUrl,
+          authType: companyConnections.authType,
+          authConfig: companyConnections.authConfig,
+          credentialScope: companyConnections.credentialScope,
         })
         .from(companyConnections)
         .where(and(...conditions))

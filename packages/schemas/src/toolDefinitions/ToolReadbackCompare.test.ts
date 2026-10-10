@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { compareReadback, getCommitExpectations, getUndoExpectations } from "./ToolReadbackCompare";
+import {
+  compareReadback,
+  getCommitCheckExpectations,
+  getCommitExpectations,
+  getUndoCheckExpectations,
+  getUndoExpectations,
+} from "./ToolReadbackCompare";
 import type { ToolReadbackOp } from "./ToolOpsRegistry";
 import { ToolOpMethodEnum } from "./ToolOpsV1";
 
@@ -33,6 +39,27 @@ describe("getUndoExpectations", () => {
       { name: "amount", path: "data.amount", expected: { isFound: true, value: 10 } },
       { name: "owner", path: "data.owner", expected: { isFound: false } },
     ]);
+  });
+});
+
+describe("getCommitCheckExpectations / getUndoCheckExpectations", () => {
+  const args = { amount: 12.5 };
+  const before = { data: { amount: 10 } };
+  const sent = [{ name: "amount", path: "data.amount", expected: { isFound: true, value: 12.5 } }];
+  const earlier = [{ name: "amount", path: "data.amount", expected: { isFound: true, value: 10 } }];
+
+  it("a commit lands as the args over the read-before values", () => {
+    expect(getCommitCheckExpectations(readbackOp, args, before)).toEqual({
+      landed: sent,
+      notLanded: earlier,
+    });
+  });
+
+  it("an undo swaps them", () => {
+    expect(getUndoCheckExpectations(readbackOp, args, before)).toEqual({
+      landed: earlier,
+      notLanded: sent,
+    });
   });
 });
 

@@ -36,6 +36,23 @@ function toPlaceholder(token: string, root: string, path: string): ToolOpPlaceho
   };
 }
 
+// Every string in a template value (path, query, body map) with its path inside the value
+export function collectTemplateStrings(
+  value: unknown,
+  path: (string | number)[],
+  out: { text: string; path: (string | number)[] }[],
+) {
+  if (typeof value === "string") {
+    out.push({ text: value, path });
+  } else if (Array.isArray(value)) {
+    value.forEach((item, index) => collectTemplateStrings(item, [...path, index], out));
+  } else if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      collectTemplateStrings(item, [...path, key], out);
+    }
+  }
+}
+
 // Every placeholder in a template string, in order
 export function findToolOpPlaceholders(template: string): ToolOpPlaceholder[] {
   return [...template.matchAll(placeholderPattern())].map((match) =>
