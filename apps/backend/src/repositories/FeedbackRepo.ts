@@ -4,15 +4,19 @@ import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
+import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import Constants from "@/config/Constants";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Feedback (M2-7): a visitor's thumbs on a reply, from the widget's feedback frame through the Conversation
 // DO. Every internal id comes from the DO's verified session; the widget names the reply only by its Think message id,
 // and only a synced reply of this very conversation matches, so a visitor can rate nothing but their own replies.
-// M2-8 adds the quality issue a thumbs-down opens.
+// A thumbs-down also opens a user quality issue (M2-8) in the same transaction.
+const QUALITY_ISSUE_ENTITY = "quality_issue";
+
 export default class FeedbackRepo {
   private db: NodePgDatabase;
   private feedbackDal: FeedbackDAL;
@@ -20,6 +24,7 @@ export default class FeedbackRepo {
   private conversationsDal: ConversationsDAL;
   private companiesDal: CompaniesDAL;
   private chatbotsDal: ChatbotsDAL;
+  private qualityIssuesDal: QualityIssuesDAL;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
@@ -28,11 +33,15 @@ export default class FeedbackRepo {
     this.conversationsDal = new ConversationsDAL();
     this.companiesDal = new CompaniesDAL();
     this.chatbotsDal = new ChatbotsDAL();
+    this.qualityIssuesDal = new QualityIssuesDAL();
   }
 
   // DEV_NOTE: The reply (an assistant message of the session's conversation, by Think message id) gets the rating, the
   // user's earlier one on it replaced. Statuses are re-checked on every rating, never only at connect (rule 3.23): the
-  // conversation must still be open, the company and chatbot active. failure says why nothing was stored.
+  // conversation must still be open, the company and chatbot active. failure says why nothing was stored. A Down opens
+  // the rating's user issue (status Open, untriaged) and its quality_issue.opened event, or rolls the rating back with
+  // them; the issue stays when the visitor later switches to Up, and a second Down opens nothing new (M2-8). outboxId
+  // is the event to relay after the commit.
   async recordFeedback(params: {
     session: Schemas.ConversationSession;
     sessionMessageId: string;
@@ -114,12 +123,47 @@ export default class FeedbackRepo {
       if (!saved.isSuccess || !saved.feedback) {
         return refuse(Schemas.RecordFeedbackFailureEnum.ServerError, saved.message);
       }
+      const rating = { messageId: params.sessionMessageId, rating: saved.feedback.rating };
+      if (saved.feedback.rating !== Schemas.FeedbackRatingIntEnum.Down) {
+        return { isSuccess: true, message: saved.message, rating };
+      }
 
-      return {
-        isSuccess: true,
-        message: saved.message,
-        rating: { messageId: params.sessionMessageId, rating: saved.feedback.rating },
-      };
+      const issue = await this.qualityIssuesDal.createUserQualityIssue(tx, {
+        companyId: session.companyId,
+        conversationId: session.conversationId,
+        feedbackId: saved.feedback.id,
+      });
+      if (!issue.isSuccess || !issue.qualityIssue) {
+        throw new TenantRollbackError(issue.message ?? "User quality issue not opened");
+      }
+      if (!issue.isCreated) {
+        return { isSuccess: true, message: saved.message, rating };
+      }
+
+      const event = await CriticalEventProvider.record(tx, {
+        companyId: session.companyId,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+        actorId: session.chatbotUserId,
+        entityType: QUALITY_ISSUE_ENTITY,
+        entityId: issue.qualityIssue.id,
+        entityAction: "opened",
+        entityVersion: null,
+        parentLogId: null,
+        rootLogId: conversation.conversation.rootLogId,
+        detail: {
+          source: Schemas.QualityIssueSourceIntEnum.User,
+          conversationId: session.conversationId,
+          messageId: found.chatMessage.id,
+          feedbackId: saved.feedback.id,
+        },
+        eventType: "quality_issue.opened",
+        dedupeKey: `quality_issue.opened:${issue.qualityIssue.publicId}`,
+      });
+      if (!event.isSuccess || !event.outboxId) {
+        throw new TenantRollbackError(event.message ?? "Quality issue event not recorded");
+      }
+
+      return { isSuccess: true, message: saved.message, rating, outboxId: event.outboxId };
     });
   }
 

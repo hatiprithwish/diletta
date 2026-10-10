@@ -1,14 +1,14 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { companies, conversations, qualityIssues } from "@/db/tables";
+import { companies, conversations, feedback, qualityIssues } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
-// and every query filters on companyId (defence in depth on top of RLS). M2-3 needs the system issues only (the
-// model router's key-failure path); user (M2-8) and admin issues add their own methods.
+// and every query filters on companyId (defence in depth on top of RLS). System issues come from the model router's
+// key-failure path (M2-3), user issues from a thumbs-down (M2-8); admin issues add their own methods.
 export default class QualityIssuesDAL {
   // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type), held until the Repo's transaction ends.
   // Two calls that hit the same failure at once take turns, so the second sees the first one's open issue instead
@@ -154,6 +154,108 @@ export default class QualityIssuesDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The user issue a thumbs-down opens (M2-8): one per feedback row. A feedback row that already has its
+  // issue (Down → Up → Down) keeps it as it is, whatever its status, and isCreated is false.
+  async createUserQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateUserQualityIssueDALRequest,
+  ) {
+    const response: Schemas.UserQualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing
+      const conversationConditions = [
+        eq(conversations.id, params.conversationId),
+        eq(conversations.companyId, params.companyId),
+      ];
+      const [conversation] = await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(...conversationConditions))
+        .limit(1);
+      const feedbackConditions = [
+        eq(feedback.id, params.feedbackId),
+        eq(feedback.companyId, params.companyId),
+      ];
+      const [feedbackRow] = await tx
+        .select({ id: feedback.id })
+        .from(feedback)
+        .where(and(...feedbackConditions))
+        .limit(1);
+
+      if (!conversation || !feedbackRow) {
+        const message = conversation ? "Feedback not found" : "Conversation not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateUserQualityIssue,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const [created] = await tx
+        .insert(qualityIssues)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: params.companyId,
+          conversationId: params.conversationId,
+          feedbackId: params.feedbackId,
+          source: Schemas.QualityIssueSourceIntEnum.User,
+        })
+        .onConflictDoNothing({ target: qualityIssues.feedbackId })
+        .returning();
+
+      if (created) {
+        response.isSuccess = true;
+        response.message = "User quality issue created successfully";
+        response.qualityIssue = created;
+        response.isCreated = true;
+        return response;
+      }
+
+      const existingConditions = [
+        eq(qualityIssues.feedbackId, params.feedbackId),
+        eq(qualityIssues.companyId, params.companyId),
+      ];
+      const [existing] = await tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...existingConditions))
+        .limit(1);
+
+      if (!existing) {
+        const message = "Quality issue for the feedback not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateUserQualityIssue,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "User quality issue already exists";
+      response.qualityIssue = existing;
+      response.isCreated = false;
+    } catch (error) {
+      const message = "Unknown error in creating user quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateUserQualityIssue,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

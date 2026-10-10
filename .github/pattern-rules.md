@@ -1304,6 +1304,34 @@ dangerouslySetInnerHTML|innerHTML\s*=|localStorage\.setItem\([^)]*token|react-ma
 
 **Fix:** Parse with the schema in `packages/schemas/src/widget/` or `widgetAuth/`, render through `components/Markdown.tsx`, and see `docs/runbooks/widget.md`.
 
+### 3.28 A Thumbs-Down Opens Its User Issue in the Rating's Transaction [CRITICAL]
+
+**Rule:** A user quality issue (source User, M2-8) opens only from `FeedbackRepo.recordFeedback`, in the same `withTenant` that saves the Down rating: `QualityIssuesDAL.createUserQualityIssue` (one issue per feedback row, `UNQ_quality_issues_feedback_id`, insert `ON CONFLICT DO NOTHING`), then `CriticalEventProvider.record` (`quality_issue.opened`, actor ChatbotUser, `rootLogId` = the conversation's root log, dedupe key `quality_issue.opened:<publicId>`). Either failing throws `TenantRollbackError`, so the rating, the issue and the event commit together or not at all. The issue opens Open with `issue_type`, `note` and `created_by` null (admins triage it); switching to Up leaves it as it is, and a second Down opens nothing and records no event. The DO relays the returned `outboxId` in `waitUntil` after the commit; it never reaches the widget.
+
+**Violations:**
+
+- Inserting a source-User issue anywhere but `QualityIssuesDAL.createUserQualityIssue`, or calling it outside the rating's transaction
+- Saving the rating when the issue or its event failed (returning instead of throwing `TenantRollbackError`)
+- Closing, dismissing or deleting the issue when the visitor switches to Up, or opening a second issue / event on a repeat Down
+- Copying reply or user text into the issue's `note`, or setting `issue_type` before triage
+- `outboxId` or any internal id in a widget frame
+
+**Detection Pattern:**
+
+```regex
+source:\s*Schemas\.QualityIssueSourceIntEnum\.User(?!.*QualityIssuesDAL\.ts)
+```
+
+**Examples:**
+
+```
+- ❌ if (!issue.isSuccess) return refuse(Schemas.RecordFeedbackFailureEnum.ServerError, issue.message); // rating already upserted, commits alone
+- ❌ await withTenant(db, companyId, (tx) => qualityIssuesDal.createUserQualityIssue(tx, …)); // a second transaction
+- ✅ if (!issue.isSuccess || !issue.qualityIssue) throw new TenantRollbackError(issue.message ?? "User quality issue not opened");
+```
+
+**Fix:** Mirror `repositories/FeedbackRepo.ts` (`recordFeedback`) and `durable-objects/ConversationDO.ts` (`recordFeedback`).
+
 ---
 
 ## 4. ADDING NEW RULES
@@ -1393,5 +1421,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction)
 Maintainer: hatiprithwish
