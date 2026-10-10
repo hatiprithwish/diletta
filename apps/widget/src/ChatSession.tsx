@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import * as Schemas from "@app/schemas";
 import Launcher from "@/components/Launcher";
 import Panel from "@/components/Panel";
@@ -16,17 +16,9 @@ export default function ChatSession({
   apiBase,
   chatbot,
   getToken,
-  savedKey,
   bootstrap,
   onRetryBootstrap,
-}: {
-  apiBase: string;
-  chatbot: string | null;
-  getToken: () => Promise<string>;
-  savedKey: string | null;
-  bootstrap: Schemas.WidgetBootstrapState;
-  onRetryBootstrap: () => void;
-}) {
+}: Schemas.WidgetChatSessionProps) {
   const storeApi = useWidgetStoreApi();
   const isOpen = useWidgetStore((state) => state.isOpen);
   const isUnavailable = useWidgetStore((state) => state.isUnavailable);
@@ -36,7 +28,10 @@ export default function ChatSession({
   const ratings = useWidgetStore((state) => state.ratings);
   const pendingRatings = useWidgetStore((state) => state.pendingRatings);
 
-  const conversation = useConversation({ apiBase, chatbot, getToken, savedKey });
+  // DEV_NOTE: Focus goes back to the launcher only when the visitor closed the panel, never on page load
+  const [shouldFocusLauncher, setShouldFocusLauncher] = useState(false);
+
+  const conversation = useConversation({ apiBase, chatbot, getToken });
 
   const ready = bootstrap.status === "ready" ? bootstrap.bootstrap : null;
   const chatbotName = ready?.chatbot.name ?? FALLBACK_NAME;
@@ -63,8 +58,12 @@ export default function ChatSession({
       : isBusy
         ? Schemas.WidgetStatusEnum.Working
         : Schemas.WidgetStatusEnum.Online,
+    // DEV_NOTE: Suggestions only while the chatbot can answer them, each once
     welcome: ready?.widget
-      ? { greeting: ready.widget.greeting, suggestions: ready.widget.suggestions }
+      ? {
+          greeting: ready.widget.greeting,
+          suggestions: shownUnavailable ? [] : [...new Set(ready.widget.suggestions)],
+        }
       : null,
     messages,
     isUnavailable: shownUnavailable,
@@ -89,7 +88,10 @@ export default function ChatSession({
           onStop={conversation.stop}
           onRetry={onRetry}
           onNewChat={conversation.newChat}
-          onClose={() => storeApi.getState().setOpen(false)}
+          onClose={() => {
+            setShouldFocusLauncher(true);
+            storeApi.getState().setOpen(false);
+          }}
           onRate={conversation.rate}
           onDraftChange={(value) => storeApi.getState().patch({ draft: value })}
         />
@@ -97,6 +99,7 @@ export default function ChatSession({
         <Launcher
           label={ready?.widget?.launcherLabel ?? null}
           chatbotName={chatbotName}
+          autoFocus={shouldFocusLauncher}
           onOpen={() => storeApi.getState().setOpen(true)}
         />
       )}

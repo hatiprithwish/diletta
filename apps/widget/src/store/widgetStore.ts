@@ -9,6 +9,7 @@ export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Sche
     isOpen: false,
     draft: "",
     theme,
+    hostUser: null,
     conversationPublicId: null,
     isSocketEnabled: false,
     isUnavailable: false,
@@ -19,6 +20,17 @@ export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Sche
     setOpen: (isOpen) => set({ isOpen }),
     setTheme: (nextTheme) => set({ theme: nextTheme }),
     setConversation: (conversationPublicId) => set({ conversationPublicId }),
+    startOver: (conversationPublicId) =>
+      set({
+        conversationPublicId,
+        isSocketEnabled: false,
+        isUnavailable: false,
+        notice: null,
+        pendingText: null,
+        draft: "",
+        ratings: {},
+        pendingRatings: {},
+      }),
     patch: (patch) => set(patch),
   }));
 }

@@ -14,7 +14,7 @@
     "lint:fix": "eslint src scripts --fix"
   },
   "dependencies": {
-    "@ai-sdk/react": "^4.0.130",
+    "@ai-sdk/react": "4.0.129",
     "@app/schemas": "workspace:*",
     "@app/ui": "workspace:*",
     "@cloudflare/think": "0.19.0",

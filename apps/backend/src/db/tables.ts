@@ -697,7 +697,6 @@ export const feedback = table(
       .uniqueIndex("UNQ_feedback_message_id_chatbot_user_id")
       .on(table.messageId, table.chatbotUserId),
     t.index("IDX_feedback_company_id").on(table.companyId),
-    t.index("IDX_feedback_message_id").on(table.messageId),
     t.index("IDX_feedback_chatbot_user_id").on(table.chatbotUserId),
   ],
 );

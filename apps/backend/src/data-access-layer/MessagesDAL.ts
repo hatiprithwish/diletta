@@ -111,8 +111,9 @@ export default class MessagesDAL {
         .limit(1);
 
       if (!messageResponse) {
+        // DEV_NOTE: An expected visitor path (a reply still streaming, or another conversation's), so a warning
         const message = "Message not found";
-        AppLogger.error({
+        AppLogger.warn({
           category: Schemas.LogCategory.DAL,
           action: Schemas.LogAction.GetAssistantMessage,
           message,

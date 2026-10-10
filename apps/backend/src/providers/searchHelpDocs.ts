@@ -18,7 +18,7 @@ import * as Schemas from "@app/schemas";
 // parses; it reads as "no longer shown", never as a failed search.
 //
 // Citations: each result carries a number n, counted across the turn's searches (a second search goes on from the
-// first one's last number). The model cites with [n]; citedBy keeps the results the reply text actually cites.
+// first one's last number). The model cites with [n]; Schemas.citedBy keeps the results the reply text actually cites.
 const FENCE_TAG = /<(\s*\/?\s*(?:search_results|result)\b)/gi;
 
 const UNAVAILABLE_TEXT =
@@ -71,7 +71,7 @@ export default class SearchHelpDocsProvider {
         excerpts.length > 0
           ? Schemas.SearchHelpDocsStatusEnum.Found
           : Schemas.SearchHelpDocsStatusEnum.NoResults,
-      results: excerpts.map((excerpt) => SearchHelpDocsProvider.toCitation(excerpt)),
+      results: excerpts.map((excerpt) => Schemas.toCitation(excerpt)),
     };
   }
 
@@ -109,25 +109,6 @@ export default class SearchHelpDocsProvider {
       ...results.map((result) => `<result ${SearchHelpDocsProvider.attributes(result, false)} />`),
       "</search_results>",
     ].join("\n");
-  }
-
-  // DEV_NOTE: The citations the text cites, once each, in number order (Schemas.citedBy, the same marker rules the
-  // widget reads). [n] and [n, m] both count; a number with no result behind it (a made-up marker) is ignored, and so
-  // are brackets in code or that index or link something.
-  static citedBy(
-    text: string,
-    citations: Schemas.KnowledgeCitation[],
-  ): Schemas.KnowledgeCitation[] {
-    return Schemas.citedBy(text, citations);
-  }
-
-  private static toCitation(citation: Schemas.KnowledgeCitation): Schemas.KnowledgeCitation {
-    return {
-      n: citation.n,
-      documentPublicId: citation.documentPublicId,
-      title: citation.title,
-      sourceUrl: citation.sourceUrl,
-    };
   }
 
   private static attributes(citation: Schemas.KnowledgeCitation, isNumbered: boolean): string {

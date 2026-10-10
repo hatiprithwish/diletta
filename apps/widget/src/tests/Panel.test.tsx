@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as Schemas from "@app/schemas";
 import Panel from "@/components/Panel";
@@ -53,6 +53,7 @@ describe("Launcher", () => {
       <Launcher
         label="Ask about your registers"
         chatbotName="Registers Assistant"
+        autoFocus={false}
         onOpen={onOpen}
       />,
     );
@@ -168,5 +169,26 @@ describe("Panel", () => {
     expect(screen.getByPlaceholderText("Assistant unavailable")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(actions.onRetry).toHaveBeenCalled();
+  });
+
+  it("is a dialog with a live chat log, focuses the composer, and closes on Escape", () => {
+    const actions = renderPanel({
+      messages: [{ role: "user", id: "u1", text: "Hello" }],
+    });
+    const dialog = screen.getByRole("dialog", { name: "Registers Assistant" });
+    expect(within(dialog).getByRole("log")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByLabelText("Message")).toHaveFocus();
+    fireEvent.keyDown(screen.getByLabelText("Message"), { key: "Escape" });
+    expect(actions.onClose).toHaveBeenCalled();
+  });
+
+  it("never sends on the Enter that confirms an IME conversion", () => {
+    const actions = renderPanel({ draft: "こんにち" });
+    const input = screen.getByLabelText("Message");
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(actions.onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(actions.onSend).toHaveBeenCalledWith("こんにち");
   });
 });

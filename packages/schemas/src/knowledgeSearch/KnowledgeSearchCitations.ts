@@ -10,8 +10,16 @@ const CODE = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;
 const markerNumbers = (marker: string): number[] =>
   marker.split(",").map((number) => Number(number.trim()));
 
+// DEV_NOTE: A plain citation object, so nothing else a caller's object carries (an excerpt, say) rides along
+export const toCitation = (citation: KnowledgeCitation): KnowledgeCitation => ({
+  n: citation.n,
+  documentPublicId: citation.documentPublicId,
+  title: citation.title,
+  sourceUrl: citation.sourceUrl,
+});
+
 // DEV_NOTE: The citations the text cites, once each, in number order. A number with no citation behind it (a made-up
-// marker) is ignored. Returns plain citation objects, so nothing else a caller's object carries rides along.
+// marker) is ignored. Returns plain citation objects (toCitation).
 export const citedBy = (text: string, citations: KnowledgeCitation[]): KnowledgeCitation[] => {
   const cited = new Set<number>();
   for (const marker of text.replace(CODE, " ").matchAll(CITATION_MARKER)) {
@@ -24,16 +32,7 @@ export const citedBy = (text: string, citations: KnowledgeCitation[]): Knowledge
     .sort((a, b) => a - b)
     .flatMap((n) => {
       const citation = byNumber.get(n);
-      return citation
-        ? [
-            {
-              n: citation.n,
-              documentPublicId: citation.documentPublicId,
-              title: citation.title,
-              sourceUrl: citation.sourceUrl,
-            },
-          ]
-        : [];
+      return citation ? [toCitation(citation)] : [];
     });
 };
 

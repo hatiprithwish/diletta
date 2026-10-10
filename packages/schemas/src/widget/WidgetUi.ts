@@ -1,7 +1,7 @@
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type { KnowledgeCitation } from "../knowledgeSearch";
 import type { WidgetBootstrap } from "./WidgetApiResponse";
-import type { WidgetStatusEnum, WidgetThemeEnum } from "./WidgetCommon";
+import type { WidgetInitOptions, WidgetStatusEnum, WidgetThemeEnum } from "./WidgetCommon";
 
 // DEV_NOTE: The widget's view model (apps/widget, M2-7). The chat hooks turn Think's transcript and the DO's frames
 // into it; the components only render it, so every state in DESIGN.md §7 can be drawn from plain data.
@@ -68,20 +68,30 @@ export interface WidgetPanelActions {
 
 export type WidgetPanelProps = WidgetPanelActions & { view: WidgetPanelView };
 
+// DEV_NOTE: autoFocus: the panel was just closed from inside, so focus returns to the launcher (never on page load)
+// DEV_NOTE: One state of the dev gallery (?gallery), drawn from sample data
+export interface WidgetGalleryState {
+  name: string;
+  view: WidgetPanelView;
+}
+
 export interface WidgetLauncherProps {
   label: string | null;
   chatbotName: string;
+  autoFocus: boolean;
   onOpen: () => void;
 }
 
 // DEV_NOTE: The one embedded widget's UI state (a zustand store per widget). conversationPublicId is the conversation
-// to resume, kept in localStorage per chatbot and host user so a reload continues the chat; pendingText is a message
-// waiting for its socket to open; draft is the composer's text (a refused message comes back to it); ratings are the
-// saved thumbs, pendingRatings the ones sent and not yet answered.
+// to resume, kept in localStorage per chatbot and host user so a reload continues the chat; hostUser is a SHA-256 of
+// the host user the latest token is for (its sub), which keys that saved id, learned from every token; pendingText is
+// a message waiting for its socket to open; draft is the composer's text (a refused message comes back to it); ratings
+// are the saved thumbs, pendingRatings the ones sent and not yet answered.
 export interface WidgetStoreState {
   isOpen: boolean;
   draft: string;
   theme: WidgetThemeEnum;
+  hostUser: string | null;
   conversationPublicId: string | null;
   isSocketEnabled: boolean;
   isUnavailable: boolean;
@@ -91,14 +101,93 @@ export interface WidgetStoreState {
   pendingRatings: Record<string, FeedbackRatingIntEnum>;
 }
 
+// DEV_NOTE: startOver switches to another conversation (or none) and clears everything that belonged to the old one:
+// socket off, ratings, unsent text, notice, unavailable. The theme, the panel and the host user stay.
 export interface WidgetStoreActions {
   setOpen: (isOpen: boolean) => void;
   setTheme: (theme: WidgetThemeEnum) => void;
   setConversation: (conversationPublicId: string | null) => void;
+  startOver: (conversationPublicId: string | null) => void;
   patch: (patch: Partial<WidgetStoreState>) => void;
 }
 
 export type WidgetStore = WidgetStoreState & WidgetStoreActions;
+
+// DEV_NOTE: The store as the widget reads it (structurally zustand's StoreApi, without a zustand dependency here)
+export interface WidgetStoreApi {
+  getState: () => WidgetStore;
+  getInitialState: () => WidgetStore;
+  subscribe: (listener: (state: WidgetStore, previousState: WidgetStore) => void) => () => void;
+}
+
+// DEV_NOTE: One widget instance: its options and its own store (the script tag and the React export both render it)
+export interface WidgetRootProps {
+  options: WidgetInitOptions;
+  store: WidgetStoreApi;
+}
+
+// DEV_NOTE: The React export's inner widget, remounted (with a fresh store) for each apiBase + chatbot
+export interface DilettaWidgetInstanceProps {
+  options: WidgetInitOptions;
+  theme: WidgetThemeEnum;
+}
+
+// DEV_NOTE: What the widget's app, its chat session and its hooks are built from
+export interface WidgetAppProps {
+  apiBase: string;
+  chatbot: string | null;
+  getToken: () => Promise<string>;
+}
+
+export type WidgetChatSessionProps = WidgetAppProps & {
+  bootstrap: WidgetBootstrapState;
+  onRetryBootstrap: () => void;
+};
+
+export interface WidgetBootstrapFetchParams {
+  apiBase: string;
+  chatbot: string | null;
+  token: string;
+  signal: AbortSignal;
+}
+
+// DEV_NOTE: Where the conversation to resume is kept: per platform, chatbot and host user (hostUser is already hashed)
+export interface WidgetSavedConversationKeyParams {
+  apiBase: string;
+  chatbot: string | null;
+  hostUser: string;
+}
+
+// DEV_NOTE: Failed connects. A browser can't read a refused upgrade's status (it sees a close before open), so they are
+// counted: Refused = the socket closed before it opened; Token = the host's getToken failed, so no socket was tried
+// (never a reason to drop the saved conversation). refused counts the first kind, failed both.
+export enum WidgetConnectFailureKindEnum {
+  Refused = "Refused",
+  Token = "Token",
+}
+
+export enum WidgetConnectFailureActionEnum {
+  None = "None",
+  DropConversation = "DropConversation",
+  Unavailable = "Unavailable",
+}
+
+export interface WidgetConnectFailures {
+  refused: number;
+  failed: number;
+}
+
+export interface WidgetConnectFailureDecision {
+  failures: WidgetConnectFailures;
+  action: WidgetConnectFailureActionEnum;
+}
+
+// DEV_NOTE: The newest user message the server never took (a refused or closed send), split off the transcript so its
+// text can go back to the composer or be sent again
+export interface WidgetUnsentSplit<TMessage> {
+  messages: TMessage[];
+  text: string;
+}
 
 // DEV_NOTE: The bootstrap read's state, for the launcher and the welcome screen
 export type WidgetBootstrapState =
@@ -152,6 +241,10 @@ export interface WidgetUnavailableCardProps {
   onRetry: () => void;
 }
 
+export interface WidgetStopButtonProps {
+  onStop: () => void;
+}
+
 export interface WidgetComposerProps {
   value: string;
   isDisabled: boolean;
@@ -179,6 +272,13 @@ export type WidgetMarkdownInlineContent =
 export type WidgetMarkdownInline = { key: string } & WidgetMarkdownInlineContent;
 
 export type WidgetMarkdownListItem = { key: string; children: WidgetMarkdownInline[] };
+
+// DEV_NOTE: A list while the parser collects its items (raw item text, parsed once the list ends)
+export interface WidgetMarkdownListDraft {
+  isOrdered: boolean;
+  start: number;
+  items: string[];
+}
 
 export type WidgetMarkdownBlock = { key: string } & (
   | { kind: "paragraph"; children: WidgetMarkdownInline[] }

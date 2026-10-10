@@ -6,12 +6,12 @@ import * as Schemas from "@app/schemas";
 export default function ToolSteps({ steps }: Schemas.WidgetToolStepsProps) {
   if (steps.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-muted bg-surface-subtle px-3 py-2.5">
+    <div className="flex flex-col gap-2 rounded-xl border border-muted bg-surface-subtle px-3 py-2.5 text-widget-row">
       {steps.map((step) => (
         <div
           key={step.id}
           className={cn(
-            "flex items-center gap-2.5 text-[13px]",
+            "flex items-center gap-2.5",
             step.state === Schemas.WidgetToolStepStateEnum.Running
               ? "text-foreground"
               : "text-subtle-foreground",

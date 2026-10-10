@@ -2,65 +2,105 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/think/react";
 import * as Schemas from "@app/schemas";
+import { useLatest } from "@/hooks/useLatest";
+import { NO_CONNECT_FAILURES, nextConnectFailure } from "@/lib/connectFailures";
+import { hostUserOf } from "@/lib/hostUser";
+import { savedConversationKey, writeSavedConversation } from "@/lib/savedConversation";
+import { parseServerFrame, ratingsOf } from "@/lib/serverFrames";
+import { splitUnsent } from "@/lib/transcriptView";
 import { useWidgetStore, useWidgetStoreApi } from "@/store/WidgetStoreContext";
-import { writeSavedConversation } from "@/lib/savedConversation";
 
 // DEV_NOTE: The chat socket (GET /widget/ws, ADR 0001) through Think's client (useAgent + useAgentChat).
 //
 // When it opens: only for a first message, or when the panel opens on a saved conversation, so an idle visitor never
 // creates a conversation. The token goes in Sec-WebSocket-Protocol (['diletta.v1', <jwt>]), fetched fresh from the
-// host for every connect; never in the URL.
+// host for every connect; never in the URL. Each token also tells the store which host user it is for (hashed).
 //
 // A new conversation: the server names it in its `conversation` frame; the widget saves the id and reconnects with it
 // once, before sending anything, so a later reconnect (network drop, reload) resumes it instead of starting another.
 // The message that opened the socket waits in pendingText until the socket is ready.
 //
-// The DO's own frames (Schemas.ZWidgetServerMessage, parsed before use): unavailable / a refused send stop the
-// pending request (the DO never answers it, so Think's client would wait forever) and drop or keep the unsent message;
-// closed starts over; feedback settles a thumb.
+// The DO's own frames (lib/serverFrames.ts, parsed before use): unavailable / a refused send stop the pending request
+// (the DO never answers it, so Think's client would wait forever) and keep the unsent message; closed ends the
+// conversation, and a message it refused is sent again in a new one; feedback settles a thumb.
 //
 // One socket per conversation id: the session using this hook is remounted when the id changes (ChatSession's key), so
 // each socket is created with its final address. (partysocket reconnects its old socket, at its old address, when the
 // address changes right after `enabled` turned on, so the address must never change under a live hook.)
 //
-// A refused upgrade can't be read by a browser (it sees a close before open), so failures are counted: after
-// RESUME_FAILURES the saved conversation is dropped (closed or not the user's any more) and a new one starts; after
-// UNAVAILABLE_FAILURES the widget shows its unavailable state.
+// Failed connects (lib/connectFailures.ts): refused upgrades drop the saved conversation, after which the widget goes
+// idle (a new conversation opens only for a waiting message); a getToken failure never does. Too many failures of
+// either kind show the unavailable state.
 const AGENT_NAME = "conversation";
 const SOCKET_PATH = "widget/ws";
-const RESUME_FAILURES = 2;
-const UNAVAILABLE_FAILURES = 5;
 const CLOSED_NOTICE =
   "This chat ended after a while without messages. Ask a new question any time.";
 const FEEDBACK_NOT_SAVED_NOTICE = "Your feedback wasn't saved. Please try again.";
 
-export function useConversation(params: {
-  apiBase: string;
-  chatbot: string | null;
-  getToken: () => Promise<string>;
-  savedKey: string | null;
-}) {
-  const { apiBase, chatbot, savedKey } = params;
+export function useConversation(params: Schemas.WidgetAppProps) {
+  const { apiBase, chatbot } = params;
   const storeApi = useWidgetStoreApi();
   const conversationPublicId = useWidgetStore((state) => state.conversationPublicId);
   const isSocketEnabled = useWidgetStore((state) => state.isSocketEnabled);
   const isOpen = useWidgetStore((state) => state.isOpen);
   const [isReady, setIsReady] = useState(false);
 
-  const getTokenRef = useRef(params.getToken);
-  useLayoutEffect(() => {
-    getTokenRef.current = params.getToken;
-  });
+  const getTokenRef = useLatest(params.getToken);
   const hasOpenedRef = useRef(false);
-  const failuresRef = useRef(0);
+  const isTokenFailureRef = useRef(false);
+  const failuresRef = useRef(NO_CONNECT_FAILURES);
+  // DEV_NOTE: Read through a ref by the socket's handlers, which are created before the chat helpers exist
+  const chatRef = useRef<ReturnType<typeof useAgentChat> | null>(null);
 
+  // DEV_NOTE: Saved under the host user known at the time of the call, not at render: a token read mid-connect may
+  // have just told the store who the user is
   const setConversation = useCallback(
     (publicId: string | null) => {
-      storeApi.getState().setConversation(publicId);
-      if (savedKey) writeSavedConversation(savedKey, publicId);
+      const store = storeApi.getState();
+      store.setConversation(publicId);
+      if (store.hostUser) {
+        writeSavedConversation(
+          savedConversationKey({ apiBase, chatbot, hostUser: store.hostUser }),
+          publicId,
+        );
+      }
     },
-    [savedKey, storeApi],
+    [apiBase, chatbot, storeApi],
   );
+
+  // DEV_NOTE: The conversation is over (closed, or its resume keeps being refused). The widget goes back to a new chat
+  // and stays idle, unless a message is waiting: then it opens a new conversation for it.
+  const endConversation = useCallback(() => {
+    const store = storeApi.getState();
+    setIsReady(false);
+    chatRef.current?.setMessages([]);
+    setConversation(null);
+    store.patch({
+      isSocketEnabled: store.pendingText !== null,
+      ratings: {},
+      pendingRatings: {},
+      notice: store.pendingText === null ? CLOSED_NOTICE : null,
+    });
+  }, [setConversation, storeApi]);
+
+  const failConnect = useCallback(
+    (kind: Schemas.WidgetConnectFailureKindEnum) => {
+      const store = storeApi.getState();
+      const decision = nextConnectFailure({
+        failures: failuresRef.current,
+        kind,
+        hasConversation: store.conversationPublicId !== null,
+      });
+      failuresRef.current = decision.failures;
+      if (decision.action === Schemas.WidgetConnectFailureActionEnum.Unavailable) {
+        store.patch({ isSocketEnabled: false, isUnavailable: true });
+      } else if (decision.action === Schemas.WidgetConnectFailureActionEnum.DropConversation) {
+        endConversation();
+      }
+    },
+    [endConversation, storeApi],
+  );
+  const failConnectRef = useLatest(failConnect);
 
   const url = useMemo(() => new URL(apiBase), [apiBase]);
   const query = useMemo(() => {
@@ -69,26 +109,30 @@ export function useConversation(params: {
     if (conversationPublicId) entries.conversation = conversationPublicId;
     return entries;
   }, [chatbot, conversationPublicId]);
-  const protocols = useCallback(
-    async () => [Schemas.WIDGET_SUBPROTOCOL, await getTokenRef.current()],
-    [],
-  );
 
-  // DEV_NOTE: Read through a ref by the socket's frame handler, which is created before the chat helpers exist
-  const chatRef = useRef<ReturnType<typeof useAgentChat> | null>(null);
+  // DEV_NOTE: partysocket calls this for every connect. A getToken failure is counted here: partysocket swallows it and
+  // retries with no close event (or with one from the previous, already closed socket, which isTokenFailureRef skips)
+  const protocols = useCallback(async () => {
+    isTokenFailureRef.current = false;
+    let token: string;
+    try {
+      token = await getTokenRef.current();
+    } catch (error) {
+      isTokenFailureRef.current = true;
+      failConnectRef.current(Schemas.WidgetConnectFailureKindEnum.Token);
+      throw error;
+    }
+    const hostUser = await hostUserOf(token);
+    if (hostUser && hostUser !== storeApi.getState().hostUser) {
+      storeApi.getState().patch({ hostUser });
+    }
+    return [Schemas.WIDGET_SUBPROTOCOL, token];
+  }, [failConnectRef, getTokenRef, storeApi]);
 
   const handleFrame = useCallback(
     (event: MessageEvent) => {
-      if (typeof event.data !== "string") return;
-      let json: unknown;
-      try {
-        json = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      const parsed = Schemas.ZWidgetServerMessage.safeParse(json);
-      if (!parsed.success) return;
-      const frame = parsed.data;
+      const frame = parseServerFrame(event.data);
+      if (!frame) return;
       const store = storeApi.getState();
       const chat = chatRef.current;
 
@@ -99,24 +143,23 @@ export function useConversation(params: {
             setConversation(frame.conversation.publicId);
             return;
           }
-          failuresRef.current = 0;
-          const ratings = Object.fromEntries(
-            frame.feedback.map((entry) => [entry.messageId, entry.rating]),
-          );
-          store.patch({ ratings, pendingRatings: {}, isUnavailable: false });
+          failuresRef.current = NO_CONNECT_FAILURES;
+          store.patch({
+            ratings: ratingsOf(frame.feedback),
+            pendingRatings: {},
+            isUnavailable: false,
+          });
           setIsReady(true);
           return;
         }
         case "closed": {
-          setIsReady(false);
-          setConversation(null);
-          chat?.setMessages([]);
-          store.patch({
-            isSocketEnabled: store.pendingText !== null,
-            ratings: {},
-            pendingRatings: {},
-            notice: store.pendingText === null ? CLOSED_NOTICE : null,
-          });
+          // DEV_NOTE: A message sent just as the conversation closed was never taken; it goes to a new conversation
+          const unsent = chat?.status === "submitted" ? splitUnsent(chat.messages) : null;
+          if (chat && unsent) {
+            void chat.stop();
+            store.patch({ pendingText: store.pendingText ?? unsent.text });
+          }
+          endConversation();
           return;
         }
         case "unavailable": {
@@ -125,17 +168,11 @@ export function useConversation(params: {
           return;
         }
         case "error": {
-          const isTurnPending = chat?.status === "submitted";
-          if (isTurnPending && chat) {
+          const unsent = chat?.status === "submitted" ? splitUnsent(chat.messages) : null;
+          if (chat && unsent) {
             void chat.stop();
-            const unsent = chat.messages.at(-1);
-            if (unsent?.role === "user") {
-              chat.setMessages(chat.messages.slice(0, -1));
-              const text = unsent.parts
-                .flatMap((part) => (part.type === "text" ? [part.text] : []))
-                .join("\n");
-              store.patch({ draft: store.draft || text });
-            }
+            chat.setMessages(unsent.messages);
+            store.patch({ draft: store.draft || unsent.text });
           }
           store.patch({ notice: frame.message });
           return;
@@ -154,7 +191,7 @@ export function useConversation(params: {
         }
       }
     },
-    [setConversation, storeApi],
+    [endConversation, setConversation, storeApi],
   );
 
   const handleOpen = useCallback(() => {
@@ -165,20 +202,12 @@ export function useConversation(params: {
     setIsReady(false);
     const wasOpen = hasOpenedRef.current;
     hasOpenedRef.current = false;
-    if (wasOpen) return;
-
-    failuresRef.current += 1;
-    const store = storeApi.getState();
-    if (failuresRef.current >= UNAVAILABLE_FAILURES) {
-      failuresRef.current = 0;
-      store.patch({ isSocketEnabled: false, isUnavailable: true });
+    if (isTokenFailureRef.current) {
+      isTokenFailureRef.current = false;
       return;
     }
-    if (failuresRef.current >= RESUME_FAILURES && store.conversationPublicId) {
-      chatRef.current?.setMessages([]);
-      setConversation(null);
-    }
-  }, [setConversation, storeApi]);
+    if (!wasOpen) failConnect(Schemas.WidgetConnectFailureKindEnum.Refused);
+  }, [failConnect]);
 
   const agent = useAgent({
     agent: AGENT_NAME,
@@ -242,14 +271,11 @@ export function useConversation(params: {
   const retry = useCallback(() => {
     const store = storeApi.getState();
     store.patch({ isUnavailable: false, notice: null });
-    failuresRef.current = 0;
-    const unsent = messages.at(-1);
-    if (unsent?.role === "user") {
-      setMessages(messages.slice(0, -1));
-      const text = unsent.parts
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n");
-      send(text);
+    failuresRef.current = NO_CONNECT_FAILURES;
+    const unsent = splitUnsent(messages);
+    if (unsent) {
+      setMessages(unsent.messages);
+      send(unsent.text);
       return;
     }
     if (store.conversationPublicId || store.pendingText !== null) {
@@ -263,15 +289,7 @@ export function useConversation(params: {
     setMessages([]);
     setIsReady(false);
     setConversation(null);
-    storeApi.getState().patch({
-      isSocketEnabled: false,
-      isUnavailable: false,
-      notice: null,
-      pendingText: null,
-      draft: "",
-      ratings: {},
-      pendingRatings: {},
-    });
+    storeApi.getState().startOver(null);
   }, [chat.isStreaming, chat.status, setConversation, setMessages, stop, storeApi]);
 
   const rate = useCallback(

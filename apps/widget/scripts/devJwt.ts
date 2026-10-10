@@ -22,11 +22,11 @@ export async function loadDevKey(): Promise<Schemas.WidgetDevKey | null> {
 
 export async function signDevToken(
   devKey: Schemas.WidgetDevKey,
-  user: { sub: string; name: string },
+  user: Schemas.WidgetDevUser,
 ): Promise<string> {
   const key = await crypto.subtle.importKey(
     "jwk",
-    devKey.privateJwk as JsonWebKey,
+    devKey.privateJwk,
     { name: "ECDSA", namedCurve: "P-256" },
     false,
     ["sign"],

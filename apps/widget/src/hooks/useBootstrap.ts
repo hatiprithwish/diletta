@@ -1,23 +1,18 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type * as Schemas from "@app/schemas";
+import { useLatest } from "@/hooks/useLatest";
 import { fetchBootstrap } from "@/lib/bootstrapApi";
 import { hostUserOf } from "@/lib/hostUser";
+import { useWidgetStoreApi } from "@/store/WidgetStoreContext";
 
 // DEV_NOTE: Reads the widget's bootstrap (chatbot name, greeting, suggestions, launcher label) when the widget mounts
-// and on retry, with a fresh token from the host each time. Also learns the host user the token is for, which keys
-// the saved conversation. Opening nothing and creating nothing: a page view costs one read.
-export function useBootstrap(params: {
-  apiBase: string;
-  chatbot: string | null;
-  getToken: () => Promise<string>;
-}) {
+// and on retry, with a fresh token from the host each time. Each token also tells the store which host user it is for
+// (hashed), like every connect's token does. Opening nothing and creating nothing: a page view costs one read.
+export function useBootstrap(params: Schemas.WidgetAppProps) {
   const { apiBase, chatbot } = params;
-  const getTokenRef = useRef(params.getToken);
-  useLayoutEffect(() => {
-    getTokenRef.current = params.getToken;
-  });
+  const storeApi = useWidgetStoreApi();
+  const getTokenRef = useLatest(params.getToken);
   const [state, setState] = useState<Schemas.WidgetBootstrapState>({ status: "loading" });
-  const [hostUser, setHostUser] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -30,22 +25,20 @@ export function useBootstrap(params: {
         if (!controller.signal.aborted) setState({ status: "failed" });
         return;
       }
-      const bootstrap = await fetchBootstrap({
-        apiBase,
-        chatbot,
-        token,
-        signal: controller.signal,
-      });
+      const [bootstrap, hostUser] = await Promise.all([
+        fetchBootstrap({ apiBase, chatbot, token, signal: controller.signal }),
+        hostUserOf(token),
+      ]);
       if (controller.signal.aborted) return;
-      setHostUser(hostUserOf(token));
+      if (hostUser) storeApi.getState().patch({ hostUser });
       setState(bootstrap ? { status: "ready", bootstrap } : { status: "failed" });
     })();
     return () => controller.abort();
-  }, [apiBase, chatbot, attempt]);
+  }, [apiBase, chatbot, attempt, getTokenRef, storeApi]);
 
   const retry = useCallback(() => {
     setState({ status: "loading" });
     setAttempt((value) => value + 1);
   }, []);
-  return { state, hostUser, retry };
+  return { state, retry };
 }

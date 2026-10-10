@@ -1772,6 +1772,130 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(await getFeedbackRows(owner.companyId)).toEqual([]);
     expect(await getFeedbackRows(other.companyId)).toEqual([]);
   });
+
+  // DEV_NOTE: A finished turn on a fresh socket: the conversation's public id and its reply's Think message id
+  async function ratedReply(tenant: Awaited<ReturnType<typeof createTenant>>) {
+    const connected = await connect(tenant);
+    if (!connected.socket || !connected.waitFor) throw new Error("Not connected");
+    const hello = (await connected.waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    await sendTurn(connected.socket, connected.waitFor, "req-1", [
+      userMessage("user-1", "Which are overdue?"),
+    ]);
+    const reply = (await getTranscript(hello.conversation.publicId))[1];
+    if (!reply) throw new Error("No reply");
+    return { ...connected, publicId: hello.conversation.publicId, replyId: reply.id };
+  }
+
+  const feedbackFrame = (messageId: string, rating: Schemas.FeedbackRatingIntEnum) =>
+    JSON.stringify({ type: "feedback", messageId, rating });
+
+  it("never rates a reply of the same user's other conversation", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const first = await ratedReply(tenant);
+    first.socket.close(1000);
+
+    const second = await connect(tenant);
+    if (!second.socket || !second.waitFor) throw new Error("Not connected");
+    const hello = (await second.waitFor(
+      (frame) => frame.type === "conversation",
+    )) as unknown as Schemas.WidgetConversationMessage;
+    expect(hello.conversation.publicId).not.toBe(first.publicId);
+    second.socket.send(feedbackFrame(first.replyId, Schemas.FeedbackRatingIntEnum.Down));
+    expect((await second.waitFor(isFeedbackFor(first.replyId, null))).rating).toBeNull();
+    expect(await getFeedbackRows(tenant.companyId)).toEqual([]);
+    second.socket.close(1000);
+  });
+
+  it("stores nothing once the chatbot is paused or the company churned", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, frames, replyId } = await ratedReply(tenant);
+    const answers = () => frames.filter(isFeedbackFor(replyId, null)).length;
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(chatbots)
+        .set({ status: Schemas.ChatbotStatusIntEnum.Paused })
+        .where(eq(chatbots.id, tenant.chatbotId));
+    });
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    await waitFor(() => answers() === 1);
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(chatbots)
+        .set({ status: Schemas.ChatbotStatusIntEnum.Active })
+        .where(eq(chatbots.id, tenant.chatbotId));
+      await ownerDb
+        .update(companies)
+        .set({ status: Schemas.CompanyStatusIntEnum.Churned })
+        .where(eq(companies.id, tenant.companyId));
+    });
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    await waitFor(() => answers() === 2);
+
+    expect(await getFeedbackRows(tenant.companyId)).toEqual([]);
+    socket.close(1000);
+  });
+
+  it("answers not saved and closed when the conversation was closed elsewhere", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, closed, publicId, replyId } = await ratedReply(tenant);
+    if (!closed) throw new Error("Not connected");
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(conversations)
+        .set({ status: Schemas.ConversationStatusIntEnum.Closed })
+        .where(eq(conversations.publicId, publicId));
+    });
+    socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Up));
+
+    expect((await waitFor(isFeedbackFor(replyId, null))).rating).toBeNull();
+    expect(await waitFor((frame) => frame.type === "closed")).toEqual({ type: "closed" });
+    expect(await closed).toBe(1000);
+    expect(await getFeedbackRows(tenant.companyId)).toEqual([]);
+  });
+
+  it("keeps the last of several quick clicks, and stops answering a flood", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const { socket, waitFor, frames, replyId } = await ratedReply(tenant);
+    const answers = () =>
+      frames.filter((frame) => frame.type === "feedback" && frame.messageId === replyId);
+
+    const clicks = [
+      Schemas.FeedbackRatingIntEnum.Up,
+      Schemas.FeedbackRatingIntEnum.Down,
+      Schemas.FeedbackRatingIntEnum.Up,
+      Schemas.FeedbackRatingIntEnum.Down,
+    ];
+    for (const rating of clicks) socket.send(feedbackFrame(replyId, rating));
+    await waitFor(() => answers().length === clicks.length);
+    expect(answers().map((frame) => frame.rating)).toEqual(clicks);
+    const rows = await getFeedbackRows(tenant.companyId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.rating).toBe(Schemas.FeedbackRatingIntEnum.Down);
+
+    // DEV_NOTE: The window already holds the clicks above; past the limit the answer is "not saved" at once, with no
+    // database work. The Repo is stubbed for the flood so the test doesn't wait on dozens of Neon round trips.
+    const recordFeedback = vi.spyOn(FeedbackRepo.prototype, "recordFeedback").mockResolvedValue({
+      isSuccess: true,
+      rating: { messageId: replyId, rating: Schemas.FeedbackRatingIntEnum.Up },
+    });
+    const flood = Constants.FEEDBACK_FRAMES_PER_WINDOW - clicks.length + 1;
+    for (let index = 0; index < flood; index++) {
+      socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Up));
+    }
+    await waitFor(() => answers().length === clicks.length + flood);
+    expect(answers().filter((frame) => frame.rating === null)).toHaveLength(1);
+    expect(recordFeedback).toHaveBeenCalledTimes(flood - 1);
+    socket.close(1000);
+  });
 });
 
 describe("Conversation DALs tenancy (as diletta_app)", { timeout: END_TO_END_TIMEOUT_MS }, () => {

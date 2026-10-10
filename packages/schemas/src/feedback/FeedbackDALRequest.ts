@@ -8,7 +8,9 @@ export type UpsertFeedbackDALRequest = Pick<
   "companyId" | "messageId" | "chatbotUserId" | "rating"
 >;
 
-// DEV_NOTE: The ratings one chatbot user gave the replies of one conversation (conversationId is internal)
+// DEV_NOTE: The ratings one chatbot user gave the replies of one conversation (conversationId is internal), the newest
+// replies' first, at most limit
 export type ListConversationFeedbackDALRequest = Pick<Feedback, "companyId" | "chatbotUserId"> & {
   conversationId: string;
+  limit: number;
 };

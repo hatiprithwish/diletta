@@ -31,7 +31,7 @@ const base: Schemas.WidgetPanelView = {
   draft: "",
 };
 
-const STATES: { name: string; view: Schemas.WidgetPanelView }[] = [
+const STATES: Schemas.WidgetGalleryState[] = [
   {
     name: "Welcome",
     view: {
@@ -147,6 +147,7 @@ export default function StatesGallery() {
             <Launcher
               label="Ask about your registers"
               chatbotName={base.chatbotName}
+              autoFocus={false}
               onOpen={noop}
             />
           </ShadowHost>

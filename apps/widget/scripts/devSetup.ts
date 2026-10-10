@@ -4,6 +4,8 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import pg from "pg";
 import * as Schemas from "@app/schemas";
+// DEV_NOTE: The backend's own publicId generator, so a dev connection's id is made like every other
+import Utility from "../../backend/src/utils/Utility.ts";
 import { DEV_KEY_PATH, loadDevKey } from "./devJwt.ts";
 
 // DEV_NOTE: Development only: makes the widget dev host able to sign in to the local backend (docs/runbooks/widget.md).
@@ -14,13 +16,7 @@ import { DEV_KEY_PATH, loadDevKey } from "./devJwt.ts";
 //    this is fixture setup, like a test's, never code under test.
 // 3. Seeds the issuer's JWKS into the local backend's JWKS_CACHE (miniflare KV), since the dev issuer serves none.
 // 4. Says what the company still lacks for a chat (a default chatbot, a published config, a model key).
-const PUBLIC_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const BACKEND_DIR = path.resolve(import.meta.dirname, "../../backend");
-
-function generatePublicId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(21));
-  return Array.from(bytes, (byte) => PUBLIC_ID_ALPHABET[byte % PUBLIC_ID_ALPHABET.length]).join("");
-}
 
 async function readOwnerDatabaseUrl(): Promise<string> {
   const lines = (await readFile(path.join(BACKEND_DIR, ".env"), "utf8")).split("\n");
@@ -43,12 +39,12 @@ async function ensureDevKey(): Promise<Schemas.WidgetDevKey> {
   ]);
   const kid = `dev-${crypto.randomUUID()}`;
   const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
-  const devKey: Schemas.WidgetDevKey = {
+  const devKey = Schemas.ZWidgetDevKey.parse({
     issuer: `https://widget-dev-${crypto.randomUUID()}.diletta.test`,
     kid,
-    privateJwk: { ...(await crypto.subtle.exportKey("jwk", pair.privateKey)) },
+    privateJwk: await crypto.subtle.exportKey("jwk", pair.privateKey),
     publicJwk: { ...publicJwk, kid, alg: Schemas.WidgetJwtAlgorithmEnum.ES256, use: "sig" },
-  };
+  });
   await mkdir(path.dirname(DEV_KEY_PATH), { recursive: true });
   await writeFile(DEV_KEY_PATH, JSON.stringify(devKey, null, 2), { mode: 0o600 });
   return devKey;
@@ -83,7 +79,7 @@ async function registerConnection(
         allowed_origins, status)
      VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6, $7, $8, $9)`,
     [
-      generatePublicId(),
+      Utility.generatePublicId(),
       companyId,
       Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
       Schemas.WIDGET_DEV_ORIGIN,
@@ -127,7 +123,7 @@ async function reportGaps(client: pg.Client, companyId: string): Promise<string[
 
 function seedLocalJwks(devKey: Schemas.WidgetDevKey) {
   const cached: Schemas.CachedJwks = {
-    keys: [Schemas.ZJwk.parse(devKey.publicJwk)],
+    keys: [devKey.publicJwk],
     fetchedAt: Date.now(),
   };
   execFileSync(

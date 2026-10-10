@@ -7,7 +7,8 @@ import * as Schemas from "@app/schemas";
 //   (an indented line continues its item), ``` code blocks.
 //   Inline: `code`, **bold** / __bold__, *italic* / _italic_, [text](url) links, [n] / [n, m] citation markers.
 // Links keep only http(s) and mailto targets; any other target is shown as its text. Raw HTML is plain text.
-const SAFE_URL = /^(https?:\/\/|mailto:)/i;
+const WEB_URL = /^https?:\/\//i;
+const MAILTO = /^mailto:/i;
 const FENCE = /^\s*```/;
 const HEADING = /^\s{0,3}#{1,6}\s+(.*)$/;
 const UNORDERED_ITEM = /^\s*[-*+]\s+(.*)$/;
@@ -15,6 +16,10 @@ const ORDERED_ITEM = /^\s*(\d{1,9})[.)]\s+(.*)$/;
 const CONTINUATION = /^\s{2,}\S/;
 const INLINE =
   /`([^`\n]+)`|\[([^\]\n]+)\]\(([^)\s]+)\)|\*\*(?=\S)([^\n]*?\S)\*\*|(?<!\w)__(?=\S)([^\n]*?\S)__(?!\w)|\*(?=[^\s*])([^*\n]*?[^\s*])\*|(?<!\w)_(?=[^\s_])([^_\n]*?[^\s_])_(?!\w)/g;
+
+// DEV_NOTE: An http(s) address (a source the widget may link to); a reply's links may also be mailto
+export const isWebUrl = (url: string | null): url is string => url !== null && WEB_URL.test(url);
+const isSafeHref = (href: string) => isWebUrl(href) || MAILTO.test(href);
 
 function parseText(text: string): Schemas.WidgetMarkdownInlineContent[] {
   return Schemas.splitCitationMarkers(text).flatMap(
@@ -44,7 +49,7 @@ export function parseInline(text: string, parentKey = "i"): Schemas.WidgetMarkdo
       add({ kind: "code", text: code });
     } else if (linkText !== undefined && href !== undefined) {
       const children = parseInline(linkText, key).filter((node) => node.kind !== "link");
-      if (SAFE_URL.test(href)) {
+      if (isSafeHref(href)) {
         add({ kind: "link", href, children });
       } else {
         add(...children);
@@ -63,7 +68,7 @@ export function parseMarkdown(text: string): Schemas.WidgetMarkdownBlock[] {
   const blocks: Schemas.WidgetMarkdownBlock[] = [];
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   let paragraph: string[] = [];
-  let list: { isOrdered: boolean; start: number; items: string[] } | null = null;
+  let list: Schemas.WidgetMarkdownListDraft | null = null;
 
   const flushParagraph = () => {
     if (paragraph.length > 0) {

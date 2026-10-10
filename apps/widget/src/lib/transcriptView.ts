@@ -67,6 +67,14 @@ function textOf(message: UIMessage): string {
     .join("\n\n");
 }
 
+// DEV_NOTE: When the newest message is the user's (a send the server refused or never answered), the transcript
+// without it and its text; else null
+export function splitUnsent(messages: UIMessage[]): Schemas.WidgetUnsentSplit<UIMessage> | null {
+  const unsent = messages.at(-1);
+  if (unsent?.role !== "user") return null;
+  return { messages: messages.slice(0, -1), text: textOf(unsent) };
+}
+
 export function toMessageViews(params: {
   messages: UIMessage[];
   isStreaming: boolean;

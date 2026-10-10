@@ -25,12 +25,12 @@ ADR 0001 also assumed the widget could read the HTTP status of a refused upgrade
    - The data itself is gated by `allowed_origins`, through `authenticate`. A token whose connection doesn't list the request's `Origin` gets 403.
 4. The widget opens the socket only for a first message, or when the panel opens on a conversation saved in this browser. A new conversation's id comes back in the `conversation` frame. The widget saves it and reconnects with it once, before sending anything, so a later reconnect resumes that conversation.
 5. A refused upgrade is handled by counting connects that close before they open:
-   - after 2, a saved conversation is dropped and a new one started;
-   - after 5, the widget shows "temporarily unavailable".
+   - after 2, a saved conversation is dropped and the widget goes back to a new chat, idle: a new conversation opens only when the visitor sends a message (so a return visit after auto-close creates nothing);
+   - after 5 failed connects of any kind (a `getToken` failure counts, but never drops a saved conversation), the widget shows "temporarily unavailable".
 
 ## Consequences
 
 - An idle page view costs one authenticated read and leaves no rows.
 - A second endpoint takes the companion JWT. Its token handling matches `/ws` exactly (pattern rule 3.22), so it adds no new oracle.
 - A host's origin can read a 401/403/404 status cross-origin. The body is generic, as it is for `/ws`.
-- The widget can't tell 401 from 404 on a refused upgrade, so a resume the server refuses costs two failed connects before a fresh conversation starts.
+- The widget can't tell 401 from 404 on a refused upgrade, so a resume the server refuses costs two failed connects before the widget falls back to a new chat.

@@ -5,7 +5,10 @@ import { cn } from "@app/ui/lib/utils";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The message box: Enter sends, Shift+Enter adds a line; disabled while the chatbot is unavailable, and send
-// is off while a reply is running. Text over WIDGET_MESSAGE_MAX_CHARS can't be typed (the DO refuses it anyway).
+// is off while a reply is running. Text over WIDGET_MESSAGE_MAX_CHARS can't be typed (the DO refuses it anyway). It
+// takes focus when the panel opens. Enter that confirms an IME conversion never sends: isComposing, or keyCode 229,
+// which Safari sends for the Enter right after compositionend.
+const IME_KEY_CODE = 229;
 export default function Composer({
   value,
   isDisabled,
@@ -20,7 +23,8 @@ export default function Composer({
     if (canSend) onSend(value);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    const isComposing = event.nativeEvent.isComposing || event.keyCode === IME_KEY_CODE;
+    if (event.key === "Enter" && !event.shiftKey && !isComposing) {
       event.preventDefault();
       submit();
     }
@@ -30,7 +34,7 @@ export default function Composer({
     <form onSubmit={submit} className="flex flex-col gap-2 px-3.5 pt-2.5 pb-3">
       <div
         className={cn(
-          "flex items-end gap-2 rounded-[14px] border border-border py-1.25 pr-1.25 pl-3.5",
+          "flex items-end gap-2 rounded-widget-field border border-border py-1.25 pr-1.25 pl-3.5",
           isDisabled ? "bg-muted" : "bg-background",
         )}
       >
@@ -39,6 +43,7 @@ export default function Composer({
         </label>
         <Textarea
           id="diletta-widget-message"
+          autoFocus
           rows={1}
           value={value}
           disabled={isDisabled}
@@ -60,7 +65,7 @@ export default function Composer({
           <ArrowUp className="size-4" weight="bold" />
         </button>
       </div>
-      <span className="px-1 text-[11.5px] text-muted-foreground">
+      <span className="px-1 text-widget-note text-muted-foreground">
         AI assistant. Changes to your data need your approval.
       </span>
     </form>

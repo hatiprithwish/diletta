@@ -1,11 +1,19 @@
 import { env, createExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { chatbotConfigs, chatbots, companies, companyConnections } from "@/db/tables";
+import {
+  activityLog,
+  chatbotConfigs,
+  chatbots,
+  chatbotUsers,
+  companies,
+  companyConnections,
+  conversations,
+} from "@/db/tables";
 import worker from "@/index";
 import JwksProvider from "@/providers/jwks";
 import WidgetJwtProvider from "@/providers/widgetJwt";
@@ -673,6 +681,16 @@ describe("GET /widget/ws", () => {
     }
   });
 
+  it("checks the token before the query: 401 without one, 400 only for a verified token", async () => {
+    const badQuery = `?conversation=${"x".repeat(65)}`;
+    expect((await upgrade({ query: badQuery, protocols: null })).status).toBe(401);
+    expect(
+      (await upgrade({ query: badQuery, protocols: [Schemas.WIDGET_SUBPROTOCOL, "not-a-jwt"] }))
+        .status,
+    ).toBe(401);
+    expect((await upgrade({ query: badQuery })).status).toBe(400);
+  });
+
   it("ignores a token in the URL", async () => {
     const token = await signToken(rsaKey, claimsFor(issuers.active));
     const response = await upgrade({
@@ -796,5 +814,37 @@ describe("GET /widget/bootstrap", () => {
     expect((await bootstrap({ origin: null })).status).toBe(403);
     expect((await bootstrap({ query: `?chatbot=${chatbotOfB}` })).status).toBe(404);
     expect((await bootstrap({ query: `?chatbot=${pausedChatbotA}` })).status).toBe(403);
+  });
+
+  it("creates nothing: no chatbot user, conversation or activity row", async () => {
+    const counts = async () => {
+      let found = { chatbotUsers: -1, conversations: -1, activity: -1 };
+      await withOwnerDb(async (ownerDb) => {
+        found = {
+          chatbotUsers: await ownerDb.$count(chatbotUsers, eq(chatbotUsers.companyId, companyA)),
+          conversations: await ownerDb.$count(conversations, eq(conversations.companyId, companyA)),
+          activity: await ownerDb.$count(activityLog, eq(activityLog.companyId, companyA)),
+        };
+      });
+      return found;
+    };
+    const before = await counts();
+    expect((await bootstrap()).status).toBe(200);
+    expect((await bootstrap({ query: `?chatbot=${secondChatbotA}` })).status).toBe(200);
+    expect(await counts()).toEqual(before);
+  });
+
+  it("checks the token before the query: 401 without one, 400 only for a verified token", async () => {
+    const badQuery = `?chatbot=${"x".repeat(65)}`;
+    expect((await bootstrap({ query: badQuery, authorization: null })).status).toBe(401);
+    expect((await bootstrap({ query: badQuery, authorization: "Bearer not-a-jwt" })).status).toBe(
+      401,
+    );
+    expect((await bootstrap({ query: badQuery })).status).toBe(400);
+  });
+
+  it("accepts the bearer scheme in any case", async () => {
+    const token = await signToken(rsaKey, claimsFor(issuers.active));
+    expect((await bootstrap({ authorization: `bearer ${token}` })).status).toBe(200);
   });
 });

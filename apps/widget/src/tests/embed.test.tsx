@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as Schemas from "@app/schemas";
 import "@/embed";
+import DilettaWidget from "@/DilettaWidget";
 
 // DEV_NOTE: The script-tag widget end to end in jsdom: window.Diletta.init, the bootstrap read, the shadow root, and
 // the chat over a fake WebSocket standing in for the Conversation DO (Think's frames plus our own). Nothing here
@@ -121,8 +122,6 @@ class MemoryStorage {
 
 let storage: MemoryStorage;
 
-const latestSocket = () => FakeWebSocket.instances.at(-1);
-
 // DEV_NOTE: The socket's address without partysocket's own client id (_pk), which the worker ignores
 const socketAddress = (socket: FakeWebSocket | undefined) => {
   if (!socket) return null;
@@ -169,6 +168,23 @@ function streamReply(socket: FakeWebSocket, requestId: string, messageId: string
     });
   }
   socket.push({ type: "cf_agent_use_chat_response", id: requestId, body: "", done: true });
+}
+
+// DEV_NOTE: Where the widget keeps a host user's conversation: keyed by the sub's SHA-256, never the sub itself
+async function savedKeyFor(sub: string, chatbot = "default") {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sub));
+  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"));
+  return `diletta-widget:conversation:${API_BASE}|${chatbot}|${hash.join("")}`;
+}
+
+const CLOSED_NOTICE =
+  "This chat ended after a while without messages. Ask a new question any time.";
+
+function sendFromComposer(panel: ReturnType<typeof shadow>, text: string) {
+  const input = panel.getByLabelText("Message");
+  // DEV_NOTE: jsdom's typed input events don't cross into the shadow root's React tree; a change event does
+  fireEvent.change(input, { target: { value: text } });
+  fireEvent.keyDown(input, { key: "Enter" });
 }
 
 // DEV_NOTE: What the script set on window, read without augmenting the global Window type
@@ -335,7 +351,7 @@ describe("window.Diletta", () => {
   });
 
   it("puts a refused message back in the composer and shows why", async () => {
-    storage.setItem(`diletta-widget:conversation:${API_BASE}|default|host-user-1`, "conv-3");
+    storage.setItem(await savedKeyFor("host-user-1"), "conv-3");
     act(() => {
       diletta().init({ apiBase: API_BASE, getToken });
       diletta().open();
@@ -347,10 +363,8 @@ describe("window.Diletta", () => {
       socket.accept();
       socket.push(conversationFrame("conv-3"));
     });
-    const input = await panel.findByLabelText("Message");
-    // DEV_NOTE: jsdom's typed input events don't cross into the shadow root's React tree; a change event does
-    fireEvent.change(input, { target: { value: "Too fast" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await panel.findByLabelText("Message");
+    sendFromComposer(panel, "Too fast");
     await waitFor(() =>
       expect(socket.frames().some((frame) => frame.type === "cf_agent_use_chat_request")).toBe(
         true,
@@ -362,22 +376,121 @@ describe("window.Diletta", () => {
     expect(panel.getByLabelText("Message")).toHaveValue("Too fast");
   });
 
-  it("drops a saved conversation the server keeps refusing and starts a new one", async () => {
-    storage.setItem(`diletta-widget:conversation:${API_BASE}|default|host-user-1`, "gone");
+  it("drops a saved conversation the server keeps refusing and waits for a message to start a new one", async () => {
+    const key = await savedKeyFor("host-user-1");
+    storage.setItem(key, "gone");
     act(() => {
       diletta().init({ apiBase: API_BASE, getToken });
       diletta().open();
     });
+    const panel = shadow();
     const refused = await nextSocket(0);
     expect(refused.url).toContain("conversation=gone");
     act(() => refused.close(1006));
     const again = await nextSocket(1, 15_000);
     act(() => again.close(1006));
-    await waitFor(
-      () => expect(socketAddress(latestSocket())).toBe("wss://platform.example.com/widget/ws"),
-      {
-        timeout: 15_000,
-      },
-    );
+
+    expect(await panel.findByText(CLOSED_NOTICE)).toBeInTheDocument();
+    expect(storage.getItem(key)).toBeNull();
+    // DEV_NOTE: Idle: no new conversation is opened for a visitor who hasn't asked anything
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    sendFromComposer(panel, "Hello again");
+    const fresh = await nextSocket(2);
+    expect(socketAddress(fresh)).toBe("wss://platform.example.com/widget/ws");
   }, 20_000);
+
+  it("keeps the saved conversation when getToken fails, and connects to it on the next try", async () => {
+    const key = await savedKeyFor("host-user-1");
+    storage.setItem(key, "conv-4");
+    getToken
+      .mockImplementationOnce(async () => TOKEN)
+      .mockImplementationOnce(async () => {
+        throw new Error("Host session expired");
+      });
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    const socket = await nextSocket(0, 15_000);
+    expect(socketAddress(socket)).toBe("wss://platform.example.com/widget/ws?conversation=conv-4");
+    expect(getToken).toHaveBeenCalledTimes(3);
+    expect(storage.getItem(key)).toBe("conv-4");
+  }, 20_000);
+
+  it("saves a conversation started before the bootstrap read finished, and keeps it after", async () => {
+    let finishBootstrap: (response: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    );
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    const panel = shadow();
+    sendFromComposer(panel, "Quick question");
+    const first = await nextSocket(0);
+    act(() => {
+      first.accept();
+      first.push(conversationFrame("conv-5"));
+    });
+    const second = await nextSocket(1);
+    expect(socketAddress(second)).toBe("wss://platform.example.com/widget/ws?conversation=conv-5");
+    expect(storage.getItem(await savedKeyFor("host-user-1"))).toBe("conv-5");
+
+    await act(async () => {
+      finishBootstrap(new Response(JSON.stringify({ isSuccess: true, bootstrap: BOOTSTRAP })));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(storage.getItem(await savedKeyFor("host-user-1"))).toBe("conv-5");
+    expect(panel.getByText("Quick question")).toBeInTheDocument();
+  });
+
+  it("never keeps a raw host user id in localStorage", async () => {
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    const panel = shadow();
+    sendFromComposer(panel, "Hi");
+    const socket = await nextSocket(0);
+    act(() => {
+      socket.accept();
+      socket.push(conversationFrame("conv-6"));
+    });
+    await waitFor(() => expect(storage.entries()).toContain("conv-6"));
+    expect(storage.key(0)).not.toContain("host-user-1");
+  });
+});
+
+describe("<DilettaWidget />", () => {
+  it("starts a fresh widget for a new chatbot, nothing of the old one's conversation kept", async () => {
+    const view = render(<DilettaWidget apiBase={API_BASE} chatbot="bot-a" getToken={getToken} />);
+    await userEvent.click(
+      await shadow().findByRole("button", { name: "Open Registers Assistant" }),
+    );
+    sendFromComposer(shadow(), "Hello");
+    const first = await nextSocket(0);
+    act(() => {
+      first.accept();
+      first.push(conversationFrame("conv-a"));
+    });
+    const second = await nextSocket(1);
+    expect(socketAddress(second)).toContain("conversation=conv-a");
+
+    view.rerender(<DilettaWidget apiBase={API_BASE} chatbot="bot-b" getToken={getToken} />);
+    expect(
+      await shadow().findByRole("button", { name: "Open Registers Assistant" }),
+    ).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(FakeWebSocket.instances.every((socket) => !socket.url.includes("chatbot=bot-b"))).toBe(
+      true,
+    );
+    view.unmount();
+  });
 });

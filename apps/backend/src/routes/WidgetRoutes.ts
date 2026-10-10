@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { zValidator } from "@hono/zod-validator";
 import { getAgentByName } from "agents";
 import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
@@ -46,48 +45,52 @@ WidgetRoutes.use(
   }),
 );
 
-WidgetRoutes.get(
-  "/bootstrap",
-  zValidator("query", Schemas.ZWidgetBootstrapApiRequest),
-  async (c) => {
-    const reject = (failure: Schemas.WidgetAuthFailureEnum) =>
-      c.json(
-        { isSuccess: false, message: FAILURE_BODY[failure] },
-        Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
-      );
+// DEV_NOTE: The bearer scheme is case-insensitive (RFC 9110)
+const BEARER = /^bearer\s+(.+)$/i;
+const INVALID_REQUEST_BODY = "Invalid request";
 
-    const authorization = c.req.header("Authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
-    if (!token) {
-      return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
-    }
+WidgetRoutes.get("/bootstrap", async (c) => {
+  const reject = (failure: Schemas.WidgetAuthFailureEnum) =>
+    c.json(
+      { isSuccess: false, message: FAILURE_BODY[failure] },
+      Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
+    );
 
-    const query = c.req.valid("query");
-    const authenticated = await new WidgetAuthRepo(c.env).authenticate({
-      token,
-      origin: c.req.header("Origin") ?? null,
-      chatbotPublicId: query.chatbot ?? null,
-    });
-    if (!authenticated.isSuccess || !authenticated.identity) {
-      return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
-    }
+  const token = BEARER.exec(c.req.header("Authorization") ?? "")?.[1]?.trim() ?? "";
+  if (!token) {
+    return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
+  }
 
-    const result = await new WidgetBootstrapRepo(c.env).getBootstrap({
-      identity: authenticated.identity,
-    });
-    if (!result.isSuccess || !result.bootstrap) {
-      return reject(result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
-    }
-    const response: Schemas.WidgetBootstrapApiResponse = {
-      isSuccess: true,
-      message: result.message,
-      bootstrap: result.bootstrap,
-    };
-    return c.json(response, 200);
-  },
-);
+  // DEV_NOTE: The query is checked only after the token (rule 3.22): without a valid token the answer is 401 whatever
+  // the query says; a verified token with a bad query gets 400
+  const query = Schemas.ZWidgetBootstrapApiRequest.safeParse(c.req.query());
+  const authenticated = await new WidgetAuthRepo(c.env).authenticate({
+    token,
+    origin: c.req.header("Origin") ?? null,
+    chatbotPublicId: query.success ? (query.data.chatbot ?? null) : null,
+  });
+  if (!query.success && authenticated.failure !== Schemas.WidgetAuthFailureEnum.Unauthorized) {
+    return c.json({ isSuccess: false, message: INVALID_REQUEST_BODY }, 400);
+  }
+  if (!authenticated.isSuccess || !authenticated.identity) {
+    return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+  }
 
-WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), async (c) => {
+  const result = await new WidgetBootstrapRepo(c.env).getBootstrap({
+    identity: authenticated.identity,
+  });
+  if (!result.isSuccess || !result.bootstrap) {
+    return reject(result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+  }
+  const response: Schemas.WidgetBootstrapApiResponse = {
+    isSuccess: true,
+    message: result.message,
+    bootstrap: result.bootstrap,
+  };
+  return c.json(response, 200);
+});
+
+WidgetRoutes.get("/ws", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
     return c.json({ isSuccess: false, message: "Expected a WebSocket upgrade" }, 426);
   }
@@ -108,15 +111,23 @@ WidgetRoutes.get("/ws", zValidator("query", Schemas.ZWidgetConnectApiRequest), a
     return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
   }
 
-  const query = c.req.valid("query");
+  // DEV_NOTE: The query is checked only after the token, as on /bootstrap
+  const parsedQuery = Schemas.ZWidgetConnectApiRequest.safeParse(c.req.query());
   const authenticated = await new WidgetAuthRepo(c.env).authenticate({
     token,
     origin: c.req.header("Origin") ?? null,
-    chatbotPublicId: query.chatbot ?? null,
+    chatbotPublicId: parsedQuery.success ? (parsedQuery.data.chatbot ?? null) : null,
   });
-  if (!authenticated.isSuccess || !authenticated.identity) {
+  if (
+    !parsedQuery.success &&
+    authenticated.failure !== Schemas.WidgetAuthFailureEnum.Unauthorized
+  ) {
+    return c.json({ isSuccess: false, message: INVALID_REQUEST_BODY }, 400);
+  }
+  if (!parsedQuery.success || !authenticated.isSuccess || !authenticated.identity) {
     return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
   }
+  const query = parsedQuery.data;
 
   const conversationsRepo = new ConversationsRepo(c.env);
   const started = await conversationsRepo.startOrResume({

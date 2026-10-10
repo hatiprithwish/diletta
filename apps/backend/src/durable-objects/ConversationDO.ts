@@ -82,6 +82,9 @@ export class ConversationDO extends Think<Env> {
   private isClosing = false;
   private syncInFlight: Promise<boolean> | null = null;
   private isSyncRequested = false;
+  private feedbackQueue: Promise<void> = Promise.resolve();
+  private feedbackFrameTimes: number[] = [];
+  private isFeedbackLimitLogged = false;
 
   getModel(): LanguageModel {
     if (!this.activeTurn?.model) {
@@ -191,16 +194,19 @@ export class ConversationDO extends Think<Env> {
       return;
     }
 
-    // DEV_NOTE: The ratings the worker read before the upgrade (Constants.CONVERSATION_FEEDBACK_HEADER)
+    // DEV_NOTE: The ratings the worker read before the upgrade (Constants.CONVERSATION_FEEDBACK_HEADER), each entry
+    // checked on its own, so one that doesn't parse drops only itself
     const feedbackHeader = ctx.request.headers.get(Constants.CONVERSATION_FEEDBACK_HEADER);
-    const feedback = Schemas.ZWidgetFeedbackRatings.safeParse(
-      feedbackHeader ? Utility.parseJson(feedbackHeader) : [],
-    );
+    const entries: unknown = feedbackHeader ? Utility.parseJson(feedbackHeader) : [];
+    const feedback = (Array.isArray(entries) ? entries : []).flatMap((entry: unknown) => {
+      const parsed = Schemas.ZWidgetFeedbackRating.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
     this.send(connection, {
       type: "conversation",
       conversation: { publicId: session.conversationPublicId },
       chatbot: { publicId: session.chatbotPublicId, name: session.chatbotName },
-      feedback: feedback.success ? feedback.data : [],
+      feedback,
     });
   }
 
@@ -229,7 +235,7 @@ export class ConversationDO extends Think<Env> {
       return;
     }
     if (admission.kind === "feedback") {
-      await this.recordFeedback(ws, admission.messageId, admission.rating);
+      await this.queueFeedback(ws, admission.messageId, admission.rating);
       return;
     }
     if (!(await this.startTurn(ws, admission.requestId, admission.message.id))) {
@@ -389,16 +395,50 @@ export class ConversationDO extends Think<Env> {
     return true;
   }
 
+  // DEV_NOTE: Feedback frames are rate-limited per conversation (Constants.FEEDBACK_FRAMES_PER_WINDOW, in memory: an
+  // eviction resets it, which only ever allows a few more) and stored one at a time in arrival order, so a fast up →
+  // down leaves the last click stored. Over the limit → "not saved" with no database work.
+  private queueFeedback(
+    ws: WebSocket,
+    messageId: string,
+    rating: Schemas.FeedbackRatingIntEnum,
+  ): Promise<void> {
+    const now = Date.now();
+    this.feedbackFrameTimes = this.feedbackFrameTimes.filter(
+      (at) => now - at < Constants.FEEDBACK_WINDOW_MS,
+    );
+    if (this.feedbackFrameTimes.length >= Constants.FEEDBACK_FRAMES_PER_WINDOW) {
+      if (!this.isFeedbackLimitLogged) {
+        this.isFeedbackLimitLogged = true;
+        AppLogger.warn({
+          category: Schemas.LogCategory.Feedback,
+          action: Schemas.LogAction.RecordFeedback,
+          message: "Feedback frame rate limit reached",
+          metadata: { conversationPublicId: this.name },
+        });
+      }
+      this.reply(ws, { type: "feedback", messageId, rating: null });
+      return Promise.resolve();
+    }
+    this.isFeedbackLimitLogged = false;
+    this.feedbackFrameTimes.push(now);
+
+    const recorded = this.feedbackQueue.then(() => this.recordFeedback(ws, messageId, rating));
+    this.feedbackQueue = recorded.catch(() => undefined);
+    return recorded;
+  }
+
   // DEV_NOTE: Stores a rating for one reply (M2-7). The read model is synced first, so a reply that just finished is in
-  // messages; the running turn's reply never is (the sync leaves it out), so it can't be rated mid-stream. A rating
-  // FeedbackRepo can't match to a synced reply of this conversation, or can't save, answers null (logged).
+  // messages; the running turn's reply never is (the sync leaves it out), so it can't be rated mid-stream. FeedbackRepo
+  // re-checks the conversation, company and chatbot. A rating it can't match to a synced reply of this conversation, or
+  // can't save, answers null; a conversation closed elsewhere also gets the closed frame.
   private async recordFeedback(
     ws: WebSocket,
     messageId: string,
     rating: Schemas.FeedbackRatingIntEnum,
   ): Promise<void> {
     const state = this.getRuntimeState();
-    if (!state || state.isClosed) {
+    if (!state || state.isClosed || this.isClosing) {
       this.reply(ws, { type: "feedback", messageId, rating: null });
       return;
     }
@@ -409,13 +449,20 @@ export class ConversationDO extends Think<Env> {
       rating,
     });
     if (!recorded.isSuccess || !recorded.rating) {
-      AppLogger.warn({
-        category: Schemas.LogCategory.Feedback,
-        action: Schemas.LogAction.RecordFeedback,
-        message: recorded.message ?? "Feedback not saved",
-        metadata: { conversationPublicId: this.name, isNotFound: recorded.isNotFound ?? false },
-      });
+      if (recorded.failure !== Schemas.RecordFeedbackFailureEnum.NotFound) {
+        AppLogger.warn({
+          category: Schemas.LogCategory.Feedback,
+          action: Schemas.LogAction.RecordFeedback,
+          message: recorded.message ?? "Feedback not saved",
+          metadata: { conversationPublicId: this.name, failure: recorded.failure ?? null },
+        });
+      }
       this.reply(ws, { type: "feedback", messageId, rating: null });
+      if (recorded.failure === Schemas.RecordFeedbackFailureEnum.ConversationClosed) {
+        this.patchRuntimeState({ isClosed: true });
+        this.reply(ws, { type: "closed" });
+        ws.close(1000, "Conversation closed");
+      }
       return;
     }
     this.reply(ws, { type: "feedback", messageId, rating: recorded.rating.rating });

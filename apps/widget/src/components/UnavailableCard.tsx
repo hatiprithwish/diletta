@@ -13,7 +13,7 @@ export default function UnavailableCard({ onRetry }: Schemas.WidgetUnavailableCa
         <Pause className="size-4 text-subtle-foreground" />
         Temporarily unavailable
       </span>
-      <span className="text-[13px] leading-normal text-subtle-foreground">
+      <span className="text-widget-row leading-normal text-subtle-foreground">
         Try again in a few minutes. Your data hasn&apos;t changed.
       </span>
       <span className="pt-1.5">

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ZJwk } from "../widgetAuth/WidgetAuthCommon";
 
 // DEV_NOTE: The chat widget (apps/widget, M2-7). The host page embeds it with a script tag (window.Diletta.init) or as
 // a React component (<DilettaWidget />); both take the same options. The widget renders in a Shadow DOM, so host CSS
@@ -64,10 +65,23 @@ export const WIDGET_DEV_PORT = 5174;
 export const WIDGET_DEV_ORIGIN = `http://localhost:${WIDGET_DEV_PORT}`;
 export const WIDGET_DEV_API_BASE = "http://localhost:8787";
 
+// DEV_NOTE: The host user a dev token is signed for (sub) and shown as (name)
+export interface WidgetDevUser {
+  sub: string;
+  name: string;
+}
+
+// DEV_NOTE: privateJwk is an EC P-256 private key as WebCrypto exports it (importable as a JsonWebKey as is)
 export const ZWidgetDevKey = z.object({
   issuer: z.url(),
   kid: z.string().min(1),
-  privateJwk: z.record(z.string(), z.unknown()),
-  publicJwk: z.record(z.string(), z.unknown()),
+  privateJwk: z.object({
+    kty: z.literal("EC"),
+    crv: z.literal("P-256"),
+    x: z.string(),
+    y: z.string(),
+    d: z.string(),
+  }),
+  publicJwk: ZJwk,
 });
 export type WidgetDevKey = z.infer<typeof ZWidgetDevKey>;

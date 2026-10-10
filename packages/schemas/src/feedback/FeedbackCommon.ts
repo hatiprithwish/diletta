@@ -15,6 +15,16 @@ export const FEEDBACK_RATING_LABEL_MAP: Record<FeedbackRatingIntEnum, FeedbackRa
   [FeedbackRatingIntEnum.Down]: FeedbackRatingLabelEnum.Down,
 };
 
+// DEV_NOTE: Why a rating wasn't stored (server-side only, FeedbackRepo → Conversation DO). NotFound: no synced reply of
+// this conversation has that message id. ConversationClosed: the conversation is no longer open (the widget is told
+// it closed). ChatbotUnavailable: the company or chatbot is no longer active.
+export enum RecordFeedbackFailureEnum {
+  NotFound = "NotFound",
+  ConversationClosed = "ConversationClosed",
+  ChatbotUnavailable = "ChatbotUnavailable",
+  ServerError = "ServerError",
+}
+
 // Whole Feedback Body — DB shape (rating stored as integer)
 // DEV_NOTE: A visitor's thumbs up or down on one reply (M2-7): one row per (message, chatbot user), changed in place
 // when they switch. id, companyId, messageId and chatbotUserId are internal — NEVER sent to a client; the widget names

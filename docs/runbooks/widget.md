@@ -8,12 +8,12 @@ Before any conversation exists, it reads its settings from `GET /widget/bootstra
 
 A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`):
 
-| Option     | Required | What it is                                                                                   |
-| ---------- | -------- | -------------------------------------------------------------------------------------------- |
-| `apiBase`  | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https only) |
-| `getToken` | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes) |
-| `chatbot`  | no       | A chatbot publicId; when absent, the company's default chatbot is used                       |
-| `theme`    | no       | `"light"` (default) or `"dark"`                                                              |
+| Option     | Required | What it is                                                                                                               |
+| ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `apiBase`  | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`) |
+| `getToken` | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                             |
+| `chatbot`  | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                   |
+| `theme`    | no       | `"light"` (default) or `"dark"`                                                                                          |
 
 **Script tag.** The static Worker in `apps/widget/wrangler.jsonc` serves the bundle (`diletta-widget.js`).
 
@@ -29,7 +29,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 </script>
 ```
 
-`init` throws on bad options. Calling it a second time replaces the first widget.
+`init` throws on bad options. Calling it a second time replaces the first widget; the first `init`'s controller then does nothing, so it can't destroy the new one. `init` may run from a `<head>` script: the widget joins `<body>` once it exists.
 
 **React.** Use `<DilettaWidget apiBase=… getToken=… theme=… />`, exported from `apps/widget/src/index.ts`. `vite build --mode lib` builds it to `dist/lib/index.js`, with React external. A new `theme` re-themes the widget in place; a new `apiBase` or `chatbot` starts a fresh one.
 
@@ -42,14 +42,15 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 ## What it does
 
 - **Page load.** The widget makes one bootstrap read with a fresh token: the chatbot's name, the greeting, up to 3 suggestions and the launcher label. It opens no socket, so idle visitors create no conversations.
-- **First message.** The socket opens with no conversation. The server creates one and names it in the `conversation` frame. The widget saves the id in `localStorage`, keyed by platform, chatbot and host user (the token's `sub`). It reconnects once with that id, then sends the message.
+- **First message.** The socket opens with no conversation. The server creates one and names it in the `conversation` frame. The widget saves the id in `localStorage`, keyed by platform, chatbot and host user (a SHA-256 of the token's `sub`, never the `sub` itself). It reconnects once with that id, then sends the message.
+- **Host user.** Learned from every token (the bootstrap read's and every connect's), so a chat started before the bootstrap read finished is still saved, and a host that signs in as someone else without `destroy()` gets that user's saved conversation, never the previous user's. The hash needs `crypto.subtle`, which browsers offer only on https pages (and `localhost`); on a plain http host page nothing is saved and every reload starts a new chat.
 - **Reload.** Opening the panel resumes the saved conversation. The server sends the transcript and the ratings already given.
 - **New chat.** Clears the saved id and shows the welcome screen. The old conversation closes on its own after 30 minutes idle.
 - **Every connect** gets a fresh token through `getToken`, sent in `Sec-WebSocket-Protocol`. Tokens are never stored.
 
 **The greeting.** Its first line is the welcome heading; any following lines are the paragraph under it.
 
-**Feedback.** Thumbs up or down on a finished reply. The visitor can switch, but not clear. They're stored in `feedback` (one row per reply per user). M2-8 opens the quality issue for a thumbs-down.
+**Feedback.** Thumbs up or down on a finished reply. The visitor can switch, but not clear. They're stored in `feedback` (one row per reply per user), one at a time in click order, so the last click wins. A rating is refused (shown as "not saved") once the conversation closed or the company or chatbot isn't active, and past 30 feedback clicks a minute in one conversation. On reconnect the widget gets back the ratings of the newest 100 replies. M2-8 opens the quality issue for a thumbs-down.
 
 ## Troubleshooting
 
@@ -63,13 +64,15 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 - After a message: the DO answered `unavailable`, for example no model key, a provider failure, or a budget refusal (see `docs/runbooks/budget.md` and `ai-gateway.md`).
 - After five failed connects: the socket upgrade keeps being refused. A browser can't read the upgrade's status, so test `/widget/bootstrap` with the same token. It runs the same checks.
 
-**A conversation won't resume.** After two refused connects the widget drops the saved id and starts a new conversation. That's expected when the old one closed after idling.
+**A conversation won't resume.** After two refused connects the widget drops the saved id and shows a new chat with a note that the old one ended. It opens no new conversation until the visitor sends a message. That's expected when the old one closed after idling.
+
+**The widget keeps saying "Working", then "Temporarily unavailable".** `getToken` is failing (for example the host session expired). Each failure counts as a failed connect; after five the unavailable card shows. A saved conversation is kept, so "Try again" resumes it once the host's token endpoint works again.
 
 **The widget looks wrong on a host page.** All its styles live in its shadow root. It puts only two things in the host's `<head>`: Tailwind's `@property` rules (`#diletta-widget-properties`) and the Google Fonts stylesheet (`#diletta-widget-fonts`).
 
 ## Bundle size
 
-`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7.
+`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7. `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
 
 The biggest parts are React DOM, zod, `cn`, the agents client (including its unused capnweb transport) and `ai`. Markdown is the widget's own small parser (`src/lib/markdown.ts`) rather than a library, to stay within the budget.
 
@@ -95,6 +98,6 @@ It then lists anything the company still lacks for a chat: an active default cha
 
 ## Deploying
 
-The `deploy-widget-staging` and `deploy-widget-production` workflows build the widget and run `wrangler deploy --env staging|production`. They run on a push to `staging` or `main` that touches `apps/widget/**`, `packages/ui/**` or `packages/schemas/**`.
+The `deploy-widget-staging` and `deploy-widget-production` workflows build the widget and run `wrangler deploy --env staging|production`. They run on a push to `staging` or `main` that touches `apps/widget/**`, `packages/ui/**`, `packages/schemas/**`, `pnpm-lock.yaml` or the root `package.json`.
 
 The bundle is served with a 5-minute cache, so hosts pick up a release within minutes.

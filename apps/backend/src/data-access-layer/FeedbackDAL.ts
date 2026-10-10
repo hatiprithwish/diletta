@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotUsers, feedback, messages } from "@/db/tables";
@@ -85,7 +85,7 @@ export default class FeedbackDAL {
   }
 
   // DEV_NOTE: The ratings one chatbot user gave the replies of one conversation, as the widget names them (the reply's
-  // Think message id), oldest reply first
+  // Think message id), the newest replies' first and at most params.limit (they travel in a request header)
   async listConversationFeedback(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.ListConversationFeedbackDALRequest,
@@ -104,7 +104,8 @@ export default class FeedbackDAL {
         .from(feedback)
         .innerJoin(messages, eq(messages.id, feedback.messageId))
         .where(and(...conditions))
-        .orderBy(asc(messages.id));
+        .orderBy(desc(messages.id))
+        .limit(params.limit);
 
       response.isSuccess = true;
       response.message = "Feedback fetched successfully";

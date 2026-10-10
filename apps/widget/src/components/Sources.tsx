@@ -1,9 +1,9 @@
 import { ArrowSquareOut, FileText } from "@phosphor-icons/react";
 import type * as Schemas from "@app/schemas";
+import { isWebUrl } from "@/lib/markdown";
 
 // DEV_NOTE: The sources a reply's [n] markers cite (host-Main), numbered like the markers. A source with a web address
 // opens it in a new tab; an uploaded file has none and is listed only.
-const isWebUrl = (url: string | null): url is string => url !== null && /^https?:\/\//i.test(url);
 
 export default function Sources({ citations }: Schemas.WidgetSourcesProps) {
   if (citations.length === 0) return null;
@@ -13,8 +13,10 @@ export default function Sources({ citations }: Schemas.WidgetSourcesProps) {
         const title = citation.title ?? "Untitled document";
         const content = (
           <>
-            <span className="text-[11px] font-semibold text-muted-foreground">{citation.n}</span>
-            <span className="grow truncate text-[13px]">{title}</span>
+            <span className="text-widget-index font-semibold text-muted-foreground">
+              {citation.n}
+            </span>
+            <span className="grow truncate text-widget-row">{title}</span>
             <span className="text-muted-foreground">
               {isWebUrl(citation.sourceUrl) ? (
                 <ArrowSquareOut className="size-3.5" />
