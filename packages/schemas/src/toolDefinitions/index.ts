@@ -8,3 +8,4 @@ export * from "./ToolOpsV1";
 export * from "./ToolOpsRegistry";
 export * from "./ToolOpsLoader";
 export * from "./ToolOpRenderer";
+export * from "./ToolReadbackCompare";

@@ -90,6 +90,44 @@ export enum CompanyConnectionAuthTypeEnum {
   HmacSigned = "hmac_signed",
 }
 
+// DEV_NOTE: jwt_forward sends the chatbot user's host bearer token (held in DO memory) as Authorization: Bearer, so
+// the host applies its own permissions to every call. Nothing to configure and no stored credential.
+export const ZJwtForwardAuthConfig = z.strictObject({});
+export type JwtForwardAuthConfig = z.infer<typeof ZJwtForwardAuthConfig>;
+
+// DEV_NOTE: The auth types that have an AuthStrategy in @app/adapter (its registry test checks they match), each with
+// the auth_config schema and the credential scopes it works with. A connection with any other auth type is refused
+// until its strategy is built.
+export const SUPPORTED_AUTH_TYPES: Partial<
+  Record<
+    CompanyConnectionAuthTypeEnum,
+    { authConfig: z.ZodType; credentialScopes: CompanyConnectionCredentialScopeIntEnum[] }
+  >
+> = {
+  [CompanyConnectionAuthTypeEnum.JwtForward]: {
+    authConfig: ZJwtForwardAuthConfig,
+    credentialScopes: [CompanyConnectionCredentialScopeIntEnum.None],
+  },
+};
+
+// DEV_NOTE: Why a connection's auth settings can't be used, or null. Checked on create and, for an auth_config
+// change, against the stored row's auth type (auth type and credential scope never change after create).
+export function getAuthConfigIssue(params: {
+  authType: string;
+  credentialScope: CompanyConnectionCredentialScopeIntEnum;
+  authConfig: unknown;
+}): string | null {
+  const supported = Object.hasOwn(SUPPORTED_AUTH_TYPES, params.authType)
+    ? SUPPORTED_AUTH_TYPES[params.authType as CompanyConnectionAuthTypeEnum]
+    : undefined;
+  if (!supported) return `Auth type ${params.authType} is not supported yet`;
+  if (!supported.credentialScopes.includes(params.credentialScope)) {
+    return `Auth type ${params.authType} doesn't work with this credential scope`;
+  }
+  const parsed = supported.authConfig.safeParse(params.authConfig);
+  return parsed.success ? null : `Invalid auth config: ${z.prettifyError(parsed.error)}`;
+}
+
 // DEV_NOTE: Host API calls and the issuer's signing keys (JWKS) must not travel in plaintext, or anyone on the
 // path could read host data or swap the keys and forge host JWTs. OIDC also requires an https issuer.
 const ZHttpsUrl = z.url({ protocol: /^https$/ });
@@ -107,8 +145,8 @@ const ZOrigin = z.url().refine((value) => URL.canParse(value) && new URL(value).
 });
 
 // Create Company Connection Body
-// DEV_NOTE: authConfig is a JSON object and resetOp any JSON until their shapes land: authConfig per auth type
-// with the AuthStrategy (M3-2), resetOp with the tool op schemas (M3-1)
+// DEV_NOTE: authConfig is any JSON object here: its shape depends on the auth type, so the create request and the
+// Repo check it with getAuthConfigIssue. resetOp stays any JSON until the eval reset flow (M5-2).
 export const ZCompanyConnectionBase = z.object({
   environment: z.enum(CompanyConnectionEnvironmentIntEnum),
   adapterType: z.enum(CompanyConnectionAdapterTypeIntEnum),
