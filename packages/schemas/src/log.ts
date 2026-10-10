@@ -169,6 +169,14 @@ export enum LogAction {
   PruneKnowledgeDocuments = "PruneKnowledgeDocuments",
   FinishKnowledgeSync = "FinishKnowledgeSync",
 
+  // Knowledge search
+  GetKnowledgeSourceIds = "GetKnowledgeSourceIds",
+  SearchKnowledgeChunksByVector = "SearchKnowledgeChunksByVector",
+  SearchKnowledgeChunksByKeyword = "SearchKnowledgeChunksByKeyword",
+  SearchKnowledge = "SearchKnowledge",
+  RerankKnowledgeChunks = "RerankKnowledgeChunks",
+  RecordKnowledgeModelCalls = "RecordKnowledgeModelCalls",
+
   // Files
   CreateFile = "CreateFile",
   SetFileOwner = "SetFileOwner",

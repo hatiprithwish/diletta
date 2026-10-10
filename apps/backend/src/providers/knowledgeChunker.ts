@@ -125,8 +125,8 @@ export default class KnowledgeChunkerProvider {
   }
 
   // DEV_NOTE: What is embedded for a chunk: its heading path above its text, so a chunk deep in a page still carries
-  // what it is about
-  static embeddingText(chunk: Schemas.KnowledgeChunkDraft): string {
+  // what it is about. Also what the search reranker scores (KnowledgeSearchRepo), so both see a chunk the same way.
+  static embeddingText(chunk: Pick<Schemas.KnowledgeChunkDraft, "headingPath" | "text">): string {
     return chunk.headingPath ? `${chunk.headingPath}\n\n${chunk.text}` : chunk.text;
   }
 

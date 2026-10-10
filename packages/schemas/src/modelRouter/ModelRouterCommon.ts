@@ -197,11 +197,12 @@ export function getModelPrice(provider: ModelProviderEnum, model: string): Model
   return Object.hasOwn(prices, model) ? (prices[model] ?? null) : null;
 }
 
-// DEV_NOTE: Platform-paid models (embeddings), priced like MODEL_PRICES so cost goes through computeModelCallCostUsd.
-// Input-only: output and cache prices are 0 (an embedding has no output; cacheWrite equals input, so the backfill's
-// dearer-of rule reads input). Workers AI list prices as of 2026-10-09
-// (developers.cloudflare.com/workers-ai/platform/pricing). They never reach a company's budget (tier Embed is left out
-// of BudgetRepo's seed), but every call still gets its model_calls row.
+// DEV_NOTE: Platform-paid models (embeddings and the search reranker), priced like MODEL_PRICES so cost goes through
+// computeModelCallCostUsd. Input-only: output and cache prices are 0 (neither has output; cacheWrite equals input, so
+// the backfill's dearer-of rule reads input). Workers AI list prices as of 2026-10-09
+// (developers.cloudflare.com/workers-ai/platform/pricing; the reranker at its model page's $0.00311, the dearer of the
+// two listed). They never reach a company's budget (tier Embed is left out of BudgetRepo's seed), but every call still
+// gets its model_calls row.
 export const PLATFORM_MODEL_PRICES: Record<
   PlatformModelProviderEnum,
   Record<string, ModelPrice>
@@ -212,6 +213,12 @@ export const PLATFORM_MODEL_PRICES: Record<
       outputUsdPerMTok: 0,
       cacheReadUsdPerMTok: 0,
       cacheWriteUsdPerMTok: 0.012,
+    },
+    "@cf/baai/bge-reranker-base": {
+      inputUsdPerMTok: 0.00311,
+      outputUsdPerMTok: 0,
+      cacheReadUsdPerMTok: 0,
+      cacheWriteUsdPerMTok: 0.00311,
     },
   },
 };

@@ -22,13 +22,16 @@ export const MODEL_CALL_TIER_LABEL_MAP: Record<ModelCallTierIntEnum, ModelCallTi
   [ModelCallTierIntEnum.Embed]: ModelCallTierLabelEnum.Embed,
 };
 
-// DEV_NOTE: What a model call is for (model_calls.task_type, text in the DB). knowledge.embed runs on Workers AI
-// (platform-paid, tier Embed), not through the router: KnowledgeEmbedProvider writes its rows.
+// DEV_NOTE: What a model call is for (model_calls.task_type, text in the DB). knowledge.embed (ingestion), search.embed
+// (the query) and search.rerank run on Workers AI (platform-paid, tier Embed), not through the router:
+// KnowledgeModelCallsProvider writes their rows.
 export enum ModelTaskTypeEnum {
   RouteIntent = "route.intent",
   QaAnswer = "qa.answer",
   EvalJudge = "eval.judge",
   KnowledgeEmbed = "knowledge.embed",
+  SearchEmbed = "search.embed",
+  SearchRerank = "search.rerank",
 }
 
 // DEV_NOTE: Providers the platform pays for itself (model_calls.provider). Never a company model key provider: a
@@ -53,8 +56,8 @@ export type ModelCallProvider = z.infer<typeof ZModelCallProvider>;
 //     input and cache-write prices (an overcount, never an under).
 //   Unknown: no usage could be found (no log id, or none in the log within the backfill window). Cost stays 0 and an
 //     error is logged; the budget must not read 0 as free.
-//   Estimated: counted by us as an upper bound because the provider returns no usage (Workers AI embeddings: one
-//     token per input character, more than the tokenizer ever produces). An overcount, never an under.
+//   Estimated: counted by us as an upper bound because the provider returns no usage (Workers AI embeddings and
+//     reranks: one token per input character, more than the tokenizer ever produces). An overcount, never an under.
 export enum ModelCallUsageStatusIntEnum {
   Reported = 1,
   Pending = 2,

@@ -9,3 +9,7 @@ export interface KnowledgeSourceDALResponse extends ApiResponse {
 export interface KnowledgeSourcesDALResponse extends ApiResponse {
   knowledgeSources?: KnowledgeSource[];
 }
+
+export interface KnowledgeSourceIdsDALResponse extends ApiResponse {
+  knowledgeSourceIds?: string[];
+}

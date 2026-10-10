@@ -160,6 +160,47 @@ export default class KnowledgeSourcesDAL {
     return response;
   }
 
+  async getKnowledgeSourceIds(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetKnowledgeSourceIdsDALRequest,
+  ) {
+    const response: Schemas.KnowledgeSourceIdsDALResponse = { isSuccess: false };
+
+    if (params.publicIds.length === 0) {
+      response.isSuccess = true;
+      response.message = "No knowledge sources to look up";
+      response.knowledgeSourceIds = [];
+      return response;
+    }
+
+    try {
+      const conditions = [
+        inArray(knowledgeSources.publicId, params.publicIds),
+        eq(knowledgeSources.companyId, params.companyId),
+      ];
+      const rows = await tx
+        .select({ id: knowledgeSources.id })
+        .from(knowledgeSources)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Knowledge source ids fetched successfully";
+      response.knowledgeSourceIds = rows.map((row) => row.id);
+    } catch (error) {
+      const message = "Unknown error in fetching knowledge source ids";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetKnowledgeSourceIds,
+        message,
+        error,
+        metadata: { companyId: params.companyId, sourceCount: params.publicIds.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getKnowledgeSourcesCount(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetKnowledgeSourcesCountDALRequest,

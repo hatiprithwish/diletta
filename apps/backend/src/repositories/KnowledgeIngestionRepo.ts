@@ -12,7 +12,7 @@ import FileStorageProvider from "@/providers/fileStorage";
 import KnowledgeChunkerProvider from "@/providers/knowledgeChunker";
 import KnowledgeDocumentFilesProvider from "@/providers/knowledgeDocumentFiles";
 import KnowledgeEmbedProvider from "@/providers/knowledgeEmbed";
-import KnowledgeEmbedCallsProvider from "@/providers/knowledgeEmbedCalls";
+import KnowledgeModelCallsProvider from "@/providers/knowledgeModelCalls";
 import KnowledgeExtractProvider from "@/providers/knowledgeExtract";
 import KnowledgeFetchProvider from "@/providers/knowledgeFetch";
 import AppLogger from "@/providers/logger";
@@ -410,7 +410,7 @@ export default class KnowledgeIngestionRepo {
     if (chunks.length === 0) {
       return { isSuccess: true, chunks: [], callCount: 0 };
     }
-    const price = KnowledgeEmbedCallsProvider.price();
+    const price = KnowledgeModelCallsProvider.price(Schemas.KNOWLEDGE_EMBEDDING_MODEL);
     if (!price) {
       const message = "Embedding model is not priced";
       AppLogger.error({
@@ -424,12 +424,20 @@ export default class KnowledgeIngestionRepo {
 
     const embedded = await KnowledgeEmbedProvider.embed(this.env, {
       companyPublicId,
+      taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
       texts: chunks.map((chunk) => KnowledgeChunkerProvider.embeddingText(chunk)),
     });
     const calls = embedded.calls ?? [];
     if (calls.length > 0) {
       const recorded = await withTenant(this.db, companyId, async (tx) => {
-        const result = await KnowledgeEmbedCallsProvider.record(tx, { companyId, price, calls });
+        const result = await KnowledgeModelCallsProvider.record(tx, {
+          companyId,
+          links: { chatbotId: null, chatbotUserId: null, conversationId: null, turnId: null },
+          taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
+          model: Schemas.KNOWLEDGE_EMBEDDING_MODEL,
+          price,
+          calls,
+        });
         if (!result.isSuccess) throw new TenantRollbackError(result.message);
         return result;
       });

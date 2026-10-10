@@ -48,11 +48,20 @@ export interface ChunkedKnowledgeDocument {
   isTruncated: boolean;
 }
 
-// DEV_NOTE: One Workers AI embedding call, for its model_calls row. inputTokens is the upper bound the row is priced
-// at (usage Estimated: Workers AI returns no usage); errorCode is set when the call failed.
-export interface KnowledgeEmbedCall {
+// DEV_NOTE: One Workers AI call (an embedding batch or a rerank), for its model_calls row. inputTokens is the upper
+// bound the row is priced at (usage Estimated: Workers AI returns no usage); errorCode is set when the call failed.
+export interface KnowledgeModelCall {
   inputTokens: number;
   latencyMs: number;
   gatewayLogId: string | null;
   errorCode: string | null;
+}
+
+// DEV_NOTE: What a platform call served, for its model_calls row: a search's chatbot, user, conversation and turn
+// (internal ids, server-side only). Ingestion is a background job: every field null.
+export interface KnowledgeModelCallLinks {
+  chatbotId: string | null;
+  chatbotUserId: string | null;
+  conversationId: string | null;
+  turnId: string | null;
 }

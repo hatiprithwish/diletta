@@ -146,4 +146,17 @@ export default class Constants {
 
   // DEV_NOTE: Embedding (KnowledgeEmbedProvider): texts per Workers AI call (one model_calls row each)
   static readonly KNOWLEDGE_EMBED_BATCH_SIZE = 50;
+
+  // DEV_NOTE: Hybrid search (KnowledgeSearchRepo, M2-6). Each side (HNSW vector, GIN keyword) returns its best
+  // KNOWLEDGE_SEARCH_CANDIDATES_PER_SIDE; reciprocal rank fusion (1 / (KNOWLEDGE_SEARCH_RRF_K + rank), summed over the
+  // sides) keeps the top KNOWLEDGE_SEARCH_RERANK_CANDIDATES for the reranker, and the config's topK of those scoring at
+  // least KNOWLEDGE_SEARCH_MIN_SCORE (sigmoid rerank score, 0–1) reach the model. Fewer means the model says it
+  // doesn't know. The min score is a starting value, to be tuned by the M5 evals. KNOWLEDGE_SEARCH_HNSW_EF_SEARCH is
+  // the HNSW candidate list per scan (set per transaction, ≥ the candidates asked for); iterative scans keep recall
+  // when the company and source filters drop most of it.
+  static readonly KNOWLEDGE_SEARCH_CANDIDATES_PER_SIDE = 40;
+  static readonly KNOWLEDGE_SEARCH_RRF_K = 60;
+  static readonly KNOWLEDGE_SEARCH_RERANK_CANDIDATES = 20;
+  static readonly KNOWLEDGE_SEARCH_MIN_SCORE = 0.2;
+  static readonly KNOWLEDGE_SEARCH_HNSW_EF_SEARCH = 100;
 }

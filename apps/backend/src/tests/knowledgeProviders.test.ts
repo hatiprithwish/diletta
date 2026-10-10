@@ -110,6 +110,7 @@ describe("KnowledgeEmbedProvider", () => {
 
     const result = await KnowledgeEmbedProvider.embed(withAi(ai), {
       companyPublicId: "co_1",
+      taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
       texts,
     });
 
@@ -142,6 +143,7 @@ describe("KnowledgeEmbedProvider", () => {
     };
     const result = await KnowledgeEmbedProvider.embed(withAi(ai), {
       companyPublicId: "co_1",
+      taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
       texts: ["a"],
     });
     expect(result.isSuccess).toBe(false);
@@ -152,6 +154,7 @@ describe("KnowledgeEmbedProvider", () => {
     const ai = { aiGatewayLogId: "log-old", run: vi.fn().mockRejectedValue(new Error("busy")) };
     const result = await KnowledgeEmbedProvider.embed(withAi(ai), {
       companyPublicId: "co_1",
+      taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed,
       texts: ["a", "b"],
     });
     expect(result.isSuccess).toBe(false);

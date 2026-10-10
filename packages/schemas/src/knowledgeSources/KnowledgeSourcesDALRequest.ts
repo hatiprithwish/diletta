@@ -14,6 +14,12 @@ export type FindKnowledgeSourceDALRequest = Pick<KnowledgeSource, "publicId" | "
   isForUpdate: boolean;
 };
 
+// DEV_NOTE: The search's source filter: the internal ids of the given public ids that exist in the company (unknown
+// ones are left out), whatever their status
+export type GetKnowledgeSourceIdsDALRequest = Pick<KnowledgeSource, "companyId"> & {
+  publicIds: string[];
+};
+
 export type GetKnowledgeSourcesCountDALRequest = Pick<KnowledgeSource, "companyId">;
 
 export type GetKnowledgeSourcesDALRequest = GetKnowledgeSourcesCountDALRequest &

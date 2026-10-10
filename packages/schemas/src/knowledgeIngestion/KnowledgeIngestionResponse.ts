@@ -1,5 +1,5 @@
 import type {
-  KnowledgeEmbedCall,
+  KnowledgeModelCall,
   KnowledgeSyncItem,
   KnowledgeSyncItemOutcomeEnum,
   ParsedSitemap,
@@ -65,7 +65,7 @@ export interface KnowledgeTextResponse extends ApiResponse {
 // so each gets its model_calls row even when the embedding as a whole failed.
 export interface KnowledgeEmbedResponse extends ApiResponse {
   embeddings?: number[][];
-  calls?: KnowledgeEmbedCall[];
+  calls?: KnowledgeModelCall[];
 }
 
 // DEV_NOTE: An object read back from R2 (FileStorageProvider)

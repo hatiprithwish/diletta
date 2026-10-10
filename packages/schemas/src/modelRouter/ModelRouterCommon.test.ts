@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { ModelProviderEnum } from "../companySecrets";
 import { ModelTierEnum } from "../configSpec";
+import { KNOWLEDGE_EMBEDDING_MODEL } from "../knowledgeChunks";
+import { KNOWLEDGE_RERANK_MODEL } from "../knowledgeSearch";
 import { PlatformModelProviderEnum } from "../modelCalls";
 import {
   MODEL_PRICES,
@@ -108,6 +110,22 @@ describe("getModelPrice", () => {
         }
       }
     }
+  });
+});
+
+describe("PLATFORM_MODEL_PRICES", () => {
+  it("prices the knowledge embedding and rerank models, input only", () => {
+    const prices = PLATFORM_MODEL_PRICES[PlatformModelProviderEnum.WorkersAi];
+    for (const model of [KNOWLEDGE_EMBEDDING_MODEL, KNOWLEDGE_RERANK_MODEL]) {
+      const price = getModelCallPrice(PlatformModelProviderEnum.WorkersAi, model);
+      expect(price).not.toBeNull();
+      expect(price?.inputUsdPerMTok).toBeGreaterThan(0);
+      expect(price?.outputUsdPerMTok).toBe(0);
+      expect(price?.cacheWriteUsdPerMTok).toBe(price?.inputUsdPerMTok);
+    }
+    expect(Object.keys(prices).sort()).toEqual(
+      [KNOWLEDGE_EMBEDDING_MODEL, KNOWLEDGE_RERANK_MODEL].sort(),
+    );
   });
 });
 

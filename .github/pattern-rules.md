@@ -739,7 +739,7 @@ FOREIGN KEY
 
 ### 3.10 Model Calls Only Through the Router [CRITICAL]
 
-**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Usage-status rules live only in `ModelCallRecordingProvider`: a call billed without usage (stream cut or cancelled, connection lost, a finish without totals, an unreadable 2xx) is written `usage_status` Pending for the Cron backfill, never Reported at $0; only a 4xx/5xx refusal is Reported at 0. Every model failure reaches the caller as `ModelUnavailableError` (an abort stays an abort): Think sends a stream error's message to the widget verbatim. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search: `env.AI.run` only in `providers/knowledgeEmbed.ts` (bge-m3, `KNOWLEDGE_EMBEDDING_MODEL`), `env.AI.toMarkdown` only in `providers/knowledgeExtract.ts` (HTML, PDF, DOCX; never an image, which would run a model). Each embed call gets its `model_calls` row (tier Embed, provider `workers_ai`, usage `Estimated`, priced from `PLATFORM_MODEL_PRICES` rounded up), left out of the company budget seed.
+**Rule:** Every LLM call goes through the model router on the company's own key via AI Gateway: `ModelRouterRepo.getModel` (`repositories/ModelRouterRepo.ts`), which builds the model only through `AiGatewayProvider` (`providers/aiGateway.ts`). The model it returns is wrapped to write one `model_calls` row per call, priced from `MODEL_PRICES`; a model missing from that table is refused, never priced at 0. Usage-status rules live only in `ModelCallRecordingProvider`: a call billed without usage (stream cut or cancelled, connection lost, a finish without totals, an unreadable 2xx) is written `usage_status` Pending for the Cron backfill, never Reported at $0; only a 4xx/5xx refusal is Reported at 0. Every model failure reaches the caller as `ModelUnavailableError` (an abort stays an abort): Think sends a stream error's message to the widget verbatim. Only a provider's own rejected-key answer (`AiGatewayProvider.isRejectedKeyError`: 401 / Google `API_KEY_INVALID`, never a 403 or a gateway error) may mark a company key Invalid, and only through `CompanySecretsDAL.invalidateModelKey`, which checks the row still holds the value used. The only platform-paid model calls are Workers AI embeddings (`halfvec(1024)`) in knowledge ingestion and search, and the search reranker: `env.AI.run` only in `providers/knowledgeEmbed.ts` (bge-m3, `KNOWLEDGE_EMBEDDING_MODEL`) and `providers/knowledgeRerank.ts` (`KNOWLEDGE_RERANK_MODEL`), `env.AI.toMarkdown` only in `providers/knowledgeExtract.ts` (HTML, PDF, DOCX; never an image, which would run a model). Each of these calls gets its `model_calls` row through `KnowledgeModelCallsProvider` (tier Embed, provider `workers_ai`, usage `Estimated`, priced from `PLATFORM_MODEL_PRICES` rounded up), left out of the company budget seed.
 
 **Violations:**
 
@@ -753,7 +753,7 @@ FOREIGN KEY
 - Marking a key Invalid, or opening a system issue, on any status code without matching the provider's error shape, on a 403, or through the general `updateCompanySecret` (it would invalidate a key the admin replaced meanwhile)
 - Writing a `model_calls` row as Reported with zero usage for a call that reached the provider without a refusal (use Pending with the gateway log id, or Unknown)
 - Logging the decrypted company key or the gateway token, or passing either anywhere but the provider SDK settings
-- `env.AI.run(...)` with a non-embedding model, or anywhere but `providers/knowledgeEmbed.ts`; `env.AI.toMarkdown(...)` anywhere but `providers/knowledgeExtract.ts`, or on an image
+- `env.AI.run(...)` with a model other than the embedding or rerank model, or anywhere but `providers/knowledgeEmbed.ts` / `providers/knowledgeRerank.ts`; `env.AI.toMarkdown(...)` anywhere but `providers/knowledgeExtract.ts`, or on an image
 - An embed call with no `model_calls` row, or one written at $0 (price it with `computeModelCallCostUsd(…, true)`)
 - A Think `getModel()` that builds a provider client itself instead of asking the router
 - A provider API key read from `env` (platform key) for a company's model call
@@ -1128,12 +1128,12 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 
 ### 3.23 Conversation DO Stays Server-Authoritative [CRITICAL]
 
-**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools: []` until tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames; everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
+**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources; `[]` otherwise) until host tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames; everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
 
 **Violations:**
 
 - Removing or widening the frame allowlist, or passing a client chat body through unchanged (client history, `clientTools`, custom fields, `trigger: "regenerate-message"`)
-- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin
+- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin; any active tool but `search_help_docs`, or activating it for a bot with no knowledge sources
 - Returning a raw error or provider message from `onChatError`
 - Calling a model outside `ModelRouterRepo.getModel` (pattern rule 3.10), or running a turn without a fresh `loadTurnConfig`
 - Writing the read model anywhere but `ConversationsRepo.recordTurn`, or reading `messages` into a turn (the Think session is the source of truth)
@@ -1197,7 +1197,7 @@ BUDGET_DO\.getByName
 
 ### 3.25 Knowledge Ingestion Skips Unchanged Text [CRITICAL]
 
-**Rule:** A knowledge source syncs only through `KnowledgeSourcesRepo.startSync` (route, upload, resume, Cron): the source row is locked `FOR UPDATE` and claimed (Syncing with a new `sync_run_id`) unless Paused or its heartbeat is fresh (`KNOWLEDGE_SYNC_STALE_MS`), then one `KnowledgeSyncWorkflow` instance starts under that id (`KnowledgeSyncWorkflowProvider`); a failed start puts the source in Failed. Only the run the source names may write: every write locks the source and requires Syncing + its `sync_run_id`, and refreshes `sync_heartbeat_at`; any other run answers Stopped. Workflow steps call `KnowledgeIngestionRepo`, return ids and outcomes only (never text or bytes), and throw when the Repo answers `isSuccess: false` so the step retries. Per item: fetch (`KnowledgeFetchProvider`: http(s) on the source's site, every redirect hop re-checked, capped in time and size) or read from R2 → convert (`KnowledgeExtractProvider`) → normalize (NUL dropped) → `content_hash` = `KNOWLEDGE_PIPELINE_VERSION` + sha256 of the text. An Indexed document whose hash matches is Unchanged: zero chunking and zero embed calls. A changed one is chunked (`KnowledgeChunkerProvider`, pure) and embedded (`KnowledgeEmbedProvider`, rows through `KnowledgeEmbedCallsProvider` in a transaction that rolls back on any failed row); its new bytes go to R2 as a new file before the transaction, which re-reads the document under the lock, writes the file row (`KnowledgeDocumentFilesProvider`) and deletes + rewrites the chunks. The new object is deleted if the item isn't stored; a replaced or removed file's object is deleted after the commit. Pruning runs only after a complete, non-empty listing. One document per (source, URL). Source URLs are public http(s) domains on the default port (`ZKnowledgeSourceUrl`); uploads are size-capped before parsing (`bodyLimit`) and type-checked by magic bytes. Tests may read `FILES_BUCKET` directly to check objects.
+**Rule:** A knowledge source syncs only through `KnowledgeSourcesRepo.startSync` (route, upload, resume, Cron): the source row is locked `FOR UPDATE` and claimed (Syncing with a new `sync_run_id`) unless Paused or its heartbeat is fresh (`KNOWLEDGE_SYNC_STALE_MS`), then one `KnowledgeSyncWorkflow` instance starts under that id (`KnowledgeSyncWorkflowProvider`); a failed start puts the source in Failed. Only the run the source names may write: every write locks the source and requires Syncing + its `sync_run_id`, and refreshes `sync_heartbeat_at`; any other run answers Stopped. Workflow steps call `KnowledgeIngestionRepo`, return ids and outcomes only (never text or bytes), and throw when the Repo answers `isSuccess: false` so the step retries. Per item: fetch (`KnowledgeFetchProvider`: http(s) on the source's site, every redirect hop re-checked, capped in time and size) or read from R2 → convert (`KnowledgeExtractProvider`) → normalize (NUL dropped) → `content_hash` = `KNOWLEDGE_PIPELINE_VERSION` + sha256 of the text. An Indexed document whose hash matches is Unchanged: zero chunking and zero embed calls. A changed one is chunked (`KnowledgeChunkerProvider`, pure) and embedded (`KnowledgeEmbedProvider`, rows through `KnowledgeModelCallsProvider` in a transaction that rolls back on any failed row); its new bytes go to R2 as a new file before the transaction, which re-reads the document under the lock, writes the file row (`KnowledgeDocumentFilesProvider`) and deletes + rewrites the chunks. The new object is deleted if the item isn't stored; a replaced or removed file's object is deleted after the commit. Pruning runs only after a complete, non-empty listing. One document per (source, URL). Source URLs are public http(s) domains on the default port (`ZKnowledgeSourceUrl`); uploads are size-capped before parsing (`bodyLimit`) and type-checked by magic bytes. Tests may read `FILES_BUCKET` directly to check objects.
 
 **Violations:**
 
@@ -1232,6 +1232,43 @@ redirect:\s*"follow"
 ```
 
 **Fix:** Mirror `repositories/KnowledgeIngestionRepo.ts`, `repositories/KnowledgeSourcesRepo.ts` and `workflows/KnowledgeSyncWorkflow.ts` (`docs/runbooks/knowledge.md`).
+
+---
+
+### 3.26 Knowledge Search Stays Inside the Bot's Sources and Fenced [CRITICAL]
+
+**Rule:** Knowledge is searched only through `KnowledgeSearchRepo.search`, called only by the Conversation DO's `search_help_docs` tool on the running turn's config. The source filter is the bot's `knowledge.sourceIds` resolved to internal ids in the company (`KnowledgeSourcesDAL.getKnowledgeSourceIds`); no source left (or a blank query) means no hits and no model call. Both sides of the hybrid search (`KnowledgeChunksDAL.searchKnowledgeChunksByVector` / `…ByKeyword`) run in one `withTenant` and filter on company, source ids, `embedding_model = KNOWLEDGE_EMBEDDING_MODEL` and Indexed documents; the vector side sets `hnsw.iterative_scan` and `hnsw.ef_search` with `set_config(…, true)` (never per session) and orders by the distance alone. Fusion and the score cut live in `KnowledgeRankingProvider` (pure), reranking in `KnowledgeRerankProvider`; rerank scores are never stored. Every Workers AI call made (failed too) gets its `model_calls` row with the search's chatbot, user, conversation and turn, written in `waitUntil` and never counted in the company budget. The tool's output (stored in the transcript, streamed to the widget) carries citations only (`SearchHelpDocsProvider.toOutput`); excerpt text stays in the running turn's memory (`ActiveTurn.searchExcerpts`) and reaches only the model, through `SearchHelpDocsProvider.toModelText` (inside `<search_results>`, marked as data, fence tags defused). The read model gets only `content.citations` for the `[n]` markers the reply uses (`SearchHelpDocsProvider.citedBy`). Rerank scores are probabilities as Workers AI returns them; a score outside [0, 1] is refused, never re-mapped. The query text is never logged.
+
+**Violations:**
+
+- Searching `knowledge_chunks` outside `KnowledgeChunksDAL`'s search methods, or without the source, embedding-model and Indexed filters
+- Taking the source list from anywhere but the turn's loaded config (a client value, another bot's config), or resolving source ids outside the company
+- `SET hnsw.*` / `set_config('hnsw.…', …, false)` (session-wide on a pooled connection), or an ORDER BY on the vector side that the HNSW index can't serve
+- Passing chunk text to the model outside the fence, or returning the tool's raw JSON as its model output
+- Chunk text in the tool's output (it is stored and streamed to the widget), or excerpts kept anywhere but the running turn's memory
+- A search call with no `model_calls` row, or a search call counted against the company budget
+- Storing rerank scores, or citations for results the reply didn't cite
+- Logging the search query or chunk text
+
+**Detection Pattern:**
+
+```regex
+\.from\(knowledgeChunks\)(?!.*KnowledgeChunksDAL\.ts)
+set_config\('hnsw\.[a-z_]+',\s*[^,]+,\s*false\)
+SET\s+(?!LOCAL)hnsw\.
+```
+
+**Examples:**
+
+```
+- ❌ const hits = await tx.select().from(knowledgeChunks).where(eq(knowledgeChunks.companyId, companyId)); // no source filter
+- ❌ execute: async ({ query }) => JSON.stringify(hits) // chunk text unfenced
+- ❌ AppLogger.info({ message: "Searched", metadata: { query } })
+- ❌ return { status, results: hits }; // excerpt text in the output reaches the widget
+- ✅ toModelOutput: ({ toolCallId, output }) => ({ type: "text", value: SearchHelpDocsProvider.toModelText(output, this.turnSearchExcerpts(toolCallId)) })
+```
+
+**Fix:** Mirror `repositories/KnowledgeSearchRepo.ts`, `durable-objects/ConversationDO.ts` (`getTools`, `searchHelpDocs`) and `providers/searchHelpDocs.ts` (`docs/runbooks/knowledge.md`).
 
 ---
 
@@ -1322,5 +1359,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search)
 Maintainer: hatiprithwish

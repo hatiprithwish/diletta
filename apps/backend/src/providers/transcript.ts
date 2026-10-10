@@ -1,10 +1,17 @@
 import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
+import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
+
+const SEARCH_TOOL_PART_TYPE = `tool-${Schemas.SEARCH_HELP_DOCS_TOOL_NAME}`;
 
 // DEV_NOTE: Maps the Conversation DO's Think transcript (the source of truth) onto the messages read model. Pure, so
 // it is unit-tested on its own. The DO keeps the id of the last message already in messages (lastSyncedMessageId) and
 // re-syncs from there after every turn and on every wake: a failed write, or a turn cut by an eviction (every deploy),
 // is caught up on later instead of being lost. Writes are idempotent per Think message id.
+//
+// Citations (M2-6): a reply's search_help_docs citations sit in its own message, as tool parts before its text. Each
+// written reply keeps the ones its [n] markers cite (SearchHelpDocsProvider.citedBy), looked up in every search of
+// its turn so far; a reply that cites none is written with its text only.
 export default class TranscriptProvider {
   static toEntries(messages: UIMessage[]): Schemas.TranscriptEntry[] {
     return messages.map((message) => ({
@@ -14,7 +21,19 @@ export default class TranscriptProvider {
         .map((part) => (part.type === "text" ? part.text : ""))
         .join("")
         .trim(),
+      searchCitations: message.parts.flatMap((part) => TranscriptProvider.searchCitationsOf(part)),
     }));
+  }
+
+  // DEV_NOTE: The citations of one finished search_help_docs call (its output never carries excerpt text); anything
+  // else (another part, a call still running or failed, an output of the wrong shape) has none
+  private static searchCitationsOf(part: UIMessage["parts"][number]): Schemas.KnowledgeCitation[] {
+    const isSearch =
+      part.type === SEARCH_TOOL_PART_TYPE ||
+      (part.type === "dynamic-tool" && part.toolName === Schemas.SEARCH_HELP_DOCS_TOOL_NAME);
+    if (!isSearch || !("state" in part) || part.state !== "output-available") return [];
+    const parsed = Schemas.ZSearchHelpDocsOutput.safeParse(part.output);
+    return parsed.success ? parsed.data.results : [];
   }
 
   // DEV_NOTE: The transcript after the last synced message, cut into turns: each user message starts one, and the
@@ -42,6 +61,7 @@ export default class TranscriptProvider {
 
     const turns: Schemas.TranscriptTurn[] = [];
     let current: Schemas.TranscriptTurn | null = null;
+    let turnSearchCitations: Schemas.KnowledgeCitation[] = [];
     for (const entry of params.entries.slice(start)) {
       if (entry.role === "user" || !current) {
         const isUser = entry.role === "user";
@@ -55,17 +75,23 @@ export default class TranscriptProvider {
           lastEntryId: entry.id,
         };
         turns.push(current);
+        turnSearchCitations = [];
       }
 
       current.lastEntryId = entry.id;
+      turnSearchCitations = [...turnSearchCitations, ...entry.searchCitations];
       if (entry.role !== "other" && entry.text.length > 0) {
+        const citations =
+          entry.role === "assistant"
+            ? SearchHelpDocsProvider.citedBy(entry.text, turnSearchCitations)
+            : [];
         current.messages.push({
           sessionMessageId: entry.id,
           role:
             entry.role === "user"
               ? Schemas.MessageRoleIntEnum.User
               : Schemas.MessageRoleIntEnum.Assistant,
-          content: { text: entry.text },
+          content: citations.length > 0 ? { text: entry.text, citations } : { text: entry.text },
         });
       }
     }

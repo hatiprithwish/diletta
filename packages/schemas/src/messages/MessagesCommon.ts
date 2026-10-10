@@ -1,4 +1,5 @@
 import z from "zod";
+import { ZKnowledgeCitation } from "../knowledgeSearch";
 
 export enum MessageRoleIntEnum {
   User = 1,
@@ -18,10 +19,12 @@ export const MESSAGE_ROLE_LABEL_MAP: Record<MessageRoleIntEnum, MessageRoleLabel
   [MessageRoleIntEnum.Tool]: MessageRoleLabelEnum.Tool,
 };
 
-// DEV_NOTE: messages.content — what the read model keeps of one Think message: its text. Citations and attachment
-// file ids join it with knowledge (M2-6) and uploads. Nulled when the chat is purged.
+// DEV_NOTE: messages.content — what the read model keeps of one Think message: its text and, for a reply that used
+// knowledge (M2-6), the sources its [n] markers cite (absent when it cites none). Attachment file ids join it with
+// uploads. Nulled when the chat is purged.
 export const ZMessageContent = z.object({
   text: z.string(),
+  citations: z.array(ZKnowledgeCitation).optional(),
 });
 export type MessageContent = z.infer<typeof ZMessageContent>;
 
