@@ -3,6 +3,7 @@ import {
   TOOL_OP_DOT_PATH_PATTERN,
   ToolOpPlaceholderRootEnum,
   findToolOpPlaceholders,
+  findMalformedToolOpPlaceholders,
   findUnknownToolOpRoots,
 } from "./ToolOpPlaceholders";
 
@@ -37,7 +38,14 @@ export const ZToolOpPathV1 = z
   .refine((path) => !/[?#\s]/.test(path), { message: "Path has no query, fragment or whitespace" })
   .refine((path) => !path.split("/").some((segment) => segment === "." || segment === ".."), {
     message: "Path has no . or .. segment",
-  });
+  })
+  .refine(
+    (path) => {
+      const inner = path.endsWith("/") ? path.slice(1, -1) : path.slice(1);
+      return path === "/" || !inner.split("/").includes("");
+    },
+    { message: "Path has no empty segment (only a trailing /)" },
+  );
 
 // Query values are strings (a template, or one placeholder whose value is a scalar)
 export const ZToolOpQueryV1 = z.record(z.string().min(1).max(200), z.string().max(2_048));
@@ -145,6 +153,9 @@ export const ZToolOpsV1 = z
       for (const { text, path } of strings) {
         for (const token of findUnknownToolOpRoots(text)) {
           ctx.addIssue({ code: "custom", message: `Unknown placeholder ${token}`, path });
+        }
+        for (const token of findMalformedToolOpPlaceholders(text)) {
+          ctx.addIssue({ code: "custom", message: `Malformed placeholder ${token}`, path });
         }
         for (const placeholder of findToolOpPlaceholders(text)) {
           if (!ALLOWED_ROOTS[opKey].includes(placeholder.root)) {

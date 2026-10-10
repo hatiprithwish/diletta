@@ -23,6 +23,8 @@ export const TOOL_OP_DOT_PATH_PATTERN = new RegExp(`^${SEGMENT}(\\.${SEGMENT})*$
 
 const placeholderPattern = () => new RegExp(`\\{(args|before|result)((?:\\.${SEGMENT})+)\\}`, "g");
 const rootedPattern = () => /\{([A-Za-z_][A-Za-z0-9_]*)\.[^{}]*\}/g;
+// A brace token that starts with a known root (whitespace allowed): {args.items[0]}, {args.id }, {args.}, {args}
+const knownRootTokenPattern = () => /\{\s*(args|before|result)(?![A-Za-z0-9_])[^{}]*\}/g;
 const wholePattern = new RegExp(`^\\{(args|before|result)((?:\\.${SEGMENT})+)\\}$`);
 
 function toPlaceholder(token: string, root: string, path: string): ToolOpPlaceholder {
@@ -53,6 +55,14 @@ export function findUnknownToolOpRoots(template: string): string[] {
   return [...template.matchAll(rootedPattern())]
     .filter((match) => !roots.includes(match[1]!))
     .map((match) => match[0]);
+}
+
+// DEV_NOTE: Tokens with a known root that aren't a full placeholder, which would otherwise reach the host as literal
+// text. The op schemas refuse them as typos.
+export function findMalformedToolOpPlaceholders(template: string): string[] {
+  return [...template.matchAll(knownRootTokenPattern())]
+    .map((match) => match[0])
+    .filter((token) => !wholePattern.test(token));
 }
 
 // Replaces each placeholder with replace(placeholder); the text between placeholders is kept as is

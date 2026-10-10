@@ -49,6 +49,14 @@ describe("normalizeToolOps (write path)", () => {
     expect(result.ops?.inputSchema).toHaveProperty("additionalProperties", false);
   });
 
+  it("accepts a trailing slash and the root path", () => {
+    for (const path of ["/records/", "/"]) {
+      const ops = validOps();
+      ops.callOp.path = path;
+      expect(normalizeToolOps(ops).isSuccess).toBe(true);
+    }
+  });
+
   it("accepts a read tool: no readback, no inverse", () => {
     const result = normalizeToolOps({
       ...validOps(),
@@ -105,8 +113,24 @@ describe("normalizeToolOps (write path)", () => {
     expect(messageOf(ops)).toContain("Unknown placeholder {arg.amount}");
   });
 
+  it("refuses a malformed placeholder with a known root", () => {
+    for (const token of [
+      "{args.items[0]}",
+      "{args.recordId }",
+      "{args.}",
+      "{args}",
+      "{ result.id}",
+    ]) {
+      const ops = validOps();
+      ops.inverseOp = { ...ops.inverseOp!, bodyMap: { x: `v=${token}` } };
+      expect(messageOf(ops)).toContain(`Malformed placeholder ${token}`);
+    }
+  });
+
   it("refuses unsafe paths, a non-GET readback and an empty compare", () => {
     for (const path of [
+      "/records//x",
+      "//",
       "records",
       "//evil.example/x",
       "https://evil.example",

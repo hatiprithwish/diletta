@@ -8,20 +8,14 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tool definitions (M3-1), operator routes mounted at /operator/companies/:companyPublicId/tool-definitions.
 // Chain: checkAuth → authorizePlatform(action) → resolveOperatorCompany (unknown company → 404) → zValidator →
-// handler. Operators curate a company's tools; a company admin gets 403. Tools are addressed by publicId. A request the
-// tool's state refuses answers 409 with its failure, invalid ops or an unknown connection 400; isSuccess ? 200 :
-// isNotFound ? 404 : 500 otherwise.
+// handler. Operators curate a company's tools; a company admin gets 403. Tools are addressed by publicId. A refused request
+// answers its failure's TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP status (409 state, 400 ops or connection); isSuccess ?
+// 200 : isNotFound ? 404 : 500 otherwise.
 const ToolDefinitionsRoutes = new Hono<AppContext>();
 
 function stateStatus(response: Schemas.ToolDefinitionStateResponse, success: 200 | 201) {
   if (response.isSuccess) return success;
-  if (
-    response.failure === Schemas.ToolDefinitionFailureEnum.InvalidOps ||
-    response.failure === Schemas.ToolDefinitionFailureEnum.ConnectionNotFound
-  ) {
-    return 400;
-  }
-  if (response.failure) return 409;
+  if (response.failure) return Schemas.TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP[response.failure];
   return response.isNotFound ? 404 : 500;
 }
 

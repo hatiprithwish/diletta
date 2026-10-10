@@ -58,8 +58,10 @@ export default class ToolDefinitionsDAL {
     } = params;
 
     try {
-      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing (the connection is resolved
-      // inside the company by getToolConnection)
+      // DEV_NOTE: No DB foreign keys — the DAL checks the company reference before writing, like every create (golden
+      // ChatbotsDAL). The route's resolveOperatorCompany already found it; the check stays because a DAL never trusts
+      // its caller for a reference. The connection is checked by the Repo (getToolConnection), which needs its state
+      // to decide, not just its existence.
       const [company] = await tx
         .select({ id: companies.id })
         .from(companies)
@@ -249,8 +251,8 @@ export default class ToolDefinitionsDAL {
     return response;
   }
 
-  // DEV_NOTE: isSuccess with no connectionId = not one of the company's connections (a client mistake, not logged as an
-  // error)
+  // DEV_NOTE: isSuccess with no connection = not one of the company's connections (a client mistake, not logged as an
+  // error). Status, adapter type and base_url come with it, so the Repo can refuse one that can't serve tool calls.
   async getToolConnection(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindToolConnectionDALRequest,
@@ -263,14 +265,19 @@ export default class ToolDefinitionsDAL {
         eq(companyConnections.companyId, params.companyId),
       ];
       const [connection] = await tx
-        .select({ id: companyConnections.id })
+        .select({
+          id: companyConnections.id,
+          status: companyConnections.status,
+          adapterType: companyConnections.adapterType,
+          baseUrl: companyConnections.baseUrl,
+        })
         .from(companyConnections)
         .where(and(...conditions))
         .limit(1);
 
       response.isSuccess = true;
       response.message = connection ? "Connection found" : "Connection not found";
-      response.connectionId = connection?.id;
+      response.connection = connection;
     } catch (error) {
       const message = "Unknown error in fetching tool connection";
       AppLogger.error({

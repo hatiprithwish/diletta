@@ -354,6 +354,69 @@ describe("ToolDefinitionsRepo", () => {
     expect(listed.toolDefinitions?.map((tool) => tool.version).sort()).toEqual([1, 2]);
   });
 
+  it("refuses a disabled or non-REST connection on create, and activation once it is disabled", async () => {
+    const repo = new ToolDefinitionsRepo(env);
+    let disabled = "";
+    let hostExec = "";
+    let later = "";
+    await withOwnerDb(async (ownerDb) => {
+      const rows = await ownerDb
+        .insert(companyConnections)
+        .values([
+          {
+            ...connectionValues(companyA),
+            status: Schemas.CompanyConnectionStatusIntEnum.Disabled,
+          },
+          {
+            ...connectionValues(companyA),
+            adapterType: Schemas.CompanyConnectionAdapterTypeIntEnum.HostExec,
+            baseUrl: null,
+          },
+          connectionValues(companyA),
+        ])
+        .returning({ publicId: companyConnections.publicId });
+      disabled = rows[0]!.publicId;
+      hostExec = rows[1]!.publicId;
+      later = rows[2]!.publicId;
+    });
+
+    for (const connectionPublicId of [disabled, hostExec]) {
+      const refused = await repo.createToolDefinition({
+        companyId: companyA,
+        adminId: "1",
+        toolDefinition: writeTool(uniqueName(), connectionPublicId),
+      });
+      expect(refused.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable);
+    }
+
+    const created = await repo.createToolDefinition({
+      companyId: companyA,
+      adminId: "1",
+      toolDefinition: writeTool(uniqueName(), later),
+    });
+    const moved = await repo.updateToolDefinition({
+      companyId: companyA,
+      publicId: created.toolDefinition!.publicId,
+      adminId: "1",
+      toolDefinition: { connectionPublicId: disabled },
+    });
+    expect(moved.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable);
+
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(companyConnections)
+        .set({ status: Schemas.CompanyConnectionStatusIntEnum.Disabled })
+        .where(eq(companyConnections.publicId, later));
+    });
+    const activated = await repo.setToolDefinitionStatus({
+      companyId: companyA,
+      publicId: created.toolDefinition!.publicId,
+      adminId: "1",
+      status: Schemas.ToolDefinitionStatusIntEnum.Active,
+    });
+    expect(activated.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable);
+  });
+
   it("refuses to activate a version whose connection is gone", async () => {
     const repo = new ToolDefinitionsRepo(env);
     let doomed = "";

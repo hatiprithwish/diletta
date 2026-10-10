@@ -62,18 +62,35 @@ function isDroppable(placeholder: ToolOpPlaceholder, context: ToolOpContext): bo
   );
 }
 
+function isNullArg(placeholder: ToolOpPlaceholder, context: ToolOpContext): boolean {
+  if (placeholder.root !== ToolOpPlaceholderRootEnum.Args) return false;
+  const found = resolve(placeholder, context);
+  return found.isFound && found.value === null;
+}
+
 function renderText(template: string, context: ToolOpContext): string {
   return replaceToolOpPlaceholders(template, (placeholder) => toText(placeholder, context));
 }
 
+// DEV_NOTE: A path value can't change which endpoint is called. An empty value is refused (DELETE /records/{args.id}
+// with id "" would hit the collection, /records/), and so is any empty segment the template didn't end with.
+// encodeURIComponent keeps "." , so a value of ".." would still walk up a level on the host: refused too.
 function renderPath(template: string, context: ToolOpContext): string {
-  const path = replaceToolOpPlaceholders(template, (placeholder) =>
-    encodeURIComponent(toText(placeholder, context)),
-  );
-  // DEV_NOTE: encodeURIComponent keeps "." , so a value of ".." would still walk up a level on the host
-  if (path.split("/").some((segment) => segment === "." || segment === "..")) {
-    throw new RenderError("Rendered path has a . or .. segment");
-  }
+  const path = replaceToolOpPlaceholders(template, (placeholder) => {
+    const text = toText(placeholder, context);
+    if (text === "") throw new RenderError(`${placeholder.token} is empty in the path`);
+    return encodeURIComponent(text);
+  });
+  const segments = path.split("/").slice(1);
+  const lastIndex = segments.length - 1;
+  segments.forEach((segment, index) => {
+    if (segment === "." || segment === "..") {
+      throw new RenderError("Rendered path has a . or .. segment");
+    }
+    if (segment === "" && !(index === lastIndex && template.endsWith("/"))) {
+      throw new RenderError("Rendered path has an empty segment");
+    }
+  });
   return path;
 }
 
@@ -84,7 +101,9 @@ function renderQuery(
   const rendered: Record<string, string> = {};
   for (const [key, template] of Object.entries(query ?? {})) {
     const whole = parseWholeToolOpPlaceholder(template);
-    if (whole && isDroppable(whole, context)) continue;
+    // DEV_NOTE: In the query an arg sent as null drops its key too (models send null for an unused optional filter);
+    // a null has no text form. In the body a null arg stays null: the host may mean "clear the field".
+    if (whole && (isDroppable(whole, context) || isNullArg(whole, context))) continue;
     rendered[key] = renderText(template, context);
   }
   return rendered;

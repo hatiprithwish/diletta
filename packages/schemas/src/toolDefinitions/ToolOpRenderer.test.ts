@@ -124,6 +124,33 @@ describe("renderToolOp: args", () => {
     expect(rendered).toEqual({ isSuccess: false, message: "Rendered path has a . or .. segment" });
   });
 
+  it("refuses an empty path value or an empty segment, keeping the template's own trailing slash", () => {
+    expect(
+      renderToolOp(callOp({ method: ToolOpMethodEnum.Delete, path: "/records/{args.id}" }), {
+        args: { id: "" },
+      }),
+    ).toEqual({ isSuccess: false, message: "{args.id} is empty in the path" });
+    expect(
+      renderToolOp(callOp({ path: "/records/{args.id}/" }), { args: { id: "a" } }).request?.path,
+    ).toBe("/records/a/");
+    expect(renderToolOp(callOp({ path: "/records//x" }), context)).toEqual({
+      isSuccess: false,
+      message: "Rendered path has an empty segment",
+    });
+  });
+
+  it("drops a null arg from the query but keeps it in the body", () => {
+    const rendered = renderToolOp(
+      callOp({
+        query: { note: "{args.note}", amount: "{args.amount}" },
+        bodyMap: { note: "{args.note}" },
+      }),
+      context,
+    );
+    expect(rendered.request?.query).toEqual({ amount: "12.5" });
+    expect(rendered.request?.body).toEqual({ note: null });
+  });
+
   it("never reads the prototype chain", () => {
     const dropped = renderToolOp(callOp({ bodyMap: { x: "{args.owner.constructor}" } }), context);
     expect(dropped.request?.body).toEqual({});

@@ -111,15 +111,18 @@ export enum ToolDefinitionSortColumn {
 
 export const ZToolDefinitionSortColumn = z.enum(ToolDefinitionSortColumn);
 
-// DEV_NOTE: Why a tool definition request was refused for its state or its references, not its shape.
+// DEV_NOTE: Why a tool definition request was refused for its state or its references, not its shape. The HTTP
+// status for each is TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP.
 //   NotDraft: only a Draft version is edited or deleted; an active or disabled version is immutable (a config may pin
-//     it). Change it through a new version. → 409
-//   DraftExists: a tool name has at most one Draft at a time; edit that one. → 409
-//   NameTaken: create starts a new tool at version 1; a name already in use gets a new version instead. → 409
-//   InvalidTransition: the status change isn't allowed from the current status (Draft → Active, Active ↔ Disabled). → 409
+//     it). Change it through a new version.
+//   DraftExists: a tool name has at most one Draft at a time; edit that one.
+//   NameTaken: create starts a new tool at version 1; a name already in use is refused (create a new version of it).
+//   InvalidTransition: the status change isn't allowed from the current status (Draft → Active, Active ↔ Disabled).
 //   InvalidOps: the ops don't parse at the current schema version, or don't fit the risk (a read tool has no readback
-//     or inverse op, every write has a readback op). → 400
-//   ConnectionNotFound: the connection isn't one of the company's. → 400
+//     or inverse op, every write has a readback op).
+//   ConnectionNotFound: the connection isn't one of the company's.
+//   ConnectionUnavailable: the connection can't serve a tool call: it is Disabled, or not a REST connection with a
+//     base_url (op paths are relative to it).
 export enum ToolDefinitionFailureEnum {
   NotDraft = "NotDraft",
   DraftExists = "DraftExists",
@@ -127,7 +130,20 @@ export enum ToolDefinitionFailureEnum {
   InvalidTransition = "InvalidTransition",
   InvalidOps = "InvalidOps",
   ConnectionNotFound = "ConnectionNotFound",
+  ConnectionUnavailable = "ConnectionUnavailable",
 }
+
+// DEV_NOTE: 409 = the tool's state refused it; 400 = the request's ops or connection can't be used
+export const TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP: Record<ToolDefinitionFailureEnum, 400 | 409> =
+  {
+    [ToolDefinitionFailureEnum.NotDraft]: 409,
+    [ToolDefinitionFailureEnum.DraftExists]: 409,
+    [ToolDefinitionFailureEnum.NameTaken]: 409,
+    [ToolDefinitionFailureEnum.InvalidTransition]: 409,
+    [ToolDefinitionFailureEnum.InvalidOps]: 400,
+    [ToolDefinitionFailureEnum.ConnectionNotFound]: 400,
+    [ToolDefinitionFailureEnum.ConnectionUnavailable]: 400,
+  };
 
 // DEV_NOTE: The name the model calls the tool by: provider tool-name rules (letters, digits, _ and -, at most 64,
 // starting with a letter). The platform's own tool name is reserved, so a host tool can never shadow it.

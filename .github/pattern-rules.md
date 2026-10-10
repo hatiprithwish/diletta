@@ -1343,7 +1343,7 @@ A hit is a violation outside its home: `.insert(qualityIssues)` only in `data-ac
 
 ### 3.29 Tool Ops Are Versioned Data, Rendered Only by renderToolOp [CRITICAL]
 
-**Rule:** A tool definition's ops (`input_schema`, `call_op`, `readback_op`, `inverse_op`, one unit at `tool_definitions.schema_version`, M3-1) are written only through `Schemas.normalizeToolOps` (current version, shapes and placeholder references checked) and read only through `Schemas.loadToolOps` (upgraded from the row's version); `ToolDefinitionsRepo` checks the risk with `Schemas.getToolRiskOpsIssue` on every write and before activating. Placeholders (`{args.*}`, `{before.*}`, `{result.*}`) are filled only by `Schemas.renderToolOp`, which encodes path values, refuses a `.` / `..` path segment and never throws; nothing builds a host URL or body from an op by hand. Only a Draft version is edited or deleted (the DAL matches Draft rows only); an Active or Disabled version never changes again, and a change is a new version (`createToolDefinitionVersion`, one Draft per name under the name's advisory lock). Tool definitions are operator-curated: the routes live under `/operator/companies/:companyPublicId/tool-definitions` with `authorizePlatform(ToolDefinition*)` then `resolveOperatorCompany()`, and every query runs in `withTenant` on the resolved company.
+**Rule:** A tool definition's ops (`input_schema`, `call_op`, `readback_op`, `inverse_op`, one unit at `tool_definitions.schema_version`, M3-1) are written only through `Schemas.normalizeToolOps` (current version, shapes and placeholder references checked) and read only through `Schemas.loadToolOps` (upgraded from the row's version); `ToolDefinitionsRepo` checks the risk with `Schemas.getToolRiskOpsIssue` on every write and before activating. Placeholders (`{args.*}`, `{before.*}`, `{result.*}`) are filled only by `Schemas.renderToolOp`, which encodes path values, refuses an empty path value, an empty segment and a `.` / `..` segment, and never throws; nothing builds a host URL or body from an op by hand. Only a Draft version is edited or deleted (the DAL matches Draft rows only); an Active or Disabled version never changes again, and a change is a new version (`createToolDefinitionVersion`, one Draft per name under the name's advisory lock). Tool definitions are operator-curated: the routes live under `/operator/companies/:companyPublicId/tool-definitions` with `authorizePlatform(ToolDefinition*)` then `resolveOperatorCompany()`, and every query runs in `withTenant` on the resolved company.
 
 **Violations:**
 
@@ -1354,6 +1354,8 @@ A hit is a violation outside its home: `.insert(qualityIssues)` only in `data-ac
 - Updating or deleting a tool definition row that isn't a Draft, or editing `name`
 - A tool definition route without `authorizePlatform` + `resolveOperatorCompany`, or under `/dashboard/*`
 - Editing a released `ZToolOpsV<n>` instead of adding `ZToolOpsV<n+1>` with an upgrader (rule 3.12)
+- A tool whose connection isn't Active, REST and with a `base_url` saved or activated
+- A failure → HTTP status mapping outside `TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP`
 - Calling `renderToolOp` with args not first checked against the tool's `input_schema` (the renderer drops a missing arg's key; it doesn't know which args are required)
 - Picking a tool by name or "latest Active" instead of a config's `{ name, version }` pin, or disabling other versions when one is activated
 

@@ -1,4 +1,5 @@
 import type { ToolDefinitionFailureEnum, ToolDefinitionWithStatus } from "./ToolDefinitionsCommon";
+import type { ToolOps } from "./ToolOpsRegistry";
 import type { ApiResponse, TotalRecordsResponse } from "../common";
 
 // DEV_NOTE: failure is set (with isSuccess false) when the request was refused for the tool's state or references;
@@ -7,7 +8,10 @@ export interface ToolDefinitionStateResponse extends ApiResponse {
   failure?: ToolDefinitionFailureEnum;
 }
 
-export interface CreateToolDefinitionApiResponse extends ToolDefinitionStateResponse {
+export type CreateToolDefinitionApiResponse = ToolDefinitionMutationResponse;
+
+// DEV_NOTE: Every write answers with the tool as it now is, or a failure
+export interface ToolDefinitionMutationResponse extends ToolDefinitionStateResponse {
   toolDefinition?: ToolDefinitionWithStatus;
 }
 
@@ -21,16 +25,22 @@ export interface GetToolDefinitionsApiResponse extends ApiResponse {
 
 export type GetToolDefinitionsCountApiResponse = TotalRecordsResponse;
 
-export interface UpdateToolDefinitionApiResponse extends ToolDefinitionStateResponse {
-  toolDefinition?: ToolDefinitionWithStatus;
-}
+export type UpdateToolDefinitionApiResponse = ToolDefinitionMutationResponse;
 
-export interface CreateToolDefinitionVersionApiResponse extends ToolDefinitionStateResponse {
-  toolDefinition?: ToolDefinitionWithStatus;
-}
+export type CreateToolDefinitionVersionApiResponse = ToolDefinitionMutationResponse;
 
-export interface SetToolDefinitionStatusApiResponse extends ToolDefinitionStateResponse {
-  toolDefinition?: ToolDefinitionWithStatus;
-}
+export type SetToolDefinitionStatusApiResponse = ToolDefinitionMutationResponse;
 
 export type DeleteToolDefinitionApiResponse = ToolDefinitionStateResponse;
+
+// DEV_NOTE: Server-side only (ToolDefinitionsRepo steps, never a route response): a connection that can serve tool
+// calls, or the refusal to answer with
+export type ToolConnectionResult =
+  | { isSuccess: true; connectionId: string }
+  | { isSuccess: false; response: ToolDefinitionStateResponse };
+
+// DEV_NOTE: Server-side only: client ops normalised at the current schema version and checked against the risk, or
+// the refusal to answer with
+export type ToolOpsResult =
+  | { isSuccess: true; ops: ToolOps; schemaVersion: number }
+  | { isSuccess: false; response: ToolDefinitionStateResponse };
