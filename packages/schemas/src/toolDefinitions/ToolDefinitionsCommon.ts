@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { SEARCH_HELP_DOCS_TOOL_NAME } from "../knowledgeSearch/KnowledgeSearchCommon";
-import { ZToolOps, type ToolOps } from "./ToolOpsRegistry";
+import { ZToolOps, type ToolInverseOp, type ToolOps, type ToolReadbackOp } from "./ToolOpsRegistry";
+import { ToolOpPlaceholderRootEnum, findToolOpPlaceholders } from "./ToolOpPlaceholders";
 
 export enum ToolDefinitionRiskIntEnum {
   Read = 1,
@@ -152,16 +153,46 @@ export const ZToolDefinitionName = z
   .regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/, "Invalid tool name")
   .refine((name) => name !== SEARCH_HELP_DOCS_TOOL_NAME, { message: "Reserved tool name" });
 
-// DEV_NOTE: The risk rule CHK_tool_definitions_readback_op enforces, plus: a read tool has nothing to undo. Checked on
-// the request and again by the Repo on the merged row of an edit.
+// Whether an op reads the call_op response anywhere ({result.*} in its path, query or body)
+function readsCallResult(op: ToolReadbackOp | ToolInverseOp): boolean {
+  const strings: string[] = [];
+  const collect = (value: unknown) => {
+    if (typeof value === "string") strings.push(value);
+    else if (Array.isArray(value)) value.forEach(collect);
+    else if (value !== null && typeof value === "object") Object.values(value).forEach(collect);
+  };
+  collect(op.path);
+  collect(op.query);
+  if ("bodyMap" in op) collect(op.bodyMap);
+  return strings.some((text) =>
+    findToolOpPlaceholders(text).some(
+      (placeholder) => placeholder.root === ToolOpPlaceholderRootEnum.Result,
+    ),
+  );
+}
+
+// DEV_NOTE: The risk rule CHK_tool_definitions_readback_op enforces, plus: a read tool has nothing to undo, and an
+// Emulated write never reads {result.*} after the call. Emulated idempotency (@app/adapter) proves a write landed by
+// reading it back with the args alone, and a commit found that way has no call response for a read-after or an undo
+// to read. A read tool's idempotency mode is unused (reads are always safe to retry). Checked on the request and
+// again by the Repo on the merged row of an edit.
 export function getToolRiskOpsIssue(
   risk: ToolDefinitionRiskIntEnum,
+  idempotencyMode: ToolDefinitionIdempotencyModeIntEnum,
   ops: Pick<ToolOps, "readbackOp" | "inverseOp">,
 ): string | null {
   const isRead = risk === ToolDefinitionRiskIntEnum.Read;
   if (isRead && ops.readbackOp !== null) return "A read tool has no readback op";
   if (isRead && ops.inverseOp !== null) return "A read tool has no inverse op";
   if (!isRead && ops.readbackOp === null) return "A write tool needs a readback op";
+  if (!isRead && idempotencyMode === ToolDefinitionIdempotencyModeIntEnum.Emulated) {
+    if (ops.readbackOp && readsCallResult(ops.readbackOp)) {
+      return "An emulated-idempotency tool's readback op can't read {result.*}";
+    }
+    if (ops.inverseOp && readsCallResult(ops.inverseOp)) {
+      return "An emulated-idempotency tool's inverse op can't read {result.*}";
+    }
+  }
   return null;
 }
 

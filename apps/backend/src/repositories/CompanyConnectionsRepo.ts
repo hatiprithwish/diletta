@@ -104,6 +104,22 @@ export default class CompanyConnectionsRepo {
   ): Promise<Schemas.UpdateCompanyConnectionApiResponse> {
     return await withTenant(this.db, params.companyId, async (tx) => {
       const { companyConnection } = params;
+      // DEV_NOTE: A new auth_config must fit the stored auth type and credential scope (both fixed at create)
+      if (companyConnection.authConfig !== undefined) {
+        const found = await this.dal.getCompanyConnectionDetails(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+        });
+        if (!found.isSuccess || !found.companyConnection) {
+          return this.withCompanyConnectionResponse(found);
+        }
+        const issue = Schemas.getAuthConfigIssue({
+          authType: found.companyConnection.authType,
+          credentialScope: found.companyConnection.credentialScope,
+          authConfig: companyConnection.authConfig,
+        });
+        if (issue) return { isSuccess: false, message: issue };
+      }
       const result = await this.dal.updateCompanyConnection(tx, {
         companyId: params.companyId,
         publicId: params.publicId,
