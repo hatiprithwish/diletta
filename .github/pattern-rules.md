@@ -1341,6 +1341,48 @@ A hit is a violation outside its home: `.insert(qualityIssues)` only in `data-ac
 
 ---
 
+### 3.29 Tool Ops Are Versioned Data, Rendered Only by renderToolOp [CRITICAL]
+
+**Rule:** A tool definition's ops (`input_schema`, `call_op`, `readback_op`, `inverse_op`, one unit at `tool_definitions.schema_version`, M3-1) are written only through `Schemas.normalizeToolOps` (current version, shapes and placeholder references checked) and read only through `Schemas.loadToolOps` (upgraded from the row's version); `ToolDefinitionsRepo` checks the risk with `Schemas.getToolRiskOpsIssue` on every write and before activating. Placeholders (`{args.*}`, `{before.*}`, `{result.*}`) are filled only by `Schemas.renderToolOp`, which encodes path values, refuses an empty path value, an empty segment and a `.` / `..` segment, and never throws; nothing builds a host URL or body from an op by hand. Only a Draft version is edited or deleted (the DAL matches Draft rows only); an Active or Disabled version never changes again, and a change is a new version (`createToolDefinitionVersion`, one Draft per name under the name's advisory lock). Tool definitions are operator-curated: the routes live under `/operator/companies/:companyPublicId/tool-definitions` with `authorizePlatform(ToolDefinition*)` then `resolveOperatorCompany()`, and every query runs in `withTenant` on the resolved company.
+
+**Violations:**
+
+- Writing an op column without `normalizeToolOps`, or storing ops at anything but its returned `schemaVersion`
+- Parsing stored ops with `ZToolOps*.parse` / `safeParse` outside `packages/schemas` instead of `loadToolOps`
+- Writing a `loadToolOps` result back to the row (a stored version is immutable)
+- String-building a request from an op (`op.path.replace(…)`, template literals with `args`) instead of `renderToolOp`
+- Updating or deleting a tool definition row that isn't a Draft, or editing `name`
+- A tool definition route without `authorizePlatform` + `resolveOperatorCompany`, or under `/dashboard/*`
+- Editing a released `ZToolOpsV<n>` instead of adding `ZToolOpsV<n+1>` with an upgrader (rule 3.12)
+- A tool whose connection isn't Active, REST and with a `base_url` saved or activated
+- A failure → HTTP status mapping outside `TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP`
+- Calling `renderToolOp` with args not first checked against the tool's `input_schema` (the renderer drops a missing arg's key; it doesn't know which args are required)
+- Picking a tool by name or "latest Active" instead of a config's `{ name, version }` pin, or disabling other versions when one is activated
+
+**Detection Pattern:**
+
+```regex
+\.(insert|update)\(toolDefinitions\)
+ZToolOps(V\d+)?\.(safe)?[pP]arse\(
+\.(callOp|readbackOp|inverseOp)\.path\.replace\(
+```
+
+A hit is a violation outside its home: `.insert(toolDefinitions)` / `.update(toolDefinitions)` only in `data-access-layer/ToolDefinitionsDAL.ts` (and owner-connection test fixtures), `ZToolOps*.parse` only in `packages/schemas/src/toolDefinitions/` (tests may build fixtures with it).
+
+**Examples:**
+
+```
+- ❌ await this.dal.createToolDefinition(tx, { ...body, callOp: body.ops.callOp, schemaVersion: 1 }); // not normalised
+- ❌ const url = `${baseUrl}/records/${args.recordId}`; // hand-built, unencoded
+- ❌ .where(eq(toolDefinitions.publicId, publicId)) on an update of an active version
+- ✅ const normalized = Schemas.normalizeToolOps(body.ops); // then store normalized.ops at normalized.schemaVersion
+- ✅ const rendered = Schemas.renderToolOp(ops.callOp, { args }); if (!rendered.isSuccess) …
+```
+
+**Fix:** Mirror `repositories/ToolDefinitionsRepo.ts`, `data-access-layer/ToolDefinitionsDAL.ts` and `packages/schemas/src/toolDefinitions/ToolOpRenderer.ts`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1428,5 +1470,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated)
 Maintainer: hatiprithwish

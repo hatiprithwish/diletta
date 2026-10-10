@@ -8,6 +8,7 @@ import AdminsRoutes from "@/routes/AdminsRoutes";
 import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
 import CompaniesRoutes from "@/routes/CompaniesRoutes";
 import KnowledgeSourcesRoutes from "@/routes/KnowledgeSourcesRoutes";
+import ToolDefinitionsRoutes from "@/routes/ToolDefinitionsRoutes";
 import WidgetRoutes from "@/routes/WidgetRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
@@ -63,6 +64,7 @@ app.route("/dashboard", AdminsRoutes);
 app.route("/dashboard/chatbots", ChatbotsRoutes);
 app.route("/dashboard/knowledge-sources", KnowledgeSourcesRoutes);
 app.route("/operator/companies", CompaniesRoutes);
+app.route("/operator/companies/:companyPublicId/tool-definitions", ToolDefinitionsRoutes);
 app.route("/widget", WidgetRoutes);
 
 export default {

@@ -134,6 +134,20 @@ export enum LogAction {
   SettleBudget = "SettleBudget",
   ExpireBudgetReservation = "ExpireBudgetReservation",
 
+  // Tool definitions
+  CreateToolDefinition = "CreateToolDefinition",
+  GetToolDefinitionDetails = "GetToolDefinitionDetails",
+  ListToolDefinitions = "ListToolDefinitions",
+  CountToolDefinitions = "CountToolDefinitions",
+  GetToolConnection = "GetToolConnection",
+  LockToolDefinitionName = "LockToolDefinitionName",
+  GetToolDefinitionNameState = "GetToolDefinitionNameState",
+  UpdateToolDefinitionDraft = "UpdateToolDefinitionDraft",
+  SetToolDefinitionStatus = "SetToolDefinitionStatus",
+  DeleteToolDefinitionDraft = "DeleteToolDefinitionDraft",
+  LoadToolOps = "LoadToolOps",
+  ResolveOperatorCompany = "ResolveOperatorCompany",
+
   // Knowledge sources
   CreateKnowledgeSource = "CreateKnowledgeSource",
   GetKnowledgeSourceDetails = "GetKnowledgeSourceDetails",

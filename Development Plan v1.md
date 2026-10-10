@@ -316,6 +316,8 @@ eRegister goes live when every box below is ticked.
 - [ ] Load test target: concurrent conversations per company (M6-5)
 - [ ] Cluster size that opens a Quality item (M5-6)
 - [ ] Budget alerts at 50 / 80 / 100% of `spending_budget` (Cron in the architecture): no task owns them after M2-4. Fold into M6-6, or a new task? (see `docs/runbooks/budget.md` › Known gaps)
+- [ ] Tool args must be checked against the tool's `input_schema` before `renderToolOp` (types, enums, required; the renderer drops a missing arg's key). Needs a JSON Schema validator: zod `z.fromJSONSchema` if it covers the keywords used, else a new package (ask first) (M3-4)
+- [ ] A pinned tool version that is Disabled: leave the tool out of the turn, or refuse the turn? And should disabling a version pinned by a published config be blocked? (M3-4, M4-10)
 - [ ] Loop guard (same tool + same args twice in a turn → stop) left out of M2-4 because no tools exist yet: add with the first tool calls (M3-1 / M3-4), in `ConversationDO.beforeTurn` `stopWhen`
 
 **Risks**

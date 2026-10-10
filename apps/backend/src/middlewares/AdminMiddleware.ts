@@ -1,5 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import AdminsRepo from "@/repositories/AdminsRepo";
+import CompaniesRepo from "@/repositories/CompaniesRepo";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 import type AppContext from "@/config/AppContext";
@@ -83,6 +84,31 @@ export function authorizePlatform(action: Schemas.AuthzActionEnum) {
     }
 
     c.set("admin", result.admin);
+    await next();
+  });
+}
+
+// DEV_NOTE: For /operator/companies/:companyPublicId/* routes, after authorizePlatform: resolves the company the path
+// names and sets companyId (the withTenant key), so the handler acts on that one company in withTenant (pattern rule
+// 3.15). An unknown company answers 404. Mounted behind authorizePlatform, so a company admin is refused (403) before
+// any lookup.
+export function resolveOperatorCompany() {
+  return createMiddleware<CompanyContextEnv>(async (c, next) => {
+    const publicId = c.req.param("companyPublicId") ?? "";
+    const result = await new CompaniesRepo(c.env).resolveCompanyId({ publicId });
+    if (!result.isSuccess || !result.companyId) {
+      if (!result.isNotFound) {
+        AppLogger.error({
+          category: Schemas.LogCategory.Middleware,
+          action: Schemas.LogAction.ResolveOperatorCompany,
+          message: result.message ?? "Company lookup failed",
+          metadata: { companyPublicId: publicId },
+        });
+      }
+      return c.json({ isSuccess: false, message: result.message }, result.isNotFound ? 404 : 500);
+    }
+
+    c.set("companyId", result.companyId);
     await next();
   });
 }
