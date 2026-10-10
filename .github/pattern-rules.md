@@ -1354,6 +1354,8 @@ A hit is a violation outside its home: `.insert(qualityIssues)` only in `data-ac
 - Updating or deleting a tool definition row that isn't a Draft, or editing `name`
 - A tool definition route without `authorizePlatform` + `resolveOperatorCompany`, or under `/dashboard/*`
 - Editing a released `ZToolOpsV<n>` instead of adding `ZToolOpsV<n+1>` with an upgrader (rule 3.12)
+- Calling `renderToolOp` with args not first checked against the tool's `input_schema` (the renderer drops a missing arg's key; it doesn't know which args are required)
+- Picking a tool by name or "latest Active" instead of a config's `{ name, version }` pin, or disabling other versions when one is activated
 
 **Detection Pattern:**
 

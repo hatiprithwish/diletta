@@ -23,6 +23,10 @@ type OpsResult =
 //   new version → copies a version into a Draft at the name's highest version + 1, at most one Draft per name
 //   status → Draft → Active, Active ↔ Disabled; an active or disabled version never changes again (a config pins it)
 //   delete → Draft only
+// Several versions of one name may be Active at once, on purpose: the published config pins v1 while a draft config
+// (and its gate eval) pins v2, and a rollback copy pins v1 again. Activating a version never disables another. The
+// runtime loads exactly a config's { name, version } pins (the config spec refuses a name twice), never a tool by
+// name or "latest Active".
 // Ops are written only through normalizeToolOps (current schema_version) and read only through loadToolOps.
 export default class ToolDefinitionsRepo {
   private db: NodePgDatabase;

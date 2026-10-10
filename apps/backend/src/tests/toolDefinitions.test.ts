@@ -320,6 +320,40 @@ describe("ToolDefinitionsRepo", () => {
     expect(v3.toolDefinition?.version).toBe(2);
   });
 
+  it("keeps several versions of one name Active at once: activating v2 leaves v1 Active", async () => {
+    const repo = new ToolDefinitionsRepo(env);
+    const name = uniqueName();
+    const created = await repo.createToolDefinition({
+      companyId: companyA,
+      adminId: "1",
+      toolDefinition: writeTool(name, connectionA),
+    });
+    const v1 = created.toolDefinition!.publicId;
+    const active = Schemas.ToolDefinitionStatusIntEnum.Active;
+    await repo.setToolDefinitionStatus({
+      companyId: companyA,
+      publicId: v1,
+      adminId: "1",
+      status: active,
+    });
+
+    const v2 = await repo.createToolDefinitionVersion({
+      companyId: companyA,
+      publicId: v1,
+      adminId: "1",
+    });
+    const activated = await repo.setToolDefinitionStatus({
+      companyId: companyA,
+      publicId: v2.toolDefinition!.publicId,
+      adminId: "1",
+      status: active,
+    });
+    expect(activated.toolDefinition?.toolDefinitionStatus).toBe(active);
+
+    const listed = await repo.getToolDefinitions({ companyId: companyA, name, status: active });
+    expect(listed.toolDefinitions?.map((tool) => tool.version).sort()).toEqual([1, 2]);
+  });
+
   it("refuses to activate a version whose connection is gone", async () => {
     const repo = new ToolDefinitionsRepo(env);
     let doomed = "";

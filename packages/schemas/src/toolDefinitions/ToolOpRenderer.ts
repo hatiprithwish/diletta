@@ -51,9 +51,11 @@ function toText(placeholder: ToolOpPlaceholder, context: ToolOpContext): string 
   throw new RenderError(`${placeholder.token} is not a text value`);
 }
 
-// DEV_NOTE: An optional arg the model left out drops its query key or body key, so a list tool can take optional
-// filters. A missing before / result value never does: an inverse_op that silently skipped a field would not restore
-// it. Missing inside an array (no key to drop), or embedded in a longer string, always fails.
+// DEV_NOTE: A query or body value that is exactly one {args.*} placeholder with no value drops its key (at any depth),
+// so a list tool can take optional filters. The renderer doesn't know which args are required: the caller checks the
+// model's args against the tool's input_schema before rendering (M3-4), so a missing required arg never gets here.
+// A missing before / result value never drops: an inverse_op that silently skipped a field would not restore it.
+// Missing inside an array (no key to drop), or embedded in a longer string, always fails.
 function isDroppable(placeholder: ToolOpPlaceholder, context: ToolOpContext): boolean {
   return (
     placeholder.root === ToolOpPlaceholderRootEnum.Args && !resolve(placeholder, context).isFound
