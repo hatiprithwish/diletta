@@ -38,9 +38,11 @@ import worker from "@/index";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import FeedbackRepo from "@/repositories/FeedbackRepo";
 import KnowledgeSearchRepo from "@/repositories/KnowledgeSearchRepo";
 import Constants from "@/config/Constants";
+import CriticalEventProvider from "@/providers/criticalEvent";
 import WidgetFrameProvider from "@/providers/widgetFrames";
 import Utility from "@/utils/Utility";
 import {
@@ -1935,6 +1937,7 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     const answers = () =>
       frames.filter((frame) => frame.type === "feedback" && frame.messageId === replyId);
 
+    const relayEvents = vi.spyOn(EventOutboxRepo.prototype, "relayEvents");
     socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Down));
     await waitFor(isFeedbackFor(replyId, Schemas.FeedbackRatingIntEnum.Down));
 
@@ -1964,6 +1967,12 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
       parentLogId: conversation.rootLogId,
       rootLogId: conversation.rootLogId,
     });
+    // DEV_NOTE: The DO relays the event right after the commit, before it answers the frame
+    expect(relayEvents).toHaveBeenCalledTimes(1);
+    expect(relayEvents).toHaveBeenCalledWith({
+      companyId: tenant.companyId,
+      outboxIds: [events[0]?.outbox.id],
+    });
     expect(events[0]?.log.detail).toMatchObject({
       source: Schemas.QualityIssueSourceIntEnum.User,
       conversationId: conversation.id,
@@ -1987,6 +1996,7 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(ratings[0]?.rating).toBe(Schemas.FeedbackRatingIntEnum.Down);
     expect(await getUserIssues(tenant.companyId)).toEqual(issues);
     expect(await getIssueOpenedEvents(tenant.companyId)).toHaveLength(1);
+    expect(relayEvents).toHaveBeenCalledTimes(1);
     socket.close(1000);
   });
 
@@ -2003,24 +2013,68 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     socket.close(1000);
   });
 
-  it("rolls the thumbs-down back when its issue can't be opened", async () => {
+  it.each([
+    {
+      failing: "the issue",
+      fail: () =>
+        vi.spyOn(QualityIssuesDAL.prototype, "createUserQualityIssue").mockResolvedValue({
+          isSuccess: false,
+          message: "Unknown error in creating user quality issue",
+        }),
+    },
+    {
+      failing: "its event",
+      fail: () =>
+        vi.spyOn(CriticalEventProvider, "record").mockResolvedValue({
+          isSuccess: false,
+          message: "Unknown error in creating event outbox",
+        }),
+    },
+  ])("rolls the thumbs-down back when $failing can't be saved", async ({ fail }) => {
     const tenant = await createTenant({ hasModelKey: true });
     mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
     const { socket, waitFor, replyId } = await ratedReply(tenant);
 
-    const createUserQualityIssue = vi
-      .spyOn(QualityIssuesDAL.prototype, "createUserQualityIssue")
-      .mockResolvedValue({
-        isSuccess: false,
-        message: "Unknown error in creating user quality issue",
-      });
+    // DEV_NOTE: Armed after the conversation started, so only the rating's own write fails
+    const failed = fail();
+    const relayEvents = vi.spyOn(EventOutboxRepo.prototype, "relayEvents");
     socket.send(feedbackFrame(replyId, Schemas.FeedbackRatingIntEnum.Down));
     await waitFor(isFeedbackFor(replyId, null));
-    expect(createUserQualityIssue).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(relayEvents).not.toHaveBeenCalled();
     expect(await getFeedbackRows(tenant.companyId)).toEqual([]);
     expect(await getUserIssues(tenant.companyId)).toEqual([]);
     expect(await getIssueOpenedEvents(tenant.companyId)).toEqual([]);
     socket.close(1000);
+  });
+
+  it("never opens an issue on a rating of another conversation (as diletta_app)", async () => {
+    const tenant = await createTenant({ hasModelKey: true });
+    mockCloudflare((mocked) => anthropicStream(String(mocked.body?.model)));
+    const first = await ratedReply(tenant);
+    first.socket.send(feedbackFrame(first.replyId, Schemas.FeedbackRatingIntEnum.Up));
+    await first.waitFor(isFeedbackFor(first.replyId, Schemas.FeedbackRatingIntEnum.Up));
+    first.socket.close(1000);
+    const second = await ratedReply(tenant);
+    second.socket.close(1000);
+
+    const [rating] = await getFeedbackRows(tenant.companyId);
+    const otherConversation = await getConversation(second.publicId);
+    if (!rating || !otherConversation) throw new Error("Rating or conversation missing");
+    const created: Schemas.UserQualityIssueDALResponse = await withTenant(
+      getDbClient(env),
+      tenant.companyId,
+      async (tx) => {
+        return await new QualityIssuesDAL().createUserQualityIssue(tx, {
+          companyId: tenant.companyId,
+          conversationId: otherConversation.id,
+          feedbackId: rating.id,
+        });
+      },
+    );
+    expect(created.isSuccess).toBe(false);
+    expect(created.message).toBe("Feedback not found in the conversation");
+    expect(await getUserIssues(tenant.companyId)).toEqual([]);
   });
 });
 

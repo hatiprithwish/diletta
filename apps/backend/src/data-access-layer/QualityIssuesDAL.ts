@@ -1,7 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { companies, conversations, feedback, qualityIssues } from "@/db/tables";
+import { companies, conversations, feedback, messages, qualityIssues } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -170,28 +170,26 @@ export default class QualityIssuesDAL {
     const response: Schemas.UserQualityIssueDALResponse = { isSuccess: false };
 
     try {
-      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing
-      const conversationConditions = [
+      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing, in one query: the feedback row
+      // exists in the company and rates a message of this conversation, which exists in the company too
+      const referenceConditions = [
+        eq(feedback.id, params.feedbackId),
+        eq(feedback.companyId, params.companyId),
+        eq(messages.companyId, params.companyId),
+        eq(messages.conversationId, params.conversationId),
         eq(conversations.id, params.conversationId),
         eq(conversations.companyId, params.companyId),
       ];
-      const [conversation] = await tx
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(and(...conversationConditions))
-        .limit(1);
-      const feedbackConditions = [
-        eq(feedback.id, params.feedbackId),
-        eq(feedback.companyId, params.companyId),
-      ];
-      const [feedbackRow] = await tx
-        .select({ id: feedback.id })
+      const [reference] = await tx
+        .select({ feedbackId: feedback.id })
         .from(feedback)
-        .where(and(...feedbackConditions))
+        .innerJoin(messages, eq(messages.id, feedback.messageId))
+        .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+        .where(and(...referenceConditions))
         .limit(1);
 
-      if (!conversation || !feedbackRow) {
-        const message = conversation ? "Feedback not found" : "Conversation not found";
+      if (!reference) {
+        const message = "Feedback not found in the conversation";
         AppLogger.error({
           category: Schemas.LogCategory.DAL,
           action: Schemas.LogAction.CreateUserQualityIssue,

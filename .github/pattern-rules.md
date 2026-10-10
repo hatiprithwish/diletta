@@ -1306,7 +1306,7 @@ dangerouslySetInnerHTML|innerHTML\s*=|localStorage\.setItem\([^)]*token|react-ma
 
 ### 3.28 A Thumbs-Down Opens Its User Issue in the Rating's Transaction [CRITICAL]
 
-**Rule:** A user quality issue (source User, M2-8) opens only from `FeedbackRepo.recordFeedback`, in the same `withTenant` that saves the Down rating: `QualityIssuesDAL.createUserQualityIssue` (one issue per feedback row, `UNQ_quality_issues_feedback_id`, insert `ON CONFLICT DO NOTHING`), then `CriticalEventProvider.record` (`quality_issue.opened`, actor ChatbotUser, `parentLogId` and `rootLogId` = the conversation's root log, dedupe key `quality_issue.opened:<publicId>`). Either failing throws `TenantRollbackError`, so the rating, the issue and the event commit together or not at all. The issue opens Open with `issue_type`, `note` and `created_by` null (admins triage it); switching to Up leaves it as it is, and a second Down opens nothing and records no event. The DO relays the returned `outboxId` in `waitUntil` after the commit; it never reaches the widget.
+**Rule:** A user quality issue (source User, M2-8) opens only from `FeedbackRepo.recordFeedback`, in the same `withTenant` that saves the Down rating, through `UserQualityIssueProvider.open(tx, …)`: `QualityIssuesDAL.createUserQualityIssue` (one issue per feedback row, `UNQ_quality_issues_feedback_id`, insert `ON CONFLICT DO NOTHING`; the DAL checks the feedback rates a message of that conversation; `isCreated` always set on success), then, only when opened now, `CriticalEventProvider.record` (`quality_issue.opened`, actor ChatbotUser, `parentLogId` and `rootLogId` = the conversation's root log). A failure comes back as `isSuccess: false` and the Repo throws `TenantRollbackError`, so the rating, the issue and the event commit together or not at all. The issue opens Open with `issue_type`, `note` and `created_by` null (admins triage it); switching to Up leaves it as it is, and a second Down opens nothing and records no event. Quality issue event names and dedupe keys come only from `Schemas.QUALITY_ISSUE_ENTITY_TYPE`, `QualityIssueEntityActionEnum`, `qualityIssueEventType` and `qualityIssueEventDedupeKey` (shared with `ModelKeyFailureProvider`), never spelled inline. The DO relays the returned `outboxId` in `waitUntil` after the commit; it never reaches the widget.
 
 **Violations:**
 
@@ -1315,22 +1315,29 @@ dangerouslySetInnerHTML|innerHTML\s*=|localStorage\.setItem\([^)]*token|react-ma
 - Closing, dismissing or deleting the issue when the visitor switches to Up, or opening a second issue / event on a repeat Down
 - Copying reply or user text into the issue's `note`, or setting `issue_type` before triage
 - `outboxId` or any internal id in a widget frame
+- A quality issue event type, entity name or dedupe key written as a string literal
 
 **Detection Pattern:**
 
 ```regex
-source:\s*Schemas\.QualityIssueSourceIntEnum\.User(?!.*QualityIssuesDAL\.ts)
+\.insert\(qualityIssues\)
+UserQualityIssueProvider\.open\(
+["'`]quality_issue(\.|["'`])
 ```
+
+A hit is a violation outside its home: `.insert(qualityIssues)` only in `data-access-layer/QualityIssuesDAL.ts` (and owner-connection test fixtures), `UserQualityIssueProvider.open(` only in `repositories/FeedbackRepo.ts`, and the `quality_issue` literal only in `packages/schemas/src/qualityIssues/QualityIssuesCommon.ts` (tests may assert on it).
 
 **Examples:**
 
 ```
-- ❌ if (!issue.isSuccess) return refuse(Schemas.RecordFeedbackFailureEnum.ServerError, issue.message); // rating already upserted, commits alone
-- ❌ await withTenant(db, companyId, (tx) => qualityIssuesDal.createUserQualityIssue(tx, …)); // a second transaction
-- ✅ if (!issue.isSuccess || !issue.qualityIssue) throw new TenantRollbackError(issue.message ?? "User quality issue not opened");
+- ❌ if (!opened.isSuccess) return refuse(Schemas.RecordFeedbackFailureEnum.ServerError, opened.message); // rating already upserted, commits alone
+- ❌ await withTenant(db, companyId, (tx) => UserQualityIssueProvider.open(tx, …)); // a second transaction
+- ❌ dedupeKey: `quality_issue.opened:${qualityIssue.publicId}` // spelled inline
+- ✅ if (!opened.isSuccess) throw new TenantRollbackError(opened.message ?? "User quality issue not opened");
+- ✅ dedupeKey: Schemas.qualityIssueEventDedupeKey(Schemas.QualityIssueEntityActionEnum.Opened, qualityIssue.publicId)
 ```
 
-**Fix:** Mirror `repositories/FeedbackRepo.ts` (`recordFeedback`) and `durable-objects/ConversationDO.ts` (`recordFeedback`).
+**Fix:** Mirror `providers/userQualityIssue.ts`, `repositories/FeedbackRepo.ts` (`recordFeedback`) and `durable-objects/ConversationDO.ts` (`recordFeedback`).
 
 ---
 

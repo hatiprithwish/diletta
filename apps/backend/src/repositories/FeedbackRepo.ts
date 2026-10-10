@@ -4,19 +4,16 @@ import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
-import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import Constants from "@/config/Constants";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import CriticalEventProvider from "@/providers/criticalEvent";
+import UserQualityIssueProvider from "@/providers/userQualityIssue";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Feedback (M2-7): a visitor's thumbs on a reply, from the widget's feedback frame through the Conversation
 // DO. Every internal id comes from the DO's verified session; the widget names the reply only by its Think message id,
 // and only a synced reply of this very conversation matches, so a visitor can rate nothing but their own replies.
-// A thumbs-down also opens a user quality issue (M2-8) in the same transaction.
-const QUALITY_ISSUE_ENTITY = "quality_issue";
-
+// A thumbs-down also opens a user quality issue (M2-8, UserQualityIssueProvider) in the same transaction.
 export default class FeedbackRepo {
   private db: NodePgDatabase;
   private feedbackDal: FeedbackDAL;
@@ -24,7 +21,6 @@ export default class FeedbackRepo {
   private conversationsDal: ConversationsDAL;
   private companiesDal: CompaniesDAL;
   private chatbotsDal: ChatbotsDAL;
-  private qualityIssuesDal: QualityIssuesDAL;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
@@ -33,7 +29,6 @@ export default class FeedbackRepo {
     this.conversationsDal = new ConversationsDAL();
     this.companiesDal = new CompaniesDAL();
     this.chatbotsDal = new ChatbotsDAL();
-    this.qualityIssuesDal = new QualityIssuesDAL();
   }
 
   // DEV_NOTE: The reply (an assistant message of the session's conversation, by Think message id) gets the rating, the
@@ -128,44 +123,19 @@ export default class FeedbackRepo {
         return { isSuccess: true, message: saved.message, rating };
       }
 
-      const issue = await this.qualityIssuesDal.createUserQualityIssue(tx, {
+      const opened = await UserQualityIssueProvider.open(tx, {
         companyId: session.companyId,
         conversationId: session.conversationId,
+        conversationRootLogId: conversation.conversation.rootLogId,
+        chatbotUserId: session.chatbotUserId,
+        messageId: found.chatMessage.id,
         feedbackId: saved.feedback.id,
       });
-      if (!issue.isSuccess || !issue.qualityIssue) {
-        throw new TenantRollbackError(issue.message ?? "User quality issue not opened");
-      }
-      if (!issue.isCreated) {
-        return { isSuccess: true, message: saved.message, rating };
+      if (!opened.isSuccess) {
+        throw new TenantRollbackError(opened.message ?? "User quality issue not opened");
       }
 
-      const event = await CriticalEventProvider.record(tx, {
-        companyId: session.companyId,
-        actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
-        actorId: session.chatbotUserId,
-        entityType: QUALITY_ISSUE_ENTITY,
-        entityId: issue.qualityIssue.id,
-        entityAction: "opened",
-        entityVersion: null,
-        // DEV_NOTE: Turns write no log rows yet, so the issue hangs off the conversation's root (conversation.started);
-        // re-point the parent at the reply's turn once turns are logged
-        parentLogId: conversation.conversation.rootLogId,
-        rootLogId: conversation.conversation.rootLogId,
-        detail: {
-          source: Schemas.QualityIssueSourceIntEnum.User,
-          conversationId: session.conversationId,
-          messageId: found.chatMessage.id,
-          feedbackId: saved.feedback.id,
-        },
-        eventType: "quality_issue.opened",
-        dedupeKey: `quality_issue.opened:${issue.qualityIssue.publicId}`,
-      });
-      if (!event.isSuccess || !event.outboxId) {
-        throw new TenantRollbackError(event.message ?? "Quality issue event not recorded");
-      }
-
-      return { isSuccess: true, message: saved.message, rating, outboxId: event.outboxId };
+      return { isSuccess: true, message: saved.message, rating, outboxId: opened.outboxId };
     });
   }
 

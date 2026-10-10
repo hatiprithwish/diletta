@@ -20,7 +20,7 @@ export type UpdateQualityIssueNoteDALRequest = Pick<QualityIssue, "companyId" | 
 
 // DEV_NOTE: A user issue (source = User, M2-8) opens from a thumbs-down, one per feedback row (UNQ_quality_issues_
 // feedback_id): status Open, issueType null until triage, no note. The DAL generates publicId and checks the
-// conversation and the feedback row exist in the company.
+// conversation exists in the company and the feedback row rates a message of that very conversation.
 export type CreateUserQualityIssueDALRequest = Pick<
   QualityIssue,
   "companyId" | "conversationId"
