@@ -32,11 +32,15 @@ export default class Constants {
   // have a partition. The SQL function caps creation at 12 months ahead.
   static readonly ACTIVITY_LOG_PARTITION_MONTHS_AHEAD = 3;
 
-  // DEV_NOTE: Cron expressions, matched against controller.cron in scheduled(). Each must equal its entry in
-  // wrangler.jsonc triggers.crons exactly. The every-minute one also runs the model_calls usage backfill.
-  static readonly OUTBOX_SWEEP_CRON = "* * * * *";
-  static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
-  static readonly KNOWLEDGE_RESYNC_CRON = "0 * * * *";
+  // DEV_NOTE: The Worker's one cron trigger (wrangler.jsonc triggers.crons, equal exactly): every minute. The account's
+  // Workers Free plan allows 5 cron triggers in total, so jobs that run less often are picked by time in
+  // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
+  //   every minute: outbox sweep + model_calls usage backfill
+  //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync
+  //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
+  static readonly CRON_TRIGGER = "* * * * *";
+  static readonly CRON_HOURLY_MINUTE = 0;
+  static readonly ACTIVITY_LOG_PARTITIONS_UTC_HOUR = 3;
 
   // DEV_NOTE: Widget auth (M2-1, ADR 0001). The companion JWT rides in Sec-WebSocket-Protocol on the upgrade. A token
   // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of
