@@ -16,6 +16,7 @@ import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
+import CronScheduleProvider from "@/providers/cronSchedule";
 import consumeEvents from "@/queues/EventsConsumer";
 
 // DEV_NOTE: Durable Object classes are exported from the worker's main module (wrangler.jsonc durable_objects)
@@ -23,6 +24,14 @@ export { ConversationDO } from "@/durable-objects/ConversationDO";
 export { BudgetDO } from "@/durable-objects/BudgetDO";
 // DEV_NOTE: Workflow classes are exported from the main module too (wrangler.jsonc workflows)
 export { KnowledgeSyncWorkflow } from "@/workflows/KnowledgeSyncWorkflow";
+
+// DEV_NOTE: What each cron job runs; a Record, so a new CronJobEnum value can't be left without one
+const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
+  [Schemas.CronJobEnum.OutboxSweep]: runOutboxSweep,
+  [Schemas.CronJobEnum.ModelCallUsageBackfill]: runModelCallUsageBackfill,
+  [Schemas.CronJobEnum.KnowledgeResync]: runKnowledgeResync,
+  [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
+};
 
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests
 await configureLogger();
@@ -73,27 +82,20 @@ export default {
     return app.fetch(req, env, ctx);
   },
 
-  // DEV_NOTE: Three crons (wrangler.jsonc), told apart by controller.cron: every minute the outbox relay sweep + purge
-  // and the model_calls usage backfill, daily the activity_log partition maintenance, hourly the knowledge re-sync
+  // DEV_NOTE: One cron trigger (Constants.CRON_TRIGGER, every minute); CronScheduleProvider picks the jobs due at its
+  // scheduled time. Jobs are independent: one failing never skips another (each logs its own failures).
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    switch (controller.cron) {
-      case Constants.OUTBOX_SWEEP_CRON:
-        // DEV_NOTE: Independent jobs; one failing never skips the other (each logs its own failures)
-        await Promise.allSettled([runOutboxSweep(env), runModelCallUsageBackfill(env)]);
-        break;
-      case Constants.ACTIVITY_LOG_PARTITIONS_CRON:
-        await runActivityLogPartitions(env);
-        break;
-      case Constants.KNOWLEDGE_RESYNC_CRON:
-        await runKnowledgeResync(env);
-        break;
-      default:
-        AppLogger.error({
-          category: Schemas.LogCategory.Cron,
-          action: Schemas.LogAction.DispatchCron,
-          message: "No job for this cron expression",
-          metadata: { cron: controller.cron },
-        });
+    if (controller.cron !== Constants.CRON_TRIGGER) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Cron,
+        action: Schemas.LogAction.DispatchCron,
+        message: "No job for this cron expression",
+        metadata: { cron: controller.cron },
+      });
+    } else {
+      await Promise.allSettled(
+        CronScheduleProvider.getDueJobs(controller.scheduledTime).map((job) => CRON_JOBS[job](env)),
+      );
     }
     ctx.waitUntil(disposeLogger());
   },
