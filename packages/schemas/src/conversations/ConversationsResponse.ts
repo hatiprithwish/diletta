@@ -1,6 +1,7 @@
 import type { ApiResponse } from "../common";
 import type { ConfigSpec } from "../configSpec";
-import type { ConversationSession } from "./ConversationsCommon";
+import type { Company } from "../companies/CompaniesCommon";
+import type { Conversation, ConversationSession } from "./ConversationsCommon";
 
 // DEV_NOTE: Why a conversation couldn't be started or resumed. NotFound covers a conversation that is missing, another
 // user's or chatbot's, or closed, without saying which. The widget route maps it to an HTTP status.
@@ -32,8 +33,24 @@ export interface StartConversationResponse extends ApiResponse {
 
 // DEV_NOTE: Server-side only. The published config a turn runs on (loaded through loadConfigSpec, platform defaults
 // filled in), checked against the conversation, chatbot and company as they are now.
+// DEV_NOTE: isReadOnly = the company's is_read_only switch (M3-4): the agent may only read, so write tools are left out
+// DEV_NOTE: Server-side only — ConversationCheckProvider, the step every turn and change request step starts with: the
+// conversation as it is now (open), and its company and chatbot active; or why not. NotFound: no such conversation in
+// the company. ServerError: a read failed.
+export enum ConversationCheckFailureEnum {
+  NotFound = "NotFound",
+  ConversationClosed = "ConversationClosed",
+  ChatbotUnavailable = "ChatbotUnavailable",
+  ServerError = "ServerError",
+}
+
+export type ConversationCheckResponse =
+  | { isSuccess: true; conversation: Conversation; company: Company }
+  | { isSuccess: false; failure: ConversationCheckFailureEnum; message: string };
+
 export interface LoadTurnConfigResponse extends ApiResponse {
   spec?: ConfigSpec;
   chatbotConfigId?: string;
+  isReadOnly?: boolean;
   failure?: TurnConfigFailureEnum;
 }

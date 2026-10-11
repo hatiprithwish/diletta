@@ -56,6 +56,8 @@ Faults are queued per workspace. Each fault is used once, on the first request t
   - reset: `resetTestHost`
   - an adapter on the test host: `testHostAdapter`
   - loaded tools: `testHostTool`
+  - a tool definition row as the seed stores it: `testHostToolColumns`
+  - code under test that uses the global `fetch` (the Conversation DO's adapter): `routeTestHostFetch` (after `mockCloudflare`)
 - Record calls go through the adapter, never through `fetch` (pattern rule 3.31).
 - `src/tests/testHost.test.ts` shows each idempotency mode and the read-after outcomes.
 

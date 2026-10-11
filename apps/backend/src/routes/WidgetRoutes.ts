@@ -177,6 +177,10 @@ WidgetRoutes.get("/ws", async (c) => {
       Connection: "Upgrade",
       [Constants.CONVERSATION_SESSION_HEADER]: JSON.stringify(session),
       [Constants.CONVERSATION_FEEDBACK_HEADER]: JSON.stringify(feedback),
+      [Constants.CONVERSATION_ROLES_HEADER]: JSON.stringify({
+        roles: authenticated.identity.roles,
+        expiresAt: authenticated.identity.tokenExpiresAt.getTime(),
+      } satisfies Schemas.ConversationRolesGrant),
     });
     for (const name of ["Sec-WebSocket-Key", "Sec-WebSocket-Version", "Origin"]) {
       const value = c.req.header(name);
