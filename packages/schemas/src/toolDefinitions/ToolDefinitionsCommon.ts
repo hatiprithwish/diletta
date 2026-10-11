@@ -157,8 +157,9 @@ export const ZToolDefinitionName = z
   .regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/, "Invalid tool name")
   .refine((name) => name !== SEARCH_HELP_DOCS_TOOL_NAME, { message: "Reserved tool name" });
 
-// Whether an op reads the call_op response anywhere ({result.*} in its path, query or body)
-function readsCallResult(op: ToolReadbackOp | ToolInverseOp): boolean {
+// DEV_NOTE: Whether an op reads the call_op response anywhere ({result.*} in its path, query or body). A readback op
+// that does has no read-before (M3-4): the record it reads exists only after the call (a create's new id).
+export function readsCallResult(op: ToolReadbackOp | ToolInverseOp): boolean {
   const strings: { text: string; path: (string | number)[] }[] = [];
   collectTemplateStrings(op.path, [], strings);
   collectTemplateStrings(op.query, [], strings);

@@ -67,3 +67,12 @@ export type SetToolDefinitionStatusDALRequest = Pick<
 
 // DEV_NOTE: Deletes a Draft only
 export type DeleteToolDefinitionDraftDALRequest = Pick<ToolDefinition, "publicId" | "companyId">;
+
+// DEV_NOTE: The exact {name, version} pins of a turn's config (M3-4): the runtime loads these versions, never a tool by
+// name alone
+export type GetPinnedToolDefinitionsDALRequest = Pick<ToolDefinition, "companyId"> & {
+  pins: Pick<ToolDefinition, "name" | "version">[];
+};
+
+// One version by its internal id (a change request's tool call names it), for a commit
+export type FindToolDefinitionByIdDALRequest = Pick<ToolDefinition, "companyId" | "id">;

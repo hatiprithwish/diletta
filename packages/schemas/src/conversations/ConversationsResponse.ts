@@ -32,8 +32,10 @@ export interface StartConversationResponse extends ApiResponse {
 
 // DEV_NOTE: Server-side only. The published config a turn runs on (loaded through loadConfigSpec, platform defaults
 // filled in), checked against the conversation, chatbot and company as they are now.
+// DEV_NOTE: isReadOnly = the company's is_read_only switch (M3-4): the agent may only read, so write tools are left out
 export interface LoadTurnConfigResponse extends ApiResponse {
   spec?: ConfigSpec;
   chatbotConfigId?: string;
+  isReadOnly?: boolean;
   failure?: TurnConfigFailureEnum;
 }

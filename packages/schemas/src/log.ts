@@ -16,6 +16,7 @@ export enum LogCategory {
   Budget = "Budget",
   Knowledge = "Knowledge",
   Feedback = "Feedback",
+  Action = "Action",
 }
 
 export enum LogAction {
@@ -147,6 +148,23 @@ export enum LogAction {
   DeleteToolDefinitionDraft = "DeleteToolDefinitionDraft",
   LoadToolOps = "LoadToolOps",
   ResolveOperatorCompany = "ResolveOperatorCompany",
+  GetPinnedToolDefinitions = "GetPinnedToolDefinitions",
+  GetToolDefinitionById = "GetToolDefinitionById",
+
+  // Action engine (tool calls, change requests)
+  LoadTurnTools = "LoadTurnTools",
+  RunHostTool = "RunHostTool",
+  CreateToolCall = "CreateToolCall",
+  ProposeChange = "ProposeChange",
+  CreateChangeRequest = "CreateChangeRequest",
+  GetChangeRequestDetails = "GetChangeRequestDetails",
+  UpdateChangeRequestStatus = "UpdateChangeRequestStatus",
+  SetChangeRequestExecutionId = "SetChangeRequestExecutionId",
+  ListConversationChangeRequests = "ListConversationChangeRequests",
+  DecideChangeRequest = "DecideChangeRequest",
+  ExpireChangeRequest = "ExpireChangeRequest",
+  CommitChangeRequest = "CommitChangeRequest",
+  ReceiveHostToken = "ReceiveHostToken",
 
   // Knowledge sources
   CreateKnowledgeSource = "CreateKnowledgeSource",

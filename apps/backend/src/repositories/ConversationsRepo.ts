@@ -244,6 +244,7 @@ export default class ConversationsRepo {
         message: "Turn config loaded",
         spec: loaded.spec,
         chatbotConfigId: chatbotConfig.id,
+        isReadOnly: company.company?.isReadOnly ?? false,
       };
     });
   }

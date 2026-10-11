@@ -69,6 +69,23 @@ export default class Utility {
     }
   }
 
+  // DEV_NOTE: JSON with object keys sorted at every depth, so two equal values always give the same text whatever
+  // their key order (the action engine's loop guard compares a turn's tool calls by it). Array order is kept.
+  static stableStringify(value: unknown): string {
+    const sortKeys = (current: unknown): unknown => {
+      if (Array.isArray(current)) return current.map(sortKeys);
+      if (current !== null && typeof current === "object") {
+        return Object.fromEntries(
+          Object.entries(current)
+            .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+            .map(([key, entry]) => [key, sortKeys(entry)]),
+        );
+      }
+      return current;
+    };
+    return JSON.stringify(sortKeys(value)) ?? "null";
+  }
+
   // DEV_NOTE: base64url without padding (RFC 4648 §5), as JWTs and JWKs encode their parts. null when the input
   // isn't base64url, so a malformed token is a rejection, not an exception.
   static decodeBase64Url(encoded: string): Uint8Array<ArrayBuffer> | null {

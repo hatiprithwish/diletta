@@ -9,3 +9,4 @@ export * from "./ToolOpsRegistry";
 export * from "./ToolOpsLoader";
 export * from "./ToolOpRenderer";
 export * from "./ToolReadbackCompare";
+export * from "./ToolArgsValidator";

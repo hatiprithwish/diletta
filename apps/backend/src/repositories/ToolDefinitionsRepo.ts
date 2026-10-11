@@ -134,7 +134,10 @@ export default class ToolDefinitionsRepo {
         ),
       };
     }
-    const issue = Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, normalized.ops);
+    // DEV_NOTE: The runtime checks the model's args against input_schema (M3-4), so a schema it can't check is refused
+    const issue =
+      Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, normalized.ops) ??
+      Schemas.getToolInputSchemaIssue(normalized.ops.inputSchema);
     if (issue) {
       return {
         isSuccess: false,
@@ -152,7 +155,9 @@ export default class ToolDefinitionsRepo {
   ): Schemas.ToolDefinitionStateResponse | null {
     const loaded = this.loadRowOps(row);
     if (!loaded.ops) return { isSuccess: false, message: STORED_OPS_INVALID_MESSAGE };
-    const issue = Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, loaded.ops);
+    const issue =
+      Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, loaded.ops) ??
+      Schemas.getToolInputSchemaIssue(loaded.ops.inputSchema);
     return issue ? this.refuse(Schemas.ToolDefinitionFailureEnum.InvalidOps, issue) : null;
   }
 

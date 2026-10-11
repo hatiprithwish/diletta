@@ -70,7 +70,7 @@ export function getUndoCheckExpectations(
 }
 
 // DEV_NOTE: JSON equality: same type, numbers by value, arrays in order, objects by key set regardless of key order
-function isJsonEqual(left: unknown, right: unknown): boolean {
+export function isJsonEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
     if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
