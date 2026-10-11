@@ -6,7 +6,11 @@ import {
   type ToolDefinitionBase,
 } from "../toolDefinitions/ToolDefinitionsCommon";
 import { ToolOpMethodEnum } from "../toolDefinitions/ToolOpsV1";
-import { TestHostRecordStatusEnum } from "./TestHostCommon";
+import {
+  TEST_HOST_AMOUNT_LIMIT,
+  TEST_HOST_NAME_PATTERN,
+  TestHostRecordStatusEnum,
+} from "./TestHostCommon";
 
 // DEV_NOTE: The test company's tool definitions over the test host's record API (M3-3). The seed script
 // (pnpm --filter test-host seed) stores them on the test host connection; backend tests render them against the test
@@ -24,13 +28,25 @@ export type TestHostToolDefinition = Omit<ToolDefinitionBase, "connectionPublicI
 const RECORD_ID_PROPERTY = {
   type: "string",
   description: "The record's id, e.g. rec_alpha",
-  pattern: "^[A-Za-z0-9_-]{1,64}$",
+  pattern: TEST_HOST_NAME_PATTERN.source,
 };
 
 const RECORD_FIELD_PROPERTIES = {
-  name: { type: "string", description: "Display name", minLength: 1, maxLength: 200 },
+  // DEV_NOTE: The host trims name; pattern \S = not blank, so a name the host would refuse fails input_schema first
+  name: {
+    type: "string",
+    description: "Display name",
+    minLength: 1,
+    maxLength: 200,
+    pattern: "\\S",
+  },
   email: { type: "string", description: "Contact email", format: "email", maxLength: 320 },
-  amount: { type: "number", description: "Amount in the account currency" },
+  amount: {
+    type: "number",
+    description: "Amount in the account currency",
+    minimum: -TEST_HOST_AMOUNT_LIMIT,
+    maximum: TEST_HOST_AMOUNT_LIMIT,
+  },
   status: {
     type: "string",
     description: "Whether the record is in use",

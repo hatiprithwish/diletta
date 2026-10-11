@@ -10,19 +10,24 @@ const isFetcher = (value: unknown): value is Fetcher =>
   "fetch" in value &&
   typeof value.fetch === "function";
 
-const testHost = "TEST_HOST" in env && isFetcher(env.TEST_HOST) ? env.TEST_HOST : null;
-export const testHostIssuer =
-  "TEST_HOST_ISSUER" in env && typeof env.TEST_HOST_ISSUER === "string" ? env.TEST_HOST_ISSUER : "";
-const testHostAdminSecret =
-  "TEST_HOST_ADMIN_SECRET" in env && typeof env.TEST_HOST_ADMIN_SECRET === "string"
-    ? env.TEST_HOST_ADMIN_SECRET
-    : "";
+// DEV_NOTE: A missing binding fails loudly at import, never as an empty issuer or secret (relative URLs, 401s)
+function readStringBinding(name: "TEST_HOST_ISSUER" | "TEST_HOST_ADMIN_SECRET"): string {
+  const value: unknown = name in env ? Reflect.get(env, name) : undefined;
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`${name} binding missing (apps/backend/vitest.config.mts)`);
+  }
+  return value;
+}
+
+if (!("TEST_HOST" in env) || !isFetcher(env.TEST_HOST)) {
+  throw new Error("TEST_HOST binding missing (apps/backend/vitest.config.mts)");
+}
+const testHost: Fetcher = env.TEST_HOST;
+export const testHostIssuer = readStringBinding("TEST_HOST_ISSUER");
+const testHostAdminSecret = readStringBinding("TEST_HOST_ADMIN_SECRET");
 
 // DEV_NOTE: The adapter's fetch for the test host: every URL under the issuer reaches the auxiliary worker in-process
-export const testHostFetch: typeof fetch = (input, init) => {
-  if (!testHost) throw new Error("TEST_HOST binding missing (apps/backend/vitest.config.mts)");
-  return testHost.fetch(input, init);
-};
+export const testHostFetch: typeof fetch = (input, init) => testHost.fetch(input, init);
 
 export const newTestHostWorkspace = () => `ws_${crypto.randomUUID().replace(/-/g, "")}`;
 

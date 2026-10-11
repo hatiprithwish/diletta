@@ -134,6 +134,29 @@ describe("faults", () => {
     expect((await readRecord(token, id))?.amount).toBe(1);
   });
 
+  it("overwrites nothing after a refused or replayed write, or a read", async () => {
+    const overwrite: Schemas.TestHostFault = {
+      kind: Schemas.TestHostFaultKindEnum.Overwrite,
+      fields: { amount: 777 },
+    };
+
+    // Same key, other body: 422, nothing ran
+    await patchAlpha(10, "k-once");
+    await setFaults(workspace, [overwrite]);
+    expect((await patchAlpha(11, "k-once")).status).toBe(422);
+    expect((await readRecord(token, "rec_alpha"))?.amount).toBe(10);
+
+    // Same key, same body: the stored answer is replayed, nothing ran
+    await setFaults(workspace, [overwrite]);
+    expect((await patchAlpha(10, "k-once")).status).toBe(200);
+    expect((await readRecord(token, "rec_alpha"))?.amount).toBe(10);
+
+    // An unfiltered fault taken by a read
+    await setFaults(workspace, [overwrite]);
+    expect((await api("GET", "/v1/records/rec_alpha", { token })).status).toBe(200);
+    expect((await readRecord(token, "rec_alpha"))?.amount).toBe(10);
+  });
+
   it("holds the answer for a delay, after applying", async () => {
     await setFaults(workspace, [{ kind: Schemas.TestHostFaultKindEnum.Delay, ms: 50 }]);
     const started = Date.now();

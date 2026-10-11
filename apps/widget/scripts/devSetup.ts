@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import pg from "pg";
 import * as Schemas from "@app/schemas";
 // DEV_NOTE: The backend's own publicId generator, so a dev connection's id is made like every other
 import Utility from "../../backend/src/utils/Utility.ts";
+import { readOwnerDatabaseUrl } from "../../backend/src/db/ownerDatabaseUrl.ts";
 import { DEV_KEY_PATH, loadDevKey } from "./devJwt.ts";
 
 // DEV_NOTE: Development only: makes the widget dev host able to sign in to the local backend (docs/runbooks/widget.md).
@@ -17,17 +18,6 @@ import { DEV_KEY_PATH, loadDevKey } from "./devJwt.ts";
 // 3. Seeds the issuer's JWKS into the local backend's JWKS_CACHE (miniflare KV), since the dev issuer serves none.
 // 4. Says what the company still lacks for a chat (a default chatbot, a published config, a model key).
 const BACKEND_DIR = path.resolve(import.meta.dirname, "../../backend");
-
-async function readOwnerDatabaseUrl(): Promise<string> {
-  const lines = (await readFile(path.join(BACKEND_DIR, ".env"), "utf8")).split("\n");
-  const line = lines.find((entry) => entry.trim().startsWith("DATABASE_URL="));
-  const value = line
-    ?.slice(line.indexOf("=") + 1)
-    .trim()
-    .replace(/^["']|["']$/g, "");
-  if (!value) throw new Error("DATABASE_URL is missing from apps/backend/.env");
-  return value;
-}
 
 async function ensureDevKey(): Promise<Schemas.WidgetDevKey> {
   const existing = await loadDevKey();
@@ -151,7 +141,7 @@ async function main() {
   }
 
   const devKey = await ensureDevKey();
-  const client = new pg.Client({ connectionString: await readOwnerDatabaseUrl() });
+  const client = new pg.Client({ connectionString: readOwnerDatabaseUrl() });
   await client.connect();
   try {
     const company = await client.query<{ id: string }>(

@@ -8,6 +8,8 @@ import {
 import { normalizeToolOps } from "../toolDefinitions/ToolOpsLoader";
 import { renderToolOp } from "../toolDefinitions/ToolOpRenderer";
 import {
+  TEST_HOST_AMOUNT_LIMIT,
+  TEST_HOST_NAME_PATTERN,
   TEST_HOST_SEED_RECORDS,
   TestHostFaultKindEnum,
   ZTestHostFault,
@@ -81,6 +83,29 @@ describe("TEST_HOST_TOOL_DEFINITIONS", () => {
         status: "active",
       },
     });
+  });
+});
+
+describe("input_schema matches what the test host accepts", () => {
+  it("states the record id pattern and the amount and name bounds the host enforces", () => {
+    const properties = byName("update_record").ops.inputSchema.properties;
+    expect(properties.recordId?.pattern).toBe(TEST_HOST_NAME_PATTERN.source);
+    expect(properties.amount).toMatchObject({
+      minimum: -TEST_HOST_AMOUNT_LIMIT,
+      maximum: TEST_HOST_AMOUNT_LIMIT,
+    });
+    expect(properties.name).toMatchObject({ minLength: 1, maxLength: 200 });
+    const blank = new RegExp(String(properties.name?.pattern));
+    expect(blank.test("   ")).toBe(false);
+    expect(blank.test(" Alpha ")).toBe(true);
+
+    expect(ZTestHostUpdateRecordRequest.safeParse({ amount: TEST_HOST_AMOUNT_LIMIT }).success).toBe(
+      true,
+    );
+    expect(
+      ZTestHostUpdateRecordRequest.safeParse({ amount: TEST_HOST_AMOUNT_LIMIT + 1 }).success,
+    ).toBe(false);
+    expect(ZTestHostUpdateRecordRequest.safeParse({ name: "   " }).success).toBe(false);
   });
 });
 

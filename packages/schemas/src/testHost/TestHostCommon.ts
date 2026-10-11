@@ -42,6 +42,8 @@ export const TEST_HOST_LIST_MAX_LIMIT = 100;
 export const TEST_HOST_MAX_RECORDS = 1_000;
 export const TEST_HOST_MAX_FAULTS = 20;
 export const TEST_HOST_FAULT_MAX_DELAY_MS = 30_000;
+// A record's amount is within ± this (the tools' input_schema states the same bounds)
+export const TEST_HOST_AMOUNT_LIMIT = 1_000_000_000;
 
 // A workspace (the ws claim, the Durable Object's name) and a record id: URL-safe, short
 export const TEST_HOST_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -73,7 +75,7 @@ export type TestHostRecord = z.infer<typeof ZTestHostRecord>;
 const ZTestHostRecordFields = z.strictObject({
   name: z.string().trim().min(1).max(200),
   email: z.email().max(320),
-  amount: z.number().finite().min(-1_000_000_000).max(1_000_000_000),
+  amount: z.number().finite().min(-TEST_HOST_AMOUNT_LIMIT).max(TEST_HOST_AMOUNT_LIMIT),
   status: z.enum(TestHostRecordStatusEnum),
 });
 
@@ -299,6 +301,59 @@ export const ZTestHostTokenClaims = z.object({
   exp: z.number().int(),
 });
 export type TestHostTokenClaims = z.infer<typeof ZTestHostTokenClaims>;
+
+// DEV_NOTE: The take of one request from a workspace's fault queue (TestHostFaultsProvider.take): the matched fault
+// (null = none) and the queue to store back
+export interface TestHostFaultTake {
+  fault: TestHostFault | null;
+  remaining: TestHostFault[];
+}
+
+// DEV_NOTE: How a request ran in the workspace: its answer, and whether that answer was replayed from a stored
+// Idempotency-Key result (nothing ran this time)
+export interface TestHostRunResult {
+  response: TestHostWorkspaceResponse;
+  isReplay: boolean;
+}
+
+// DEV_NOTE: A test run's test host bindings (apps/test-host/testBindings.ts): its own tests and the backend's, where it
+// runs as an auxiliary worker
+export interface TestHostTestBindings {
+  TEST_HOST_ISSUER: string;
+  TEST_HOST_SIGNING_KEY: string;
+  TEST_HOST_ADMIN_SECRET: string;
+}
+
+// DEV_NOTE: A tool_definitions row as the seed script reads it with pg (snake_case columns, jsonb ops untyped)
+export interface TestHostSeedToolRow {
+  id: string;
+  version: number;
+  status: number;
+  connection_id: string;
+  description: string;
+  risk: number;
+  idempotency_mode: number;
+  approval: number;
+  source: number;
+  schema_version: number;
+  input_schema: unknown;
+  call_op: unknown;
+  readback_op: unknown;
+  inverse_op: unknown;
+}
+
+// DEV_NOTE: The seed's connection row: what it checks (the fields fixed at create) and keeps across reruns (an
+// operator's status and origins)
+export interface TestHostSeedConnectionRow {
+  id: string;
+  company_id: string;
+  environment: number;
+  adapter_type: number;
+  auth_type: string;
+  credential_scope: number;
+  status: number;
+  allowed_origins: string[];
+}
 
 // The error body of every refusal: a short reason, never a token or a request body
 export interface TestHostErrorBody {

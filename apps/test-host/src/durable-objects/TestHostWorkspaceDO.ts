@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import TestHostFaultsProvider from "@/providers/faults";
 import * as Schemas from "@app/schemas";
 
 const RECORD_PREFIX = "record:";
@@ -17,15 +18,6 @@ const answer = (status: number, body: object | null): Schemas.TestHostWorkspaceR
   status,
   body: body === null ? null : JSON.stringify(body),
 });
-function parseJson(text: string | null): unknown {
-  if (text === null) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
 const refusal = (status: number, error: string) =>
   answer(status, { error } satisfies Schemas.TestHostErrorBody);
 
@@ -38,31 +30,39 @@ export class TestHostWorkspaceDO extends DurableObject<Env> {
     return env.TEST_HOST_WORKSPACE_DO.getByName(workspace);
   }
 
-  // DEV_NOTE: Order: take the first matching fault; a fault that isn't applied answers before anything runs; else the
-  // request runs (replaying a stored result for a known key); then an applied status fault replaces the answer, an
-  // overwrite edits the touched record, a delay holds the answer.
+  // DEV_NOTE: Order: take the first matching fault (TestHostFaultsProvider); a fault that isn't applied answers before
+  // anything runs; else the request runs (replaying a stored result for a known key); then an applied status fault
+  // replaces the answer, an overwrite edits the record a successful write just touched (getOverwriteTarget), a delay
+  // holds the answer.
   async run(raw: Schemas.TestHostWorkspaceRequest): Promise<Schemas.TestHostWorkspaceResponse> {
     const parsed = Schemas.ZTestHostWorkspaceRequest.safeParse(raw);
     if (!parsed.success) return refusal(400, "Invalid request");
     const request = parsed.data;
 
-    const fault = this.takeFault(request.method, request.path);
+    const { fault, remaining } = TestHostFaultsProvider.take(
+      this.readFaults(),
+      request.method,
+      request.path,
+    );
+    if (fault) this.ctx.storage.kv.put(FAULTS_KEY, remaining);
     if (fault?.kind === Schemas.TestHostFaultKindEnum.Status && !fault.isApplied) {
       return this.injected(fault);
     }
 
-    const result = this.runOnce(request);
+    const run = this.runOnce(request);
 
     switch (fault?.kind) {
       case Schemas.TestHostFaultKindEnum.Status:
         return this.injected(fault);
-      case Schemas.TestHostFaultKindEnum.Overwrite:
-        this.overwrite(request.operation, result, fault.fields);
-        return result;
+      case Schemas.TestHostFaultKindEnum.Overwrite: {
+        const target = TestHostFaultsProvider.getOverwriteTarget(request.operation, run);
+        if (target) this.overwrite(target, fault.fields);
+        return run.response;
+      }
       case Schemas.TestHostFaultKindEnum.Delay:
-        return { ...result, delayMs: fault.ms };
+        return { ...run.response, delayMs: fault.ms };
       default:
-        return result;
+        return run.response;
     }
   }
 
@@ -80,10 +80,10 @@ export class TestHostWorkspaceDO extends DurableObject<Env> {
   // DEV_NOTE: A write with an Idempotency-Key runs once per key: the same key and request again answer the stored
   // result; the same key with another request is 422 (draft-ietf-httpapi-idempotency-key-header). Results below 500 are
   // kept TEST_HOST_IDEMPOTENCY_TTL_MS; reads ignore the key.
-  private runOnce(request: Schemas.TestHostWorkspaceRequest): Schemas.TestHostWorkspaceResponse {
+  private runOnce(request: Schemas.TestHostWorkspaceRequest): Schemas.TestHostRunResult {
     const { idempotencyKey, operation } = request;
     if (idempotencyKey === null || !WRITE_KINDS.has(operation.kind)) {
-      return this.execute(operation);
+      return { response: this.execute(operation), isReplay: false };
     }
 
     const now = Date.now();
@@ -93,9 +93,12 @@ export class TestHostWorkspaceDO extends DurableObject<Env> {
     const stored = Schemas.ZTestHostStoredResult.safeParse(this.ctx.storage.kv.get(storageKey));
     if (stored.success) {
       if (stored.data.fingerprint !== fingerprint) {
-        return refusal(422, "Idempotency-Key was used for a different request");
+        return {
+          response: refusal(422, "Idempotency-Key was used for a different request"),
+          isReplay: false,
+        };
       }
-      return { status: stored.data.status, body: stored.data.body };
+      return { response: { status: stored.data.status, body: stored.data.body }, isReplay: true };
     }
 
     const result = this.execute(operation);
@@ -108,7 +111,7 @@ export class TestHostWorkspaceDO extends DurableObject<Env> {
       };
       this.ctx.storage.kv.put(storageKey, entry);
     }
-    return result;
+    return { response: result, isReplay: false };
   }
 
   private execute(operation: Schemas.TestHostOperation): Schemas.TestHostWorkspaceResponse {
@@ -168,32 +171,10 @@ export class TestHostWorkspaceDO extends DurableObject<Env> {
     }
   }
 
-  // DEV_NOTE: The record a request touched: its id, or a created record's id from the answer. A record that is gone
-  // (deleted) isn't brought back.
-  private overwrite(
-    operation: Schemas.TestHostOperation,
-    result: Schemas.TestHostWorkspaceResponse,
-    fields: Partial<Omit<Schemas.TestHostRecord, "id">>,
-  ) {
-    const id =
-      "id" in operation
-        ? operation.id
-        : Schemas.ZTestHostRecordResponse.safeParse(parseJson(result.body)).data?.data.id;
-    const record = id ? this.getRecord(id) : null;
+  // A record deleted meanwhile isn't brought back
+  private overwrite(id: string, fields: Partial<Omit<Schemas.TestHostRecord, "id">>) {
+    const record = this.getRecord(id);
     if (record) this.putRecord(this.normalize({ ...record, ...fields }));
-  }
-
-  private takeFault(method: string, path: string): Schemas.TestHostFault | null {
-    const faults = this.readFaults();
-    const index = faults.findIndex(
-      (fault) =>
-        (fault.method === undefined || fault.method === method) &&
-        (fault.path === undefined || fault.path === path),
-    );
-    if (index === -1) return null;
-    const [fault] = faults.splice(index, 1);
-    this.ctx.storage.kv.put(FAULTS_KEY, faults);
-    return fault ?? null;
   }
 
   private injected(

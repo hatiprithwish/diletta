@@ -94,7 +94,8 @@ RecordsRoutes.delete("/records/:id", validate("param", Schemas.ZTestHostRecordPa
   }),
 );
 
-// DEV_NOTE: The eval reset (the connection's reset_op, M5-2): the token's workspace back to TEST_HOST_SEED_RECORDS
+// DEV_NOTE: The eval reset: the token's workspace back to TEST_HOST_SEED_RECORDS. The target of the connection's
+// reset_op once the eval reset flow (M5-2) defines its shape; the seed leaves reset_op null until then.
 RecordsRoutes.post("/_reset", (c) =>
   runInWorkspace(c, Schemas.ToolOpMethodEnum.Post, {
     kind: Schemas.TestHostOperationKindEnum.Reset,

@@ -13,9 +13,6 @@ export default tseslint.config(
         ...globals.worker,
       },
     },
-    rules: {
-      "no-console": "off",
-    },
   },
   {
     files: ["**/*.test.ts", "**/*.spec.ts"],

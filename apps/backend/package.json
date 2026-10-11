@@ -11,7 +11,7 @@
     "db:generate:sql": "drizzle-kit generate --custom --name",
     "db:migrate": "drizzle-kit migrate",
     "db:rollback": "node src/db/rollback.ts",
-    "test": "pnpm typecheck && pnpm --filter test-host build && vitest run",
+    "test": "pnpm typecheck && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",

@@ -1,10 +1,9 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { parseArgs } from "node:util";
 import pg from "pg";
 import * as Schemas from "@app/schemas";
 // DEV_NOTE: The backend's own publicId generator, so seeded rows get ids made like every other
 import Utility from "../../backend/src/utils/Utility.ts";
+import { readOwnerDatabaseUrl } from "../../backend/src/db/ownerDatabaseUrl.ts";
 
 // DEV_NOTE: Puts the test host on our test company (docs/runbooks/test-host.md). Idempotent: rerun it after changing
 // Schemas.TEST_HOST_TOOL_DEFINITIONS.
@@ -13,31 +12,26 @@ import Utility from "../../backend/src/utils/Utility.ts";
 // staging test host (Schemas.TEST_HOST_STAGING_ISSUER). On the database in apps/backend/.env (the staging branch), as
 // the owner role (DATABASE_URL): fixture setup, like a test's, never code under test.
 // 1. The issuer's staging company connection: REST, base_url {issuer}/v1/, jwt_forward, the widget dev host's origin
-//    allowed. Refused if the issuer belongs to another company.
+//    allowed. Created Active on the first run. On a rerun only base_url is set and the dev origin added: an operator's
+//    status and other origins are kept, and a row whose fixed-at-create fields differ (another environment, adapter,
+//    auth type or scope) is refused, never rewritten. Refused if the issuer belongs to another company.
 // 2. Each tool definition, Active at its newest version: a new version is added only when the definition changed, so
 //    configs pinned to an older version keep it. Refused while a Draft of the name exists (an operator is editing it).
+//    Skipped while the connection isn't Active (a tool needs an Active connection), with a message saying so.
 // 3. Says what a chat with the tools still needs, and the {name, version} pins for the config.
-const BACKEND_DIR = path.resolve(import.meta.dirname, "../../backend");
+// reset_op stays null: its shape is defined by the eval reset flow (M5-2), which sets it here, pointing at
+// POST /v1/_reset.
 
-async function readOwnerDatabaseUrl(): Promise<string> {
-  const lines = (await readFile(path.join(BACKEND_DIR, ".env"), "utf8")).split("\n");
-  const line = lines.find((entry) => entry.trim().startsWith("DATABASE_URL="));
-  const value = line
-    ?.slice(line.indexOf("=") + 1)
-    .trim()
-    .replace(/^["']|["']$/g, "");
-  if (!value) throw new Error("DATABASE_URL is missing from apps/backend/.env");
-  return value;
-}
-
+// DEV_NOTE: The connection id, and whether it is Active (a tool can be activated only on an Active connection)
 async function upsertConnection(
   client: pg.Client,
   companyId: string,
   issuer: string,
-): Promise<string> {
+): Promise<{ connectionId: string; isActive: boolean }> {
   const baseUrl = Schemas.getTestHostBaseUrl(issuer);
-  const existing = await client.query<{ id: string; company_id: string }>(
-    "SELECT id, company_id FROM company_connections WHERE jwt_issuer = $1",
+  const existing = await client.query<Schemas.TestHostSeedConnectionRow>(
+    `SELECT id, company_id, environment, adapter_type, auth_type, credential_scope, status, allowed_origins
+       FROM company_connections WHERE jwt_issuer = $1 FOR UPDATE`,
     [issuer],
   );
   const row = existing.rows[0];
@@ -45,23 +39,27 @@ async function upsertConnection(
     throw new Error(`Issuer ${issuer} is already another company's connection`);
   }
   if (row) {
+    if (
+      row.environment !== Schemas.CompanyConnectionEnvironmentIntEnum.Staging ||
+      row.adapter_type !== Schemas.CompanyConnectionAdapterTypeIntEnum.Rest ||
+      row.auth_type !== Schemas.CompanyConnectionAuthTypeEnum.JwtForward ||
+      row.credential_scope !== Schemas.CompanyConnectionCredentialScopeIntEnum.None
+    ) {
+      throw new Error(
+        `Connection for ${issuer} isn't a staging REST jwt_forward connection; replace it with a new one`,
+      );
+    }
+    const origins = row.allowed_origins.includes(Schemas.WIDGET_DEV_ORIGIN)
+      ? row.allowed_origins
+      : [...row.allowed_origins, Schemas.WIDGET_DEV_ORIGIN];
     await client.query(
-      `UPDATE company_connections
-         SET environment = $1, adapter_type = $2, base_url = $3, auth_type = $4, auth_config = '{}'::jsonb,
-             credential_scope = $5, allowed_origins = $6, status = $7, updated_at = now()
-       WHERE id = $8`,
-      [
-        Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
-        Schemas.CompanyConnectionAdapterTypeIntEnum.Rest,
-        baseUrl,
-        Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
-        Schemas.CompanyConnectionCredentialScopeIntEnum.None,
-        [Schemas.WIDGET_DEV_ORIGIN],
-        Schemas.CompanyConnectionStatusIntEnum.Active,
-        row.id,
-      ],
+      `UPDATE company_connections SET base_url = $1, allowed_origins = $2, updated_at = now() WHERE id = $3`,
+      [baseUrl, origins, row.id],
     );
-    return row.id;
+    return {
+      connectionId: row.id,
+      isActive: row.status === Schemas.CompanyConnectionStatusIntEnum.Active,
+    };
   }
   const inserted = await client.query<{ id: string }>(
     `INSERT INTO company_connections
@@ -82,24 +80,7 @@ async function upsertConnection(
       Schemas.CompanyConnectionStatusIntEnum.Active,
     ],
   );
-  return inserted.rows[0]!.id;
-}
-
-interface ToolRow {
-  id: string;
-  version: number;
-  status: Schemas.ToolDefinitionStatusIntEnum;
-  connection_id: string;
-  description: string;
-  risk: number;
-  idempotency_mode: number;
-  approval: number;
-  source: number;
-  schema_version: number;
-  input_schema: unknown;
-  call_op: unknown;
-  readback_op: unknown;
-  inverse_op: unknown;
+  return { connectionId: inserted.rows[0]!.id, isActive: true };
 }
 
 // DEV_NOTE: JSON with sorted keys, so a stored jsonb (key order not kept) compares equal to the definition
@@ -115,7 +96,7 @@ function canonical(value: unknown): string {
 }
 
 function isSameDefinition(
-  row: ToolRow,
+  row: Schemas.TestHostSeedToolRow,
   connectionId: string,
   tool: Schemas.TestHostToolDefinition,
   ops: Schemas.ToolOps,
@@ -151,7 +132,7 @@ async function seedTool(
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
     `tool_definition:${companyId}:${tool.name}`,
   ]);
-  const rows = await client.query<ToolRow>(
+  const rows = await client.query<Schemas.TestHostSeedToolRow>(
     `SELECT id, version, status, connection_id, description, risk, idempotency_mode, approval, source,
             schema_version, input_schema, call_op, readback_op, inverse_op
        FROM tool_definitions WHERE company_id = $1 AND name = $2 ORDER BY version DESC`,
@@ -242,7 +223,7 @@ async function main() {
   const issuer = (values.issuer ?? Schemas.TEST_HOST_STAGING_ISSUER).replace(/\/+$/, "");
   if (!issuer.startsWith("https://")) throw new Error("The issuer must be an https URL");
 
-  const client = new pg.Client({ connectionString: await readOwnerDatabaseUrl() });
+  const client = new pg.Client({ connectionString: readOwnerDatabaseUrl() });
   await client.connect();
   try {
     const company = await client.query<{ id: string; status: number }>(
@@ -256,12 +237,21 @@ async function main() {
     }
 
     await client.query("BEGIN");
-    const connectionId = await upsertConnection(client, companyRow.id, issuer);
+    const { connectionId, isActive } = await upsertConnection(client, companyRow.id, issuer);
     const seeded = [];
-    for (const tool of Schemas.TEST_HOST_TOOL_DEFINITIONS) {
-      seeded.push(await seedTool(client, companyRow.id, connectionId, tool));
+    if (isActive) {
+      for (const tool of Schemas.TEST_HOST_TOOL_DEFINITIONS) {
+        seeded.push(await seedTool(client, companyRow.id, connectionId, tool));
+      }
     }
     await client.query("COMMIT");
+
+    if (!isActive) {
+      process.stdout.write(
+        `The test host connection for ${issuer} is disabled: left as it is, no tools seeded. Enable it to seed.\n`,
+      );
+      return;
+    }
 
     const gaps = await reportGaps(client, companyRow.id);
     process.stdout.write(

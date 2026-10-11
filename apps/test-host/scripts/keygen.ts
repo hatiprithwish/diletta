@@ -5,10 +5,11 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Makes the test host's secrets (docs/runbooks/test-host.md).
 //   pnpm --filter test-host keygen                  writes apps/test-host/.dev.vars (local dev), once
-//   pnpm --filter test-host keygen --signing-key    prints a new TEST_HOST_SIGNING_KEY, to pipe into
-//                                                   `wrangler secret put TEST_HOST_SIGNING_KEY --env staging`
-//   pnpm --filter test-host keygen --admin-secret   prints a new TEST_HOST_ADMIN_SECRET, the same way
-// Nothing else is printed in the --signing-key / --admin-secret modes, so the pipe carries the value only.
+//   pnpm --silent --filter test-host keygen --signing-key    prints a new TEST_HOST_SIGNING_KEY, to pipe into
+//                                                            `wrangler secret put TEST_HOST_SIGNING_KEY --env staging`
+//   pnpm --silent --filter test-host keygen --admin-secret   prints a new TEST_HOST_ADMIN_SECRET, the same way
+// Nothing else is printed in the --signing-key / --admin-secret modes. --silent is required when piping: without it
+// pnpm prints its "> test-host@ keygen" banner to stdout ahead of the value, and the stored secret is corrupt.
 const DEV_VARS_PATH = path.resolve(import.meta.dirname, "../.dev.vars");
 
 async function createSigningKey(): Promise<Schemas.TestHostSigningKey> {

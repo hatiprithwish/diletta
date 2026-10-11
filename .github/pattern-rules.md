@@ -1431,7 +1431,8 @@ A hit is a violation outside its home: host calls and auth headers only in `pack
 - An import from `apps/test-host` (or `test-host`) in platform code, or `TEST_HOST_STAGING_ISSUER` used outside the test host, its seed and tests
 - A backend test calling `/v1/*` on the test host with its own `fetch` instead of the adapter, or reading `TEST_HOST_SIGNING_KEY`
 - A test host route without its middleware: `/auth/tokens` and `/control/*` without `requireAdmin`, `/v1/*` without `requireHostToken`
-- A production env, a production connection or a production deploy workflow for the test host
+- A production env, a production connection, a production deploy workflow, or a `deploy` script without `--env staging` for the test host
+- A secret piped from `pnpm keygen` without `--silent` (pnpm's banner lands in the secret)
 - A tool definition for the test host company edited by hand instead of through `TEST_HOST_TOOL_DEFINITIONS` + seed
 - `console.log` or a token, admin secret or request body in a test host response or error
 
