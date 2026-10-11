@@ -1422,6 +1422,41 @@ A hit is a violation outside its home: host calls and auth headers only in `pack
 
 ---
 
+### 3.31 The Test Host Stays a Test Fixture [HIGH]
+
+**Rule:** `apps/test-host` (M3-3) is a stand-in customer app for our own test company, staging only. Platform code (`apps/backend/src` outside `tests/`, `apps/web`, `apps/widget`, `packages/*`) never imports it or names its URL. Its types live in `packages/schemas/src/testHost/`. Backend tests reach it only through `src/tests/helpers/testHost.ts`: the `TEST_HOST` service binding of the auxiliary worker (fresh secrets per run, `testBindings.ts`), admin calls (token minting, faults, reset) through the helper, and every record call through `@app/adapter` with ops rendered from `Schemas.TEST_HOST_TOOL_DEFINITIONS`. Its connection is a Staging one; there is no production test host. Its tools change only in `TEST_HOST_TOOL_DEFINITIONS`, stored by `pnpm --filter test-host seed` as a new version. It signs tokens with its own key, not company data, so its WebCrypto use is outside rule 3.19.
+
+**Violations:**
+
+- An import from `apps/test-host` (or `test-host`) in platform code, or `TEST_HOST_STAGING_ISSUER` used outside the test host, its seed and tests
+- A backend test calling `/v1/*` on the test host with its own `fetch` instead of the adapter, or reading `TEST_HOST_SIGNING_KEY`
+- A test host route without its middleware: `/auth/tokens` and `/control/*` without `requireAdmin`, `/v1/*` without `requireHostToken`
+- A production env, a production connection, a production deploy workflow, or a `deploy` script without `--env staging` for the test host
+- A secret piped from `pnpm keygen` without `--silent` (pnpm's banner lands in the secret)
+- A tool definition for the test host company edited by hand instead of through `TEST_HOST_TOOL_DEFINITIONS` + seed
+- `console.log` or a token, admin secret or request body in a test host response or error
+
+**Detection Pattern:**
+
+```regex
+from ["'][^"']*test-host
+TEST_HOST_(STAGING_ISSUER|SIGNING_KEY|ADMIN_SECRET)
+diletta-test-host
+```
+
+**Examples:**
+
+```
+- ❌ await fetch(`${issuer}/v1/records/rec_alpha`, { headers: { Authorization: `Bearer ${hostToken}` } }) // in a backend test
+- ✅ await testHostAdapter(() => hostToken).execute({ risk, request: render(testHostTool("get_record").ops.callOp, { args }) })
+- ❌ await setTestHostFaults(workspace, [{ kind: "status", status: 503, isApplied: true }]) // unfiltered: the read-before takes it
+- ✅ await setTestHostFaults(workspace, [{ kind: "status", status: 503, isApplied: true, method: "PATCH" }])
+```
+
+**Fix:** Mirror `apps/backend/src/tests/testHost.test.ts` and `apps/test-host/src/routes/RecordsRoutes.ts`; runbook `docs/runbooks/test-host.md`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1509,5 +1544,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*})
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture)
 Maintainer: hatiprithwish

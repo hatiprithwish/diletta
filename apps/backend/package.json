@@ -38,6 +38,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@app/adapter": "workspace:*",
     "@cloudflare/vitest-pool-workers": "^0.16.20",
     "@types/node": "^25.9.5",
     "@types/pg": "^8.15.6",

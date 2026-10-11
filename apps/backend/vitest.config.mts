@@ -1,8 +1,11 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 import path from "path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { unstable_getMiniflareWorkerOptions } from "wrangler";
+import { createTestHostTestBindings } from "../test-host/testBindings";
 
 // DEV_NOTE: Loads CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE (Neon staging) so tests run on Postgres.
 const envFile = path.resolve(import.meta.dirname, ".env");
@@ -19,6 +22,26 @@ const pgCloudflareCjs = path.join(
   path.dirname(requireFromPg.resolve("pg-cloudflare/package.json")),
   "dist/index.js",
 );
+
+// DEV_NOTE: The test host (M3-3, docs/runbooks/test-host.md) runs next to the worker as an auxiliary worker, reached
+// only through the TEST_HOST service binding (tests pass TEST_HOST.fetch as the adapter's fetch, so nothing goes over
+// the network), with fresh secrets per run. Its bundle is rebuilt every time this config loads (`pnpm test`,
+// `vitest`, an IDE run), so a run never uses a missing or stale one; watch mode doesn't rebuild on a test-host source
+// change: restart it. Compatibility date, flags and its Durable Object come from apps/test-host/wrangler.jsonc (its
+// .dev.vars bindings are ignored: testHostBindings replaces them). The bundle goes in as `script` (its text): under
+// the Workers pool a `scriptPath` worker fails to start.
+const TEST_HOST_DIR = path.resolve(import.meta.dirname, "../test-host");
+try {
+  execFileSync("pnpm", ["--silent", "build"], { cwd: TEST_HOST_DIR, stdio: "pipe" });
+} catch (error) {
+  const stderr = error instanceof Error && "stderr" in error ? String(error.stderr) : String(error);
+  throw new Error(`Building the test host bundle failed:\n${stderr}`, { cause: error });
+}
+const testHostScript = readFileSync(path.join(TEST_HOST_DIR, "dist/index.js"), "utf8");
+const { workerOptions: testHostWorkerOptions } = unstable_getMiniflareWorkerOptions(
+  path.join(TEST_HOST_DIR, "wrangler.jsonc"),
+);
+const testHostBindings = await createTestHostTestBindings();
 
 export default defineConfig({
   plugins: [
@@ -38,13 +61,28 @@ export default defineConfig({
           NEON_POOLER_URL: process.env.NEON_POOLER_URL ?? "",
           DATABASE_URL: process.env.DATABASE_URL ?? "",
           AI_GATEWAY_TOKEN: "test-gateway-token",
+          TEST_HOST_ISSUER: testHostBindings.TEST_HOST_ISSUER,
+          TEST_HOST_ADMIN_SECRET: testHostBindings.TEST_HOST_ADMIN_SECRET,
         },
+        serviceBindings: { TEST_HOST: "test-host" },
+        workers: [
+          {
+            name: "test-host",
+            modules: true,
+            script: testHostScript,
+            compatibilityDate: testHostWorkerOptions.compatibilityDate,
+            compatibilityFlags: testHostWorkerOptions.compatibilityFlags,
+            durableObjects: testHostWorkerOptions.durableObjects,
+            bindings: { ...testHostBindings },
+          },
+        ],
       },
     }),
   ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
+      "@app/adapter": path.resolve(import.meta.dirname, "../../packages/adapter/src/index.ts"),
       "@app/crypto": path.resolve(import.meta.dirname, "../../packages/crypto/src/index.ts"),
       "@app/schemas": path.resolve(import.meta.dirname, "../../packages/schemas/src/index.ts"),
       "pg-protocol": pgProtocolCjs,
