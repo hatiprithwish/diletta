@@ -10,7 +10,7 @@ export { TestHostWorkspaceDO } from "@/durable-objects/TestHostWorkspaceDO";
 
 // DEV_NOTE: The test host (M3-3, docs/runbooks/test-host.md). Identity (/.well-known/jwks.json, /auth/tokens), the
 // record API (/v1, the connection's base_url) and fault control (/control). Every error answers { error } as JSON with
-// a fixed reason; nothing is logged beyond Workers' invocation logs.
+// a fixed reason; nothing is logged beyond Workers' invocation logs
 const app = new Hono<AppContext>();
 
 app.route("/", AuthRoutes);
