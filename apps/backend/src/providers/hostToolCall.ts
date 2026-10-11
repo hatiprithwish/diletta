@@ -18,6 +18,10 @@ export default class HostToolCallProvider {
     getHostToken: Schemas.HostTokenSource;
     signal?: AbortSignal;
   }): Promise<Schemas.HostCallResponse> {
+    // DEV_NOTE: Sent as a read (retried freely), so only a read tool's call_op may go this way
+    if (params.tool.risk !== Schemas.ToolDefinitionRiskIntEnum.Read) {
+      return HostToolCallProvider.notSent("Not a read tool");
+    }
     const adapter = HostToolCallProvider.adapterFor(params.tool, params.getHostToken);
     const rendered = Schemas.renderToolOp(params.tool.ops.callOp, { args: params.args });
     if (!adapter.adapter || !rendered.request) {

@@ -1,4 +1,8 @@
-import type { ChangeRequest, ChangeRequestStatusIntEnum } from "./ChangeRequestsCommon";
+import type {
+  ChangeRequest,
+  ChangeRequestErrorCodeEnum,
+  ChangeRequestStatusIntEnum,
+} from "./ChangeRequestsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS. The DAL generates
 // the publicId and checks the conversation and the tool call exist in the company. The payload arrives encrypted.
@@ -32,7 +36,7 @@ export type UpdateChangeRequestStatusDALRequest = Pick<
 > & {
   fromStatuses: ChangeRequestStatusIntEnum[];
   idempotencyKey?: string;
-  errorCode?: string | null;
+  errorCode?: ChangeRequestErrorCodeEnum | null;
 };
 
 // DEV_NOTE: The durable pause's execution id, set once (only while still null)

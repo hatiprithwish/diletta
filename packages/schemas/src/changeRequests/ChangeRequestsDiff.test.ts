@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ToolDefinitionRiskIntEnum } from "../toolDefinitions/ToolDefinitionsCommon";
-import type { ToolReadbackOp } from "../toolDefinitions/ToolOpsRegistry";
+import type { ToolCallOp, ToolReadbackOp } from "../toolDefinitions/ToolOpsRegistry";
 import { ToolOpMethodEnum } from "../toolDefinitions/ToolOpsV1";
 import { ChangeRequestKindEnum } from "./ChangeRequestsCommon";
 import {
@@ -26,6 +26,32 @@ const deleteReadback: ToolReadbackOp = {
   path: "/records/{args.recordId}",
   compare: { recordId: "data.id" },
 };
+const updateCallOp: ToolCallOp = {
+  method: ToolOpMethodEnum.Patch,
+  path: "/records/{args.recordId}",
+  bodyMap: {
+    name: "{args.name}",
+    amount: "{args.amount}",
+    tags: "{args.tags}",
+    memo: "{args.memo}",
+  },
+};
+const createCallOp: ToolCallOp = {
+  method: ToolOpMethodEnum.Post,
+  path: "/records",
+  bodyMap: { name: "{args.name}", amount: "{args.amount}" },
+};
+const deleteCallOp: ToolCallOp = {
+  method: ToolOpMethodEnum.Delete,
+  path: "/records/{args.recordId}",
+  query: { reason: "{args.reason}" },
+};
+const recordIdRow = {
+  field: "recordId",
+  before: { isFound: true, value: "rec_alpha" },
+  after: { isFound: true, value: "rec_alpha" },
+  isChanged: false,
+};
 const before = { data: { id: "rec_alpha", name: "Alpha", amount: 120, tags: ["a", "b"] } };
 
 describe("getChangeRequestKind", () => {
@@ -49,6 +75,7 @@ describe("buildChangeRequestChanges", () => {
   it("diffs an update from the read-before and the real args, field by field", () => {
     const changes = buildChangeRequestChanges({
       kind: ChangeRequestKindEnum.Update,
+      callOp: updateCallOp,
       readbackOp: updateReadback,
       args: { recordId: "rec_alpha", name: "Alpha Two", amount: 120, tags: ["b", "a"] },
       before,
@@ -72,6 +99,7 @@ describe("buildChangeRequestChanges", () => {
         after: { isFound: true, value: ["b", "a"] },
         isChanged: true,
       },
+      recordIdRow,
     ]);
     expect(countChangedFields(changes)).toBe(2);
   });
@@ -79,6 +107,7 @@ describe("buildChangeRequestChanges", () => {
   it("leaves out a compare field the model passed no arg for, and shows a field the record lacks as absent", () => {
     const changes = buildChangeRequestChanges({
       kind: ChangeRequestKindEnum.Update,
+      callOp: updateCallOp,
       readbackOp: updateReadback,
       args: { recordId: "rec_alpha", amount: 5 },
       before: { data: { id: "rec_alpha" } },
@@ -90,12 +119,40 @@ describe("buildChangeRequestChanges", () => {
         after: { isFound: true, value: 5 },
         isChanged: true,
       },
+      recordIdRow,
     ]);
+  });
+
+  it("shows every other arg the commit sends as set, so nothing goes out unseen and it is never a no-change", () => {
+    const changes = buildChangeRequestChanges({
+      kind: ChangeRequestKindEnum.Update,
+      callOp: updateCallOp,
+      readbackOp: updateReadback,
+      args: { recordId: "rec_alpha", amount: 120, memo: "late fee" },
+      before,
+    });
+    expect(changes).toEqual([
+      {
+        field: "amount",
+        before: { isFound: true, value: 120 },
+        after: { isFound: true, value: 120 },
+        isChanged: false,
+      },
+      {
+        field: "memo",
+        before: { isFound: false },
+        after: { isFound: true, value: "late fee" },
+        isChanged: true,
+      },
+      recordIdRow,
+    ]);
+    expect(countChangedFields(changes)).toBe(1);
   });
 
   it("shows a create as new values with nothing before", () => {
     const changes = buildChangeRequestChanges({
       kind: ChangeRequestKindEnum.Create,
+      callOp: createCallOp,
       readbackOp: createReadback,
       args: { name: "New", amount: 1 },
       before: null,
@@ -107,6 +164,7 @@ describe("buildChangeRequestChanges", () => {
   it("shows a delete as the record's values going away, and nothing to delete when it wasn't found", () => {
     const found = buildChangeRequestChanges({
       kind: ChangeRequestKindEnum.Delete,
+      callOp: deleteCallOp,
       readbackOp: deleteReadback,
       args: { recordId: "rec_alpha" },
       before,
@@ -121,8 +179,9 @@ describe("buildChangeRequestChanges", () => {
     ]);
     const missing = buildChangeRequestChanges({
       kind: ChangeRequestKindEnum.Delete,
+      callOp: deleteCallOp,
       readbackOp: deleteReadback,
-      args: { recordId: "rec_zulu" },
+      args: { recordId: "rec_zulu", reason: "duplicate" },
       before: { error: "not found" },
     });
     expect(countChangedFields(missing)).toBe(0);

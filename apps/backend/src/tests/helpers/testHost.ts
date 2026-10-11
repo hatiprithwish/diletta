@@ -110,17 +110,22 @@ export function render(
   return rendered.request;
 }
 
+// DEV_NOTE: The global fetch as the module loaded, before any spy: the fallback when a spy has no implementation of its
+// own (calling the spy itself would loop forever)
+const unmockedFetch: typeof fetch = globalThis.fetch;
+const testHostOrigin = new URL(testHostIssuer).origin;
+
 // DEV_NOTE: Code under test that calls the host with the global fetch (the Conversation DO's adapter, M3-4) reaches the
-// test host through this: every URL under the issuer goes to the auxiliary worker, anything else to the fetch in place
-// before. vi.spyOn reuses a spy already on fetch, so this layers over its implementation (call mockCloudflare first,
-// then this). Undone by vi.restoreAllMocks.
+// test host through this: every URL on the issuer's origin goes to the auxiliary worker, anything else to the fetch in
+// place before (its mock implementation, or the unmocked fetch). vi.spyOn reuses a spy already on fetch, so this
+// layers over its implementation (call mockCloudflare first, then this). Undone by vi.restoreAllMocks.
 export function routeTestHostFetch() {
-  const realFetch = globalThis.fetch;
-  const previous = vi.isMockFunction(realFetch) ? realFetch.getMockImplementation() : undefined;
-  const next: typeof fetch = previous ?? realFetch;
+  const current = globalThis.fetch;
+  const previous = vi.isMockFunction(current) ? current.getMockImplementation() : current;
+  const next: typeof fetch = previous ?? unmockedFetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return url.startsWith(testHostIssuer)
+    return URL.canParse(url) && new URL(url).origin === testHostOrigin
       ? await testHostFetch(input, init)
       : await next(input, init);
   });

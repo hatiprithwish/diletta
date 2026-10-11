@@ -39,7 +39,8 @@ export interface ChangeRequestViewsResponse extends ApiResponse {
 }
 
 // DEV_NOTE: The turn's tools, and how many pins were left out (Disabled, Draft or missing version, connection not
-// Active, ops that don't load, an input_schema that can't be checked: each logged)
+// Active, ops that don't load, an input_schema that can't be checked: each logged). A read-only company's write tools
+// are not loaded and not counted.
 export interface LoadTurnToolsResponse extends ApiResponse {
   tools?: RuntimeTool[];
   skippedCount?: number;

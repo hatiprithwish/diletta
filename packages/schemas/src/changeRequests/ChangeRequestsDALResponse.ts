@@ -10,7 +10,8 @@ export interface ChangeRequestsDALResponse extends ApiResponse {
   changeRequests?: ChangeRequestRow[];
 }
 
-// DEV_NOTE: The row a status change wrote (without the tool fields: the Repo read those when it locked the row)
-export interface ChangeRequestUpdateDALResponse extends ApiResponse {
+// DEV_NOTE: The row a create or an update wrote (without the tool fields: the Repo has those from the turn's tool or
+// from the row it locked)
+export interface ChangeRequestWriteDALResponse extends ApiResponse {
   changeRequest?: ChangeRequest;
 }

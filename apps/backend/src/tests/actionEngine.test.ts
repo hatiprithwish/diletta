@@ -19,6 +19,7 @@ import {
   toolDefinitions,
 } from "@/db/tables";
 import HostToolCallProvider from "@/providers/hostToolCall";
+import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import Utility from "@/utils/Utility";
@@ -53,6 +54,8 @@ let ownerPool: Pool | null = null;
 let sessionA: Schemas.ConversationSession;
 let sessionB: Schemas.ConversationSession;
 let hostToken = "";
+// DEV_NOTE: Each fixture conversation's conversation.started root log, which every change request event hangs under
+const rootLogIds = new Map<string, string>();
 
 async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Promise<T> {
   ownerPool ??= new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
@@ -110,6 +113,16 @@ async function createFixture(label: string): Promise<Schemas.ConversationSession
       .insert(chatbotUsers)
       .values({ companyId, hostUserId: `user-${crypto.randomUUID()}` })
       .returning();
+    const [rootLog] = await ownerDb
+      .insert(activityLog)
+      .values({
+        companyId,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+        actorId: chatbotUser?.id ?? null,
+        entityType: "conversation",
+        entityAction: "started",
+      })
+      .returning({ id: activityLog.id });
     const [conversation] = await ownerDb
       .insert(conversations)
       .values({
@@ -117,8 +130,10 @@ async function createFixture(label: string): Promise<Schemas.ConversationSession
         companyId,
         chatbotUserId: chatbotUser?.id ?? "",
         chatbotId: chatbot?.id ?? "",
+        rootLogId: rootLog?.id ?? null,
       })
       .returning();
+    rootLogIds.set(conversation?.id ?? "", rootLog?.id ?? "");
     return {
       companyId,
       chatbotId: chatbot?.id ?? "",
@@ -135,6 +150,7 @@ async function loadUpdateTool(session: Schemas.ConversationSession) {
   const loaded = await new ActionEngineRepo(env).loadTurnTools({
     session,
     pins: [{ name: "update_record", version: 1 }],
+    isReadOnly: false,
   });
   const tool = loaded.tools?.[0];
   if (!tool?.ops.readbackOp) throw new Error("update_record not loaded");
@@ -159,6 +175,7 @@ async function propose(
     before,
     changes: Schemas.buildChangeRequestChanges({
       kind,
+      callOp: tool.ops.callOp,
       readbackOp: tool.ops.readbackOp!,
       args,
       before,
@@ -166,7 +183,6 @@ async function propose(
     isApprovalRequired,
     hasUntrustedContext: true,
     latencyMs: 5,
-    expiresAt: Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS,
   });
   if (!proposed.changeRequest) throw new Error(proposed.message);
   return proposed;
@@ -188,6 +204,42 @@ async function eventsOf(changeRequestPublicId: string) {
         ),
       )
       .orderBy(asc(activityLog.id));
+  });
+}
+
+const startCommit = (session: Schemas.ConversationSession, changeRequestPublicId: string) =>
+  new ActionEngineRepo(env).startCommit({
+    session,
+    changeRequestPublicId,
+    attemptId: Utility.generateUlid(),
+  });
+
+// DEV_NOTE: Moves a proposal's created_at back, so its approval deadline has passed
+const ageChangeRequest = (publicId: string, ageMs: number) =>
+  withOwnerDb((ownerDb) =>
+    ownerDb
+      .update(changeRequests)
+      .set({ createdAt: new Date(Date.now() - ageMs) })
+      .where(eq(changeRequests.publicId, publicId)),
+  );
+
+const setToolStatus = (companyId: string, status: Schemas.ToolDefinitionStatusIntEnum) =>
+  withOwnerDb((ownerDb) =>
+    ownerDb
+      .update(toolDefinitions)
+      .set({ status })
+      .where(
+        and(eq(toolDefinitions.companyId, companyId), eq(toolDefinitions.name, "update_record")),
+      ),
+  );
+
+async function getRow(publicId: string) {
+  return await withOwnerDb(async (ownerDb) => {
+    const [row] = await ownerDb
+      .select()
+      .from(changeRequests)
+      .where(eq(changeRequests.publicId, publicId));
+    return row;
   });
 }
 
@@ -243,6 +295,7 @@ describe("ActionEngineRepo.loadTurnTools", () => {
         { name: "get_record", version: 1 },
         { name: "update_record", version: 9 },
       ],
+      isReadOnly: false,
     });
     expect(loaded.isSuccess).toBe(true);
     expect(loaded.tools?.map((tool) => [tool.name, tool.version])).toEqual([["update_record", 1]]);
@@ -261,6 +314,7 @@ describe("ActionEngineRepo.loadTurnTools", () => {
       const loaded = await new ActionEngineRepo(env).loadTurnTools({
         session: sessionB,
         pins: [{ name: "update_record", version: 1 }],
+        isReadOnly: false,
       });
       expect(loaded.tools).toEqual([]);
     } finally {
@@ -271,6 +325,16 @@ describe("ActionEngineRepo.loadTurnTools", () => {
           .where(eq(companyConnections.companyId, sessionB.companyId)),
       );
     }
+  });
+
+  it("loads no write tool for a read-only company, without counting it as left out", async () => {
+    const loaded = await new ActionEngineRepo(env).loadTurnTools({
+      session: sessionA,
+      pins: [{ name: "update_record", version: 1 }],
+      isReadOnly: true,
+    });
+    expect(loaded.tools).toEqual([]);
+    expect(loaded.skippedCount).toBe(0);
   });
 });
 
@@ -319,7 +383,7 @@ describe("ActionEngineRepo change requests", () => {
     });
     expect(again.failure).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
 
-    const started = await repo.startCommit({ session: sessionA, changeRequestPublicId: publicId });
+    const started = await startCommit(sessionA, publicId);
     expect(started.plan).toMatchObject({
       isResume: false,
       idempotencyKey: Schemas.changeRequestCommitIdempotencyKey(publicId),
@@ -347,7 +411,10 @@ describe("ActionEngineRepo change requests", () => {
       "committing",
       "committed",
     ]);
-    expect(events.every((event) => event.rootLogId === null)).toBe(true);
+    const rootLogId = rootLogIds.get(sessionA.conversationId);
+    expect(
+      events.every((event) => event.rootLogId === rootLogId && event.parentLogId === rootLogId),
+    ).toBe(true);
     expect(JSON.stringify(events.map((event) => event.detail))).not.toContain("333");
   });
 
@@ -360,10 +427,17 @@ describe("ActionEngineRepo change requests", () => {
     );
     expect(proposed.outboxIds).toHaveLength(2);
 
-    const first = await repo.startCommit({ session: sessionA, changeRequestPublicId: publicId });
+    const first = await startCommit(sessionA, publicId);
     expect(first.plan?.isResume).toBe(false);
-    const resumed = await repo.startCommit({ session: sessionA, changeRequestPublicId: publicId });
+    const resumed = await startCommit(sessionA, publicId);
     expect(resumed.plan?.isResume).toBe(true);
+    const resumedAgain = await startCommit(sessionA, publicId);
+    expect(resumedAgain.plan?.isResume).toBe(true);
+    // DEV_NOTE: Every attempt is on the timeline (its own attempt id), none deduped into another
+    const committing = (await eventsOf(publicId)).filter(
+      (event) => event.entityAction === "committing",
+    );
+    expect(committing).toHaveLength(3);
 
     const finished = await repo.finishCommit({
       session: sessionA,
@@ -395,7 +469,7 @@ describe("ActionEngineRepo change requests", () => {
       const repo = new ActionEngineRepo(env);
       const proposed = await propose(sessionA, 10, false);
       const publicId = proposed.changeRequest!.publicId;
-      await repo.startCommit({ session: sessionA, changeRequestPublicId: publicId });
+      await startCommit(sessionA, publicId);
       const finished = await repo.finishCommit({
         session: sessionA,
         changeRequestPublicId: publicId,
@@ -428,6 +502,78 @@ describe("ActionEngineRepo change requests", () => {
       isExpired: false,
     });
     expect(approved.failure).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
+    expect(approved.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Expired,
+    );
+  });
+
+  it("ends an approval that comes after the deadline as Expired, by the system", async () => {
+    const repo = new ActionEngineRepo(env);
+    const publicId = (await propose(sessionA, 14)).changeRequest!.publicId;
+    await ageChangeRequest(publicId, Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS + 1_000);
+    const late = await repo.decideChangeRequest({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      decision: Schemas.ChangeRequestDecisionEnum.Approve,
+      isExpired: false,
+    });
+    expect(late.isSuccess).toBe(true);
+    expect(late.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Expired,
+    );
+    expect(late.changeRequest?.expiresAt).toBeNull();
+    expect((await eventsOf(publicId)).at(-1)).toMatchObject({
+      entityAction: "expired",
+      actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+    });
+    expect((await startCommit(sessionA, publicId)).failure).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+  });
+
+  it("names a rolled-back step a ServerError, so the DO retries it rather than dropping it", async () => {
+    const publicId = (await propose(sessionA, 15, false)).changeRequest!.publicId;
+    // DEV_NOTE: The status write fails inside the transaction: withTenant rolls back and returns no failure of its own
+    vi.spyOn(ChangeRequestsDAL.prototype, "updateChangeRequestStatus").mockResolvedValueOnce({
+      isSuccess: false,
+      message: "Unknown error in updating change request status",
+    });
+    const started = await startCommit(sessionA, publicId);
+    expect(started.isSuccess).toBe(false);
+    expect(started.failure).toBe(Schemas.ChangeRequestFailureEnum.ServerError);
+    expect(started.plan).toBeUndefined();
+    expect((await getRow(publicId))?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Approved);
+    expect((await startCommit(sessionA, publicId)).plan?.isResume).toBe(false);
+  });
+
+  it("ends a commit whose tool was disabled after approval as Failed, with the reason stored", async () => {
+    const repo = new ActionEngineRepo(env);
+    const publicId = (await propose(sessionB, 16, false)).changeRequest!.publicId;
+    await setToolStatus(sessionB.companyId, Schemas.ToolDefinitionStatusIntEnum.Disabled);
+    try {
+      const started = await startCommit(sessionB, publicId);
+      expect(started.failure).toBe(Schemas.ChangeRequestFailureEnum.ToolUnavailable);
+      expect(started.changeRequest?.changeRequestStatus).toBe(
+        Schemas.ChangeRequestStatusIntEnum.Failed,
+      );
+      expect((await getRow(publicId))?.errorCode).toBe(
+        Schemas.ChangeRequestErrorCodeEnum.ToolUnavailable,
+      );
+    } finally {
+      await setToolStatus(sessionB.companyId, Schemas.ToolDefinitionStatusIntEnum.Active);
+    }
+    // DEV_NOTE: A purged payload: the view has no changes, and an update's kind is unknown without it
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(changeRequests)
+        .set({ encryptedChanges: null, iv: null, encryptionKeyVersion: null })
+        .where(eq(changeRequests.publicId, publicId)),
+    );
+    const views = await repo.getChangeRequestViews({
+      session: sessionB,
+      changeRequestPublicIds: [publicId],
+    });
+    expect(views.changeRequests?.[0]).toMatchObject({ changes: null, kind: null });
   });
 
   it("refuses to propose or approve for a read-only company, but still lets the user reject", async () => {
@@ -447,7 +593,6 @@ describe("ActionEngineRepo change requests", () => {
         isApprovalRequired: true,
         hasUntrustedContext: false,
         latencyMs: 1,
-        expiresAt: Date.now(),
       });
       expect(refused.failure).toBe(Schemas.ChangeRequestFailureEnum.ReadOnly);
       const approved = await repo.decideChangeRequest({
@@ -496,8 +641,24 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
         isExpired: false,
       });
       expect(decided.isSuccess).toBe(false);
-      const started = await repo.startCommit({ session, changeRequestPublicId: publicId });
+      expect(decided.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+      const started = await startCommit(session, publicId);
       expect(started.plan).toBeUndefined();
+      expect(started.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+      const finished = await repo.finishCommit({
+        session,
+        changeRequestPublicId: publicId,
+        hostCall: { outcome: Schemas.HostCallOutcomeEnum.Succeeded, attempts: 1 },
+        isResume: false,
+      });
+      expect(finished.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+      const executionSet = await repo.setExecutionId({
+        session,
+        changeRequestPublicId: publicId,
+        thinkExecutionId: "forged",
+      });
+      expect(executionSet.isSuccess).toBe(false);
+      expect(executionSet.isNotFound).toBe(true);
     }
 
     const stillProposed = await repo.getChangeRequestViews({
@@ -507,5 +668,47 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
     expect(stillProposed.changeRequests?.[0]?.changeRequestStatus).toBe(
       Schemas.ChangeRequestStatusIntEnum.Proposed,
     );
+    expect((await getRow(publicId))?.thinkExecutionId).toBeNull();
+  });
+
+  it("never loads another company's tools or records a tool call under its tenant", async () => {
+    const repo = new ActionEngineRepo(env);
+    const toolA = await loadUpdateTool(sessionA);
+    const loaded = await repo.loadTurnTools({
+      session: sessionB,
+      pins: [{ name: "update_record", version: 1 }],
+      isReadOnly: false,
+    });
+    expect(loaded.tools?.map((tool) => tool.id)).not.toContain(toolA.id);
+
+    // DEV_NOTE: B's tenant key naming A's conversation and A's tool: RLS and the DAL's reference checks refuse it
+    const forged = {
+      ...sessionB,
+      conversationId: sessionA.conversationId,
+      conversationPublicId: sessionA.conversationPublicId,
+    };
+    const recorded = await repo.recordToolCall({
+      session: forged,
+      turnId: Utility.generateUlid(),
+      tool: toolA,
+      args: null,
+      status: Schemas.ToolCallStatusIntEnum.Error,
+      errorCode: Schemas.ToolCallErrorCodeEnum.InvalidArgs,
+      latencyMs: null,
+      hasUntrustedContext: false,
+    });
+    expect(recorded.isSuccess).toBe(false);
+    const forgedRows = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ id: toolCalls.id })
+        .from(toolCalls)
+        .where(
+          and(
+            eq(toolCalls.companyId, sessionB.companyId),
+            eq(toolCalls.conversationId, sessionA.conversationId),
+          ),
+        ),
+    );
+    expect(forgedRows).toEqual([]);
   });
 });

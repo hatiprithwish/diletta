@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SEARCH_HELP_DOCS_TOOL_NAME } from "../knowledgeSearch/KnowledgeSearchCommon";
+import { getToolInputSchemaIssue } from "./ToolArgsValidator";
 import { ZToolOps, type ToolInverseOp, type ToolOps, type ToolReadbackOp } from "./ToolOpsRegistry";
 import {
   ToolOpPlaceholderRootEnum,
@@ -194,6 +195,18 @@ export function getToolRiskOpsIssue(
     }
   }
   return null;
+}
+
+// DEV_NOTE: Everything a stored tool's loaded ops must pass to be saved, activated or run: the risk rule above and an
+// input_schema the runtime can check (getToolInputSchemaIssue). Null = fine; else the reason.
+export function getToolOpsIssue(
+  risk: ToolDefinitionRiskIntEnum,
+  idempotencyMode: ToolDefinitionIdempotencyModeIntEnum,
+  ops: ToolOps,
+): string | null {
+  return (
+    getToolRiskOpsIssue(risk, idempotencyMode, ops) ?? getToolInputSchemaIssue(ops.inputSchema)
+  );
 }
 
 // Create Tool Definition Body (version 1, Draft)

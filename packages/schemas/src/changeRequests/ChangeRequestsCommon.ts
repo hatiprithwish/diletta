@@ -93,6 +93,23 @@ export const ZChangeRequestPayload = z.object({
 });
 export type ChangeRequestPayload = z.infer<typeof ZChangeRequestPayload>;
 
+// DEV_NOTE: change_requests.error_code: why a change request ended Failed or NeedsHuman. The step was refused before
+// the host call (the conversation, chatbot, company or tool no longer allowed it, or the payload couldn't be read), or
+// the host call ended so (@app/adapter outcome).
+export enum ChangeRequestErrorCodeEnum {
+  ConversationClosed = "conversation_closed",
+  ChatbotUnavailable = "chatbot_unavailable",
+  ReadOnly = "read_only",
+  ToolUnavailable = "tool_unavailable",
+  PayloadUnreadable = "payload_unreadable",
+  ServerError = "server_error",
+  TokenNeeded = "token_needed",
+  TokenRejected = "token_rejected",
+  HostRefused = "host_refused",
+  HostFailed = "host_failed",
+  HostUnknown = "host_unknown",
+}
+
 // Whole Change Request Body — DB shape (status stored as integer)
 // DEV_NOTE: id, companyId, conversationId and toolCallId are internal — NEVER sent to a client. encryptedChanges + iv +
 // encryptionKeyVersion hold the ChangeRequestPayload; null once purged. thinkExecutionId is the durable pause's
@@ -114,7 +131,7 @@ export const ZChangeRequest = z.object({
   idempotencyKey: z.string().nullable(),
   hostRef: z.string().nullable(),
   undoUntil: z.date().nullable(),
-  errorCode: z.string().nullable(),
+  errorCode: z.enum(ChangeRequestErrorCodeEnum).nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -133,12 +150,13 @@ export type ChangeRequestRow = ChangeRequest & {
 };
 
 // DEV_NOTE: Client-facing — one change request as the widget shows it (change_request frame). changes are null once
-// purged. expiresAt (epoch ms) only while Proposed. Internal ids structurally absent; toolName and field names are
+// purged, and kind too then, unless the tool is destructive (a delete): a create and an update read alike without the
+// payload. expiresAt (epoch ms) only while Proposed. Internal ids structurally absent; toolName and field names are
 // machine values (font-mono in the UI).
 export const ZWidgetChangeRequest = z.object({
   publicId: z.string(),
   toolName: z.string(),
-  kind: z.enum(ChangeRequestKindEnum),
+  kind: z.enum(ChangeRequestKindEnum).nullable(),
   changeRequestStatus: z.enum(ChangeRequestStatusIntEnum),
   changeRequestStatusLabel: z.enum(ChangeRequestStatusLabelEnum),
   summary: z.string(),

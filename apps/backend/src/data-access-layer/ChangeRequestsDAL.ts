@@ -49,7 +49,7 @@ export default class ChangeRequestsDAL {
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.CreateChangeRequestDALRequest,
   ) {
-    const response: Schemas.ChangeRequestUpdateDALResponse = { isSuccess: false };
+    const response: Schemas.ChangeRequestWriteDALResponse = { isSuccess: false };
     const metadata = { ...idsOf(params), toolCallId: params.toolCallId };
 
     try {
@@ -180,7 +180,7 @@ export default class ChangeRequestsDAL {
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpdateChangeRequestStatusDALRequest,
   ) {
-    const response: Schemas.ChangeRequestUpdateDALResponse = { isSuccess: false };
+    const response: Schemas.ChangeRequestWriteDALResponse = { isSuccess: false };
     const metadata = {
       companyId: params.companyId,
       id: params.id,
@@ -236,31 +236,55 @@ export default class ChangeRequestsDAL {
     return response;
   }
 
-  // DEV_NOTE: Set once: a row that already has an execution id (or isn't this conversation's) is left as it is
+  // DEV_NOTE: Set once: a row that already holds this execution id succeeds unchanged; one that holds another is
+  // refused (a pause is never re-pointed); no row of this conversation with that public id is isNotFound
   async setChangeRequestExecutionId(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.SetChangeRequestExecutionIdDALRequest,
   ) {
-    const response: Schemas.ChangeRequestUpdateDALResponse = { isSuccess: false };
+    const response: Schemas.ChangeRequestWriteDALResponse = { isSuccess: false };
 
     try {
-      const conditions = [
+      const rowConditions = [
         eq(changeRequests.publicId, params.publicId),
         eq(changeRequests.companyId, params.companyId),
         eq(changeRequests.conversationId, params.conversationId),
-        isNull(changeRequests.thinkExecutionId),
       ];
+      const unsetConditions = [...rowConditions, isNull(changeRequests.thinkExecutionId)];
       const [changeRequest] = await tx
         .update(changeRequests)
         .set({ thinkExecutionId: params.thinkExecutionId, updatedAt: new Date() })
-        .where(and(...conditions))
+        .where(and(...unsetConditions))
         .returning();
+      if (changeRequest) {
+        response.isSuccess = true;
+        response.message = "Change request execution id set";
+        response.changeRequest = changeRequest;
+        return response;
+      }
 
+      const [existing] = await tx
+        .select()
+        .from(changeRequests)
+        .where(and(...rowConditions))
+        .limit(1);
+      if (!existing || existing.thinkExecutionId !== params.thinkExecutionId) {
+        const message = existing
+          ? "Change request holds another execution id"
+          : "Change request not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.SetChangeRequestExecutionId,
+          message,
+          metadata: idsOf(params),
+        });
+        response.message = message;
+        response.isNotFound = !existing;
+        return response;
+      }
       response.isSuccess = true;
-      response.message = changeRequest
-        ? "Change request execution id set"
-        : "Change request execution id already set";
-      response.changeRequest = changeRequest;
+      response.message = "Change request execution id already set";
+      response.changeRequest = existing;
     } catch (error) {
       const message = "Unknown error in setting change request execution id";
       AppLogger.error({

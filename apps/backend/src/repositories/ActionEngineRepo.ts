@@ -1,15 +1,16 @@
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
-import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
-import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import ToolCallsDAL from "@/data-access-layer/ToolCallsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import ChangeRequestsProvider from "@/providers/changeRequests";
 import CompanyKeyProvider from "@/providers/companyKey";
+import ConversationCheckProvider from "@/providers/conversationCheck";
 import CriticalEventProvider from "@/providers/criticalEvent";
+import HostToolsProvider from "@/providers/hostTools";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
@@ -26,7 +27,9 @@ import * as Schemas from "@app/schemas";
 // Timeline: every change request status change writes its critical event (change_request.<action>) in the same
 // transaction (CriticalEventProvider), under the conversation's root log; the DO relays outboxIds after the commit.
 // A status change matches the statuses it may start from (the row is locked first), so a step that lost a race to
-// another (an approval and the expiry) changes nothing and answers InvalidTransition.
+// another (an approval and the expiry) changes nothing and answers InvalidTransition with the row as it stands. Every
+// refused step names a failure: a rolled-back transaction (TenantRollbackError, a lost connection) is ServerError, so
+// the DO can tell "try again" from "this is settled".
 export default class ActionEngineRepo {
   private db: NodePgDatabase;
   private env: Env;
@@ -34,8 +37,6 @@ export default class ActionEngineRepo {
   private toolCallsDal: ToolCallsDAL;
   private changeRequestsDal: ChangeRequestsDAL;
   private conversationsDal: ConversationsDAL;
-  private companiesDal: CompaniesDAL;
-  private chatbotsDal: ChatbotsDAL;
 
   constructor(env: Env) {
     this.env = env;
@@ -44,13 +45,12 @@ export default class ActionEngineRepo {
     this.toolCallsDal = new ToolCallsDAL();
     this.changeRequestsDal = new ChangeRequestsDAL();
     this.conversationsDal = new ConversationsDAL();
-    this.companiesDal = new CompaniesDAL();
-    this.chatbotsDal = new ChatbotsDAL();
   }
 
   // DEV_NOTE: The config's exact {name, version} pins, as the turn will run them. A pin whose version is not Active,
   // whose connection can't serve calls, whose ops don't load or fit its risk, or whose input_schema can't be checked is
-  // left out of the turn and logged (the bot answers without it; M4-10 keeps a published config from pinning one).
+  // left out of the turn and logged (the bot answers without it; M4-10 keeps a published config from pinning one). A
+  // read-only company (isReadOnly) gets its read tools only.
   async loadTurnTools(
     params: Schemas.LoadTurnToolsRequest,
   ): Promise<Schemas.LoadTurnToolsResponse> {
@@ -69,17 +69,21 @@ export default class ActionEngineRepo {
       }
 
       const tools: Schemas.RuntimeTool[] = [];
+      let skippedCount = 0;
       for (const pin of pins) {
         const row = found.toolDefinitions.find(
           (candidate) => candidate.name === pin.name && candidate.version === pin.version,
         );
         const loaded = row
-          ? ActionEngineRepo.toRuntimeTool(row)
+          ? HostToolsProvider.toRuntimeTool(row)
           : { tool: null, reason: "Pinned version not found" };
         if (loaded.tool) {
-          tools.push(loaded.tool);
+          if (!params.isReadOnly || loaded.tool.risk === Schemas.ToolDefinitionRiskIntEnum.Read) {
+            tools.push(loaded.tool);
+          }
           continue;
         }
+        skippedCount += 1;
         AppLogger.warn({
           category: Schemas.LogCategory.Action,
           action: Schemas.LogAction.LoadTurnTools,
@@ -92,12 +96,7 @@ export default class ActionEngineRepo {
           },
         });
       }
-      return {
-        isSuccess: true,
-        message: "Turn tools loaded",
-        tools,
-        skippedCount: pins.length - tools.length,
-      };
+      return { isSuccess: true, message: "Turn tools loaded", tools, skippedCount };
     });
   }
 
@@ -139,11 +138,12 @@ export default class ActionEngineRepo {
 
   // DEV_NOTE: A write's proposal, in one transaction: its tool call (args encrypted), the change request (payload
   // encrypted; Proposed, or Approved when no approval is needed) and its events. Anything failing rolls all of it back.
+  // Its approval deadline is the row's created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS (the view's expiresAt).
   async proposeChange(
     params: Schemas.ProposeChangeRequest,
   ): Promise<Schemas.ChangeRequestStepResponse> {
     const { session, tool } = params;
-    return await withTenant(this.db, session.companyId, async (tx) => {
+    return await this.step(session, async (tx) => {
       const checked = await this.checkConversation(tx, session, true);
       if (!checked.isSuccess) {
         return { isSuccess: false, message: checked.message, failure: checked.failure };
@@ -249,7 +249,7 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Change proposed",
         outboxIds,
-        changeRequest: ActionEngineRepo.toView(
+        changeRequest: ChangeRequestsProvider.toView(
           {
             ...changeRequest,
             toolId: tool.id,
@@ -266,20 +266,17 @@ export default class ActionEngineRepo {
   }
 
   // DEV_NOTE: The user's answer (Approve → Approved, Reject → Rejected) or the expiry (→ Expired), only from Proposed.
-  // An approval re-checks everything a commit needs; a rejection or an expiry ends the proposal whatever else changed.
+  // An approval re-checks everything a commit needs, and must come before the deadline (created_at +
+  // CHANGE_REQUEST_APPROVAL_EXPIRY_MS): one after it ends the proposal Expired instead (by the system), whatever the
+  // widget still showed. A rejection or an expiry ends the proposal whatever else changed.
   async decideChangeRequest(
     params: Schemas.DecideChangeRequest,
   ): Promise<Schemas.ChangeRequestStepResponse> {
     const { session } = params;
     const isApprove =
       params.decision === Schemas.ChangeRequestDecisionEnum.Approve && !params.isExpired;
-    const status = params.isExpired
-      ? Schemas.ChangeRequestStatusIntEnum.Expired
-      : isApprove
-        ? Schemas.ChangeRequestStatusIntEnum.Approved
-        : Schemas.ChangeRequestStatusIntEnum.Rejected;
 
-    return await withTenant(this.db, session.companyId, async (tx) => {
+    return await this.step(session, async (tx) => {
       let rootLogId: string | null;
       if (isApprove) {
         const checked = await this.checkConversation(tx, session, true);
@@ -295,9 +292,16 @@ export default class ActionEngineRepo {
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
       if (row.status !== Schemas.ChangeRequestStatusIntEnum.Proposed) {
-        return await this.refuseTransition(tx, session, row);
+        return await this.refuseTransition(tx, row);
       }
 
+      const isExpired =
+        params.isExpired || (isApprove && ChangeRequestsProvider.isPastDeadline(row, Date.now()));
+      const status = isExpired
+        ? Schemas.ChangeRequestStatusIntEnum.Expired
+        : isApprove
+          ? Schemas.ChangeRequestStatusIntEnum.Approved
+          : Schemas.ChangeRequestStatusIntEnum.Rejected;
       const updated = await this.changeRequestsDal.updateChangeRequestStatus(tx, {
         companyId: session.companyId,
         id: row.id,
@@ -312,7 +316,7 @@ export default class ActionEngineRepo {
         changeRequest: updated.changeRequest,
         rootLogId,
         status,
-        actorType: params.isExpired
+        actorType: isExpired
           ? Schemas.ActivityLogActorTypeIntEnum.System
           : Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
         detail: { toolCallId: row.toolCallId },
@@ -321,27 +325,30 @@ export default class ActionEngineRepo {
       const next = { ...row, ...updated.changeRequest };
       return {
         isSuccess: true,
-        message: "Change request decided",
+        message: isExpired && !params.isExpired ? "Approval came after the deadline" : "Decided",
         outboxIds: [outboxId],
-        changeRequest: ActionEngineRepo.toView(next, await this.decryptPayload(tx, next)),
+        changeRequest: ChangeRequestsProvider.toView(next, await this.decryptPayload(tx, next)),
       };
     });
   }
 
-  // DEV_NOTE: Approved → Committing (the commit's key stored), or a Committing one again (an eviction cut its commit:
-  // isResume, since that attempt may have reached the host). The tool version is read again by its id and must still
-  // be Active on an Active connection; if it isn't, the change request ends Failed (nothing was sent) or, on a resume,
-  // NeedsHuman (something may have been).
+  // DEV_NOTE: Approved → Committing (the commit's key stored), or a Committing one again (an eviction or a failed write
+  // cut its commit: isResume, since that attempt may have reached the host). The tool version is read again by its id
+  // and must still be Active on an Active connection; if it isn't, the change request ends Failed (nothing was sent)
+  // or, on a resume, NeedsHuman (something may have been). Each attempt's committing event is its own (attemptId).
   async startCommit(params: Schemas.StartCommitRequest): Promise<Schemas.StartCommitResponse> {
     const { session } = params;
-    return await withTenant(this.db, session.companyId, async (tx) => {
+    return await this.step(session, async (tx): Promise<Schemas.StartCommitResponse> => {
       const checked = await this.checkConversation(tx, session, true);
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
       const isResume = row.status === Schemas.ChangeRequestStatusIntEnum.Committing;
       if (!isResume && row.status !== Schemas.ChangeRequestStatusIntEnum.Approved) {
-        return await this.refuseTransition(tx, session, row);
+        return await this.refuseTransition(tx, row);
+      }
+      if (!checked.isSuccess && checked.failure === Schemas.ChangeRequestFailureEnum.ServerError) {
+        return { isSuccess: false, message: checked.message, failure: checked.failure };
       }
       const rootLogId = checked.isSuccess
         ? checked.rootLogId
@@ -359,19 +366,21 @@ export default class ActionEngineRepo {
         };
       }
       const runtime = toolRow.toolDefinition
-        ? ActionEngineRepo.toRuntimeTool(toolRow.toolDefinition)
+        ? HostToolsProvider.toRuntimeTool(toolRow.toolDefinition)
         : { tool: null, reason: "Tool definition not found" };
       const payload = await this.decryptPayload(tx, row);
 
       // DEV_NOTE: The step can't go on: end the change request here, in this transaction
-      const refusal: Schemas.ChangeRequestFailureEnum | null = !checked.isSuccess
-        ? checked.failure
-        : !runtime.tool
-          ? Schemas.ChangeRequestFailureEnum.ToolUnavailable
-          : !payload
-            ? Schemas.ChangeRequestFailureEnum.ServerError
-            : null;
-      if (refusal || !runtime.tool || !payload) {
+      if (!checked.isSuccess || !runtime.tool || !payload) {
+        const failure = !checked.isSuccess
+          ? checked.failure
+          : !runtime.tool
+            ? Schemas.ChangeRequestFailureEnum.ToolUnavailable
+            : Schemas.ChangeRequestFailureEnum.ServerError;
+        const errorCode =
+          checked.isSuccess && runtime.tool && !payload
+            ? Schemas.ChangeRequestErrorCodeEnum.PayloadUnreadable
+            : ChangeRequestsProvider.refusalErrorCode(failure);
         const ended = await this.moveStatus(tx, {
           session,
           row,
@@ -379,21 +388,21 @@ export default class ActionEngineRepo {
           status: isResume
             ? Schemas.ChangeRequestStatusIntEnum.NeedsHuman
             : Schemas.ChangeRequestStatusIntEnum.Failed,
-          errorCode: refusal ?? Schemas.ChangeRequestFailureEnum.ServerError,
-          detail: { reason: refusal ?? Schemas.ChangeRequestFailureEnum.ServerError },
+          errorCode,
+          detail: { reason: errorCode },
         });
         AppLogger.warn({
           category: Schemas.LogCategory.Action,
           action: Schemas.LogAction.CommitChangeRequest,
-          message: `Commit not started: ${checked.isSuccess ? (runtime.reason ?? "payload unreadable") : (checked.message ?? checked.failure)}`,
+          message: `Commit not started: ${checked.isSuccess ? (runtime.reason ?? "payload unreadable") : checked.message}`,
           metadata: { companyId: session.companyId, changeRequestPublicId: row.publicId, isResume },
         });
         return {
           isSuccess: false,
           message: "Commit not started",
-          failure: refusal ?? Schemas.ChangeRequestFailureEnum.ServerError,
+          failure,
           outboxIds: ended.outboxIds,
-          changeRequest: ActionEngineRepo.toView(ended.row, payload),
+          changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
         };
       }
 
@@ -405,14 +414,14 @@ export default class ActionEngineRepo {
         status: Schemas.ChangeRequestStatusIntEnum.Committing,
         idempotencyKey,
         detail: { isResume },
-        dedupeParts: isResume ? [`resume-${Date.now()}`] : [],
+        dedupeParts: isResume ? [`resume-${params.attemptId}`] : [],
       });
 
       return {
         isSuccess: true,
         message: isResume ? "Commit resumed" : "Commit started",
         outboxIds: started.outboxIds,
-        changeRequest: ActionEngineRepo.toView(started.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(started.row, payload),
         plan: {
           changeRequestPublicId: row.publicId,
           tool: runtime.tool,
@@ -424,22 +433,20 @@ export default class ActionEngineRepo {
     });
   }
 
-  // DEV_NOTE: Committing → the commit's end, from the host call (@app/adapter): Succeeded or AlreadyApplied →
-  // Committed (verified by read-after in M3-6); Unknown → NeedsHuman; any other outcome → Failed when nothing may have
-  // landed, else NeedsHuman (a token refused after a send that may have landed is never resent here: M3-8).
+  // DEV_NOTE: Committing → the commit's end, from the host call (@app/adapter): ChangeRequestsProvider.commitEnd
   async finishCommit(
-    params: Schemas.FinishCommitRequest & { isResume: boolean },
+    params: Schemas.FinishCommitRequest,
   ): Promise<Schemas.ChangeRequestStepResponse> {
     const { session, hostCall } = params;
-    return await withTenant(this.db, session.companyId, async (tx) => {
+    return await this.step(session, async (tx) => {
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
       if (row.status !== Schemas.ChangeRequestStatusIntEnum.Committing) {
-        return await this.refuseTransition(tx, session, row);
+        return await this.refuseTransition(tx, row);
       }
 
-      const ended = ActionEngineRepo.commitEnd(hostCall, params.isResume);
+      const ended = ChangeRequestsProvider.commitEnd(hostCall, params.isResume);
       const moved = await this.moveStatus(tx, {
         session,
         row,
@@ -452,7 +459,10 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Commit finished",
         outboxIds: moved.outboxIds,
-        changeRequest: ActionEngineRepo.toView(moved.row, await this.decryptPayload(tx, moved.row)),
+        changeRequest: ChangeRequestsProvider.toView(
+          moved.row,
+          await this.decryptPayload(tx, moved.row),
+        ),
       };
     });
   }
@@ -466,12 +476,17 @@ export default class ActionEngineRepo {
         publicId: params.changeRequestPublicId,
         thinkExecutionId: params.thinkExecutionId,
       });
-      return { isSuccess: updated.isSuccess, message: updated.message };
+      return {
+        isSuccess: updated.isSuccess,
+        isNotFound: updated.isNotFound,
+        message: updated.message,
+      };
     });
   }
 
   // DEV_NOTE: The widget's views of some of this conversation's change requests (values decrypted: the user's own
-  // widget only), oldest first. One whose payload can't be read is sent without its changes.
+  // widget only), oldest first, each key version unwrapped once. One whose payload can't be read is sent without its
+  // changes.
   async getChangeRequestViews(
     params: Schemas.GetChangeRequestViewsRequest,
   ): Promise<Schemas.ChangeRequestViewsResponse> {
@@ -485,186 +500,46 @@ export default class ActionEngineRepo {
       if (!listed.isSuccess || !listed.changeRequests) {
         return { isSuccess: false, message: listed.message };
       }
-      const changeRequests: Schemas.WidgetChangeRequest[] = [];
-      for (const row of listed.changeRequests) {
-        changeRequests.push(ActionEngineRepo.toView(row, await this.decryptPayload(tx, row)));
-      }
+      const payloads = await this.decryptPayloads(tx, session.companyId, listed.changeRequests);
+      const changeRequests = listed.changeRequests.map((row, index) =>
+        ChangeRequestsProvider.toView(row, payloads[index] ?? null),
+      );
       return { isSuccess: true, message: "Change requests fetched", changeRequests };
     });
   }
 
-  // DEV_NOTE: A loaded pin, or why it can't run (logged by the caller)
-  private static toRuntimeTool(
-    row: Schemas.ToolDefinitionWithConnectionRow,
-  ): { tool: Schemas.RuntimeTool; reason?: undefined } | { tool: null; reason: string } {
-    if (row.status !== Schemas.ToolDefinitionStatusIntEnum.Active) {
-      return { tool: null, reason: "Tool version is not Active" };
-    }
-    const { connection } = row;
-    if (
-      !connection ||
-      connection.status !== Schemas.CompanyConnectionStatusIntEnum.Active ||
-      connection.adapterType !== Schemas.CompanyConnectionAdapterTypeIntEnum.Rest ||
-      !connection.baseUrl
-    ) {
-      return { tool: null, reason: "Connection can't serve tool calls" };
-    }
-    const authIssue = Schemas.getAuthConfigIssue(connection);
-    if (authIssue) return { tool: null, reason: authIssue };
-
-    const loaded = Schemas.loadToolOps({
-      schemaVersion: row.schemaVersion,
-      ops: {
-        inputSchema: row.inputSchema,
-        callOp: row.callOp,
-        readbackOp: row.readbackOp,
-        inverseOp: row.inverseOp,
-      },
-    });
-    if (!loaded.isSuccess || !loaded.ops) {
-      return { tool: null, reason: loaded.message ?? "Tool ops don't load" };
-    }
-    const issue =
-      Schemas.getToolRiskOpsIssue(row.risk, row.idempotencyMode, loaded.ops) ??
-      Schemas.getToolInputSchemaIssue(loaded.ops.inputSchema);
-    if (issue) return { tool: null, reason: issue };
-
-    return {
-      tool: {
-        id: row.id,
-        name: row.name,
-        version: row.version,
-        description: row.description,
-        risk: row.risk,
-        idempotencyMode: row.idempotencyMode,
-        approval: row.approval,
-        ops: loaded.ops,
-        connection: {
-          adapterType: connection.adapterType,
-          baseUrl: connection.baseUrl,
-          authType: connection.authType,
-          authConfig: connection.authConfig,
-          credentialScope: connection.credentialScope,
-        },
-      },
-    };
+  // DEV_NOTE: One change request step in withTenant. A refusal always names its failure: a rolled-back transaction
+  // (TenantRollbackError, a lost connection) comes back from withTenant without one, and is a ServerError (try again),
+  // never mistaken for a settled change request.
+  private async step<T extends Schemas.ChangeRequestStepResponse>(
+    session: Schemas.ConversationSession,
+    callback: (tx: NodePgTransaction<EmptyRelations>) => Promise<T>,
+  ): Promise<T | Schemas.ChangeRequestStepResponse> {
+    const result: T | Schemas.ChangeRequestStepResponse = await withTenant(
+      this.db,
+      session.companyId,
+      callback,
+    );
+    if (result.isSuccess || ("failure" in result && result.failure)) return result;
+    return { ...result, failure: Schemas.ChangeRequestFailureEnum.ServerError };
   }
 
-  // DEV_NOTE: The change request's status from how its commit's host call ended. A resume that couldn't even be sent
-  // (attempts 0) proves nothing about the earlier attempt, so it can't end Failed either.
-  private static commitEnd(
-    hostCall: Schemas.FinishCommitRequest["hostCall"],
-    isResume: boolean,
-  ): { status: Schemas.ChangeRequestStatusIntEnum; errorCode: string | null } {
-    switch (hostCall.outcome) {
-      case Schemas.HostCallOutcomeEnum.Succeeded:
-      case Schemas.HostCallOutcomeEnum.AlreadyApplied:
-        return { status: Schemas.ChangeRequestStatusIntEnum.Committed, errorCode: null };
-      case Schemas.HostCallOutcomeEnum.Unknown:
-        return {
-          status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
-          errorCode: Schemas.ToolCallErrorCodeEnum.HostUnknown,
-        };
-      default: {
-        const errorCode =
-          hostCall.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded
-            ? Schemas.ToolCallErrorCodeEnum.TokenNeeded
-            : hostCall.outcome === Schemas.HostCallOutcomeEnum.TokenRejected
-              ? Schemas.ToolCallErrorCodeEnum.TokenRejected
-              : hostCall.outcome === Schemas.HostCallOutcomeEnum.Refused
-                ? Schemas.ToolCallErrorCodeEnum.HostRefused
-                : Schemas.ToolCallErrorCodeEnum.HostFailed;
-        const mayHaveLanded =
-          hostCall.mayHaveLanded === true || (isResume && (hostCall.attempts ?? 0) === 0);
-        return {
-          status: mayHaveLanded
-            ? Schemas.ChangeRequestStatusIntEnum.NeedsHuman
-            : Schemas.ChangeRequestStatusIntEnum.Failed,
-          errorCode,
-        };
-      }
-    }
-  }
-
-  private static toView(
-    row: Schemas.ChangeRequestRow,
-    payload: Schemas.ChangeRequestPayload | null,
-  ): Schemas.WidgetChangeRequest {
-    const kind =
-      payload?.kind ??
-      (row.toolRisk === Schemas.ToolDefinitionRiskIntEnum.Destructive
-        ? Schemas.ChangeRequestKindEnum.Delete
-        : Schemas.ChangeRequestKindEnum.Update);
-    const isProposed = row.status === Schemas.ChangeRequestStatusIntEnum.Proposed;
-    return {
-      publicId: row.publicId,
-      toolName: row.toolName ?? "",
-      kind,
-      changeRequestStatus: row.status,
-      changeRequestStatusLabel: Schemas.CHANGE_REQUEST_STATUS_LABEL_MAP[row.status],
-      summary: row.summary,
-      changes: payload?.changes ?? null,
-      changeCount: row.changeCount,
-      expiresAt: isProposed
-        ? row.createdAt.getTime() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS
-        : null,
-      isUndoable: row.isUndoable,
-    };
-  }
-
-  // DEV_NOTE: The conversation open and its company and chatbot active (and, for a host write, the company not
-  // read-only), re-checked on every step
+  // DEV_NOTE: The conversation open, its company and chatbot active (ConversationCheckProvider) and, for a host write,
+  // the company not read-only; re-checked on every step. A conversation missing from the company reads as closed.
   private async checkConversation(
     tx: NodePgTransaction<EmptyRelations>,
     session: Schemas.ConversationSession,
     isHostWrite: boolean,
   ): Promise<Schemas.ChangeRequestConversationCheck> {
-    const conversation = await this.conversationsDal.getConversationDetails(tx, {
-      companyId: session.companyId,
-      publicId: session.conversationPublicId,
-    });
-    if (!conversation.isSuccess || !conversation.conversation) {
+    const checked = await ConversationCheckProvider.check(tx, session);
+    if (!checked.isSuccess) {
       return {
         isSuccess: false,
-        failure: conversation.isNotFound
-          ? Schemas.ChangeRequestFailureEnum.ConversationClosed
-          : Schemas.ChangeRequestFailureEnum.ServerError,
-        message: conversation.message,
+        failure: CHANGE_REQUEST_CHECK_FAILURE_MAP[checked.failure],
+        message: checked.message,
       };
     }
-    if (conversation.conversation.status !== Schemas.ConversationStatusIntEnum.Open) {
-      return {
-        isSuccess: false,
-        failure: Schemas.ChangeRequestFailureEnum.ConversationClosed,
-        message: "Conversation is closed",
-      };
-    }
-
-    const company = await this.companiesDal.getCompanyDetails(tx, { companyId: session.companyId });
-    const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
-      companyId: session.companyId,
-      publicId: session.chatbotPublicId,
-    });
-    if (!company.isSuccess || !chatbot.isSuccess || !company.company || !chatbot.chatbot) {
-      return {
-        isSuccess: false,
-        failure: chatbot.isNotFound
-          ? Schemas.ChangeRequestFailureEnum.ChatbotUnavailable
-          : Schemas.ChangeRequestFailureEnum.ServerError,
-        message: company.message ?? chatbot.message,
-      };
-    }
-    if (
-      company.company.status !== Schemas.CompanyStatusIntEnum.Active ||
-      chatbot.chatbot.status !== Schemas.ChatbotStatusIntEnum.Active
-    ) {
-      return {
-        isSuccess: false,
-        failure: Schemas.ChangeRequestFailureEnum.ChatbotUnavailable,
-        message: "Chatbot or company is not active",
-      };
-    }
-    if (isHostWrite && company.company.isReadOnly) {
+    if (isHostWrite && checked.company.isReadOnly) {
       return {
         isSuccess: false,
         failure: Schemas.ChangeRequestFailureEnum.ReadOnly,
@@ -673,11 +548,13 @@ export default class ActionEngineRepo {
     }
     return {
       isSuccess: true,
-      rootLogId: conversation.conversation.rootLogId,
-      isReadOnly: company.company.isReadOnly,
+      rootLogId: checked.conversation.rootLogId,
+      isReadOnly: checked.company.isReadOnly,
     };
   }
 
+  // DEV_NOTE: The conversation's root log, for a step that doesn't re-check the conversation (a rejection, an expiry, a
+  // commit's end). A failed read rolls the step back (retried later), so no event is cut off from its conversation.
   private async findRootLogId(
     tx: NodePgTransaction<EmptyRelations>,
     session: Schemas.ConversationSession,
@@ -686,6 +563,9 @@ export default class ActionEngineRepo {
       companyId: session.companyId,
       publicId: session.conversationPublicId,
     });
+    if (!conversation.isSuccess && !conversation.isNotFound) {
+      throw new TenantRollbackError(conversation.message ?? "Conversation not read");
+    }
     return conversation.conversation?.rootLogId ?? null;
   }
 
@@ -722,7 +602,6 @@ export default class ActionEngineRepo {
   // DEV_NOTE: A step that doesn't start from this status: nothing changes, and the caller gets the row as it stands
   private async refuseTransition(
     tx: NodePgTransaction<EmptyRelations>,
-    session: Schemas.ConversationSession,
     row: Schemas.ChangeRequestRow,
   ): Promise<Schemas.ChangeRequestStepResponse> {
     AppLogger.warn({
@@ -730,7 +609,7 @@ export default class ActionEngineRepo {
       action: Schemas.LogAction.UpdateChangeRequestStatus,
       message: "Change request not in a status this step starts from",
       metadata: {
-        companyId: session.companyId,
+        companyId: row.companyId,
         changeRequestPublicId: row.publicId,
         status: row.status,
       },
@@ -739,7 +618,7 @@ export default class ActionEngineRepo {
       isSuccess: false,
       message: "Change request not in a status this step starts from",
       failure: Schemas.ChangeRequestFailureEnum.InvalidTransition,
-      changeRequest: ActionEngineRepo.toView(row, await this.decryptPayload(tx, row)),
+      changeRequest: ChangeRequestsProvider.toView(row, await this.decryptPayload(tx, row)),
     };
   }
 
@@ -752,7 +631,7 @@ export default class ActionEngineRepo {
       rootLogId: string | null;
       status: Schemas.ChangeRequestStatusIntEnum;
       idempotencyKey?: string;
-      errorCode?: string | null;
+      errorCode?: Schemas.ChangeRequestErrorCodeEnum | null;
       detail: Record<string, string | number | boolean | null>;
       dedupeParts?: string[];
     },
@@ -856,24 +735,61 @@ export default class ActionEngineRepo {
     tx: NodePgTransaction<EmptyRelations>,
     row: Schemas.ChangeRequest,
   ): Promise<Schemas.ChangeRequestPayload | null> {
-    if (!row.encryptedChanges || !row.iv || row.encryptionKeyVersion === null) return null;
-    const decrypted = await CompanyKeyProvider.decryptValue(this.env, tx, {
-      companyId: row.companyId,
+    const [payload] = await this.decryptPayloads(tx, row.companyId, [row]);
+    return payload ?? null;
+  }
+
+  // DEV_NOTE: decryptPayload for a list of one company's rows, in order, each key version unwrapped once
+  private async decryptPayloads(
+    tx: NodePgTransaction<EmptyRelations>,
+    companyId: string,
+    rows: Schemas.ChangeRequest[],
+  ): Promise<(Schemas.ChangeRequestPayload | null)[]> {
+    const stored = rows.map((row) =>
+      row.encryptedChanges && row.iv && row.encryptionKeyVersion !== null
+        ? {
+            encryptedValue: { ciphertext: row.encryptedChanges, iv: row.iv },
+            encryptionKeyVersion: row.encryptionKeyVersion,
+          }
+        : null,
+    );
+    const decrypted = await CompanyKeyProvider.decryptValues(this.env, tx, {
+      companyId,
       column: Schemas.EncryptedColumnEnum.ChangeRequestChanges,
-      encryptedValue: { ciphertext: row.encryptedChanges, iv: row.iv },
-      encryptionKeyVersion: row.encryptionKeyVersion,
+      values: stored.filter((value) => value !== null),
     });
-    if (!decrypted.isSuccess || decrypted.plaintext === undefined) return null;
-    const parsed = Schemas.ZChangeRequestPayload.safeParse(Utility.parseJson(decrypted.plaintext));
-    if (!parsed.success) {
-      AppLogger.error({
-        category: Schemas.LogCategory.Action,
-        action: Schemas.LogAction.GetChangeRequestDetails,
-        message: "Change request payload doesn't parse",
-        metadata: { companyId: row.companyId, changeRequestPublicId: row.publicId },
-      });
-      return null;
-    }
-    return parsed.data;
+    let next = 0;
+    return rows.map((row, index) => {
+      if (!stored[index]) return null;
+      const result = decrypted[next];
+      next += 1;
+      if (!result?.isSuccess || result.plaintext === undefined) return null;
+      const parsed = Schemas.ZChangeRequestPayload.safeParse(Utility.parseJson(result.plaintext));
+      if (!parsed.success) {
+        AppLogger.error({
+          category: Schemas.LogCategory.Action,
+          action: Schemas.LogAction.GetChangeRequestDetails,
+          message: "Change request payload doesn't parse",
+          metadata: { companyId, changeRequestPublicId: row.publicId },
+        });
+        return null;
+      }
+      return parsed.data;
+    });
   }
 }
+
+// DEV_NOTE: A change request step whose conversation check fails. A conversation missing from the company can take
+// no more steps, as if closed.
+const CHANGE_REQUEST_CHECK_FAILURE_MAP: Record<
+  Schemas.ConversationCheckFailureEnum,
+  Schemas.ChangeRequestFailureEnum
+> = {
+  [Schemas.ConversationCheckFailureEnum.NotFound]:
+    Schemas.ChangeRequestFailureEnum.ConversationClosed,
+  [Schemas.ConversationCheckFailureEnum.ConversationClosed]:
+    Schemas.ChangeRequestFailureEnum.ConversationClosed,
+  [Schemas.ConversationCheckFailureEnum.ChatbotUnavailable]:
+    Schemas.ChangeRequestFailureEnum.ChatbotUnavailable,
+  [Schemas.ConversationCheckFailureEnum.ServerError]: Schemas.ChangeRequestFailureEnum.ServerError,
+};

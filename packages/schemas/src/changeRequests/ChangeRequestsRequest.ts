@@ -36,10 +36,10 @@ export interface ProposeChangeRequest {
   isApprovalRequired: boolean;
   hasUntrustedContext: boolean;
   latencyMs: number;
-  expiresAt: number;
 }
 
-// DEV_NOTE: The user's answer (Approve / Reject), or the expiry (isExpired, Proposed → Expired)
+// DEV_NOTE: The user's answer (Approve / Reject), or the expiry (isExpired, Proposed → Expired). The deadline is the
+// row's created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS: an approval after it ends the proposal Expired instead.
 export interface DecideChangeRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
@@ -47,16 +47,21 @@ export interface DecideChangeRequest {
   isExpired: boolean;
 }
 
+// DEV_NOTE: attemptId (a fresh ULID per commit attempt) parts a resumed attempt's committing event from the others, so
+// a retried transaction of the same attempt dedupes
 export interface StartCommitRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
+  attemptId: string;
 }
 
-// DEV_NOTE: How the commit's host call ended (@app/adapter), for the change request's final status
+// DEV_NOTE: How the commit's host call ended (@app/adapter), for the change request's final status. isResume: the
+// commit plan's (an earlier attempt may have reached the host).
 export interface FinishCommitRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
   hostCall: Pick<HostCallResponse, "outcome" | "mayHaveLanded" | "attempts">;
+  isResume: boolean;
 }
 
 export interface GetChangeRequestViewsRequest {
@@ -70,7 +75,9 @@ export interface SetExecutionIdRequest {
   thinkExecutionId: string;
 }
 
+// DEV_NOTE: isReadOnly: the company is read-only (is_read_only), so only its read tools load
 export interface LoadTurnToolsRequest {
   session: ConversationSession;
   pins: { name: string; version: number }[];
+  isReadOnly: boolean;
 }

@@ -440,6 +440,12 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
         after: { isFound: true, value: 300 },
         isChanged: true,
       },
+      {
+        field: "recordId",
+        before: { isFound: true, value: "rec_alpha" },
+        after: { isFound: true, value: "rec_alpha" },
+        isChanged: false,
+      },
     ]);
     expect(proposed.expiresAt).toBeGreaterThan(Date.now());
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
@@ -529,6 +535,7 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
     const loaded = await repo.loadTurnTools({
       session,
       pins: [{ name: "update_record", version: 1 }],
+      isReadOnly: false,
     });
     const updateTool = loaded.tools?.[0];
     if (!updateTool?.ops.readbackOp) throw new Error("update_record not loaded");
@@ -543,6 +550,7 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
       before,
       changes: Schemas.buildChangeRequestChanges({
         kind,
+        callOp: updateTool.ops.callOp,
         readbackOp: updateTool.ops.readbackOp,
         args,
         before,
@@ -550,7 +558,6 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
       isApprovalRequired: true,
       hasUntrustedContext: false,
       latencyMs: 1,
-      expiresAt: Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS,
     });
     const proposedId = proposed.changeRequest?.publicId;
     if (!proposedId) throw new Error(proposed.message);
@@ -715,6 +722,207 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
     );
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
     socket.socket.close(1000);
+  });
+});
+
+describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  // DEV_NOTE: A turn that parks one update_record proposal (amount → `amount`), with Think's pause id recorded
+  async function parkProposal(amount: number) {
+    const tenant = await createTenant({ tools: ["update_record"] });
+    scriptModel([updateAlpha(amount), reply("Waiting for you."), reply("Done.")]);
+    routeTestHostFetch();
+    const socket = await connect(tenant);
+    sendHostToken(socket, tenant.hostToken);
+    await sendChat(socket, "req-1", `Set Alpha's amount to ${amount}`);
+    const proposed = asChangeRequest(
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)),
+    );
+    await waitForExecutionId(socket.publicId);
+    return { tenant, socket, proposed };
+  }
+
+  async function changeRequestEvents(companyId: string) {
+    return await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ entityAction: activityLog.entityAction })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.companyId, companyId),
+            eq(activityLog.entityType, Schemas.CHANGE_REQUEST_ENTITY_TYPE),
+          ),
+        )
+        .orderBy(asc(activityLog.id)),
+    );
+  }
+
+  it("decides a double-clicked approval once: the second answer waits for the first", async () => {
+    const { tenant, socket, proposed } = await parkProposal(310);
+    const from = socket.frames.length;
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await socket.waitFor(isContinuationDone, from);
+    const refused = await socket.waitFor(
+      (frame) =>
+        frame.type === "error" &&
+        (frame.message === "A reply is still in progress" ||
+          frame.message === "This change is no longer waiting for your answer"),
+      from,
+    );
+    expect(refused).toBeDefined();
+
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(310);
+    expect((await changeRequestEvents(tenant.companyId)).map((e) => e.entityAction)).toEqual([
+      "proposed",
+      "approved",
+      "committing",
+      "committed",
+    ]);
+    expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
+    socket.socket.close(1000);
+  });
+
+  it("ends an approval that comes after the deadline as Expired, writing nothing", async () => {
+    const { tenant, socket, proposed } = await parkProposal(320);
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(changeRequests)
+        .set({
+          createdAt: new Date(Date.now() - Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS - 1_000),
+        })
+        .where(eq(changeRequests.publicId, proposed.publicId)),
+    );
+    const from = socket.frames.length;
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Expired), from);
+    await socket.waitFor(
+      (frame) =>
+        frame.type === "error" &&
+        frame.message === "This change is no longer waiting for your answer",
+      from,
+    );
+    await socket.waitFor(isContinuationDone, from);
+
+    expect((await getChangeRequestRow(proposed.publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Expired,
+    );
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+    expect(JSON.stringify(gatewayRequests().at(-1)?.body?.messages)).toContain(
+      "The change expired before the user approved it",
+    );
+    socket.socket.close(1000);
+  });
+
+  it("follows a change request the database already approved (a lost answer) and commits it", async () => {
+    const { tenant, socket, proposed } = await parkProposal(330);
+    const { session } = await getRuntimeState(socket.publicId);
+    const approved = await new ActionEngineRepo(env).decideChangeRequest({
+      session,
+      changeRequestPublicId: proposed.publicId,
+      decision: Schemas.ChangeRequestDecisionEnum.Approve,
+      isExpired: false,
+    });
+    expect(approved.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Approved,
+    );
+
+    const from = socket.frames.length;
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await socket.waitFor(isContinuationDone, from);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(330);
+    expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
+    socket.socket.close(1000);
+  });
+
+  // DEV_NOTE: An eviction mid-commit leaves the row Committing. On the wake the DO has no host token, so it sends
+  // nothing (no NeedsHuman for a commit it couldn't even try); the widget's host_token frame resumes it, and the
+  // Emulated tool reads back first (not landed) before it resends.
+  it("resumes a commit an eviction cut short once the widget sends the host token again", async () => {
+    const tenant = await createTenant({ tools: ["update_record"] });
+    routeTestHostFetch();
+    const first = await connect(tenant);
+    first.socket.close(1000);
+    const stub = await getAgentByName(env.CONVERSATION_DO, first.publicId);
+    const toolCallId = "toolu_cut";
+    const args = { recordId: "rec_alpha", amount: 340 };
+
+    const { session } = await getRuntimeState(first.publicId);
+    const repo = new ActionEngineRepo(env);
+    const loaded = await repo.loadTurnTools({
+      session,
+      pins: [{ name: "update_record", version: 1 }],
+      isReadOnly: false,
+    });
+    const updateTool = loaded.tools?.[0];
+    if (!updateTool?.ops.readbackOp) throw new Error("update_record not loaded");
+    const before = await readHostRecord(tenant.hostToken, "rec_alpha");
+    const kind = Schemas.ChangeRequestKindEnum.Update;
+    const turnId = Utility.generateUlid();
+    const proposed = await repo.proposeChange({
+      session,
+      turnId,
+      tool: updateTool,
+      args,
+      kind,
+      before,
+      changes: Schemas.buildChangeRequestChanges({
+        kind,
+        callOp: updateTool.ops.callOp,
+        readbackOp: updateTool.ops.readbackOp,
+        args,
+        before,
+      }),
+      isApprovalRequired: false,
+      hasUntrustedContext: false,
+      latencyMs: 1,
+    });
+    const publicId = proposed.changeRequest?.publicId;
+    if (!publicId) throw new Error(proposed.message);
+    const started = await repo.startCommit({
+      session,
+      changeRequestPublicId: publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    expect(started.plan?.isResume).toBe(false);
+
+    await runInDurableObject(stub, async (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({
+        ...state,
+        changeRequests: {
+          [toolCallId]: {
+            publicId,
+            toolName: "update_record",
+            turnId,
+            stage: Schemas.ConversationChangeRequestStageEnum.Committing,
+            expiresAt: Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS,
+            executionId: null,
+            expiryScheduleId: null,
+          },
+        },
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await evictDurableObject(stub, { webSockets: "close" });
+
+    const second = await connect(tenant, { conversation: first.publicId });
+    await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committing));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect((await getChangeRequestRow(publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Committing,
+    );
+
+    const from = second.frames.length;
+    sendHostToken(second, tenant.hostToken);
+    await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(340);
+    expect((await getChangeRequestRow(publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Committed,
+    );
+    expect((await getRuntimeState(first.publicId)).changeRequests).toEqual({});
+    second.socket.close(1000);
   });
 });
 

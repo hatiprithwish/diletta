@@ -44,12 +44,17 @@ describe("HostToolsProvider.decideApproval", () => {
     expect(decide({ approval: Policy }, { rules: [] })).toBe(Required);
   });
 
-  it("ignores the rules for a tool that isn't Policy", () => {
-    const rules: Schemas.ConfigSpec["approvalRules"] = [
-      { roles: [], tools: [], approval: Blocked },
+  it("lets a blocking rule refuse any tool, and ignores the other rules for a tool that isn't Policy", () => {
+    const blockRule: Schemas.ConfigSpec["approvalRules"] = [
+      { roles: ["viewer"], tools: [], approval: Blocked },
     ];
-    expect(decide({ approval: Never }, { rules })).toBe(Auto);
-    expect(decide({ approval: Always }, { rules })).toBe(Required);
+    expect(decide({ approval: Never }, { rules: blockRule, roles: ["viewer"] })).toBe(Blocked);
+    expect(decide({ approval: Always }, { rules: blockRule, roles: ["viewer"] })).toBe(Blocked);
+    expect(decide({ approval: Never }, { rules: blockRule, roles: ["staff"] })).toBe(Auto);
+    const autoRule: Schemas.ConfigSpec["approvalRules"] = [
+      { roles: [], tools: [], approval: Auto },
+    ];
+    expect(decide({ approval: Always }, { rules: autoRule })).toBe(Required);
   });
 
   it("never lets a destructive tool or an untrusted turn skip approval, and still blocks what a rule blocks", () => {
@@ -77,28 +82,43 @@ describe("HostToolsProvider.callKey", () => {
   });
 });
 
+describe("HostToolsProvider.activeRoles", () => {
+  it("counts the JWT's roles only until its exp", () => {
+    const state = { roles: ["manager"], rolesExpiresAt: 1_000 };
+    expect(HostToolsProvider.activeRoles(state, 999)).toEqual(["manager"]);
+    expect(HostToolsProvider.activeRoles(state, 1_000)).toEqual([]);
+  });
+});
+
 describe("HostToolsProvider.hasUntrustedHistory", () => {
-  const writes = new Set(["update_record"]);
-  it("counts help docs searches, host reads and unknown tools as untrusted, and the turn's writes as trusted", () => {
+  const tool = (output: unknown, type = "tool-update_record") => ({ parts: [{ type, output }] });
+  it("judges a tool part by what it holds, never by its tool's name", () => {
     const text = { parts: [{ type: "text" }] };
-    expect(HostToolsProvider.hasUntrustedHistory([text], writes)).toBe(false);
+    expect(HostToolsProvider.hasUntrustedHistory([text])).toBe(false);
+    // DEV_NOTE: A write's outcome, Think's pause, a call with no output yet: the platform's own words
     expect(
-      HostToolsProvider.hasUntrustedHistory([{ parts: [{ type: "tool-update_record" }] }], writes),
+      HostToolsProvider.hasUntrustedHistory([
+        tool({ status: "committed", message: "The change was made in the app." }),
+        tool({ status: "paused", executionId: "x", message: "awaiting human approval" }),
+        tool(undefined),
+      ]),
     ).toBe(false);
+    // DEV_NOTE: Host data under any tool name (a name once a read, re-pinned to a write), a trimmed output, a search
     expect(
-      HostToolsProvider.hasUntrustedHistory(
-        [{ parts: [{ type: `tool-${Schemas.SEARCH_HELP_DOCS_TOOL_NAME}` }] }],
-        writes,
-      ),
+      HostToolsProvider.hasUntrustedHistory([tool({ status: "ok", message: "Read.", data: {} })]),
+    ).toBe(true);
+    expect(HostToolsProvider.hasUntrustedHistory([tool("[trimmed]", "tool-get_record")])).toBe(
+      true,
+    );
+    expect(
+      HostToolsProvider.hasUntrustedHistory([
+        tool(undefined, `tool-${Schemas.SEARCH_HELP_DOCS_TOOL_NAME}`),
+      ]),
     ).toBe(true);
     expect(
-      HostToolsProvider.hasUntrustedHistory([{ parts: [{ type: "tool-get_record" }] }], writes),
-    ).toBe(true);
-    expect(
-      HostToolsProvider.hasUntrustedHistory(
-        [{ parts: [{ type: "dynamic-tool", toolName: "old_tool" }] }],
-        writes,
-      ),
+      HostToolsProvider.hasUntrustedHistory([
+        { parts: [{ type: "dynamic-tool", toolName: "old_tool", output: { data: 1 } }] },
+      ]),
     ).toBe(true);
   });
 });
