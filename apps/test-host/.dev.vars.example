@@ -1,0 +1,7 @@
+# ============================================================
+# Test host (M3-3) secrets. `pnpm --filter test-host keygen` writes .dev.vars with fresh values.
+# Staging gets its own via `wrangler secret put <NAME> --env staging` (docs/runbooks/test-host.md).
+# ============================================================
+
+TEST_HOST_SIGNING_KEY=   # runtime-only: {"kid": "...", "privateJwk": {EC P-256 private JWK}}
+TEST_HOST_ADMIN_SECRET=  # runtime-only: X-Test-Host-Admin for /auth/tokens and /control/*

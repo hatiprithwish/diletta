@@ -1,0 +1,41 @@
+{
+  // DEV_NOTE: The test host (M3-3, docs/runbooks/test-host.md): a stand-in customer app for our own test company, staging
+  // only. The top level is local dev (`pnpm --filter test-host dev`, port 8788) and the bundle the backend's tests run
+  // as an auxiliary worker (`build`); CI deploys --env staging only. There is no production test host.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "diletta-test-host-local",
+  "main": "src/index.ts",
+  // DEV_NOTE: keep it up to date with the current date (same as the platform worker).
+  "compatibility_date": "2026-06-11",
+  // DEV_NOTE: TEST_HOST_ISSUER is the host's own origin: the companion JWT's iss, where its JWKS is served, and (+ /v1/)
+  // the connection's base_url. Secrets (.dev.vars locally, `wrangler secret put --env staging`): TEST_HOST_SIGNING_KEY
+  // (ES256 private key, `pnpm --filter test-host keygen`), TEST_HOST_ADMIN_SECRET (token minting + fault control).
+  "vars": {
+    "TEST_HOST_ISSUER": "http://localhost:8788",
+  },
+  "dev": { "port": 8788 },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+  },
+  // DEV_NOTE: One workspace DO per ws claim (SQLite kv): records, stored idempotency results, the fault queue.
+  // Bindings don't inherit, so each env declares its own; migrations do (top level only).
+  "durable_objects": {
+    "bindings": [{ "name": "TEST_HOST_WORKSPACE_DO", "class_name": "TestHostWorkspaceDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestHostWorkspaceDO"] }],
+  "env": {
+    "staging": {
+      "name": "diletta-test-host-staging",
+      "vars": {
+        // DEV_NOTE: = Schemas.TEST_HOST_STAGING_ISSUER; change both together
+        "TEST_HOST_ISSUER": "https://diletta-test-host-staging.hatiprithwish.workers.dev",
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "TEST_HOST_WORKSPACE_DO", "class_name": "TestHostWorkspaceDO" }],
+      },
+    },
+  },
+}

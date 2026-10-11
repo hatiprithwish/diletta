@@ -11,7 +11,7 @@
     "db:generate:sql": "drizzle-kit generate --custom --name",
     "db:migrate": "drizzle-kit migrate",
     "db:rollback": "node src/db/rollback.ts",
-    "test": "pnpm typecheck && vitest run",
+    "test": "pnpm typecheck && pnpm --filter test-host build && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
@@ -38,6 +38,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@app/adapter": "workspace:*",
     "@cloudflare/vitest-pool-workers": "^0.16.20",
     "@types/node": "^25.9.5",
     "@types/pg": "^8.15.6",
