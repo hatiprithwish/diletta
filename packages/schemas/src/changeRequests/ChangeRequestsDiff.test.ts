@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import { ToolDefinitionRiskIntEnum } from "../toolDefinitions/ToolDefinitionsCommon";
 import type { ToolCallOp, ToolReadbackOp } from "../toolDefinitions/ToolOpsRegistry";
 import { ToolOpMethodEnum } from "../toolDefinitions/ToolOpsV1";
-import { ChangeRequestKindEnum } from "./ChangeRequestsCommon";
+import { ChangeRequestFieldTypeEnum, ChangeRequestKindEnum } from "./ChangeRequestsCommon";
 import {
+  applyChangeRequestEdits,
   buildChangeRequestChanges,
+  getEditableFields,
   buildChangeRequestSummary,
   countChangedFields,
   getChangeRequestKind,
@@ -199,5 +201,91 @@ describe("buildChangeRequestSummary", () => {
     expect(buildChangeRequestSummary("delete_record", ChangeRequestKindEnum.Delete, 1)).toBe(
       "delete_record: delete record",
     );
+  });
+});
+
+describe("getEditableFields", () => {
+  const inputSchema = {
+    type: "object" as const,
+    properties: {
+      recordId: { type: "string" },
+      name: { type: "string", minLength: 1 },
+      amount: { type: ["number", "null"] },
+      tags: { type: "array", items: { type: "string" } },
+      memo: { enum: ["a", "b"] },
+      dueOn: { type: "string", format: "date" },
+    },
+    required: ["recordId", "name"],
+  };
+
+  it("offers the sent scalar args only, never the args that pick the record", () => {
+    const fields = getEditableFields({
+      kind: ChangeRequestKindEnum.Update,
+      callOp: updateCallOp,
+      inputSchema,
+    });
+    expect(fields).toEqual([
+      {
+        field: "name",
+        type: ChangeRequestFieldTypeEnum.String,
+        enumValues: null,
+        format: null,
+        isRequired: true,
+      },
+      {
+        field: "amount",
+        type: ChangeRequestFieldTypeEnum.Number,
+        enumValues: null,
+        format: null,
+        isRequired: false,
+      },
+      {
+        field: "memo",
+        type: ChangeRequestFieldTypeEnum.String,
+        enumValues: ["a", "b"],
+        format: null,
+        isRequired: false,
+      },
+    ]);
+  });
+
+  it("keeps the format, and offers nothing for a delete", () => {
+    const callOp: ToolCallOp = { ...createCallOp, bodyMap: { dueOn: "{args.dueOn}" } };
+    expect(
+      getEditableFields({ kind: ChangeRequestKindEnum.Create, callOp, inputSchema })[0]?.format,
+    ).toBe("date");
+    expect(
+      getEditableFields({ kind: ChangeRequestKindEnum.Delete, callOp: deleteCallOp, inputSchema }),
+    ).toEqual([]);
+  });
+});
+
+describe("applyChangeRequestEdits", () => {
+  const editableFields = getEditableFields({
+    kind: ChangeRequestKindEnum.Update,
+    callOp: updateCallOp,
+    inputSchema: {
+      type: "object",
+      properties: { recordId: { type: "string" }, name: { type: "string" } },
+    },
+  });
+
+  it("puts the edited values over the stored args", () => {
+    expect(
+      applyChangeRequestEdits({
+        args: { recordId: "rec_alpha", name: "Alpha" },
+        values: { name: "Beta" },
+        editableFields,
+      }),
+    ).toEqual({ isSuccess: true, args: { recordId: "rec_alpha", name: "Beta" } });
+  });
+
+  it("refuses an edit of a field that picks the record or isn't editable", () => {
+    const applied = applyChangeRequestEdits({
+      args: { recordId: "rec_alpha", name: "Alpha" },
+      values: { recordId: "rec_other" },
+      editableFields,
+    });
+    expect(applied.isSuccess).toBe(false);
   });
 });

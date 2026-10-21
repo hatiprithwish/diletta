@@ -16,6 +16,7 @@ export default function ChatSession({
   apiBase,
   chatbot,
   getToken,
+  getHostToken,
   bootstrap,
   onRetryBootstrap,
 }: Schemas.WidgetChatSessionProps) {
@@ -27,11 +28,12 @@ export default function ChatSession({
   const pendingText = useWidgetStore((state) => state.pendingText);
   const ratings = useWidgetStore((state) => state.ratings);
   const pendingRatings = useWidgetStore((state) => state.pendingRatings);
+  const review = useWidgetStore((state) => state.review);
 
   // DEV_NOTE: Focus goes back to the launcher only when the visitor closed the panel, never on page load
   const [shouldFocusLauncher, setShouldFocusLauncher] = useState(false);
 
-  const conversation = useConversation({ apiBase, chatbot, getToken });
+  const conversation = useConversation({ apiBase, chatbot, getToken, getHostToken });
 
   const ready = bootstrap.status === "ready" ? bootstrap.bootstrap : null;
   const chatbotName = ready?.chatbot.name ?? FALLBACK_NAME;
@@ -45,6 +47,7 @@ export default function ChatSession({
     isStreaming: conversation.isStreaming,
     ratings,
     pendingRatings,
+    review,
   });
   if (pendingText !== null) {
     messages.push({ role: "user", id: "pending", text: pendingText });
@@ -93,6 +96,7 @@ export default function ChatSession({
             storeApi.getState().setOpen(false);
           }}
           onRate={conversation.rate}
+          {...conversation.changeActions}
           onDraftChange={(value) => storeApi.getState().patch({ draft: value })}
         />
       ) : (

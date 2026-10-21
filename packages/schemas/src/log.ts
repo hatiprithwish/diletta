@@ -164,6 +164,8 @@ export enum LogAction {
   DecideChangeRequest = "DecideChangeRequest",
   ExpireChangeRequest = "ExpireChangeRequest",
   CommitChangeRequest = "CommitChangeRequest",
+  EditChangeRequest = "EditChangeRequest",
+  UpdateChangeRequestPayload = "UpdateChangeRequestPayload",
   ReceiveHostToken = "ReceiveHostToken",
 
   // Knowledge sources

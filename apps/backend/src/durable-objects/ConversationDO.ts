@@ -19,6 +19,7 @@ import { ModelUnavailableError } from "@/providers/modelCallRecording";
 import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
 import TranscriptProvider from "@/providers/transcript";
 import WidgetFrameProvider from "@/providers/widgetFrames";
+import ChangeRequestsProvider from "@/providers/changeRequests";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
@@ -36,6 +37,13 @@ const CLOSING_MESSAGE = "This conversation is closing";
 const CHANGE_NOT_WAITING_MESSAGE = "This change is no longer waiting for your answer";
 const DECISION_NOT_SAVED_MESSAGE = "Your answer couldn't be saved. Please try again.";
 const READ_ONLY_MESSAGE = "Changes are turned off right now";
+const CLOSED_MESSAGE = "This conversation has ended";
+// DEV_NOTE: An edit's refusals (M3-5). Each says what did not happen: the proposal still waits as it was.
+const EDIT_LOCKED_MESSAGE = "Some of these fields can't be changed here. Nothing changed.";
+const EDIT_INVALID_MESSAGE = "Some values don't fit. Nothing changed.";
+const EDIT_NO_CHANGE_MESSAGE = "That's what the record already shows. Nothing changed.";
+const EDIT_RECHECK_FAILED_MESSAGE = "The record couldn't be checked again. Nothing changed.";
+const EDIT_UNAVAILABLE_MESSAGE = "This change can't be edited right now. Nothing changed.";
 
 // DEV_NOTE: Model-facing texts for host tool calls (no values, no host text)
 const TOOL_TEXT = {
@@ -78,6 +86,13 @@ const SETTLED_REASON =
 const isThinkErrorResult = (result: unknown): boolean =>
   typeof result === "object" && result !== null && "status" in result && result.status === "error";
 
+// DEV_NOTE: A change request the database decided, with the status its pause is resolved by
+interface DecidedChangeRequest {
+  toolCallId: string;
+  entry: Schemas.ConversationChangeRequestEntry;
+  status: Schemas.ChangeRequestStatusIntEnum;
+}
+
 // DEV_NOTE: The Conversation DO (M2-2): one per conversation, named by conversations.public_id, built on Think. The
 // Think session (DO SQLite) is the transcript's source of truth; messages in Neon is its read model.
 //
@@ -113,12 +128,15 @@ const isThinkErrorResult = (result: unknown): boolean =>
 // the real args, and stores the tool call and an encrypted change request with its event (ActionEngineRepo). When the
 // user's approval is needed (HostToolsProvider.decideApproval) the turn parks: the widget gets the change_request frame,
 // the change request waits CHANGE_REQUEST_APPROVAL_EXPIRY_MS (a DO schedule), and the conversation doesn't auto-close.
-// The widget's change_request_decision frame approves or rejects it (an approval needs the host token: token_needed
-// otherwise). An answer or the expiry claims the conversation before its first await (isDeciding, so nothing else
-// starts meanwhile), is decided in the database first (which enforces the deadline), and the DO then follows the row's
-// status, whoever set it. Think's approveExecution / rejectExecution resolves the pause from its own storage, so the
-// pause survives an eviction, and continues the chat; the DO prepares that continuation like a turn (config, tools,
-// model, budget). The action's execute commits (Approved → Committing → Committed / Failed / NeedsHuman). A commit an
+// The widget's change_request_decision and change_request_batch_decision frames approve or reject (an approval needs
+// the host token: token_needed otherwise). Answers or the expiry claim the conversation before their first await
+// (isDeciding, so nothing else starts meanwhile), are decided in the database first (which enforces the deadline), and
+// the DO then follows each row's status, whoever set it. The approved ones are committed (Approved → Committing →
+// Committed / Failed / NeedsHuman), then Think's approveExecution / rejectExecution resolves every pause from its own
+// storage, back to back, so the pauses survive an eviction and the chat continues once; the DO prepares that
+// continuation like a turn (config, tools, model, budget), and each action's execute answers its commit's outcome.
+// The change_request_edits frame (M3-5) changes a proposal's values: each edit is re-checked like a new proposal
+// (editable fields only, input_schema, a fresh read-before, the diff rebuilt) and the proposal waits again. A commit an
 // eviction or a failed write cut short is resumed (isResume) once the DO holds the host token again (the host_token
 // frame, which every reconnect sends), on ACTION_COMMIT_RETRY_MS retries and on the auto-close's check. Open change
 // requests live in the runtime state by Think tool call id.
@@ -168,6 +186,9 @@ export class ConversationDO extends Think<Env> {
   // DEV_NOTE: A write call that ended in its approval hook without a change to make (refused, nothing to change): the
   // output its execute returns right after, by Think tool call id
   private settledCalls = new Map<string, Schemas.HostToolOutput>();
+  // DEV_NOTE: An approved change committed before its pause was resolved (an answer commits first, then resolves the
+  // batch's pauses together): the outcome its execute returns, by Think tool call id
+  private approvedOutputs = new Map<string, Schemas.HostToolOutput>();
   private commitsInFlight = new Set<string>();
   // DEV_NOTE: Write calls between their cap check and their entry, counted against CHANGE_REQUEST_MAX_PENDING
   private proposalsInFlight = 0;
@@ -387,8 +408,12 @@ export class ConversationDO extends Think<Env> {
       this.ctx.waitUntil(this.resumeCommits());
       return;
     }
-    if (admission.kind === "decision") {
-      await this.decideChangeRequest(ws, admission.changeRequestPublicId, admission.decision);
+    if (admission.kind === "decisions") {
+      await this.decideChangeRequests(ws, admission.decisions);
+      return;
+    }
+    if (admission.kind === "edits") {
+      await this.editChangeRequests(ws, admission.edits);
       return;
     }
     if (!(await this.startTurn(ws, admission.requestId, admission.message.id))) {
@@ -497,13 +522,7 @@ export class ConversationDO extends Think<Env> {
     }
     this.isDeciding = true;
     try {
-      await this.resolvePending(
-        null,
-        payload.toolCallId,
-        entry,
-        Schemas.ChangeRequestDecisionEnum.Reject,
-        true,
-      );
+      await this.resolvePending(payload.toolCallId, entry);
     } finally {
       this.isDeciding = false;
     }
@@ -868,8 +887,10 @@ export class ConversationDO extends Think<Env> {
       hasAnswer: state.hasAnswer || (status === "completed" && replyText.length > 0),
     });
     this.activeTurn = null;
-    // DEV_NOTE: An approval hook's outcome whose execute never ran (the turn ended in between) is dropped with the turn
+    // DEV_NOTE: An approval hook's outcome whose execute never ran (the turn ended in between) is dropped with the turn,
+    // and so is a commit's outcome Think never asked for
     this.settledCalls.clear();
+    this.approvedOutputs.clear();
 
     await this.syncReadModel();
     await this.recordExecutionIds();
@@ -1061,9 +1082,19 @@ export class ConversationDO extends Think<Env> {
 
   private broadcastChangeRequest(changeRequest: Schemas.WidgetChangeRequest | undefined): void {
     if (!changeRequest) return;
+    const view = this.withToolCallId(changeRequest);
     for (const connection of this.getConnections()) {
-      this.send(connection, { type: "change_request", changeRequest });
+      this.send(connection, { type: "change_request", changeRequest: view });
     }
+  }
+
+  // DEV_NOTE: The view with the Think tool call id of its open entry (the widget places the card by it); null once the
+  // entry is gone (the call's output names the change request then)
+  private withToolCallId(changeRequest: Schemas.WidgetChangeRequest): Schemas.WidgetChangeRequest {
+    const found = Object.entries(this.getRuntimeState()?.changeRequests ?? {}).find(
+      ([, entry]) => entry.publicId === changeRequest.publicId,
+    );
+    return { ...changeRequest, toolCallId: found?.[0] ?? null };
   }
 
   // DEV_NOTE: Critical events recorded with a step, relayed after its commit; the Cron sweep publishes any this misses
@@ -1431,13 +1462,18 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: A write action's execute: the hook's own outcome when the call settled there, else the commit of its
-  // change request (approved by the user or needing no approval)
+  // DEV_NOTE: A write action's execute: the hook's own outcome when the call settled there, the outcome of the commit
+  // an answer already ran, else the commit of its change request (needing no approval, or resumed)
   private async commitChange(toolCallId: string): Promise<Schemas.HostToolOutput> {
     const settled = this.settledCalls.get(toolCallId);
     if (settled) {
       this.settledCalls.delete(toolCallId);
       return settled;
+    }
+    const committed = this.approvedOutputs.get(toolCallId);
+    if (committed) {
+      this.approvedOutputs.delete(toolCallId);
+      return committed;
     }
     const entry = this.getRuntimeState()?.changeRequests[toolCallId];
     if (!entry || entry.stage === Schemas.ConversationChangeRequestStageEnum.Pending) {
@@ -1612,15 +1648,17 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: The widget's answer to a proposal. Rate-limited per conversation (DECISION_FRAMES_PER_WINDOW) before any
-  // database work. Only a Pending one of this conversation is decided; anything else gets the change request as it
-  // stands. One at a time: the answer continues the chat, so it waits for a running turn or decision, and claims the
-  // conversation (isDeciding) with no await after that check. An approval needs the host token (the commit runs as
-  // the user): without one the widget gets token_needed and the proposal keeps waiting.
-  private async decideChangeRequest(
+  // DEV_NOTE: The widget's answers to proposals (one, or a bulk review's batch: M3-5). Rate-limited per conversation
+  // (DECISION_FRAMES_PER_WINDOW, one slot per frame) before any database work. Only Pending ones of this conversation
+  // are decided; any other gets the change request as it stands. One at a time: the answers continue the chat, so they
+  // wait for a running turn or decision, and claim the conversation (isDeciding) with no await after that check. An
+  // approval needs the host token (the commit runs as the user): without one the widget gets token_needed and nothing
+  // is decided. Then, in order: the database decides every one (it enforces each deadline), the approved ones are
+  // committed one after another, and only then are their pauses resolved, back to back, so Think continues the chat
+  // once for the whole batch (its continuation coalesces resolutions that land together).
+  private async decideChangeRequests(
     ws: WebSocket,
-    changeRequestPublicId: string,
-    decision: Schemas.ChangeRequestDecisionEnum,
+    decisions: { changeRequestPublicId: string; decision: Schemas.ChangeRequestDecisionEnum }[],
   ): Promise<void> {
     if (!this.takeFrameSlot("decision", Constants.DECISION_FRAMES_PER_WINDOW)) {
       this.reply(ws, { type: "error", message: DECISION_NOT_SAVED_MESSAGE });
@@ -1631,19 +1669,12 @@ export class ConversationDO extends Think<Env> {
       this.sendClosed(ws);
       return;
     }
-    const found = Object.entries(state.changeRequests).find(
-      ([, entry]) => entry.publicId === changeRequestPublicId,
+    const { pending, notWaiting } = ConversationDO.matchPending(
+      state,
+      decisions.map((entry) => entry.changeRequestPublicId),
     );
-    if (!found || found[1].stage !== Schemas.ConversationChangeRequestStageEnum.Pending) {
-      const views = await this.actionEngineRepo().getChangeRequestViews({
-        session: state.session,
-        changeRequestPublicIds: [changeRequestPublicId],
-      });
-      const view = views.changeRequests?.[0];
-      if (view) this.reply(ws, { type: "change_request", changeRequest: view });
-      this.reply(ws, { type: "error", message: CHANGE_NOT_WAITING_MESSAGE });
-      return;
-    }
+    await this.replyNotWaiting(ws, state, notWaiting);
+    if (pending.length === 0) return;
     if (this.isClosing) {
       this.reply(ws, { type: "error", message: CLOSING_MESSAGE });
       return;
@@ -1652,35 +1683,334 @@ export class ConversationDO extends Think<Env> {
       this.reply(ws, { type: "error", message: TURN_IN_PROGRESS_MESSAGE });
       return;
     }
-    if (decision === Schemas.ChangeRequestDecisionEnum.Approve && !this.hostToken) {
+    const decisionOf = new Map(
+      decisions.map((entry) => [entry.changeRequestPublicId, entry.decision]),
+    );
+    const isApproving = pending.some(
+      ([, entry]) => decisionOf.get(entry.publicId) === Schemas.ChangeRequestDecisionEnum.Approve,
+    );
+    if (isApproving && !this.hostToken) {
       this.reply(ws, { type: "token_needed" });
       return;
     }
-    const [toolCallId, entry] = found;
+
     this.isDeciding = true;
     try {
       this.patchRuntimeState({ lastActivityAt: Date.now() });
-      await this.resolvePending(ws, toolCallId, entry, decision, false);
+      const decided: DecidedChangeRequest[] = [];
+      for (const [toolCallId, entry] of pending) {
+        const decision = decisionOf.get(entry.publicId) ?? Schemas.ChangeRequestDecisionEnum.Reject;
+        const status = await this.decideInDatabase(ws, toolCallId, entry, decision, false);
+        if (status !== null) decided.push({ toolCallId, entry, status });
+      }
+      // DEV_NOTE: Every approved one is committed before any pause is resolved; its execute then answers this outcome
+      for (const item of decided) {
+        if (item.status !== Schemas.ChangeRequestStatusIntEnum.Approved) continue;
+        const current = this.getRuntimeState()?.changeRequests[item.toolCallId];
+        if (!current) continue;
+        this.approvedOutputs.set(item.toolCallId, await this.runCommit(item.toolCallId, current));
+      }
+      await this.resolvePauses(decided);
     } finally {
       this.isDeciding = false;
     }
   }
 
-  // DEV_NOTE: Ends a Pending proposal: the user's answer or its expiry, with the conversation claimed (isDeciding) by
-  // the caller. The database decides first (rule 3.23 re-checks; an approval after the deadline ends Expired), so a
-  // refused decision spends no budget. Then the DO follows the row's status, whoever set it (a lost race, an answer
-  // whose response never arrived): Approved → the commit; Committing → left for the commit already under way (or its
-  // resume); any end status → the entry goes and a pause Think still holds is rejected so the model hears why. A
-  // refusal that settled nothing keeps the proposal (an expiry is tried again on a database failure).
+  // DEV_NOTE: The open entries (by Think tool call id) still Pending for these public ids, and the ids that aren't
+  private static matchPending(
+    state: Schemas.ConversationRuntimeState,
+    publicIds: string[],
+  ): { pending: [string, Schemas.ConversationChangeRequestEntry][]; notWaiting: string[] } {
+    const pending: [string, Schemas.ConversationChangeRequestEntry][] = [];
+    const notWaiting: string[] = [];
+    for (const publicId of publicIds) {
+      const found = Object.entries(state.changeRequests).find(
+        ([, entry]) => entry.publicId === publicId,
+      );
+      if (found && found[1].stage === Schemas.ConversationChangeRequestStageEnum.Pending) {
+        pending.push(found);
+      } else {
+        notWaiting.push(publicId);
+      }
+    }
+    return { pending, notWaiting };
+  }
+
+  // DEV_NOTE: Change requests an answer or an edit named that no longer wait: the widget gets each as it stands (so
+  // its card catches up) and one error
+  private async replyNotWaiting(
+    ws: WebSocket,
+    state: Schemas.ConversationRuntimeState,
+    publicIds: string[],
+  ): Promise<void> {
+    if (publicIds.length === 0) return;
+    const views = await this.actionEngineRepo().getChangeRequestViews({
+      session: state.session,
+      changeRequestPublicIds: publicIds,
+    });
+    for (const view of views.changeRequests ?? []) {
+      this.reply(ws, { type: "change_request", changeRequest: this.withToolCallId(view) });
+    }
+    this.reply(ws, { type: "error", message: CHANGE_NOT_WAITING_MESSAGE });
+  }
+
+  // DEV_NOTE: The user's edits to proposals (M3-5). Same gate as an answer (rate limit, claim, host token: the edit
+  // reads the record again as the user), then each edit in order (applyEdit). Nothing is approved: an edit that saves
+  // leaves the proposal waiting with the re-checked diff. The widget hears every edit's outcome
+  // (change_request_edit); a host token that runs out midway answers token_needed and stops there.
+  private async editChangeRequests(
+    ws: WebSocket,
+    edits: { changeRequestPublicId: string; values: Schemas.ChangeRequestEditValues }[],
+  ): Promise<void> {
+    const refuseAll = (message: string) => {
+      for (const edit of edits) this.replyEdit(ws, edit.changeRequestPublicId, false, message);
+    };
+    if (!this.takeFrameSlot("decision", Constants.DECISION_FRAMES_PER_WINDOW)) {
+      refuseAll(DECISION_NOT_SAVED_MESSAGE);
+      return;
+    }
+    const state = this.getRuntimeState();
+    if (!state || state.isClosed) {
+      this.sendClosed(ws);
+      return;
+    }
+    const { pending, notWaiting } = ConversationDO.matchPending(
+      state,
+      edits.map((edit) => edit.changeRequestPublicId),
+    );
+    for (const publicId of notWaiting) {
+      this.replyEdit(ws, publicId, false, CHANGE_NOT_WAITING_MESSAGE);
+    }
+    await this.replyNotWaiting(ws, state, notWaiting);
+    if (pending.length === 0) return;
+    if (this.isClosing) {
+      refuseAll(CLOSING_MESSAGE);
+      return;
+    }
+    if (this.isBusy()) {
+      refuseAll(TURN_IN_PROGRESS_MESSAGE);
+      return;
+    }
+    if (!this.hostToken) {
+      this.reply(ws, { type: "token_needed" });
+      return;
+    }
+
+    const valuesOf = new Map(edits.map((edit) => [edit.changeRequestPublicId, edit.values]));
+    this.isDeciding = true;
+    try {
+      this.patchRuntimeState({ lastActivityAt: Date.now() });
+      for (const [toolCallId, entry] of pending) {
+        const values = valuesOf.get(entry.publicId);
+        if (!values) continue;
+        const edited = await this.applyEdit(ws, toolCallId, entry, values);
+        if (edited === "tokenNeeded") {
+          this.reply(ws, { type: "token_needed" });
+          return;
+        }
+        if (edited === "closed") return;
+      }
+    } finally {
+      this.isDeciding = false;
+    }
+  }
+
+  // DEV_NOTE: One edit, re-checked like the proposal it replaces (rule 3.34), never trusting the widget: the change
+  // request still Proposed before its deadline, its tool still loading (getEditPlan); only editable fields (the args
+  // call_op sends, never those that pick the record); the edited args through the input_schema again; the record read
+  // again as the user (none for a create); the diff rebuilt from that read and the edited args; and a diff with
+  // nothing to change is refused. Then the new payload replaces the stored one (saveEdit, which re-checks the status
+  // and deadline under its lock). Anything refused changes nothing, and the widget hears why in safe text.
+  private async applyEdit(
+    ws: WebSocket,
+    toolCallId: string,
+    entry: Schemas.ConversationChangeRequestEntry,
+    values: Schemas.ChangeRequestEditValues,
+  ): Promise<"saved" | "refused" | "tokenNeeded" | "closed"> {
+    const state = this.getRuntimeState();
+    if (!state) return "closed";
+    const repo = this.actionEngineRepo();
+    const refuse = (message: string) => {
+      this.replyEdit(ws, entry.publicId, false, message);
+      return "refused" as const;
+    };
+
+    const planned = await repo.getEditPlan({
+      session: state.session,
+      changeRequestPublicId: entry.publicId,
+    });
+    if (!planned.isSuccess || !planned.plan) {
+      this.broadcastChangeRequest(planned.changeRequest);
+      AppLogger.warn({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.EditChangeRequest,
+        message: planned.message ?? "Edit refused",
+        metadata: { conversationPublicId: this.name, failure: planned.failure ?? null },
+      });
+      return this.refuseEditStep(ws, toolCallId, entry, planned.failure);
+    }
+    const { tool, payload } = planned.plan;
+    const readbackOp = tool.ops.readbackOp;
+    if (!readbackOp) return refuse(EDIT_UNAVAILABLE_MESSAGE);
+
+    const applied = Schemas.applyChangeRequestEdits({
+      args: payload.args,
+      values,
+      editableFields: ChangeRequestsProvider.editableFields(tool, payload),
+    });
+    if (!applied.isSuccess) return refuse(EDIT_LOCKED_MESSAGE);
+    const validator = Schemas.buildToolArgsValidator(tool.ops.inputSchema);
+    const validated = validator.validator
+      ? Schemas.validateToolArgs(validator.validator, tool.ops.inputSchema, applied.args)
+      : null;
+    if (!validated?.isSuccess || !validated.args) {
+      return refuse(ConversationDO.invalidEditMessage(validated?.issues ?? []));
+    }
+    const args = validated.args;
+
+    let before: unknown = null;
+    if (Schemas.hasReadBefore(payload.kind)) {
+      const read = await HostToolCallProvider.readBefore({
+        tool,
+        args,
+        getHostToken: () => this.hostToken,
+      });
+      if (
+        read.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded ||
+        read.outcome === Schemas.HostCallOutcomeEnum.TokenRejected
+      ) {
+        return "tokenNeeded";
+      }
+      if (read.outcome !== Schemas.HostCallOutcomeEnum.Succeeded) {
+        this.logHostCall(tool, read, "Edit read-before failed");
+        return refuse(EDIT_RECHECK_FAILED_MESSAGE);
+      }
+      before = read.body ?? null;
+    }
+
+    const changes = Schemas.buildChangeRequestChanges({
+      kind: payload.kind,
+      callOp: tool.ops.callOp,
+      readbackOp,
+      args,
+      before,
+    });
+    if (Schemas.countChangedFields(changes) === 0) return refuse(EDIT_NO_CHANGE_MESSAGE);
+
+    // DEV_NOTE: The args passed the input_schema and the read-before is parsed JSON; anything that isn't JSON is refused
+    const edited = Schemas.ZChangeRequestPayload.safeParse({
+      version: 1,
+      kind: payload.kind,
+      args,
+      before,
+      changes,
+    });
+    if (!edited.success) return refuse(EDIT_INVALID_MESSAGE);
+    const saved = await repo.saveEdit({
+      session: state.session,
+      changeRequestPublicId: entry.publicId,
+      payload: edited.data,
+      editId: Utility.generateUlid(),
+    });
+    this.relayEvents(saved.outboxIds);
+    this.broadcastChangeRequest(saved.changeRequest);
+    if (!saved.isSuccess) {
+      AppLogger.warn({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.EditChangeRequest,
+        message: saved.message ?? "Edit not saved",
+        metadata: { conversationPublicId: this.name, failure: saved.failure ?? null },
+      });
+      return this.refuseEditStep(ws, toolCallId, entry, saved.failure);
+    }
+    this.replyEdit(ws, entry.publicId, true, null);
+    return "saved";
+  }
+
+  // DEV_NOTE: An edit step the database refused: the widget hears why; a change request that no longer exists drops its
+  // entry; a closed conversation is closed here too
+  private refuseEditStep(
+    ws: WebSocket,
+    toolCallId: string,
+    entry: Schemas.ConversationChangeRequestEntry,
+    failure: Schemas.ChangeRequestFailureEnum | undefined,
+  ): "refused" | "closed" {
+    const refuse = (message: string) => {
+      this.replyEdit(ws, entry.publicId, false, message);
+      return "refused" as const;
+    };
+    switch (failure) {
+      case Schemas.ChangeRequestFailureEnum.NotFound:
+        this.patchChangeRequest(toolCallId, null);
+        return refuse(CHANGE_NOT_WAITING_MESSAGE);
+      case Schemas.ChangeRequestFailureEnum.InvalidTransition:
+      case Schemas.ChangeRequestFailureEnum.PastDeadline:
+        return refuse(CHANGE_NOT_WAITING_MESSAGE);
+      case Schemas.ChangeRequestFailureEnum.ConversationClosed:
+        this.replyEdit(ws, entry.publicId, false, CLOSED_MESSAGE);
+        this.patchRuntimeState({ isClosed: true });
+        this.sendClosed(ws);
+        return "closed";
+      case Schemas.ChangeRequestFailureEnum.ReadOnly:
+        return refuse(READ_ONLY_MESSAGE);
+      case Schemas.ChangeRequestFailureEnum.ToolUnavailable:
+      case Schemas.ChangeRequestFailureEnum.ChatbotUnavailable:
+        return refuse(EDIT_UNAVAILABLE_MESSAGE);
+      case Schemas.ChangeRequestFailureEnum.InvalidEdit:
+        return refuse(EDIT_LOCKED_MESSAGE);
+      default:
+        return refuse(DECISION_NOT_SAVED_MESSAGE);
+    }
+  }
+
+  // DEV_NOTE: Which fields didn't fit (the input_schema's own words, never a value)
+  private static invalidEditMessage(issues: string[]): string {
+    const fields = [...new Set(issues.map((issue) => issue.split(":")[0]?.trim()).filter(Boolean))];
+    return fields.length > 0
+      ? `${EDIT_INVALID_MESSAGE} Check: ${fields.slice(0, 5).join(", ")}.`
+      : EDIT_INVALID_MESSAGE;
+  }
+
+  private replyEdit(
+    ws: WebSocket,
+    changeRequestId: string,
+    isSaved: boolean,
+    message: string | null,
+  ): void {
+    this.reply(ws, { type: "change_request_edit", changeRequestId, isSaved, message });
+  }
+
+  // DEV_NOTE: Ends a Pending proposal by its expiry, with the conversation claimed (isDeciding) by the caller: the
+  // database decides, then the pause is resolved
   private async resolvePending(
+    toolCallId: string,
+    entry: Schemas.ConversationChangeRequestEntry,
+  ): Promise<void> {
+    const status = await this.decideInDatabase(
+      null,
+      toolCallId,
+      entry,
+      Schemas.ChangeRequestDecisionEnum.Reject,
+      true,
+    );
+    if (status !== null) await this.resolvePauses([{ toolCallId, entry, status }]);
+  }
+
+  // DEV_NOTE: One Pending proposal decided in the database: the user's answer or its expiry. The database decides first
+  // (rule 3.23 re-checks; an approval after the deadline ends Expired), so a refused decision spends no budget. Then the
+  // DO follows the row's status, whoever set it (a lost race, an answer whose response never arrived): Approved → its
+  // entry waits for the commit; Committing → left for the commit already under way (or its resume); any end status →
+  // the entry goes. The status to resolve the pause with, or null when there is nothing to resolve (kept undecided: a
+  // refusal that settled nothing keeps the proposal, and an expiry is tried again on a database failure; or Committing).
+  private async decideInDatabase(
     ws: WebSocket | null,
     toolCallId: string,
     entry: Schemas.ConversationChangeRequestEntry,
     decision: Schemas.ChangeRequestDecisionEnum,
     isExpired: boolean,
-  ): Promise<void> {
+  ): Promise<Schemas.ChangeRequestStatusIntEnum | null> {
     const state = this.getRuntimeState();
-    if (!state) return;
+    if (!state) return null;
     const logAction = isExpired
       ? Schemas.LogAction.ExpireChangeRequest
       : Schemas.LogAction.DecideChangeRequest;
@@ -1703,7 +2033,7 @@ export class ConversationDO extends Think<Env> {
         metadata: { conversationPublicId: this.name, failure: decided.failure ?? null },
       });
       await this.keepUndecided(ws, toolCallId, entry, decided.failure, isExpired);
-      return;
+      return null;
     }
 
     const expected = isExpired
@@ -1720,7 +2050,7 @@ export class ConversationDO extends Think<Env> {
         stage: Schemas.ConversationChangeRequestStageEnum.Committing,
         expiryScheduleId: null,
       });
-      return;
+      return null;
     }
     const isApproved = status === Schemas.ChangeRequestStatusIntEnum.Approved;
     this.patchChangeRequest(
@@ -1729,7 +2059,7 @@ export class ConversationDO extends Think<Env> {
         ? { stage: Schemas.ConversationChangeRequestStageEnum.Approved, expiryScheduleId: null }
         : null,
     );
-    await this.resolvePause(toolCallId, entry, status);
+    return status;
   }
 
   // DEV_NOTE: A decision that settled nothing: the widget hears why; a change request that no longer exists drops its
@@ -1762,32 +2092,36 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: Resolves Think's pause for a decided change request: approveExecution runs the action's execute (the
-  // commit) and continues the chat, rejectExecution tells the model why. The continuation is prepared like a turn
-  // first (it continues the proposing turn, under the last synced turn's id); one that can't be prepared (budget, no
-  // key) still resolves the pause, and its turn ends with the generic safe text. A closed conversation gets no
-  // continuation (its pause is left to Think's sweep). A pause Think no longer holds (swept, resolved elsewhere) is
-  // committed here without a continuation when approved.
-  private async resolvePause(
-    toolCallId: string,
-    entry: Schemas.ConversationChangeRequestEntry,
-    status: Schemas.ChangeRequestStatusIntEnum,
-  ): Promise<void> {
-    const isApproved = status === Schemas.ChangeRequestStatusIntEnum.Approved;
-    const executionId = await this.findExecutionId(toolCallId);
-    if (!executionId) {
-      this.commitWithoutPause(toolCallId, entry, isApproved);
-      return;
+  // DEV_NOTE: Resolves Think's pauses for decided change requests: approveExecution runs each action's execute (which
+  // answers the commit's cached outcome, or commits) and continues the chat, rejectExecution tells the model why. The
+  // continuation is prepared like a turn first, once for all of them (it continues the proposing turn, under the last
+  // synced turn's id), and the pauses are resolved back to back so Think runs one continuation; one that can't be
+  // prepared (budget, no key) still resolves the pauses, and its turn ends with the generic safe text. A closed
+  // conversation gets no continuation (its pauses are left to Think's sweep). A pause Think no longer holds (swept,
+  // resolved elsewhere) is committed here without a continuation when approved.
+  private async resolvePauses(decided: DecidedChangeRequest[]): Promise<void> {
+    if (decided.length === 0) return;
+    const pending = await this.pendingApprovals();
+    const paused: (DecidedChangeRequest & { executionId: string })[] = [];
+    for (const item of decided) {
+      const executionId = ConversationDO.findPendingExecutionId(pending, item.toolCallId);
+      if (executionId) {
+        paused.push({ ...item, executionId });
+      } else {
+        this.commitWithoutPause(item);
+      }
     }
+    if (paused.length === 0) return;
 
     const state = this.getRuntimeState();
     if (!state) return;
     await this.syncReadModel();
-    const turnId = this.getRuntimeState()?.lastSyncedTurnId ?? entry.turnId;
+    const first = paused[0];
+    const turnId = this.getRuntimeState()?.lastSyncedTurnId ?? first?.entry.turnId ?? "";
     const continuation = ConversationDO.newTurn({ requestId: "", turnId, userMessageId: null });
     const prepared = await this.prepareTurn(state.session, turnId);
     if (!prepared.isSuccess && prepared.isClosed) {
-      if (isApproved) this.commitWithoutPause(toolCallId, entry, true);
+      for (const item of paused) this.commitWithoutPause(item);
       return;
     }
     if (prepared.isSuccess) {
@@ -1796,50 +2130,60 @@ export class ConversationDO extends Think<Env> {
       AppLogger.warn({
         category: Schemas.LogCategory.Action,
         action: Schemas.LogAction.DecideChangeRequest,
-        message: "Continuation not prepared; the pause is resolved without one",
+        message: "Continuation not prepared; the pauses are resolved without one",
         metadata: { conversationPublicId: this.name, refusal: prepared.refusal },
       });
     }
     const claimed = this.activeTurn;
 
-    let result: unknown;
-    try {
-      result = isApproved
-        ? await this.approveExecution(executionId)
-        : await this.rejectExecution(executionId, ConversationDO.rejectionReason(status));
-    } catch (error) {
-      result = { status: "error" };
-      AppLogger.error({
-        category: Schemas.LogCategory.Action,
-        action: Schemas.LogAction.DecideChangeRequest,
-        message: "Think couldn't resolve the pause",
-        error,
-        metadata: { conversationPublicId: this.name, changeRequestPublicId: entry.publicId },
-      });
+    let isAnyResolved = false;
+    for (const item of paused) {
+      const isApproved = item.status === Schemas.ChangeRequestStatusIntEnum.Approved;
+      let result: unknown;
+      try {
+        result = isApproved
+          ? await this.approveExecution(item.executionId)
+          : await this.rejectExecution(
+              item.executionId,
+              ConversationDO.rejectionReason(item.status),
+            );
+      } catch (error) {
+        result = { status: "error" };
+        AppLogger.error({
+          category: Schemas.LogCategory.Action,
+          action: Schemas.LogAction.DecideChangeRequest,
+          message: "Think couldn't resolve the pause",
+          error,
+          metadata: {
+            conversationPublicId: this.name,
+            changeRequestPublicId: item.entry.publicId,
+          },
+        });
+      }
+      if (isThinkErrorResult(result)) {
+        this.commitWithoutPause(item);
+      } else {
+        isAnyResolved = true;
+      }
     }
-    if (isThinkErrorResult(result)) {
-      // DEV_NOTE: No continuation will run for a pause Think didn't resolve
-      if (claimed && this.activeTurn === claimed) this.activeTurn = null;
-      this.commitWithoutPause(toolCallId, entry, isApproved);
-    }
+    // DEV_NOTE: No continuation will run when Think resolved none of the pauses
+    if (!isAnyResolved && claimed && this.activeTurn === claimed) this.activeTurn = null;
   }
 
-  // DEV_NOTE: An approved change whose pause Think doesn't hold (or couldn't resolve) is committed here, its outcome
-  // reaching the widget; the model mentions it at the next message
-  private commitWithoutPause(
-    toolCallId: string,
-    entry: Schemas.ConversationChangeRequestEntry,
-    isApproved: boolean,
-  ): void {
+  // DEV_NOTE: A decided change whose pause Think doesn't hold (or couldn't resolve): an approved one not yet committed
+  // is committed here, its outcome reaching the widget; the model mentions it at the next message
+  private commitWithoutPause(item: DecidedChangeRequest): void {
+    const isApproved = item.status === Schemas.ChangeRequestStatusIntEnum.Approved;
+    this.approvedOutputs.delete(item.toolCallId);
     AppLogger.warn({
       category: Schemas.LogCategory.Action,
       action: Schemas.LogAction.DecideChangeRequest,
       message: "Think holds no pause for this change request; resolved without a continuation",
-      metadata: { conversationPublicId: this.name, changeRequestPublicId: entry.publicId },
+      metadata: { conversationPublicId: this.name, changeRequestPublicId: item.entry.publicId },
     });
-    const approved = this.getRuntimeState()?.changeRequests[toolCallId];
+    const approved = this.getRuntimeState()?.changeRequests[item.toolCallId];
     if (isApproved && approved && !this.commitsInFlight.has(approved.publicId)) {
-      this.ctx.waitUntil(this.runCommit(toolCallId, approved));
+      this.ctx.waitUntil(this.runCommit(item.toolCallId, approved));
     }
   }
 
@@ -1946,7 +2290,10 @@ export class ConversationDO extends Think<Env> {
       changeRequestPublicIds: publicIds,
     });
     for (const changeRequest of views.changeRequests ?? []) {
-      this.send(connection, { type: "change_request", changeRequest });
+      this.send(connection, {
+        type: "change_request",
+        changeRequest: this.withToolCallId(changeRequest),
+      });
     }
   }
 

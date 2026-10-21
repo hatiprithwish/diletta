@@ -9,11 +9,15 @@ import {
   findToolOpPlaceholders,
   readValueAtPath,
 } from "../toolDefinitions/ToolOpPlaceholders";
+import type { ToolInputSchema } from "../toolDefinitions/ToolArgsValidator";
 import type { ToolCallOp, ToolReadbackOp } from "../toolDefinitions/ToolOpsRegistry";
 import { isJsonEqual } from "../toolDefinitions/ToolReadbackCompare";
 import {
+  ChangeRequestFieldTypeEnum,
   ChangeRequestKindEnum,
   type ChangeRequestChange,
+  type ChangeRequestEditableField,
+  type ChangeRequestEditValues,
   type ChangeRequestValue,
 } from "./ChangeRequestsCommon";
 
@@ -145,4 +149,83 @@ export function buildChangeRequestSummary(
     case ChangeRequestKindEnum.Update:
       return `${toolName}: ${fields} changed`;
   }
+}
+
+// DEV_NOTE: The fields the user may edit on a proposal (M3-5): the args call_op sends in its query or body, never the
+// args that only pick the record (path), and none for a delete (it sends nothing to change). Each must have one scalar
+// type in input_schema (a nullable type counts as that type); an object, an array, a $ref or a union isn't editable.
+// In input_schema property order.
+export function getEditableFields(params: {
+  kind: ChangeRequestKindEnum;
+  callOp: ToolCallOp;
+  inputSchema: ToolInputSchema;
+}): ChangeRequestEditableField[] {
+  if (params.kind === ChangeRequestKindEnum.Delete) return [];
+  const { sentArgs } = getCallOpArgs(params.callOp);
+  const required = new Set(params.inputSchema.required ?? []);
+  return Object.entries(params.inputSchema.properties).flatMap(([field, property]) => {
+    if (!sentArgs.has(field)) return [];
+    const type = scalarTypeOf(property);
+    if (!type) return [];
+    return [
+      {
+        field,
+        type,
+        enumValues: enumValuesOf(property),
+        format: typeof property.format === "string" ? property.format : null,
+        isRequired: required.has(field),
+      },
+    ];
+  });
+}
+
+const SCALAR_TYPES = new Set<string>(Object.values(ChangeRequestFieldTypeEnum));
+
+function scalarTypeOf(property: Record<string, unknown>): ChangeRequestFieldTypeEnum | null {
+  const declared = property.type;
+  const types = (Array.isArray(declared) ? declared : [declared]).filter(
+    (type) => type !== "null" && type !== undefined,
+  );
+  if (types.length === 0) {
+    // DEV_NOTE: An enum with no type: its values' type, when they share one
+    const values = enumValuesOf(property);
+    const kinds = new Set(values?.map((value) => typeof value));
+    if (kinds.size !== 1) return null;
+    const [kind] = [...kinds];
+    return kind === "string"
+      ? ChangeRequestFieldTypeEnum.String
+      : kind === "number"
+        ? ChangeRequestFieldTypeEnum.Number
+        : kind === "boolean"
+          ? ChangeRequestFieldTypeEnum.Boolean
+          : null;
+  }
+  const [type] = types;
+  if (types.length !== 1 || typeof type !== "string" || !SCALAR_TYPES.has(type)) return null;
+  return type as ChangeRequestFieldTypeEnum;
+}
+
+function enumValuesOf(property: Record<string, unknown>): (string | number | boolean)[] | null {
+  const values = property.enum;
+  if (!Array.isArray(values)) return null;
+  const scalars = values.filter(
+    (value): value is string | number | boolean =>
+      typeof value === "string" || typeof value === "number" || typeof value === "boolean",
+  );
+  return scalars.length > 0 ? scalars : null;
+}
+
+// DEV_NOTE: The args an edit would send: the stored args with the edited values on top. Refused when it names a field
+// that isn't editable. The result still has to pass the input_schema (validateToolArgs) before anything uses it.
+export function applyChangeRequestEdits(params: {
+  args: Record<string, unknown>;
+  values: ChangeRequestEditValues;
+  editableFields: ChangeRequestEditableField[];
+}): { isSuccess: true; args: Record<string, unknown> } | { isSuccess: false; message: string } {
+  const editable = new Set(params.editableFields.map((field) => field.field));
+  const locked = Object.keys(params.values).filter((field) => !editable.has(field));
+  if (locked.length > 0) {
+    return { isSuccess: false, message: `Not editable: ${locked.join(", ")}` };
+  }
+  return { isSuccess: true, args: { ...params.args, ...params.values } };
 }

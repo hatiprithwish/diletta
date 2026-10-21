@@ -2,6 +2,16 @@ import { createStore } from "zustand/vanilla";
 import type { StoreApi } from "zustand/vanilla";
 import type * as Schemas from "@app/schemas";
 
+// DEV_NOTE: The review state of a conversation with no change requests yet
+export const EMPTY_REVIEW: Schemas.WidgetChangeReviewState = {
+  changeRequests: {},
+  excluded: {},
+  editing: {},
+  sending: {},
+  expanded: {},
+  notices: {},
+};
+
 // DEV_NOTE: One store per embedded widget (not a module singleton), so two widgets on a page, or a test, never share
 // state. The script-tag controller and the React component both drive it.
 export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Schemas.WidgetStore> {
@@ -17,6 +27,7 @@ export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Sche
     pendingText: null,
     ratings: {},
     pendingRatings: {},
+    review: EMPTY_REVIEW,
     setOpen: (isOpen) => set({ isOpen }),
     setTheme: (nextTheme) => set({ theme: nextTheme }),
     setConversation: (conversationPublicId) => set({ conversationPublicId }),
@@ -30,6 +41,7 @@ export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Sche
         draft: "",
         ratings: {},
         pendingRatings: {},
+        review: EMPTY_REVIEW,
       }),
     patch: (patch) => set(patch),
   }));

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/think/react";
 import * as Schemas from "@app/schemas";
+import { useChangeReview } from "@/hooks/useChangeReview";
 import { useLatest } from "@/hooks/useLatest";
 import { NO_CONNECT_FAILURES, nextConnectFailure } from "@/lib/connectFailures";
 import { hostUserOf } from "@/lib/hostUser";
@@ -22,7 +23,8 @@ import { useWidgetStore, useWidgetStoreApi } from "@/store/WidgetStoreContext";
 //
 // The DO's own frames (lib/serverFrames.ts, parsed before use): unavailable / a refused send stop the pending request
 // (the DO never answers it, so Think's client would wait forever) and keep the unsent message; closed ends the
-// conversation, and a message it refused is sent again in a new one; feedback settles a thumb.
+// conversation, and a message it refused is sent again in a new one; feedback settles a thumb; change requests, edit
+// answers and token_needed go to the review cards (useChangeReview, M3-5). Every connect sends the host token.
 //
 // One socket per conversation id: the session using this hook is remounted when the id changes (ChatSession's key), so
 // each socket is created with its final address. (partysocket reconnects its old socket, at its old address, when the
@@ -51,6 +53,16 @@ export function useConversation(params: Schemas.WidgetAppProps) {
   const failuresRef = useRef(NO_CONNECT_FAILURES);
   // DEV_NOTE: Read through a ref by the socket's handlers, which are created before the chat helpers exist
   const chatRef = useRef<ReturnType<typeof useAgentChat> | null>(null);
+  const messagesRef = useRef<ReturnType<typeof useAgentChat>["messages"]>([]);
+  const sendFrameRef = useRef<(frame: string) => void>(() => undefined);
+  const sendFrame = useCallback((frame: string) => sendFrameRef.current(frame), []);
+  const review = useChangeReview({
+    storeApi,
+    messagesRef,
+    send: sendFrame,
+    getHostToken: params.getHostToken,
+  });
+  const { handleReviewFrame, sendHostToken, resetReview } = review;
 
   // DEV_NOTE: Saved under the host user known at the time of the call, not at render: a token read mid-connect may
   // have just told the store who the user is
@@ -75,13 +87,14 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     setIsReady(false);
     chatRef.current?.setMessages([]);
     setConversation(null);
+    resetReview();
     store.patch({
       isSocketEnabled: store.pendingText !== null,
       ratings: {},
       pendingRatings: {},
       notice: store.pendingText === null ? CLOSED_NOTICE : null,
     });
-  }, [setConversation, storeApi]);
+  }, [resetReview, setConversation, storeApi]);
 
   const failConnect = useCallback(
     (kind: Schemas.WidgetConnectFailureKindEnum) => {
@@ -133,6 +146,7 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     (event: MessageEvent) => {
       const frame = parseServerFrame(event.data);
       if (!frame) return;
+      if (handleReviewFrame(frame)) return;
       const store = storeApi.getState();
       const chat = chatRef.current;
 
@@ -150,6 +164,8 @@ export function useConversation(params: Schemas.WidgetAppProps) {
             isUnavailable: false,
           });
           setIsReady(true);
+          // DEV_NOTE: The DO holds the host token in memory only, so every connect sends it again
+          void sendHostToken();
           return;
         }
         case "closed": {
@@ -191,7 +207,7 @@ export function useConversation(params: Schemas.WidgetAppProps) {
         }
       }
     },
-    [endConversation, setConversation, storeApi],
+    [endConversation, handleReviewFrame, sendHostToken, setConversation, storeApi],
   );
 
   const handleOpen = useCallback(() => {
@@ -231,6 +247,8 @@ export function useConversation(params: Schemas.WidgetAppProps) {
   });
   useLayoutEffect(() => {
     chatRef.current = chat;
+    messagesRef.current = chat.messages;
+    sendFrameRef.current = (frame) => agent.send(frame);
   });
 
   // DEV_NOTE: Opening the panel on a saved conversation connects, so its history shows
@@ -289,8 +307,9 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     setMessages([]);
     setIsReady(false);
     setConversation(null);
+    resetReview();
     storeApi.getState().startOver(null);
-  }, [chat.isStreaming, chat.status, setConversation, setMessages, stop, storeApi]);
+  }, [chat.isStreaming, chat.status, resetReview, setConversation, setMessages, stop, storeApi]);
 
   const rate = useCallback(
     (messageId: string, rating: Schemas.FeedbackRatingIntEnum) => {
@@ -311,5 +330,6 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     retry,
     newChat,
     rate,
+    changeActions: review.actions,
   };
 }

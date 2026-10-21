@@ -1,3 +1,9 @@
+import type {
+  ChangeRequestEditableField,
+  ChangeRequestKindEnum,
+  ChangeRequestStatusIntEnum,
+  WidgetChangeRequest,
+} from "../changeRequests/ChangeRequestsCommon";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type { KnowledgeCitation } from "../knowledgeSearch";
 import type { WidgetBootstrap } from "./WidgetApiResponse";
@@ -20,6 +26,127 @@ export interface WidgetToolStep {
   state: WidgetToolStepStateEnum;
 }
 
+// DEV_NOTE: Review cards (M3-5, DESIGN.md §7 Approval / Editing / Bulk). A card holds the change requests one reply's
+// calls of one tool proposed (same kind), each one record. Up to WIDGET_CHANGE_CARD_MAX_ROWS records it is a card
+// with a diff per record (Approve N / Edit / Reject); more is the bulk table (a checkbox per record, Approve N /
+// Reject), showing WIDGET_CHANGE_BULK_VISIBLE_ROWS rows until "Show N more". Values are the user's own host data,
+// shown in their own widget only.
+export const WIDGET_CHANGE_CARD_MAX_ROWS = 3;
+export const WIDGET_CHANGE_BULK_VISIBLE_ROWS = 6;
+
+export enum WidgetChangeCardLayoutEnum {
+  Card = "card",
+  Bulk = "bulk",
+}
+
+// DEV_NOTE: review: waiting for the user; editing: the user chose Edit; settled: nothing left to decide (every record
+// shows its outcome). isSending on the card: an answer or an edit is on its way (the buttons wait).
+export enum WidgetChangeCardStageEnum {
+  Review = "review",
+  Editing = "editing",
+  Settled = "settled",
+}
+
+// DEV_NOTE: How one record's change stands, in DESIGN.md §8 words (the status line under a decided record)
+export enum WidgetChangeOutcomeEnum {
+  Waiting = "waiting",
+  Saving = "saving",
+  Saved = "saved",
+  Rejected = "rejected",
+  Expired = "expired",
+  Failed = "failed",
+  NeedsPerson = "needs_person",
+}
+
+// DEV_NOTE: One diff line: the field (a machine value, mono), what the record holds and what the change sets, as
+// display text; null = empty (nothing there). isChanged false = the record already holds it.
+export interface WidgetDiffLineView {
+  field: string;
+  before: string | null;
+  after: string | null;
+  isChanged: boolean;
+}
+
+// DEV_NOTE: One field in the editor: an editable one (editable set, value = the draft text) or a changed one the user
+// can't edit (shown as plain text)
+export interface WidgetEditFieldView {
+  field: string;
+  value: string;
+  editable: ChangeRequestEditableField | null;
+}
+
+// DEV_NOTE: One record of a card. label: the args that pick the record (its id, mono), null for a new record.
+// isIncluded: ticked (bulk) / not removed (editor); an unticked record is rejected when the card is approved.
+export interface WidgetChangeRecordView {
+  changeRequestPublicId: string;
+  label: string | null;
+  lines: WidgetDiffLineView[];
+  editFields: WidgetEditFieldView[];
+  isIncluded: boolean;
+  isProposed: boolean;
+  wasEdited: boolean;
+  outcome: WidgetChangeOutcomeEnum;
+  status: ChangeRequestStatusIntEnum;
+}
+
+export interface WidgetChangeCardView {
+  id: string;
+  toolName: string;
+  kind: ChangeRequestKindEnum | null;
+  layout: WidgetChangeCardLayoutEnum;
+  stage: WidgetChangeCardStageEnum;
+  isSending: boolean;
+  title: string;
+  subtitle: string;
+  records: WidgetChangeRecordView[];
+  hiddenCount: number;
+  includedCount: number;
+  approveLabel: string;
+  canEdit: boolean;
+  expiresAt: number | null;
+  notice: string | null;
+}
+
+// DEV_NOTE: What the review cards do (the panel hands them to useConversation)
+export interface WidgetChangeCardActions {
+  onApprove: (cardId: string) => void;
+  onReject: (cardId: string) => void;
+  onEdit: (cardId: string) => void;
+  onCancelEdit: (cardId: string) => void;
+  onSaveEdits: (cardId: string) => void;
+  onEditValue: (
+    cardId: string,
+    changeRequestPublicId: string,
+    field: string,
+    value: string,
+  ) => void;
+  onToggleRecord: (cardId: string, changeRequestPublicId: string) => void;
+  onShowMore: (cardId: string) => void;
+}
+
+export interface WidgetChangeCardProps {
+  card: WidgetChangeCardView;
+  actions: WidgetChangeCardActions;
+}
+
+export interface WidgetDiffLineProps {
+  line: WidgetDiffLineView;
+}
+
+export interface WidgetChangeOutcomeProps {
+  outcome: WidgetChangeOutcomeEnum;
+}
+
+// DEV_NOTE: The review state the store keeps per card (by card id) and per change request (the newest frame)
+export interface WidgetChangeReviewState {
+  changeRequests: Record<string, WidgetChangeRequest>;
+  excluded: Record<string, true>;
+  editing: Record<string, Record<string, Record<string, string>>>;
+  sending: Record<string, true>;
+  expanded: Record<string, true>;
+  notices: Record<string, string>;
+}
+
 export interface WidgetUserMessageView {
   role: "user";
   id: string;
@@ -37,6 +164,7 @@ export interface WidgetAssistantMessageView {
   isStreaming: boolean;
   canRate: boolean;
   rating: FeedbackRatingIntEnum | null;
+  changeCards: WidgetChangeCardView[];
 }
 
 export type WidgetMessageView = WidgetUserMessageView | WidgetAssistantMessageView;
@@ -56,7 +184,7 @@ export interface WidgetPanelView {
   draft: string;
 }
 
-export interface WidgetPanelActions {
+export type WidgetPanelActions = WidgetChangeCardActions & {
   onSend: (text: string) => void;
   onStop: () => void;
   onRetry: () => void;
@@ -64,7 +192,7 @@ export interface WidgetPanelActions {
   onClose: () => void;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
   onDraftChange: (draft: string) => void;
-}
+};
 
 export type WidgetPanelProps = WidgetPanelActions & { view: WidgetPanelView };
 
@@ -86,7 +214,8 @@ export interface WidgetLauncherProps {
 // to resume, kept in localStorage per chatbot and host user so a reload continues the chat; hostUser is a SHA-256 of
 // the host user the latest token is for (its sub), which keys that saved id, learned from every token; pendingText is
 // a message waiting for its socket to open; draft is the composer's text (a refused message comes back to it); ratings
-// are the saved thumbs, pendingRatings the ones sent and not yet answered.
+// are the saved thumbs, pendingRatings the ones sent and not yet answered; review holds the change requests the DO
+// sent and the review cards' local state (M3-5).
 export interface WidgetStoreState {
   isOpen: boolean;
   draft: string;
@@ -99,10 +228,11 @@ export interface WidgetStoreState {
   pendingText: string | null;
   ratings: Record<string, FeedbackRatingIntEnum>;
   pendingRatings: Record<string, FeedbackRatingIntEnum>;
+  review: WidgetChangeReviewState;
 }
 
 // DEV_NOTE: startOver switches to another conversation (or none) and clears everything that belonged to the old one:
-// socket off, ratings, unsent text, notice, unavailable. The theme, the panel and the host user stay.
+// socket off, ratings, review, unsent text, notice, unavailable. The theme, the panel and the host user stay.
 export interface WidgetStoreActions {
   setOpen: (isOpen: boolean) => void;
   setTheme: (theme: WidgetThemeEnum) => void;
@@ -137,6 +267,7 @@ export interface WidgetAppProps {
   apiBase: string;
   chatbot: string | null;
   getToken: () => Promise<string>;
+  getHostToken: (() => Promise<string>) | null;
 }
 
 export type WidgetChatSessionProps = WidgetAppProps & {
@@ -221,6 +352,7 @@ export interface WidgetAssistantMessageProps {
   canStop: boolean;
   onStop: () => void;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
+  changeActions: WidgetChangeCardActions;
 }
 
 export interface WidgetToolStepsProps {

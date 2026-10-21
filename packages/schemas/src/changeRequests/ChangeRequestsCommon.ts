@@ -149,13 +149,39 @@ export type ChangeRequestRow = ChangeRequest & {
   isUndoable: boolean;
 };
 
+// DEV_NOTE: How the widget edits one field of a proposal (M3-5), from the tool's input_schema property. Only args
+// call_op sends (query or body) are editable: the args that only pick the record (path) never are, so an edit can't
+// point the change at another record. Only scalar types: an object or array arg, or a property with no single scalar
+// type, isn't editable. enumValues: the allowed values (a select); format: the JSON Schema format (date → a date
+// input). isRequired: the input_schema requires it (the widget can't clear it). The server re-checks every edit
+// against input_schema whatever the widget allowed (rule 3.34).
+export enum ChangeRequestFieldTypeEnum {
+  String = "string",
+  Number = "number",
+  Integer = "integer",
+  Boolean = "boolean",
+}
+
+export const ZChangeRequestEditableField = z.object({
+  field: z.string(),
+  type: z.enum(ChangeRequestFieldTypeEnum),
+  enumValues: z.array(z.union([z.string(), z.number(), z.boolean()])).nullable(),
+  format: z.string().nullable(),
+  isRequired: z.boolean(),
+});
+export type ChangeRequestEditableField = z.infer<typeof ZChangeRequestEditableField>;
+
 // DEV_NOTE: Client-facing — one change request as the widget shows it (change_request frame). changes are null once
 // purged, and kind too then, unless the tool is destructive (a delete): a create and an update read alike without the
-// payload. expiresAt (epoch ms) only while Proposed. Internal ids structurally absent; toolName and field names are
-// machine values (font-mono in the UI).
+// payload. expiresAt (epoch ms) only while Proposed. editableFields only while Proposed (empty otherwise, or when the
+// tool no longer loads). toolCallId is Think's tool call id (the model's, already in the transcript; not a database
+// id): the widget shows the card in the reply that made the call. null when the DO no longer holds the open entry
+// (the call's own output then names the change request). wasEdited: the user changed values (M3-5), so the diff is the
+// re-checked one. Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
 export const ZWidgetChangeRequest = z.object({
   publicId: z.string(),
   toolName: z.string(),
+  toolCallId: z.string().nullable(),
   kind: z.enum(ChangeRequestKindEnum).nullable(),
   changeRequestStatus: z.enum(ChangeRequestStatusIntEnum),
   changeRequestStatusLabel: z.enum(ChangeRequestStatusLabelEnum),
@@ -164,8 +190,30 @@ export const ZWidgetChangeRequest = z.object({
   changeCount: z.number().int(),
   expiresAt: z.number().int().nullable(),
   isUndoable: z.boolean(),
+  wasEdited: z.boolean(),
+  editableFields: z.array(ZChangeRequestEditableField),
 });
 export type WidgetChangeRequest = z.infer<typeof ZWidgetChangeRequest>;
+
+// DEV_NOTE: One edit (M3-5): new values for some of a proposal's editable fields, by field name. Bounded: at most
+// CHANGE_REQUEST_EDIT_MAX_FIELDS fields, each value's JSON at most CHANGE_REQUEST_EDIT_VALUE_MAX_CHARS.
+export const CHANGE_REQUEST_EDIT_MAX_FIELDS = 50;
+export const CHANGE_REQUEST_EDIT_VALUE_MAX_CHARS = 4_000;
+
+export const ZChangeRequestEditValues = z
+  .record(
+    z.string().min(1).max(64),
+    z
+      .json()
+      .refine((value) => JSON.stringify(value).length <= CHANGE_REQUEST_EDIT_VALUE_MAX_CHARS, {
+        message: "Value too long",
+      }),
+  )
+  .refine((values) => {
+    const count = Object.keys(values).length;
+    return count > 0 && count <= CHANGE_REQUEST_EDIT_MAX_FIELDS;
+  }, "Between 1 and 50 fields");
+export type ChangeRequestEditValues = z.infer<typeof ZChangeRequestEditValues>;
 
 // DEV_NOTE: The user's answer to a proposal, from the widget's change_request_decision frame
 export enum ChangeRequestDecisionEnum {
@@ -176,12 +224,18 @@ export enum ChangeRequestDecisionEnum {
 // DEV_NOTE: Why a change request step was refused (server-side only, ActionEngineRepo → Conversation DO).
 //   NotFound: no change request of this conversation has that public id.
 //   InvalidTransition: it isn't in a status the step starts from (already decided, expired, committed).
+//   PastDeadline: an edit after the approval deadline (the expiry ends it).
+//   InvalidEdit: an edit names a field that isn't editable, or its values don't fit the input_schema (M3-5).
+//   NoChange: the edited values are what the record already holds, so there is nothing to approve.
 //   ConversationClosed / ChatbotUnavailable: re-checked on every step (rule 3.23).
 //   ReadOnly: the company is read-only (is_read_only): the agent may only read, so nothing commits.
 //   ToolUnavailable: the tool version or its connection is no longer Active, or its ops no longer load.
 export enum ChangeRequestFailureEnum {
   NotFound = "NotFound",
   InvalidTransition = "InvalidTransition",
+  PastDeadline = "PastDeadline",
+  InvalidEdit = "InvalidEdit",
+  NoChange = "NoChange",
   ConversationClosed = "ConversationClosed",
   ChatbotUnavailable = "ChatbotUnavailable",
   ReadOnly = "ReadOnly",
@@ -193,8 +247,11 @@ export enum ChangeRequestFailureEnum {
 // (M4-5) reads straight from activity_log. Spelled once here, since the dedupe key is what makes a repeat a no-op.
 export const CHANGE_REQUEST_ENTITY_TYPE = "change_request";
 
+// DEV_NOTE: Edited (M3-5) is the one event that isn't a status change: the user changed a Proposed one's values (it
+// stays Proposed). Each edit is its own event (an edit id part in the dedupe key).
 export enum ChangeRequestEntityActionEnum {
   Proposed = "proposed",
+  Edited = "edited",
   Approved = "approved",
   Rejected = "rejected",
   Expired = "expired",

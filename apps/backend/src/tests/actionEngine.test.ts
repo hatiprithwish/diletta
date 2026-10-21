@@ -52,6 +52,8 @@ const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 let ownerPool: Pool | null = null;
 let sessionA: Schemas.ConversationSession;
+// DEV_NOTE: Fixtures a single test creates, cleaned up with A and B
+const extraSessions: Schemas.ConversationSession[] = [];
 let sessionB: Schemas.ConversationSession;
 let hostToken = "";
 // DEV_NOTE: Each fixture conversation's conversation.started root log, which every change request event hangs under
@@ -261,7 +263,11 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  const companyIds = [sessionA?.companyId, sessionB?.companyId].filter(Boolean);
+  const companyIds = [
+    sessionA?.companyId,
+    sessionB?.companyId,
+    ...extraSessions.map((session) => session.companyId),
+  ].filter(Boolean);
   try {
     if (companyIds.length === 0) return;
     await withOwnerDb(async (ownerDb) => {
@@ -617,6 +623,121 @@ describe("ActionEngineRepo change requests", () => {
   });
 });
 
+// DEV_NOTE: An edited payload as the DO builds it (M3-5): the plan's args with a new amount, the diff rebuilt
+function editedPayload(plan: Schemas.EditPlan, amount: number): Schemas.ChangeRequestPayload {
+  const args = { ...plan.payload.args, amount };
+  const before = { data: { id: "rec_alpha", amount: 120 } };
+  return {
+    version: 1,
+    kind: plan.payload.kind,
+    args,
+    before,
+    changes: Schemas.buildChangeRequestChanges({
+      kind: plan.payload.kind,
+      callOp: plan.tool.ops.callOp,
+      readbackOp: plan.tool.ops.readbackOp!,
+      args,
+      before,
+    }),
+  };
+}
+
+describe("ActionEngineRepo edits (M3-5)", () => {
+  it("edits a Proposed change request: new payload encrypted, was_edited, an edited event by the user", async () => {
+    const repo = new ActionEngineRepo(env);
+    const proposed = (await propose(sessionA, 31)).changeRequest!;
+    expect(proposed.editableFields.map((field) => field.field)).toContain("amount");
+    expect(proposed.editableFields.map((field) => field.field)).not.toContain("recordId");
+
+    const planned = await repo.getEditPlan({
+      session: sessionA,
+      changeRequestPublicId: proposed.publicId,
+    });
+    expect(planned.isSuccess).toBe(true);
+    expect(planned.plan?.payload.args).toEqual({ recordId: "rec_alpha", amount: 31 });
+
+    const saved = await repo.saveEdit({
+      session: sessionA,
+      changeRequestPublicId: proposed.publicId,
+      payload: editedPayload(planned.plan!, 99),
+      editId: Utility.generateUlid(),
+    });
+    expect(saved.isSuccess).toBe(true);
+    expect(saved.changeRequest).toMatchObject({
+      changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Proposed,
+      wasEdited: true,
+    });
+    expect(saved.changeRequest?.changes?.[0]?.after).toEqual({ isFound: true, value: 99 });
+    const row = await getRow(proposed.publicId);
+    expect(row?.wasEdited).toBe(true);
+    expect(Buffer.from(row?.encryptedChanges ?? []).toString("utf8")).not.toContain("99");
+    expect((await eventsOf(proposed.publicId)).at(-1)).toMatchObject({
+      entityAction: "edited",
+      actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+    });
+
+    // DEV_NOTE: The commit sends the edited args
+    await repo.decideChangeRequest({
+      session: sessionA,
+      changeRequestPublicId: proposed.publicId,
+      decision: Schemas.ChangeRequestDecisionEnum.Approve,
+      isExpired: false,
+    });
+    expect((await startCommit(sessionA, proposed.publicId)).plan?.payload.args.amount).toBe(99);
+  });
+
+  it("refuses an edit once decided or past the deadline, and a payload of another kind", async () => {
+    const repo = new ActionEngineRepo(env);
+    const decidedId = (await propose(sessionA, 32)).changeRequest!.publicId;
+    const plan = (await repo.getEditPlan({ session: sessionA, changeRequestPublicId: decidedId }))
+      .plan!;
+    const wrongKind = await repo.saveEdit({
+      session: sessionA,
+      changeRequestPublicId: decidedId,
+      payload: { ...editedPayload(plan, 50), kind: Schemas.ChangeRequestKindEnum.Delete },
+      editId: Utility.generateUlid(),
+    });
+    expect(wrongKind.failure).toBe(Schemas.ChangeRequestFailureEnum.InvalidEdit);
+
+    await repo.decideChangeRequest({
+      session: sessionA,
+      changeRequestPublicId: decidedId,
+      decision: Schemas.ChangeRequestDecisionEnum.Reject,
+      isExpired: false,
+    });
+    const afterDecision = await repo.saveEdit({
+      session: sessionA,
+      changeRequestPublicId: decidedId,
+      payload: editedPayload(plan, 50),
+      editId: Utility.generateUlid(),
+    });
+    expect(afterDecision.failure).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
+    expect(afterDecision.changeRequest?.editableFields).toEqual([]);
+
+    const lateId = (await propose(sessionA, 33)).changeRequest!.publicId;
+    await ageChangeRequest(lateId, Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS + 1_000);
+    const late = await repo.getEditPlan({ session: sessionA, changeRequestPublicId: lateId });
+    expect(late.failure).toBe(Schemas.ChangeRequestFailureEnum.PastDeadline);
+    expect((await getRow(lateId))?.wasEdited).toBe(false);
+    expect((await getRow(decidedId))?.wasEdited).toBe(false);
+  });
+
+  it("offers no edit once the tool version is disabled", async () => {
+    const repo = new ActionEngineRepo(env);
+    const fixture = await createFixture("edit-disabled");
+    extraSessions.push(fixture);
+    const publicId = (await propose(fixture, 34)).changeRequest!.publicId;
+    await setToolStatus(fixture.companyId, Schemas.ToolDefinitionStatusIntEnum.Disabled);
+    const planned = await repo.getEditPlan({ session: fixture, changeRequestPublicId: publicId });
+    expect(planned.failure).toBe(Schemas.ChangeRequestFailureEnum.ToolUnavailable);
+    const views = await repo.getChangeRequestViews({
+      session: fixture,
+      changeRequestPublicIds: [publicId],
+    });
+    expect(views.changeRequests?.[0]?.editableFields).toEqual([]);
+  });
+});
+
 describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
   it("never lets another company's session read, decide or commit a change request", async () => {
     const repo = new ActionEngineRepo(env);
@@ -659,6 +780,26 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
       });
       expect(executionSet.isSuccess).toBe(false);
       expect(executionSet.isNotFound).toBe(true);
+      const planned = await repo.getEditPlan({ session, changeRequestPublicId: publicId });
+      expect(planned.plan).toBeUndefined();
+      expect([
+        Schemas.ChangeRequestFailureEnum.NotFound,
+        Schemas.ChangeRequestFailureEnum.ConversationClosed,
+      ]).toContain(planned.failure);
+      const saved = await repo.saveEdit({
+        session,
+        changeRequestPublicId: publicId,
+        payload: {
+          version: 1,
+          kind: Schemas.ChangeRequestKindEnum.Update,
+          args: { recordId: "rec_alpha", amount: 1 },
+          before: null,
+          changes: [],
+        },
+        editId: Utility.generateUlid(),
+      });
+      expect(saved.isSuccess).toBe(false);
+      expect(saved.changeRequest).toBeUndefined();
     }
 
     const stillProposed = await repo.getChangeRequestViews({
@@ -669,6 +810,7 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
       Schemas.ChangeRequestStatusIntEnum.Proposed,
     );
     expect((await getRow(publicId))?.thinkExecutionId).toBeNull();
+    expect((await getRow(publicId))?.wasEdited).toBe(false);
   });
 
   it("never loads another company's tools or records a tool call under its tenant", async () => {

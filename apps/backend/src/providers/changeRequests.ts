@@ -65,16 +65,21 @@ export default class ChangeRequestsProvider {
         return Schemas.ChangeRequestErrorCodeEnum.ToolUnavailable;
       case Schemas.ChangeRequestFailureEnum.NotFound:
       case Schemas.ChangeRequestFailureEnum.InvalidTransition:
+      case Schemas.ChangeRequestFailureEnum.PastDeadline:
+      case Schemas.ChangeRequestFailureEnum.InvalidEdit:
+      case Schemas.ChangeRequestFailureEnum.NoChange:
       case Schemas.ChangeRequestFailureEnum.ServerError:
         return Schemas.ChangeRequestErrorCodeEnum.ServerError;
     }
   }
 
   // DEV_NOTE: The widget's view. Without a readable payload (purged, M3-7) changes are null, and kind is known only
-  // for a destructive tool.
+  // for a destructive tool. editableFields (M3-5) count only while Proposed. toolCallId is the DO's to fill (it holds
+  // the open entries by Think tool call id).
   static toView(
     row: Schemas.ChangeRequestRow,
     payload: Schemas.ChangeRequestPayload | null,
+    editableFields: Schemas.ChangeRequestEditableField[] = [],
   ): Schemas.WidgetChangeRequest {
     const kind =
       payload?.kind ??
@@ -85,6 +90,7 @@ export default class ChangeRequestsProvider {
     return {
       publicId: row.publicId,
       toolName: row.toolName ?? "",
+      toolCallId: null,
       kind,
       changeRequestStatus: row.status,
       changeRequestStatusLabel: Schemas.CHANGE_REQUEST_STATUS_LABEL_MAP[row.status],
@@ -93,7 +99,21 @@ export default class ChangeRequestsProvider {
       changeCount: row.changeCount,
       expiresAt: isProposed ? ChangeRequestsProvider.deadline(row) : null,
       isUndoable: row.isUndoable,
+      wasEdited: row.wasEdited,
+      editableFields: isProposed && payload ? editableFields : [],
     };
+  }
+
+  // DEV_NOTE: A Proposed change request's editable fields (M3-5), from its tool's ops and its payload's kind
+  static editableFields(
+    tool: Schemas.RuntimeTool,
+    payload: Schemas.ChangeRequestPayload,
+  ): Schemas.ChangeRequestEditableField[] {
+    return Schemas.getEditableFields({
+      kind: payload.kind,
+      callOp: tool.ops.callOp,
+      inputSchema: tool.ops.inputSchema,
+    });
   }
 }
 

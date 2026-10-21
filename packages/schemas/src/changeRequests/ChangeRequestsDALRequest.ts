@@ -53,3 +53,16 @@ export type ListConversationChangeRequestsDALRequest = Pick<
 > & {
   publicIds: string[];
 };
+
+// DEV_NOTE: An edit's new payload (encrypted) and the summary and change count from its diff, only while the row is
+// still Proposed (isNotFound otherwise); sets was_edited
+export type UpdateChangeRequestPayloadDALRequest = Pick<
+  ChangeRequest,
+  | "companyId"
+  | "id"
+  | "encryptedChanges"
+  | "iv"
+  | "encryptionKeyVersion"
+  | "summary"
+  | "changeCount"
+>;

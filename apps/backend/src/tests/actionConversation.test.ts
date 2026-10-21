@@ -1039,3 +1039,260 @@ describe("Action engine: tool calls", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     socket.socket.close(1000);
   });
 });
+
+// DEV_NOTE: M3-5 — the widget's review: edits re-checked before anything commits (the Done-when), and bulk answers
+// resolved together so the model replies once
+describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  const sendEdits = (
+    socket: Socket,
+    edits: { changeRequestId: string; values: Record<string, unknown> }[],
+  ) => socket.socket.send(JSON.stringify({ type: "change_request_edits", edits }));
+
+  const sendBatch = (
+    socket: Socket,
+    decisions: { changeRequestId: string; decision: Schemas.ChangeRequestDecisionEnum }[],
+  ) => socket.socket.send(JSON.stringify({ type: "change_request_batch_decision", decisions }));
+
+  const editAnswer =
+    (changeRequestId: string) =>
+    (frame: Frame): boolean =>
+      frame.type === "change_request_edit" && frame.changeRequestId === changeRequestId;
+
+  const asEditAnswer = (frame: Frame) => frame as unknown as Schemas.WidgetChangeRequestEditMessage;
+
+  async function waitForExecutionIds(conversationPublicId: string, count: number) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const entries = Object.values((await getRuntimeState(conversationPublicId)).changeRequests);
+      if (entries.filter((entry) => entry.executionId).length >= count) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("Execution ids never recorded");
+  }
+
+  async function parkProposal(amount: number) {
+    const tenant = await createTenant({ tools: ["update_record"] });
+    scriptModel([updateAlpha(amount), reply("Waiting for you."), reply("Done.")]);
+    routeTestHostFetch();
+    const socket = await connect(tenant);
+    sendHostToken(socket, tenant.hostToken);
+    await sendChat(socket, "req-1", `Set Alpha's amount to ${amount}`);
+    const proposed = asChangeRequest(
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)),
+    );
+    await waitForExecutionId(socket.publicId);
+    return { tenant, socket, proposed };
+  }
+
+  async function writeHostAmount(hostToken: string, amount: number) {
+    const tool = testHostTool("update_record");
+    const response = await testHostAdapter(() => hostToken).execute({
+      risk: Schemas.ToolDefinitionRiskIntEnum.Write,
+      request: render(tool.ops.callOp, { args: { recordId: "rec_alpha", amount } }),
+      idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.Native,
+      idempotencyKey: `test-${crypto.randomUUID()}`,
+      appliedCheck: null,
+      isResume: false,
+    });
+    expect(response.outcome).toBe(Schemas.HostCallOutcomeEnum.Succeeded);
+  }
+
+  // DEV_NOTE: The Done-when. The edited value is checked against the input_schema, the record is read again (another
+  // edit landed in the host meanwhile: the new diff shows it), the proposal waits with the re-checked diff, and only
+  // the edited value is committed once the user approves.
+  it("re-checks an edit (read-before again, diff rebuilt) and commits the edited value once approved", async () => {
+    const { tenant, socket, proposed } = await parkProposal(300);
+    expect(proposed.editableFields.map((field) => field.field)).toEqual([
+      "name",
+      "email",
+      "amount",
+      "status",
+    ]);
+    expect(proposed.toolCallId).toBe("toolu_update");
+    expect(proposed.wasEdited).toBe(false);
+    await writeHostAmount(tenant.hostToken, 200);
+
+    let from = socket.frames.length;
+    sendEdits(socket, [{ changeRequestId: proposed.publicId, values: { amount: 450 } }]);
+    const answer = asEditAnswer(await socket.waitFor(editAnswer(proposed.publicId), from));
+    expect(answer).toMatchObject({ isSaved: true, message: null });
+    const edited = asChangeRequest(
+      await socket.waitFor(
+        (frame) =>
+          changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)(frame) &&
+          asChangeRequest(frame).wasEdited,
+        from,
+      ),
+    );
+    expect(edited.changes?.[0]).toEqual({
+      field: "amount",
+      before: { isFound: true, value: 200 },
+      after: { isFound: true, value: 450 },
+      isChanged: true,
+    });
+    expect(edited.expiresAt).toBe(proposed.expiresAt);
+    const row = await getChangeRequestRow(proposed.publicId);
+    expect(row?.wasEdited).toBe(true);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Proposed);
+    expect(Buffer.from(row?.encryptedChanges ?? []).toString("utf8")).not.toContain("450");
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(200);
+
+    from = socket.frames.length;
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await socket.waitFor(isContinuationDone, from);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(450);
+    const events = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ entityAction: activityLog.entityAction, actorType: activityLog.actorType })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.companyId, tenant.companyId),
+            eq(activityLog.entityType, Schemas.CHANGE_REQUEST_ENTITY_TYPE),
+          ),
+        )
+        .orderBy(asc(activityLog.id)),
+    );
+    expect(events.map((event) => event.entityAction)).toEqual([
+      "proposed",
+      "edited",
+      "approved",
+      "committing",
+      "committed",
+    ]);
+    expect(events[1]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
+    socket.socket.close(1000);
+  });
+
+  it("refuses an edit of the record's id, a value the input_schema rejects, and one that changes nothing", async () => {
+    const { tenant, socket, proposed } = await parkProposal(300);
+    const attempts: Record<string, unknown>[] = [
+      { recordId: "rec_bravo" },
+      { amount: "lots" },
+      { amount: Schemas.TEST_HOST_AMOUNT_LIMIT + 1 },
+      { amount: 120 },
+    ];
+    for (const values of attempts) {
+      const from = socket.frames.length;
+      sendEdits(socket, [{ changeRequestId: proposed.publicId, values }]);
+      const answer = asEditAnswer(await socket.waitFor(editAnswer(proposed.publicId), from));
+      expect(answer.isSaved).toBe(false);
+      expect(answer.message).toContain("Nothing changed");
+    }
+    const row = await getChangeRequestRow(proposed.publicId);
+    expect(row?.wasEdited).toBe(false);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Proposed);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+    socket.socket.close(1000);
+  });
+
+  it("refuses an edit after the deadline, and asks for the host token before an edit's read", async () => {
+    const { tenant, socket, proposed } = await parkProposal(300);
+    // DEV_NOTE: The DO's memory without the host token (an eviction drops it): the edit asks for it, changing nothing
+    await runInDurableObject(
+      await getAgentByName(env.CONVERSATION_DO, socket.publicId),
+      (instance) => {
+        Reflect.set(instance, "hostToken", null);
+      },
+    );
+    let from = socket.frames.length;
+    sendEdits(socket, [{ changeRequestId: proposed.publicId, values: { amount: 400 } }]);
+    await socket.waitFor((frame) => frame.type === "token_needed", from);
+
+    sendHostToken(socket, tenant.hostToken);
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(changeRequests)
+        .set({
+          createdAt: new Date(Date.now() - Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS - 1_000),
+        })
+        .where(eq(changeRequests.publicId, proposed.publicId)),
+    );
+    from = socket.frames.length;
+    sendEdits(socket, [{ changeRequestId: proposed.publicId, values: { amount: 400 } }]);
+    const answer = asEditAnswer(await socket.waitFor(editAnswer(proposed.publicId), from));
+    expect(answer).toMatchObject({
+      isSaved: false,
+      message: "This change is no longer waiting for your answer",
+    });
+    expect((await getChangeRequestRow(proposed.publicId))?.wasEdited).toBe(false);
+    socket.socket.close(1000);
+  });
+
+  // DEV_NOTE: Two writes of one step park together; one batch answers both (approve one, reject the other): the
+  // approved one is committed, the rejected one never reaches the host, and Think continues the chat once
+  it("decides a bulk review in one batch: commits the approved, rejects the rest, and the model replies once", async () => {
+    const tenant = await createTenant({ tools: ["update_record"] });
+    scriptModel([
+      (model) =>
+        anthropicToolCallsStream(model, [
+          {
+            id: "toolu_alpha",
+            name: "update_record",
+            input: { recordId: "rec_alpha", amount: 70 },
+          },
+          {
+            id: "toolu_bravo",
+            name: "update_record",
+            input: { recordId: "rec_bravo", amount: 80 },
+          },
+        ]),
+      reply("Both are ready for your review."),
+      reply("Alpha is updated; Bravo stays as it was."),
+    ]);
+    routeTestHostFetch();
+    const socket = await connect(tenant);
+    sendHostToken(socket, tenant.hostToken);
+    await sendChat(socket, "req-1", "Set Alpha to 70 and Bravo to 80");
+    await waitForExecutionIds(socket.publicId, 2);
+    const entries = Object.entries((await getRuntimeState(socket.publicId)).changeRequests);
+    const alpha = entries.find(([toolCallId]) => toolCallId === "toolu_alpha")?.[1];
+    const bravo = entries.find(([toolCallId]) => toolCallId === "toolu_bravo")?.[1];
+    if (!alpha || !bravo) throw new Error("Both proposals not parked");
+    const requestsBefore = gatewayRequests().length;
+
+    const from = socket.frames.length;
+    sendBatch(socket, [
+      { changeRequestId: alpha.publicId, decision: Schemas.ChangeRequestDecisionEnum.Approve },
+      { changeRequestId: bravo.publicId, decision: Schemas.ChangeRequestDecisionEnum.Reject },
+    ]);
+    await socket.waitFor(isContinuationDone, from);
+
+    expect((await getChangeRequestRow(alpha.publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Committed,
+    );
+    expect((await getChangeRequestRow(bravo.publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Rejected,
+    );
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(70);
+    expect((await readHostRecord(tenant.hostToken, "rec_bravo"))?.data?.amount).toBe(45.5);
+    // DEV_NOTE: One continuation for the whole batch, which saw both outcomes
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(gatewayRequests().length).toBe(requestsBefore + 1);
+    const continuation = JSON.stringify(gatewayRequests().at(-1)?.body?.messages);
+    expect(continuation).toContain("The change was made in the app.");
+    expect(continuation).toContain("The user rejected the change.");
+    expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
+    socket.socket.close(1000);
+  });
+
+  it("asks for the host token before a batch with an approval decides anything", async () => {
+    const { tenant, socket, proposed } = await parkProposal(300);
+    await runInDurableObject(
+      await getAgentByName(env.CONVERSATION_DO, socket.publicId),
+      (instance) => {
+        Reflect.set(instance, "hostToken", null);
+      },
+    );
+    const from = socket.frames.length;
+    sendBatch(socket, [
+      { changeRequestId: proposed.publicId, decision: Schemas.ChangeRequestDecisionEnum.Approve },
+    ]);
+    await socket.waitFor((frame) => frame.type === "token_needed", from);
+    expect((await getChangeRequestRow(proposed.publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Proposed,
+    );
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+    socket.socket.close(1000);
+  });
+});
