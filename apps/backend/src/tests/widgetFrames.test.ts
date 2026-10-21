@@ -155,3 +155,52 @@ describe("WidgetFrameProvider.admit feedback", () => {
     }
   });
 });
+
+describe("WidgetFrameProvider.admit host token and change request decisions", () => {
+  it("admits the widget's host token for the DO's memory", () => {
+    const token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln";
+    expect(WidgetFrameProvider.admit(JSON.stringify({ type: "host_token", token }), none)).toEqual({
+      kind: "hostToken",
+      token,
+    });
+  });
+
+  it("refuses a malformed host token, never echoing it in the reason", () => {
+    const refused = [
+      { type: "host_token", token: "" },
+      { type: "host_token", token: "has space" },
+      { type: "host_token", token: "a".repeat(Schemas.WIDGET_HOST_TOKEN_MAX_CHARS + 1) },
+      { type: "host_token" },
+    ];
+    for (const frame of refused) {
+      const admission = WidgetFrameProvider.admit(JSON.stringify(frame), none);
+      expect(admission.kind).toBe("refuse");
+      expect(JSON.stringify(admission)).not.toContain("has space");
+    }
+  });
+
+  it("admits an approval or a rejection of one change request by its public id", () => {
+    const frame = {
+      type: "change_request_decision",
+      changeRequestId: "cr_123",
+      decision: Schemas.ChangeRequestDecisionEnum.Approve,
+    };
+    expect(WidgetFrameProvider.admit(JSON.stringify(frame), none)).toEqual({
+      kind: "decision",
+      changeRequestPublicId: "cr_123",
+      decision: Schemas.ChangeRequestDecisionEnum.Approve,
+    });
+  });
+
+  it("refuses a malformed decision, and Think's own tool approval frames", () => {
+    const refused = [
+      { type: "change_request_decision", changeRequestId: "cr_1", decision: "maybe" },
+      { type: "change_request_decision", decision: "approve" },
+      { type: "cf_agent_tool_approval", toolCallId: "t-1", approved: true },
+      { type: "rpc", id: "1", method: "approveExecution", args: ["actpause_1"] },
+    ];
+    for (const frame of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(frame), none).kind).toBe("refuse");
+    }
+  });
+});

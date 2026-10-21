@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getColumns, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, getColumns, inArray, max, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections, toolDefinitions } from "@/db/tables";
@@ -18,6 +18,57 @@ const connectionJoinConditions = [
   eq(companyConnections.id, toolDefinitions.connectionId),
   eq(companyConnections.companyId, toolDefinitions.companyId),
 ];
+
+// DEV_NOTE: A tool row with the connection fields a host call needs (M3-4); connectionStatus null = connection gone
+const withConnectionSelection = {
+  ...getColumns(toolDefinitions),
+  connectionStatus: companyConnections.status,
+  connectionAdapterType: companyConnections.adapterType,
+  connectionBaseUrl: companyConnections.baseUrl,
+  connectionAuthType: companyConnections.authType,
+  connectionAuthConfig: companyConnections.authConfig,
+  connectionCredentialScope: companyConnections.credentialScope,
+};
+
+function toWithConnectionRow(
+  selected: {
+    [K in keyof typeof withConnectionSelection]: K extends keyof Schemas.ToolDefinition
+      ? Schemas.ToolDefinition[K]
+      : unknown;
+  } & {
+    connectionStatus: Schemas.CompanyConnectionStatusIntEnum | null;
+    connectionAdapterType: Schemas.CompanyConnectionAdapterTypeIntEnum | null;
+    connectionBaseUrl: string | null;
+    connectionAuthType: string | null;
+    connectionAuthConfig: unknown;
+    connectionCredentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum | null;
+  },
+): Schemas.ToolDefinitionWithConnectionRow {
+  const {
+    connectionStatus,
+    connectionAdapterType,
+    connectionBaseUrl,
+    connectionAuthType,
+    connectionAuthConfig,
+    connectionCredentialScope,
+    ...toolDefinition
+  } = selected;
+  const connection =
+    connectionStatus !== null &&
+    connectionAdapterType !== null &&
+    connectionAuthType !== null &&
+    connectionCredentialScope !== null
+      ? {
+          status: connectionStatus,
+          adapterType: connectionAdapterType,
+          baseUrl: connectionBaseUrl,
+          authType: connectionAuthType,
+          authConfig: connectionAuthConfig,
+          credentialScope: connectionCredentialScope,
+        }
+      : null;
+  return { ...toolDefinition, connection };
+}
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo, and every
 // query filters on companyId (defence in depth on top of RLS). Versions are immutable once active, so edits and
@@ -512,6 +563,107 @@ export default class ToolDefinitionsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.DeleteToolDefinitionDraft,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The exact {name, version} pins of a turn's config (M3-4), any status (the Repo keeps the Active ones and
+  // logs the rest). Every version of the pinned names is read, then matched on version here: the pins are few, and a
+  // list of (name, version) pairs has no plain where-clause form.
+  async getPinnedToolDefinitions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetPinnedToolDefinitionsDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionsWithConnectionDALResponse = { isSuccess: false };
+
+    try {
+      if (params.pins.length === 0) {
+        response.isSuccess = true;
+        response.message = "No tools pinned";
+        response.toolDefinitions = [];
+        return response;
+      }
+      const conditions = [
+        eq(toolDefinitions.companyId, params.companyId),
+        inArray(
+          toolDefinitions.name,
+          params.pins.map((pin) => pin.name),
+        ),
+      ];
+      const selected = await tx
+        .select(withConnectionSelection)
+        .from(toolDefinitions)
+        .leftJoin(companyConnections, and(...connectionJoinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(toolDefinitions.name), asc(toolDefinitions.version));
+
+      const pinned = new Set(params.pins.map((pin) => `${pin.name}@${pin.version}`));
+      response.isSuccess = true;
+      response.message = "Pinned tool definitions fetched successfully";
+      response.toolDefinitions = selected
+        .filter((row) => pinned.has(`${row.name}@${row.version}`))
+        .map(toWithConnectionRow);
+    } catch (error) {
+      const message = "Unknown error in fetching pinned tool definitions";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetPinnedToolDefinitions,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One version by its internal id, with its connection (a change request's commit, M3-4)
+  async getToolDefinitionById(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindToolDefinitionByIdDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionWithConnectionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolDefinitions.id, params.id),
+        eq(toolDefinitions.companyId, params.companyId),
+      ];
+      const [selected] = await tx
+        .select(withConnectionSelection)
+        .from(toolDefinitions)
+        .leftJoin(companyConnections, and(...connectionJoinConditions))
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!selected) {
+        const message = "Tool definition not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetToolDefinitionById,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Tool definition fetched successfully";
+      response.toolDefinition = toWithConnectionRow(selected);
+    } catch (error) {
+      const message = "Unknown error in fetching tool definition";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetToolDefinitionById,
         message,
         error,
         metadata: params,

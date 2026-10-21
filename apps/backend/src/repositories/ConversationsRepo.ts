@@ -1,15 +1,28 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotUsersDAL from "@/data-access-layer/ChatbotUsersDAL";
-import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
-import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import ConversationCheckProvider from "@/providers/conversationCheck";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
+
+// DEV_NOTE: A turn whose conversation check fails: a conversation missing from its company is a server fault here
+// (the DO only serves one the worker resolved)
+const TURN_CONFIG_CHECK_FAILURE_MAP: Record<
+  Schemas.ConversationCheckFailureEnum,
+  Schemas.TurnConfigFailureEnum
+> = {
+  [Schemas.ConversationCheckFailureEnum.NotFound]: Schemas.TurnConfigFailureEnum.ServerError,
+  [Schemas.ConversationCheckFailureEnum.ConversationClosed]:
+    Schemas.TurnConfigFailureEnum.ConversationClosed,
+  [Schemas.ConversationCheckFailureEnum.ChatbotUnavailable]:
+    Schemas.TurnConfigFailureEnum.ChatbotUnavailable,
+  [Schemas.ConversationCheckFailureEnum.ServerError]: Schemas.TurnConfigFailureEnum.ServerError,
+};
 
 // DEV_NOTE: Conversations (M2-2). The widget route calls startOrResume after WidgetAuthRepo.authenticate, before it
 // forwards the upgrade to the Conversation DO, so the DO only ever serves a verified user its own conversation (and
@@ -23,8 +36,6 @@ export default class ConversationsRepo {
   private conversationsDal: ConversationsDAL;
   private chatbotConfigsDal: ChatbotConfigsDAL;
   private messagesDal: MessagesDAL;
-  private companiesDal: CompaniesDAL;
-  private chatbotsDal: ChatbotsDAL;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
@@ -32,8 +43,6 @@ export default class ConversationsRepo {
     this.conversationsDal = new ConversationsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.messagesDal = new MessagesDAL();
-    this.companiesDal = new CompaniesDAL();
-    this.chatbotsDal = new ChatbotsDAL();
   }
 
   // DEV_NOTE: The verified user's chatbot_users row (created on first visit, display name kept current), then either
@@ -165,38 +174,11 @@ export default class ConversationsRepo {
     });
 
     return await withTenant(this.db, session.companyId, async (tx) => {
-      const current = await this.conversationsDal.getConversationDetails(tx, {
-        companyId: session.companyId,
-        publicId: session.conversationPublicId,
-      });
-      if (!current.isSuccess || !current.conversation) {
-        return refuse(Schemas.TurnConfigFailureEnum.ServerError, current.message);
+      const checked = await ConversationCheckProvider.check(tx, session);
+      if (!checked.isSuccess) {
+        return refuse(TURN_CONFIG_CHECK_FAILURE_MAP[checked.failure], checked.message);
       }
-      if (current.conversation.status !== Schemas.ConversationStatusIntEnum.Open) {
-        return refuse(Schemas.TurnConfigFailureEnum.ConversationClosed, "Conversation is closed");
-      }
-
-      const company = await this.companiesDal.getCompanyDetails(tx, {
-        companyId: session.companyId,
-      });
-      const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
-        companyId: session.companyId,
-        publicId: session.chatbotPublicId,
-      });
-      if (!company.isSuccess || !chatbot.isSuccess) {
-        return chatbot.isNotFound
-          ? refuse(Schemas.TurnConfigFailureEnum.ChatbotUnavailable, chatbot.message)
-          : refuse(Schemas.TurnConfigFailureEnum.ServerError, company.message ?? chatbot.message);
-      }
-      if (
-        company.company?.status !== Schemas.CompanyStatusIntEnum.Active ||
-        chatbot.chatbot?.status !== Schemas.ChatbotStatusIntEnum.Active
-      ) {
-        return refuse(
-          Schemas.TurnConfigFailureEnum.ChatbotUnavailable,
-          "Chatbot or company is not active",
-        );
-      }
+      const { conversation, company } = checked;
 
       const published = await this.chatbotConfigsDal.getPublishedChatbotConfig(tx, {
         companyId: session.companyId,
@@ -228,7 +210,7 @@ export default class ConversationsRepo {
         return refuse(Schemas.TurnConfigFailureEnum.ServerError, loaded.message);
       }
 
-      if (current.conversation.chatbotConfigId !== chatbotConfig.id) {
+      if (conversation.chatbotConfigId !== chatbotConfig.id) {
         const updated = await this.conversationsDal.setConversationConfig(tx, {
           companyId: session.companyId,
           publicId: session.conversationPublicId,
@@ -244,6 +226,7 @@ export default class ConversationsRepo {
         message: "Turn config loaded",
         spec: loaded.spec,
         chatbotConfigId: chatbotConfig.id,
+        isReadOnly: company.isReadOnly,
       };
     });
   }

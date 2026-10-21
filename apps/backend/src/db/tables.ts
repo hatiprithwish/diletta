@@ -730,7 +730,7 @@ export const changeRequests = table(
     idempotencyKey: t.text("idempotency_key"),
     hostRef: t.text("host_ref"), // id returned by the host
     undoUntil: t.timestamp("undo_until", { withTimezone: true }),
-    errorCode: t.text("error_code"),
+    errorCode: t.text("error_code").$type<Schemas.ChangeRequestErrorCodeEnum>(),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

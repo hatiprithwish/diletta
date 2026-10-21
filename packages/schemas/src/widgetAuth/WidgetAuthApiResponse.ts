@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FeedbackRatingIntEnum, ZWidgetFeedbackRatings } from "../feedback";
 import type { Chatbot } from "../chatbots";
+import { ZWidgetChangeRequest } from "../changeRequests/ChangeRequestsCommon";
 import type { ApiResponse } from "../common";
 import type {
   CachedJwks,
@@ -53,12 +54,30 @@ export const ZWidgetFeedbackMessage = z.object({
 });
 export type WidgetFeedbackMessage = z.infer<typeof ZWidgetFeedbackMessage>;
 
+// DEV_NOTE: One change request as it now stands (M3-4): sent to every socket when a write is proposed and at each
+// status change after it, and on connect for the ones still open. Carries the diff's values (the user's own host data,
+// to their own widget only); the review UI is M3-5.
+export const ZWidgetChangeRequestMessage = z.object({
+  type: z.literal("change_request"),
+  changeRequest: ZWidgetChangeRequest,
+});
+export type WidgetChangeRequestMessage = z.infer<typeof ZWidgetChangeRequestMessage>;
+
+// DEV_NOTE: The DO has no usable host token for a step that needs one (an approval). The widget fetches a fresh one
+// from its host and sends it in a host_token frame (M3-8), then tries again; nothing was done.
+export const ZWidgetTokenNeededMessage = z.object({
+  type: z.literal("token_needed"),
+});
+export type WidgetTokenNeededMessage = z.infer<typeof ZWidgetTokenNeededMessage>;
+
 export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetConversationMessage,
   ZWidgetErrorMessage,
   ZWidgetUnavailableMessage,
   ZWidgetConversationClosedMessage,
   ZWidgetFeedbackMessage,
+  ZWidgetChangeRequestMessage,
+  ZWidgetTokenNeededMessage,
 ]);
 export type WidgetServerMessage = z.infer<typeof ZWidgetServerMessage>;
 

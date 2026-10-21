@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { vi } from "vitest";
 import { RestAdapter } from "@app/adapter";
 import * as Schemas from "@app/schemas";
 
@@ -107,4 +108,48 @@ export function render(
   const rendered = Schemas.renderToolOp(op, context);
   if (!rendered.request) throw new Error(rendered.message);
   return rendered.request;
+}
+
+// DEV_NOTE: The global fetch as the module loaded, before any spy: the fallback when a spy has no implementation of its
+// own (calling the spy itself would loop forever)
+const unmockedFetch: typeof fetch = globalThis.fetch;
+const testHostOrigin = new URL(testHostIssuer).origin;
+
+// DEV_NOTE: Code under test that calls the host with the global fetch (the Conversation DO's adapter, M3-4) reaches the
+// test host through this: every URL on the issuer's origin goes to the auxiliary worker, anything else to the fetch in
+// place before (its mock implementation, or the unmocked fetch). vi.spyOn reuses a spy already on fetch, so this
+// layers over its implementation (call mockCloudflare first, then this). Undone by vi.restoreAllMocks.
+export function routeTestHostFetch() {
+  const current = globalThis.fetch;
+  const previous = vi.isMockFunction(current) ? current.getMockImplementation() : current;
+  const next: typeof fetch = previous ?? unmockedFetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return URL.canParse(url) && new URL(url).origin === testHostOrigin
+      ? await testHostFetch(input, init)
+      : await next(input, init);
+  });
+}
+
+// DEV_NOTE: The test company's tool definition columns for one of Schemas.TEST_HOST_TOOL_DEFINITIONS, as the seed
+// script stores them (ops normalised at the current schema version)
+export function testHostToolColumns(name: string) {
+  const tool = Schemas.TEST_HOST_TOOL_DEFINITIONS.find((definition) => definition.name === name);
+  if (!tool) throw new Error(`No test host tool ${name}`);
+  const normalized = Schemas.normalizeToolOps(tool.ops);
+  if (!normalized.ops || normalized.schemaVersion === undefined)
+    throw new Error(normalized.message);
+  return {
+    name: tool.name,
+    description: tool.description,
+    risk: tool.risk,
+    idempotencyMode: tool.idempotencyMode,
+    approval: tool.approval,
+    source: tool.source,
+    schemaVersion: normalized.schemaVersion,
+    inputSchema: normalized.ops.inputSchema,
+    callOp: normalized.ops.callOp,
+    readbackOp: normalized.ops.readbackOp,
+    inverseOp: normalized.ops.inverseOp,
+  };
 }

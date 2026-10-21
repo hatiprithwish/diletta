@@ -1,4 +1,4 @@
-import type { ToolDefinitionRow } from "./ToolDefinitionsCommon";
+import type { ToolDefinition, ToolDefinitionRow } from "./ToolDefinitionsCommon";
 import type { ApiResponse } from "../common";
 import type { CompanyConnection } from "../companyConnections";
 
@@ -23,4 +23,21 @@ export interface ToolConnectionDALResponse extends ApiResponse {
 export interface ToolDefinitionNameDALResponse extends ApiResponse {
   latestVersion?: number;
   hasDraft?: boolean;
+}
+
+// DEV_NOTE: A tool version with the connection fields a host call needs (M3-4). Left join: a connection that is gone
+// leaves connection null, and the Repo leaves the tool out.
+export type ToolDefinitionWithConnectionRow = ToolDefinition & {
+  connection: Pick<
+    CompanyConnection,
+    "status" | "adapterType" | "baseUrl" | "authType" | "authConfig" | "credentialScope"
+  > | null;
+};
+
+export interface ToolDefinitionsWithConnectionDALResponse extends ApiResponse {
+  toolDefinitions?: ToolDefinitionWithConnectionRow[];
+}
+
+export interface ToolDefinitionWithConnectionDALResponse extends ApiResponse {
+  toolDefinition?: ToolDefinitionWithConnectionRow;
 }

@@ -105,6 +105,10 @@ export default class Constants {
   // DEV_NOTE: The ratings the user gave a resumed conversation's replies (M2-7), read by the worker before the upgrade
   // and relayed by the DO in its conversation frame, so connecting costs the DO no database read
   static readonly CONVERSATION_FEEDBACK_HEADER = "x-diletta-conversation-feedback";
+  // DEV_NOTE: The host user's roles from this connect's verified companion JWT and its exp (M3-4,
+  // Schemas.ZConversationRolesGrant), for the config's approval rules. Set by the worker like the session header; the
+  // DO stores the newest connect's grant and counts its roles only until that exp.
+  static readonly CONVERSATION_ROLES_HEADER = "x-diletta-conversation-roles";
   // DEV_NOTE: At most this many ratings go in that header (the newest replies'), keeping it well under the header size
   // limit. A visitor gets at most FEEDBACK_FRAMES_PER_WINDOW feedback frames per FEEDBACK_WINDOW_MS per conversation;
   // more are answered "not saved" without touching the database.
@@ -117,6 +121,20 @@ export default class Constants {
   // this, so a stuck close never fires in a loop
   static readonly CONVERSATION_CLOSE_RETRY_MS = 60_000;
   static readonly CONVERSATION_TITLE_MAX_CHARS = 80;
+
+  // DEV_NOTE: Action engine (M3-4). A commit (one host write with its retries, HOST_CALL_TIMEOUT_MS per attempt) gets
+  // ACTION_COMMIT_TIMEOUT_MS before Think gives the model an error; the commit itself still finishes and is recorded.
+  // A continuation (the turn Think runs after an approval, rejection or expiry) that hasn't ended this long after its
+  // turn timeout is dropped, so it can't hold the conversation. Think's own parked-approval rows are swept
+  // ACTION_PENDING_APPROVAL_TTL_MS after they park (well past the approval expiry, which ends them first).
+  // A commit that couldn't start or finish its database write is tried again after ACTION_COMMIT_RETRY_MS (and on
+  // every host_token frame and wake). A visitor gets at most DECISION_FRAMES_PER_WINDOW change request decisions per
+  // FEEDBACK_WINDOW_MS per conversation; more are refused without touching the database.
+  static readonly ACTION_COMMIT_TIMEOUT_MS = 120_000;
+  static readonly CONTINUATION_START_GRACE_MS = 60_000;
+  static readonly ACTION_PENDING_APPROVAL_TTL_MS = 24 * 60 * 60_000;
+  static readonly ACTION_COMMIT_RETRY_MS = 60_000;
+  static readonly DECISION_FRAMES_PER_WINDOW = 30;
 
   // DEV_NOTE: Knowledge ingestion (M2-5). One KnowledgeSyncWorkflow per source sync lists the source's items (at most
   // KNOWLEDGE_MAX_ITEMS_PER_SYNC: a sitemap's same-site page URLs, following nested sitemap indexes

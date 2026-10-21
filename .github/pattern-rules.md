@@ -1130,12 +1130,12 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 
 ### 3.23 Conversation DO Stays Server-Authoritative [CRITICAL]
 
-**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources; `[]` otherwise) until host tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames, plus the widget's `feedback` frame (M2-7), which the DO stores itself through `FeedbackRepo` after syncing the read model (never handed to Think; a reply not synced in this conversation answers `rating: null`; `FeedbackRepo.recordFeedback` re-checks the conversation open and the company and chatbot active on every rating, a closing conversation refuses it, frames are limited per conversation (`FEEDBACK_FRAMES_PER_WINDOW`) and stored one at a time in arrival order; the ratings relayed on connect are capped at `CONVERSATION_FEEDBACK_MAX_RATINGS` and parsed entry by entry); everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
+**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources) and the turn's loaded host tools (M3-4, rule 3.33), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames, plus the widget's `host_token` and `change_request_decision` frames (M3-4, handled by the DO itself, rule 3.33; decisions limited per conversation, `DECISION_FRAMES_PER_WINDOW`), plus the widget's `feedback` frame (M2-7), which the DO stores itself through `FeedbackRepo` after syncing the read model (never handed to Think; a reply not synced in this conversation answers `rating: null`; `FeedbackRepo.recordFeedback` re-checks the conversation open and the company and chatbot active on every rating, a closing conversation refuses it, frames are limited per conversation (`FEEDBACK_FRAMES_PER_WINDOW`) and stored one at a time in arrival order; the ratings relayed on connect are capped at `CONVERSATION_FEEDBACK_MAX_RATINGS` and parsed entry by entry); everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
 
 **Violations:**
 
 - Removing or widening the frame allowlist, or passing a client chat body through unchanged (client history, `clientTools`, custom fields, `trigger: "regenerate-message"`)
-- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin; any active tool but `search_help_docs`, or activating it for a bot with no knowledge sources
+- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin; any active tool but `search_help_docs` and the turn's loaded host tools, or activating search for a bot with no knowledge sources
 - Returning a raw error or provider message from `onChatError`
 - Calling a model outside `ModelRouterRepo.getModel` (pattern rule 3.10), or running a turn without a fresh `loadTurnConfig`
 - Writing the read model anywhere but `ConversationsRepo.recordTurn`, or reading `messages` into a turn (the Think session is the source of truth)
@@ -1488,6 +1488,49 @@ controller\.cron
 
 ---
 
+### 3.33 Host Tool Calls Go Through the Action Engine [CRITICAL]
+
+**Rule:** A host tool runs only as one of the turn's tools loaded by `ActionEngineRepo.loadTurnTools` (the config's exact `{name, version}` pins, Active, on a connection that can serve calls; write tools left out for a read-only company). Every call's args pass `Schemas.validateToolArgs` (undeclared keys cut at every depth; an input_schema using a keyword zod would accept but not enforce is refused) before `renderToolOp`, and a repeat of the same tool + args in a turn is refused and stops the turn. Reads go through `HostToolCallProvider.read` and reach the model only through `HostToolsProvider.toModelText` (`<host_data>` fence); a read or a help docs search makes the turn untrusted, and an earlier turn's untrusted content is found by what its tool parts hold (`HostToolsProvider.hasUntrustedHistory`), never by tool name. A write is a Think `durable-pause` action: its approval hook reads before (`HostToolCallProvider.readBefore`, none for a create), builds the diff with `Schemas.buildChangeRequestChanges` from the read-before and the validated args (every arg `call_op` sends is on it: compare fields, other sent args as set, path args as unchanged), and stores the tool call, the change request (values only in `encrypted_changes` / `encrypted_args`, through `CompanyKeyProvider`) and its event in one `withTenant` (`ActionEngineRepo.proposeChange`). Whether the user must approve is `HostToolsProvider.decideApproval` alone (a matching `blocked` rule refuses any tool; destructive tools and untrusted turns always need approval), on the roles of the newest JWT only until its exp. A pause is resolved only by the DO's decision path (`change_request_decision` frame, or the expiry) through Think's `approveExecution` / `rejectExecution`, after the change request is decided in the database (which enforces the approval deadline); the decision claims the conversation (`isDeciding`) before its first await, follows the row's status whoever set it, and an approval needs the host token in memory. Every change request status change goes through `ActionEngineRepo` (locked row, allowed from-statuses) with its `change_request.<action>` critical event in the same transaction; a refused step always names its `failure` (a rollback is `ServerError`). A commit marks Committing (with `changeRequestCommitIdempotencyKey`) before the host call, and a Committing one is only ever resumed with `isResume: true`, with the host token in memory (never ended NeedsHuman for a resume that couldn't send).
+
+**Violations:**
+
+- Offering a tool loaded by name, a Draft / Disabled version, or a write tool to a read-only company
+- Rendering or sending a call whose args weren't checked by `validateToolArgs`, or storing args the input_schema doesn't declare
+- Building an approval diff from the model's text, or showing values that didn't come from the read-before and the args
+- Host data, a diff value or args in a log, the transcript's write outputs, the read model, an event's `detail` or a plain column
+- Calling `approveExecution` / `rejectExecution` from anywhere but the DO's decision and expiry path, or before the change request is decided; admitting Think's own tool approval frames from the widget
+- A change request status written without its critical event, or outside `ActionEngineRepo`
+- An approval rule or tool setting that lets a destructive tool, or a write in an untrusted turn, skip approval
+- A commit sent before Committing (and its key) is stored, or a Committing one resent with `isResume: false`
+- Treating a `withTenant` refusal without `failure` as settled (dropping the entry), or deciding on `this.activeTurn` checked before an await without claiming the conversation
+- An approval accepted after `created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS`
+- Telling the model a change failed while its entry is kept for a retry
+
+**Detection Pattern:**
+
+```regex
+approveExecution\(|rejectExecution\(
+renderToolOp\(
+kind:\s*"durable-pause"
+```
+
+A hit outside `ConversationDO.ts`, `providers/hostToolCall.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ actions[name] = action({ execute: () => adapter.execute({ risk, request: renderToolOp(op, { args: input }).request! }) })
+- ✅ approval: async ({ input, ctx }) => await this.proposeWrite(toolName, input, ctx.toolCallId)
+- ❌ await this.approveExecution(executionId); await repo.decideChangeRequest(...)
+- ✅ const decided = await repo.decideChangeRequest(...); if (decided.isSuccess) await this.approveExecution(executionId);
+- ❌ changes: [{ field: "amount", before: modelSaidBefore, after: args.amount }]
+- ✅ Schemas.buildChangeRequestChanges({ kind, callOp, readbackOp, args, before: readBefore.body })
+```
+
+**Fix:** Mirror `apps/backend/src/durable-objects/ConversationDO.ts` (`proposeWrite`, `runCommit`, `resolvePending`) and `repositories/ActionEngineRepo.ts`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1575,5 +1618,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit)
 Maintainer: hatiprithwish

@@ -6,6 +6,8 @@ import type { TurnMessage } from "../messages";
 import type { KnowledgeCitation, SearchHelpDocsExcerpt } from "../knowledgeSearch";
 import { ZWidgetFeedbackRating } from "../feedback";
 import type { FeedbackRatingIntEnum } from "../feedback";
+import { ChangeRequestDecisionEnum } from "../changeRequests/ChangeRequestsCommon";
+import type { RuntimeTool } from "../toolCalls/ToolCallsCommon";
 
 // DEV_NOTE: The longest user message the widget may send, in characters. Platform constant; the composer enforces
 // it too, the DO is the guard.
@@ -73,13 +75,43 @@ export const ZWidgetFeedbackFrame = ZWidgetFeedbackRating.extend({
 });
 export type WidgetFeedbackFrame = z.infer<typeof ZWidgetFeedbackFrame>;
 
+// DEV_NOTE: The widget's host bearer token (M3-4; M3-8 fetches it when the DO asks with token_needed). The DO keeps it
+// in memory only, for jwt_forward host calls made as this user: never logged, persisted or sent back. A bearer token is
+// printable ASCII with no spaces (RFC 6750 b64token, plus "." for a JWT); WIDGET_HOST_TOKEN_MAX_CHARS bounds it.
+export const WIDGET_HOST_TOKEN_FRAME_TYPE = "host_token";
+export const WIDGET_HOST_TOKEN_MAX_CHARS = 8_192;
+
+export const ZWidgetHostTokenFrame = z.object({
+  type: z.literal(WIDGET_HOST_TOKEN_FRAME_TYPE),
+  token: z
+    .string()
+    .min(1)
+    .max(WIDGET_HOST_TOKEN_MAX_CHARS)
+    .regex(/^[\w.~+/-]+=*$/),
+});
+export type WidgetHostTokenFrame = z.infer<typeof ZWidgetHostTokenFrame>;
+
+// DEV_NOTE: The user's answer to one proposal (M3-4; the widget's review UI is M3-5), named by the change request's
+// public id. Handled by the Conversation DO itself, never handed to Think.
+export const WIDGET_CHANGE_REQUEST_DECISION_FRAME_TYPE = "change_request_decision";
+
+export const ZWidgetChangeRequestDecisionFrame = z.object({
+  type: z.literal(WIDGET_CHANGE_REQUEST_DECISION_FRAME_TYPE),
+  changeRequestId: z.string().trim().min(1).max(64),
+  decision: z.enum(ChangeRequestDecisionEnum),
+});
+export type WidgetChangeRequestDecisionFrame = z.infer<typeof ZWidgetChangeRequestDecisionFrame>;
+
 // DEV_NOTE: Server-side only — what the widget frame allowlist decided (WidgetFrameProvider.admit). pass: hand the
 // frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. feedback: a
-// rating for the DO to store. refuse: drop it and tell the widget (reason is logged only).
+// rating for the DO to store. hostToken: the user's host token for the DO's memory. decision: an answer to a
+// proposal. refuse: drop it and tell the widget (reason is logged only, and never holds the frame's content).
 export type WidgetFrameAdmission =
   | { kind: "pass"; frame: string }
   | { kind: "chat"; requestId: string; message: { id: string; text: string }; frame: string }
   | { kind: "feedback"; messageId: string; rating: FeedbackRatingIntEnum }
+  | { kind: "hostToken"; token: string }
+  | { kind: "decision"; changeRequestPublicId: string; decision: ChangeRequestDecisionEnum }
   | { kind: "refuse"; reason: string };
 
 // DEV_NOTE: Server-side only — one Think transcript message reduced to what the read model keeps (TranscriptProvider).
@@ -117,22 +149,65 @@ export interface UnsyncedTranscript {
 // spec and caps are null while the turn is being prepared. citationCount is how many search results the turn has
 // numbered so far (M2-6), so a second search goes on from [n + 1]; searchExcerpts holds each of the turn's searches'
 // excerpts by tool call id, for the model only (the tool's output carries citations alone).
+//
+// Actions (M3-4): userMessageId is null for a continuation (the turn Think runs after an approval, a rejection or an
+// expiry: it has no user message, and its requestId is Think's own, so isContinuation matches the first turn end
+// Think reports for it; the DO's own fallback end of a widget request never does). tools are the config's loaded host tools. isUntrusted: the turn holds untrusted content (help docs or host data
+// read in this or an earlier turn), so every write needs approval. toolCallKeys are the turn's host calls (tool name +
+// args), for the loop guard; isLoopStopped ends the turn's loop once one repeats. startedAt (epoch ms) lets a
+// continuation Think never ran be dropped instead of holding the conversation.
 export interface ActiveTurn<TModel, TCaps> {
   requestId: string;
+  startedAt: number;
   turnId: string;
-  userMessageId: string;
+  userMessageId: string | null;
+  isContinuation: boolean;
   model: TModel | null;
   spec: ConfigSpec | null;
   caps: TCaps | null;
+  tools: RuntimeTool[];
   citationCount: number;
   searchExcerpts: Record<string, SearchHelpDocsExcerpt[]>;
+  isUntrusted: boolean;
+  toolCallKeys: string[];
+  isLoopStopped: boolean;
 }
 
 // DEV_NOTE: Server-side only — a prepared turn's config, routed model and budget, or why it can't run (isClosed: the
 // conversation was closed elsewhere; refusal: a budget or rate limit said no, null for any other failure)
 export type PreparedTurn<TModel, TCaps> =
-  | { isSuccess: true; spec: ConfigSpec; model: TModel; caps: TCaps }
+  | { isSuccess: true; spec: ConfigSpec; model: TModel; caps: TCaps; tools: RuntimeTool[] }
   | { isSuccess: false; isClosed: boolean; refusal: BudgetRefusalEnum | null };
+
+// DEV_NOTE: Server-side only — one open change request in the Conversation DO's state (M3-4), by Think tool call id.
+// Pending: proposed, waiting for the user until expiresAt (expiryScheduleId is its DO schedule). Approved: committed
+// without a pause, or approved and handed to Think. Committing: its commit started; one still Committing on a wake
+// was cut by an eviction and is resumed. executionId is Think's durable-pause id, read after the turn parks. turnId is
+// the turn that proposed it.
+export enum ConversationChangeRequestStageEnum {
+  Pending = "pending",
+  Approved = "approved",
+  Committing = "committing",
+}
+
+export const ZConversationChangeRequestEntry = z.object({
+  publicId: z.string(),
+  toolName: z.string(),
+  turnId: z.string(),
+  stage: z.enum(ConversationChangeRequestStageEnum),
+  expiresAt: z.number().int(),
+  executionId: z.string().nullable(),
+  expiryScheduleId: z.string().nullable(),
+});
+export type ConversationChangeRequestEntry = z.infer<typeof ZConversationChangeRequestEntry>;
+
+// DEV_NOTE: Server-side only — the verified companion JWT's roles and its exp (epoch ms), from the worker to the
+// Conversation DO in a header only the worker sets (Constants.CONVERSATION_ROLES_HEADER)
+export const ZConversationRolesGrant = z.object({
+  roles: z.array(z.string()),
+  expiresAt: z.number().int(),
+});
+export type ConversationRolesGrant = z.infer<typeof ZConversationRolesGrant>;
 
 // DEV_NOTE: Server-side only — what the Conversation DO keeps in its own storage between wakes: who it serves, the
 // auto-close bookkeeping, whether it is closed, and the read-model sync position. lastSyncedMessageId is the last
@@ -140,7 +215,10 @@ export type PreparedTurn<TModel, TCaps> =
 // a user message id to the turn ULID it was admitted under, until that turn is synced; lastSyncedTurnId takes a late
 // reply. Budget (M2-4): turnStartedAts holds the start times of the turns admitted in the last hour
 // (conversationTurnsPerHour) and spentMicros the conversation's settled model spend (conversationCostCapUsd), both
-// defaulted so a conversation stored before M2-4 still parses. Internal ids only; never the host bearer token.
+// defaulted so a conversation stored before M2-4 still parses. Actions (M3-4): roles are the host user's roles from
+// the newest connect's companion JWT (approval rules match them), and count only until rolesExpiresAt (epoch ms, that
+// JWT's exp; after it the user has no roles until a fresh connect); changeRequests holds this conversation's open
+// change requests by Think tool call id until they end. Internal ids only; never the host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
@@ -152,5 +230,8 @@ export const ZConversationRuntimeState = z.object({
   lastSyncedTurnId: z.string().nullable(),
   turnStartedAts: z.array(z.number().int()).default([]),
   spentMicros: z.number().int().min(0).default(0),
+  roles: z.array(z.string()).default([]),
+  rolesExpiresAt: z.number().int().default(0),
+  changeRequests: z.record(z.string(), ZConversationChangeRequestEntry).default({}),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;

@@ -139,9 +139,20 @@ export default class CompanyKeyProvider {
     if (!companyKey.isSuccess || !companyKey.companyKey) {
       return { isSuccess: false, message: companyKey.message };
     }
+    return await CompanyKeyProvider.decryptWithKey(companyKey.companyKey, params);
+  }
 
+  private static async decryptWithKey(
+    key: NonNullable<Schemas.VersionedCompanyKeyResponse["companyKey"]>,
+    params: {
+      companyId: string;
+      column: Schemas.EncryptedColumnEnum;
+      encryptedValue: Schemas.EncryptedValue;
+      encryptionKeyVersion: number;
+    },
+  ): Promise<Schemas.DecryptValueResponse> {
     const decrypted = await EnvelopeCrypto.decryptValue(
-      companyKey.companyKey,
+      key,
       params.encryptedValue,
       CryptoContext.value(params.column, params.companyId),
     );
@@ -159,6 +170,44 @@ export default class CompanyKeyProvider {
     }
 
     return decrypted;
+  }
+
+  // DEV_NOTE: decryptValue for several values of one company and column (a list): each key version is fetched and
+  // unwrapped once. Results in input order; a value that fails is a failed entry (logged), the rest still decrypt.
+  static async decryptValues(
+    env: Env,
+    tx: NodePgTransaction<EmptyRelations>,
+    params: {
+      companyId: string;
+      column: Schemas.EncryptedColumnEnum;
+      values: { encryptedValue: Schemas.EncryptedValue; encryptionKeyVersion: number }[];
+    },
+  ): Promise<Schemas.DecryptValueResponse[]> {
+    const keys = new Map<number, Schemas.VersionedCompanyKeyResponse>();
+    const results: Schemas.DecryptValueResponse[] = [];
+    for (const value of params.values) {
+      let companyKey = keys.get(value.encryptionKeyVersion);
+      if (!companyKey) {
+        companyKey = await CompanyKeyProvider.getCompanyKey(env, tx, {
+          companyId: params.companyId,
+          version: value.encryptionKeyVersion,
+        });
+        keys.set(value.encryptionKeyVersion, companyKey);
+      }
+      if (!companyKey.isSuccess || !companyKey.companyKey) {
+        results.push({ isSuccess: false, message: companyKey.message });
+        continue;
+      }
+      results.push(
+        await CompanyKeyProvider.decryptWithKey(companyKey.companyKey, {
+          companyId: params.companyId,
+          column: params.column,
+          encryptedValue: value.encryptedValue,
+          encryptionKeyVersion: value.encryptionKeyVersion,
+        }),
+      );
+    }
+    return results;
   }
 
   // DEV_NOTE: The one way to read a company_secrets value (CompanySecretsRepo, the model router): decrypts the row's
