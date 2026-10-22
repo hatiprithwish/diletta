@@ -1063,8 +1063,10 @@ describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS
 
   const asEditAnswer = (frame: Frame) => frame as unknown as Schemas.WidgetChangeRequestEditMessage;
 
+  // DEV_NOTE: Each id is stored after its proposal's database step (setExecutionId), so it waits as long as a frame
   async function waitForExecutionIds(conversationPublicId: string, count: number) {
-    for (let attempt = 0; attempt < 50; attempt++) {
+    const deadline = Date.now() + FRAME_WAIT_MS;
+    while (Date.now() < deadline) {
       const entries = Object.values((await getRuntimeState(conversationPublicId)).changeRequests);
       if (entries.filter((entry) => entry.executionId).length >= count) return;
       await new Promise((resolve) => setTimeout(resolve, 100));
