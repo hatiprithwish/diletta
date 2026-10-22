@@ -46,6 +46,7 @@ import {
   render,
   resetTestHost,
   routeTestHostFetch,
+  setTestHostFaults,
   testHostAdapter,
   testHostIssuer,
   testHostTool,
@@ -187,7 +188,7 @@ async function createTenant(options: {
   const workspace = newTestHostWorkspace();
   const { hostToken } = await mintTestHostTokens(workspace);
   await resetTestHost(hostToken);
-  return { ...tenant, hostToken };
+  return { ...tenant, hostToken, workspace };
 }
 
 const parseFrame = (data: string) => JSON.parse(data) as Record<string, unknown> & { type: string };
@@ -478,14 +479,14 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
     const from = second.frames.length;
     sendDecision(second, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
     const committed = asChangeRequest(
-      await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from),
+      await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from),
     );
     expect(committed.publicId).toBe(proposed.publicId);
     await second.waitFor(isContinuationDone, from);
 
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(300);
     const row = await getChangeRequestRow(proposed.publicId);
-    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Committed);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
     expect(row?.idempotencyKey).toBe(Schemas.changeRequestCommitIdempotencyKey(proposed.publicId));
     const events = await withOwnerDb((ownerDb) =>
       ownerDb
@@ -504,12 +505,13 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
       "approved",
       "committing",
       "committed",
+      "verified",
     ]);
     expect(events[1]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
 
     // DEV_NOTE: The model's continuation saw the commit's outcome; the open change request is gone from the DO
     expect(JSON.stringify(gatewayRequests().at(-1)?.body?.messages)).toContain(
-      "The change was made in the app.",
+      "The change was made in the app and checked",
     );
     expect((await getRuntimeState(first.publicId)).changeRequests).toEqual({});
     second.socket.close(1000);
@@ -626,12 +628,12 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
     sendHostToken(second, tenant.hostToken);
     const from = second.frames.length;
     sendDecision(second, proposedId, Schemas.ChangeRequestDecisionEnum.Approve);
-    await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
     await second.waitFor(isContinuationDone, from);
 
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(250);
     expect((await getChangeRequestRow(proposedId))?.status).toBe(
-      Schemas.ChangeRequestStatusIntEnum.Committed,
+      Schemas.ChangeRequestStatusIntEnum.Verified,
     );
     const pending = await runInDurableObject(
       stub,
@@ -639,7 +641,7 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
     );
     expect(pending).toEqual([]);
     expect(JSON.stringify(gatewayRequests().at(-1)?.body?.messages)).toContain(
-      "The change was made in the app.",
+      "The change was made in the app and checked",
     );
     second.socket.close(1000);
   });
@@ -764,7 +766,7 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
     const from = socket.frames.length;
     sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
     sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
-    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
     await socket.waitFor(isContinuationDone, from);
     const refused = await socket.waitFor(
       (frame) =>
@@ -781,6 +783,7 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
       "approved",
       "committing",
       "committed",
+      "verified",
     ]);
     expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
     socket.socket.close(1000);
@@ -832,7 +835,7 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
 
     const from = socket.frames.length;
     sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
-    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
     await socket.waitFor(isContinuationDone, from);
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(330);
     expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
@@ -919,10 +922,10 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
 
     const from = second.frames.length;
     sendHostToken(second, tenant.hostToken);
-    await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(340);
     expect((await getChangeRequestRow(publicId))?.status).toBe(
-      Schemas.ChangeRequestStatusIntEnum.Committed,
+      Schemas.ChangeRequestStatusIntEnum.Verified,
     );
     expect((await getRuntimeState(first.publicId)).changeRequests).toEqual({});
     second.socket.close(1000);
@@ -1019,12 +1022,12 @@ describe("Action engine: tool calls", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     await sendChat(socket, "req-1", "Set Alpha's amount to 64");
 
     const committed = asChangeRequest(
-      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed)),
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified)),
     );
     expect(committed.toolName).toBe("update_record");
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(64);
     expect(JSON.stringify(gatewayRequests()[1]?.body?.messages)).toContain(
-      "The change was made in the app.",
+      "The change was made in the app and checked",
     );
     socket.socket.close(1000);
   });
@@ -1143,7 +1146,7 @@ describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS
 
     from = socket.frames.length;
     sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
-    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Committed), from);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
     await socket.waitFor(isContinuationDone, from);
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(450);
     const events = await withOwnerDb((ownerDb) =>
@@ -1164,6 +1167,7 @@ describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS
       "approved",
       "committing",
       "committed",
+      "verified",
     ]);
     expect(events[1]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
     socket.socket.close(1000);
@@ -1264,7 +1268,7 @@ describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS
     await socket.waitFor(isContinuationDone, from);
 
     expect((await getChangeRequestRow(alpha.publicId))?.status).toBe(
-      Schemas.ChangeRequestStatusIntEnum.Committed,
+      Schemas.ChangeRequestStatusIntEnum.Verified,
     );
     expect((await getChangeRequestRow(bravo.publicId))?.status).toBe(
       Schemas.ChangeRequestStatusIntEnum.Rejected,
@@ -1275,7 +1279,7 @@ describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(gatewayRequests().length).toBe(requestsBefore + 1);
     const continuation = JSON.stringify(gatewayRequests().at(-1)?.body?.messages);
-    expect(continuation).toContain("The change was made in the app.");
+    expect(continuation).toContain("The change was made in the app and checked");
     expect(continuation).toContain("The user rejected the change.");
     expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
     socket.socket.close(1000);
@@ -1301,3 +1305,254 @@ describe("Action engine: edit and bulk review", { timeout: END_TO_END_TIMEOUT_MS
     socket.socket.close(1000);
   });
 });
+
+// DEV_NOTE: The Done-when (M3-6): every outcome of a landed commit, end to end through the widget socket, the DO and
+// the test host. Faults are queued after the proposal, so the read-before never takes one.
+describe(
+  "Action engine: read-after, auto-undo and needs a person (M3-6)",
+  { timeout: END_TO_END_TIMEOUT_MS },
+  () => {
+    async function approveAlpha(
+      amount: number,
+      faults: Schemas.TestHostFault[],
+      options: { isUndoable?: boolean } = {},
+    ) {
+      const tenant = await createTenant({ tools: ["update_record"] });
+      if (options.isUndoable === false) {
+        await withOwnerDb((ownerDb) =>
+          ownerDb
+            .update(toolDefinitions)
+            .set({ inverseOp: null })
+            .where(eq(toolDefinitions.companyId, tenant.companyId)),
+        );
+      }
+      scriptModel([updateAlpha(amount), reply("Waiting for you."), reply("Done.")]);
+      routeTestHostFetch();
+      const socket = await connect(tenant);
+      sendHostToken(socket, tenant.hostToken);
+      await sendChat(socket, "req-1", `Set Alpha's amount to ${amount}`);
+      const proposed = asChangeRequest(
+        await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)),
+      );
+      await waitForExecutionId(socket.publicId);
+      await setTestHostFaults(tenant.workspace, faults);
+      const from = socket.frames.length;
+      sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+      return { tenant, socket, proposed, from };
+    }
+
+    async function eventsOf(companyId: string) {
+      const rows = await withOwnerDb((ownerDb) =>
+        ownerDb
+          .select({ entityAction: activityLog.entityAction })
+          .from(activityLog)
+          .where(
+            and(
+              eq(activityLog.companyId, companyId),
+              eq(activityLog.entityType, Schemas.CHANGE_REQUEST_ENTITY_TYPE),
+            ),
+          )
+          .orderBy(asc(activityLog.id)),
+      );
+      return rows.map((row) => row.entityAction);
+    }
+
+    const overwriteAmount: Schemas.TestHostFault = {
+      kind: Schemas.TestHostFaultKindEnum.Overwrite,
+      method: Schemas.ToolOpMethodEnum.Patch,
+      fields: { amount: 999 },
+    };
+
+    it("verifies a create and a delete: the new record read back by the host's id, the deleted one gone", async () => {
+      const tenant = await createTenant({ tools: ["create_record", "delete_record"] });
+      scriptModel([
+        (model) =>
+          anthropicToolCallsStream(model, [
+            {
+              id: "toolu_create",
+              name: "create_record",
+              input: { name: "Delta Works", email: "ops@delta.example", amount: 75 },
+            },
+          ]),
+        reply("Ready for your review."),
+        reply("Added."),
+        (model) =>
+          anthropicToolCallsStream(model, [
+            { id: "toolu_delete", name: "delete_record", input: { recordId: "rec_bravo" } },
+          ]),
+        reply("Ready for your review."),
+        reply("Deleted."),
+      ]);
+      routeTestHostFetch();
+      const socket = await connect(tenant);
+      sendHostToken(socket, tenant.hostToken);
+
+      await sendChat(socket, "req-1", "Add Delta Works");
+      const created = asChangeRequest(
+        await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)),
+      );
+      expect(created.kind).toBe(Schemas.ChangeRequestKindEnum.Create);
+      await waitForExecutionId(socket.publicId);
+      let from = socket.frames.length;
+      sendDecision(socket, created.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
+      await socket.waitFor(isContinuationDone, from);
+      const createdRow = await getChangeRequestRow(created.publicId);
+      expect(createdRow?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+      expect(createdRow?.hostRef).toMatch(/^rec_/);
+      expect(
+        (await readHostRecord(tenant.hostToken, createdRow?.hostRef ?? ""))?.data?.amount,
+      ).toBe(75);
+
+      await sendChat(socket, "req-2", "Delete Bravo");
+      const deleted = asChangeRequest(
+        await socket.waitFor(
+          (frame) =>
+            changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)(frame) &&
+            asChangeRequest(frame).publicId !== created.publicId,
+        ),
+      );
+      expect(deleted.kind).toBe(Schemas.ChangeRequestKindEnum.Delete);
+      await waitForExecutionId(socket.publicId);
+      from = socket.frames.length;
+      sendDecision(socket, deleted.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
+      await socket.waitFor(isContinuationDone, from);
+      expect((await getChangeRequestRow(deleted.publicId))?.status).toBe(
+        Schemas.ChangeRequestStatusIntEnum.Verified,
+      );
+      expect(await readHostRecord(tenant.hostToken, "rec_bravo")).toBeUndefined();
+      expect(JSON.stringify(gatewayRequests().at(-1)?.body?.messages)).toContain(
+        "The change was made in the app and checked",
+      );
+      socket.socket.close(1000);
+    });
+
+    it("undoes a commit the read-after finds otherwise, and tells the widget what it found", async () => {
+      const { tenant, socket, proposed, from } = await approveAlpha(300, [overwriteAmount]);
+      const undone = asChangeRequest(
+        await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Undone), from),
+      );
+      await socket.waitFor(isContinuationDone, from);
+
+      expect(undone.publicId).toBe(proposed.publicId);
+      expect(undone.mismatches).toEqual([
+        {
+          field: "amount",
+          expected: { isFound: true, value: 300 },
+          found: { isFound: true, value: 999 },
+        },
+      ]);
+      // DEV_NOTE: Put back to its read-before values (the concurrent 999 included: all-or-nothing per change request)
+      expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+      const row = await getChangeRequestRow(proposed.publicId);
+      expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Undone);
+      expect(row?.errorCode).toBeNull();
+      expect(row?.idempotencyKey).toBe(Schemas.changeRequestUndoIdempotencyKey(proposed.publicId));
+      expect(Buffer.from(row?.encryptedChanges ?? []).toString("utf8")).not.toContain("999");
+      expect(await eventsOf(tenant.companyId)).toEqual([
+        "proposed",
+        "approved",
+        "committing",
+        "committed",
+        "mismatch",
+        "undoing",
+        "undone",
+      ]);
+      expect(JSON.stringify(gatewayRequests().at(-1)?.body?.messages)).toContain(
+        "so it was undone",
+      );
+      expect((await getRuntimeState(socket.publicId)).changeRequests).toEqual({});
+      socket.socket.close(1000);
+    });
+
+    it("hands a mismatch to a person when its undo fails", async () => {
+      // DEV_NOTE: The undo answers 500: it may have landed, and its Emulated check shows neither side (999), so it is
+      // never resent
+      const failed = await approveAlpha(300, [
+        overwriteAmount,
+        {
+          kind: Schemas.TestHostFaultKindEnum.Status,
+          method: Schemas.ToolOpMethodEnum.Patch,
+          status: 500,
+          isApplied: false,
+        },
+      ]);
+      await failed.socket.waitFor(
+        changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.NeedsHuman),
+        failed.from,
+      );
+      await failed.socket.waitFor(isContinuationDone, failed.from);
+      expect((await getChangeRequestRow(failed.proposed.publicId))?.errorCode).toBe(
+        Schemas.ChangeRequestErrorCodeEnum.UndoFailed,
+      );
+      expect((await readHostRecord(failed.tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(999);
+      expect(await eventsOf(failed.tenant.companyId)).toEqual([
+        "proposed",
+        "approved",
+        "committing",
+        "committed",
+        "mismatch",
+        "undoing",
+        "needs_human",
+      ]);
+      expect(JSON.stringify(gatewayRequests().at(-1)?.body?.messages)).toContain(
+        "sent to the team for review",
+      );
+      failed.socket.socket.close(1000);
+    });
+
+    it("hands a mismatch to a person when the tool can't be undone", async () => {
+      const notUndoable = await approveAlpha(300, [overwriteAmount], { isUndoable: false });
+      const flagged = asChangeRequest(
+        await notUndoable.socket.waitFor(
+          changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.NeedsHuman),
+          notUndoable.from,
+        ),
+      );
+      // DEV_NOTE: Its continuation must end here, or its model call takes the next test's script
+      await notUndoable.socket.waitFor(isContinuationDone, notUndoable.from);
+      expect(flagged.isUndoable).toBe(false);
+      expect(flagged.mismatches).toHaveLength(1);
+      expect((await getChangeRequestRow(notUndoable.proposed.publicId))?.errorCode).toBe(
+        Schemas.ChangeRequestErrorCodeEnum.NotUndoable,
+      );
+      expect(await eventsOf(notUndoable.tenant.companyId)).toEqual([
+        "proposed",
+        "approved",
+        "committing",
+        "committed",
+        "mismatch",
+        "needs_human",
+      ]);
+      notUndoable.socket.socket.close(1000);
+    });
+
+    it("hands a commit whose read-after can't be read to a person, and undoes nothing", async () => {
+      const unavailable: Schemas.TestHostFault = {
+        kind: Schemas.TestHostFaultKindEnum.Status,
+        method: Schemas.ToolOpMethodEnum.Get,
+        status: 503,
+        isApplied: false,
+      };
+      // DEV_NOTE: One per attempt: the read and its retries (HOST_CALL_MAX_RETRIES)
+      const faults = Array.from({ length: Schemas.HOST_CALL_MAX_RETRIES + 1 }, () => unavailable);
+      const { tenant, socket, proposed, from } = await approveAlpha(300, faults);
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.NeedsHuman), from);
+      await socket.waitFor(isContinuationDone, from);
+
+      expect((await getChangeRequestRow(proposed.publicId))?.errorCode).toBe(
+        Schemas.ChangeRequestErrorCodeEnum.VerifyUnknown,
+      );
+      expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(300);
+      expect(await eventsOf(tenant.companyId)).toEqual([
+        "proposed",
+        "approved",
+        "committing",
+        "committed",
+        "needs_human",
+      ]);
+      socket.socket.close(1000);
+    });
+  },
+);

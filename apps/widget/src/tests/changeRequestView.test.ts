@@ -50,6 +50,7 @@ function changeRequest(
     isUndoable: true,
     wasEdited: false,
     editableFields: [AMOUNT],
+    mismatches: null,
     ...patch,
   };
 }
@@ -163,6 +164,107 @@ describe("toChangeCard", () => {
     expect(card.records.map((record) => record.outcome)).toEqual([
       Schemas.WidgetChangeOutcomeEnum.Saved,
       Schemas.WidgetChangeOutcomeEnum.Rejected,
+    ]);
+  });
+
+  it("says every record was saved and checked once all are Verified", () => {
+    const members = ["a", "b"].map((id) =>
+      changeRequest(id, {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+        editableFields: [],
+      }),
+    );
+    const card = toChangeCard(group(members), review(members));
+    expect(card.tone).toBe(Schemas.WidgetChangeCardToneEnum.Verified);
+    expect(card.title).toBe("2 records updated");
+    expect(card.subtitle).toBe("Saved and checked: each record matches the change.");
+    expect(card.mismatchLines).toEqual([]);
+    expect(card.records.map((record) => record.outcome)).toEqual([
+      Schemas.WidgetChangeOutcomeEnum.Verified,
+      Schemas.WidgetChangeOutcomeEnum.Verified,
+    ]);
+  });
+
+  it("shows what the check found for an undone record, and keeps the checked one", () => {
+    const members = [
+      changeRequest("a", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+        editableFields: [],
+      }),
+      changeRequest("b", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        editableFields: [],
+        mismatches: [
+          {
+            field: "amount",
+            expected: { isFound: true, value: 300 },
+            found: { isFound: true, value: 999 },
+          },
+        ],
+      }),
+    ];
+    const card = toChangeCard(group(members), review(members));
+    expect(card.tone).toBe(Schemas.WidgetChangeCardToneEnum.Undone);
+    expect(card.title).toBe("Change undone");
+    expect(card.subtitle).toBe("The app didn't save rec_b as expected, so I undid it.");
+    expect(card.notes).toEqual(["rec_a was saved and checked."]);
+    expect(card.mismatchLines).toEqual([
+      { label: "rec_b", field: "amount", expected: "300", found: "999" },
+    ]);
+  });
+
+  it("says nothing changed when the only record was undone", () => {
+    const members = [
+      changeRequest("a", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        editableFields: [],
+      }),
+    ];
+    const card = toChangeCard(group(members), review(members));
+    expect(card.subtitle).toBe(
+      "The app didn't save rec_a as expected, so I undid it. Nothing changed.",
+    );
+  });
+
+  it("leads with the record that needs a person, and names the saved ones", () => {
+    const members = [
+      changeRequest("a", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+        editableFields: [],
+      }),
+      changeRequest("b", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+        editableFields: [],
+      }),
+    ];
+    const card = toChangeCard(group(members), review(members));
+    expect(card.tone).toBe(Schemas.WidgetChangeCardToneEnum.NeedsPerson);
+    expect(card.title).toBe("This change needs a person");
+    expect(card.subtitle).toBe("I couldn't confirm rec_b saved correctly.");
+    expect(card.notes).toEqual([
+      "rec_a was saved and checked.",
+      "rec_b is flagged for your team. Please leave it as is until they review it.",
+    ]);
+  });
+
+  it("shows a delete the check found still there", () => {
+    const members = [
+      changeRequest("a", {
+        kind: Schemas.ChangeRequestKindEnum.Delete,
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        editableFields: [],
+        mismatches: [
+          {
+            field: "recordId",
+            expected: { isFound: false },
+            found: { isFound: true, value: "rec_a" },
+          },
+        ],
+      }),
+    ];
+    const card = toChangeCard(group(members), review(members));
+    expect(card.mismatchLines).toEqual([
+      { label: "rec_a", field: "recordId", expected: "Deleted", found: "Still there" },
     ]);
   });
 

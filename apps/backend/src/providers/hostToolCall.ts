@@ -11,6 +11,9 @@ import * as Schemas from "@app/schemas";
 //   commit: a write's call_op with the args the user approved, under the change request's key. An Emulated tool proves
 //     a lost answer by reading back (appliedCheck: the args against the read-before values); isResume when an earlier
 //     attempt may have reached the host.
+//   readAfter (M3-6): a write's readback_op after its commit (args + the commit's result) or after its undo.
+//   undo (M3-6): a write's inverse_op (args + read-before + result) under the change request's undo key. An Emulated
+//     tool proves a lost answer by reading back (the read-before values against the args, the commit's check swapped).
 export default class HostToolCallProvider {
   static async read(params: {
     tool: Schemas.RuntimeTool;
@@ -81,6 +84,66 @@ export default class HostToolCallProvider {
 
     return await adapter.adapter.execute({
       risk: tool.risk,
+      request: rendered.request,
+      idempotencyMode: tool.idempotencyMode,
+      idempotencyKey,
+      appliedCheck,
+      isResume,
+      signal: params.signal,
+    });
+  }
+
+  static async readAfter(params: {
+    plan: Pick<Schemas.FollowUpPlan, "tool" | "payload">;
+    getHostToken: Schemas.HostTokenSource;
+    signal?: AbortSignal;
+  }): Promise<Schemas.HostCallResponse> {
+    const { tool, payload } = params.plan;
+    const { readbackOp } = tool.ops;
+    if (!readbackOp) return HostToolCallProvider.notSent("Tool has no readback op");
+    const adapter = HostToolCallProvider.adapterFor(tool, params.getHostToken);
+    const rendered = Schemas.renderToolOp(readbackOp, {
+      args: payload.args,
+      result: payload.result ?? undefined,
+    });
+    if (!adapter.adapter || !rendered.request) {
+      return HostToolCallProvider.notSent(adapter.message ?? rendered.message);
+    }
+    return await adapter.adapter.readback({ request: rendered.request, signal: params.signal });
+  }
+
+  static async undo(params: {
+    plan: Schemas.FollowUpPlan;
+    getHostToken: Schemas.HostTokenSource;
+    signal?: AbortSignal;
+  }): Promise<Schemas.HostCallResponse> {
+    const { tool, payload, idempotencyKey, isResume } = params.plan;
+    const { readbackOp, inverseOp } = tool.ops;
+    if (tool.risk === Schemas.ToolDefinitionRiskIntEnum.Read || !readbackOp || !inverseOp) {
+      return HostToolCallProvider.notSent("Tool can't be undone");
+    }
+    if (!idempotencyKey) return HostToolCallProvider.notSent("Undo has no key");
+    const adapter = HostToolCallProvider.adapterFor(tool, params.getHostToken);
+    const rendered = Schemas.renderToolOp(inverseOp, {
+      args: payload.args,
+      before: payload.before ?? undefined,
+      result: payload.result ?? undefined,
+    });
+    if (!adapter.adapter || !rendered.request) {
+      return HostToolCallProvider.notSent(adapter.message ?? rendered.message);
+    }
+
+    let appliedCheck: Schemas.HostAppliedCheck | null = null;
+    if (tool.idempotencyMode === Schemas.ToolDefinitionIdempotencyModeIntEnum.Emulated) {
+      const readback = Schemas.renderToolOp(readbackOp, { args: payload.args });
+      if (!readback.request) return HostToolCallProvider.notSent(readback.message);
+      appliedCheck = {
+        request: readback.request,
+        expectations: Schemas.getUndoCheckExpectations(readbackOp, payload.args, payload.before),
+      };
+    }
+
+    return await adapter.adapter.undo({
       request: rendered.request,
       idempotencyMode: tool.idempotencyMode,
       idempotencyKey,

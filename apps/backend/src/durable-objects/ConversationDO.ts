@@ -65,7 +65,13 @@ const TOOL_TEXT = {
   proposalFailed: "The change couldn't be prepared. Tell the user to try again later.",
   noChange: "The record already holds these values, so there is nothing to change.",
   nothingToDelete: "The record wasn't found, so there is nothing to delete.",
-  committed: "The change was made in the app.",
+  committed:
+    "The change was made in the app; it is still being checked. Tell the user it is saved and being checked.",
+  verified: "The change was made in the app and checked: the record shows it.",
+  undoing:
+    "The app didn't save the change as expected, so it is being undone. Tell the user plainly; don't try it again now.",
+  undone:
+    "The app didn't save the change as expected, so it was undone: the record is as it was. Tell the user nothing changed.",
   failed: "The change was not made in the app.",
   needsReview:
     "It isn't certain whether the change was made in the app; it was sent to the team for review. Tell the user plainly.",
@@ -85,6 +91,17 @@ const SETTLED_REASON =
 // rejectExecution return it instead of throwing)
 const isThinkErrorResult = (result: unknown): boolean =>
   typeof result === "object" && result !== null && "status" in result && result.status === "error";
+
+// DEV_NOTE: A decision that finds its change request already past the commit's start: the entry's stage to resume from
+const DECIDED_OPEN_STAGE: Partial<
+  Record<Schemas.ChangeRequestStatusIntEnum, Schemas.ConversationChangeRequestStageEnum>
+> = {
+  [Schemas.ChangeRequestStatusIntEnum.Committing]:
+    Schemas.ConversationChangeRequestStageEnum.Committing,
+  [Schemas.ChangeRequestStatusIntEnum.Committed]:
+    Schemas.ConversationChangeRequestStageEnum.Verifying,
+  [Schemas.ChangeRequestStatusIntEnum.Mismatch]: Schemas.ConversationChangeRequestStageEnum.Undoing,
+};
 
 // DEV_NOTE: A change request the database decided, with the status its pause is resolved by
 interface DecidedChangeRequest {
@@ -1482,7 +1499,8 @@ export class ConversationDO extends Think<Env> {
     return await this.runCommit(toolCallId, entry);
   }
 
-  // DEV_NOTE: The commit: Committing (its key stored first), the host write as the user, and the end status. Anything
+  // DEV_NOTE: The commit: Committing (its key stored first), the host write as the user, and the end status; a commit
+  // that landed goes on to its read-after and, on a mismatch, its auto-undo (runFollowUp) before execute answers. Anything
   // that leaves the outcome unrecorded keeps the entry and is tried again (ACTION_COMMIT_RETRY_MS, the next host_token
   // frame, the auto-close check) rather than losing what may have landed: a database step that failed, or a resume with
   // no host token yet (nothing sent; it waits for the token instead of ending NeedsHuman).
@@ -1498,6 +1516,13 @@ export class ConversationDO extends Think<Env> {
     }
     this.commitsInFlight.add(entry.publicId);
     try {
+      // DEV_NOTE: A commit that landed but whose read-after or undo didn't finish takes up from there (M3-6)
+      if (
+        entry.stage === Schemas.ConversationChangeRequestStageEnum.Verifying ||
+        entry.stage === Schemas.ConversationChangeRequestStageEnum.Undoing
+      ) {
+        return await this.runFollowUp(toolCallId, entry, null);
+      }
       this.patchChangeRequest(toolCallId, {
         stage: Schemas.ConversationChangeRequestStageEnum.Committing,
       });
@@ -1540,10 +1565,11 @@ export class ConversationDO extends Think<Env> {
         session: state.session,
         changeRequestPublicId: entry.publicId,
         hostCall: committed,
-        isResume: started.plan.isResume,
+        plan: started.plan,
       });
       this.relayEvents(finished.outboxIds);
       this.broadcastChangeRequest(finished.changeRequest);
+      if (finished.followUp) return await this.runFollowUp(toolCallId, entry, finished.followUp);
       if (
         finished.changeRequest &&
         finished.failure !== Schemas.ChangeRequestFailureEnum.ServerError
@@ -1600,11 +1626,142 @@ export class ConversationDO extends Think<Env> {
         entry.publicId,
       );
     }
-    this.patchChangeRequest(toolCallId, null);
     const status = started.changeRequest?.changeRequestStatus;
+    // DEV_NOTE: The commit already landed (this entry missed its end): take up its read-after or undo instead
+    if (
+      status === Schemas.ChangeRequestStatusIntEnum.Committed ||
+      status === Schemas.ChangeRequestStatusIntEnum.Mismatch
+    ) {
+      return await this.runFollowUp(toolCallId, entry, null);
+    }
+    this.patchChangeRequest(toolCallId, null);
     if (status === undefined) {
       return HostToolsProvider.output(Schemas.HostToolStatusEnum.Error, TOOL_TEXT.notWaiting);
     }
+    return ConversationDO.commitOutput(entry.publicId, status);
+  }
+
+  // DEV_NOTE: A landed commit's next steps (M3-6), under the caller's commitsInFlight claim: the read-after (readback_op
+  // as the user) → Verified / NeedsHuman, or Mismatch → the auto-undo (inverse_op as the user, then read again) →
+  // Undone / NeedsHuman. plan null = read it from the row (a resume). A step that couldn't be sent for want of the host
+  // token keeps the entry (verifying / undoing) for the next host_token; a database step that failed keeps it for a
+  // retry (ACTION_COMMIT_RETRY_MS). execute answers the outcome reached.
+  private async runFollowUp(
+    toolCallId: string,
+    entry: Schemas.ConversationChangeRequestEntry,
+    plan: Schemas.FollowUpPlan | null,
+  ): Promise<Schemas.HostToolOutput> {
+    const state = this.getRuntimeState();
+    if (!state)
+      return HostToolsProvider.output(Schemas.HostToolStatusEnum.Error, TOOL_TEXT.unavailable);
+    const repo = this.actionEngineRepo();
+    let next = plan;
+    if (!next) {
+      const started = await repo.startFollowUp({
+        session: state.session,
+        changeRequestPublicId: entry.publicId,
+        attemptId: Utility.generateUlid(),
+      });
+      this.relayEvents(started.outboxIds);
+      this.broadcastChangeRequest(started.changeRequest);
+      if (!started.followUp) return await this.endFollowUp(toolCallId, entry, started);
+      next = started.followUp;
+    }
+    const getHostToken = () => this.hostToken;
+
+    if (next.followUp === Schemas.ChangeRequestFollowUpEnum.Verify) {
+      this.patchChangeRequest(toolCallId, {
+        stage: Schemas.ConversationChangeRequestStageEnum.Verifying,
+      });
+      const read = await HostToolCallProvider.readAfter({ plan: next, getHostToken });
+      if (read.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded && read.attempts === 0) {
+        return HostToolsProvider.output(
+          Schemas.HostToolStatusEnum.Committed,
+          TOOL_TEXT.committed,
+          entry.publicId,
+        );
+      }
+      if (read.outcome !== Schemas.HostCallOutcomeEnum.Succeeded) {
+        this.logHostCall(next.tool, read, "Read-after didn't succeed");
+      }
+      const verified = await repo.finishVerify({
+        session: state.session,
+        changeRequestPublicId: entry.publicId,
+        plan: next,
+        readback: read,
+      });
+      this.relayEvents(verified.outboxIds);
+      this.broadcastChangeRequest(verified.changeRequest);
+      if (!verified.followUp) return await this.endFollowUp(toolCallId, entry, verified);
+      next = verified.followUp;
+    }
+
+    this.patchChangeRequest(toolCallId, {
+      stage: Schemas.ConversationChangeRequestStageEnum.Undoing,
+    });
+    const undo = await HostToolCallProvider.undo({ plan: next, getHostToken });
+    if (
+      undo.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded &&
+      undo.attempts === 0 &&
+      undo.mayHaveLanded !== true
+    ) {
+      return HostToolsProvider.output(
+        Schemas.HostToolStatusEnum.Error,
+        TOOL_TEXT.undoing,
+        entry.publicId,
+      );
+    }
+    const isUndoSent =
+      undo.outcome === Schemas.HostCallOutcomeEnum.Succeeded ||
+      undo.outcome === Schemas.HostCallOutcomeEnum.AlreadyApplied;
+    if (!isUndoSent) this.logHostCall(next.tool, undo, "Undo didn't succeed");
+    const reread = isUndoSent
+      ? await HostToolCallProvider.readAfter({ plan: next, getHostToken })
+      : null;
+    const undone = await repo.finishUndo({
+      session: state.session,
+      changeRequestPublicId: entry.publicId,
+      plan: next,
+      undo,
+      readback: reread,
+    });
+    this.relayEvents(undone.outboxIds);
+    this.broadcastChangeRequest(undone.changeRequest);
+    return await this.endFollowUp(toolCallId, entry, undone);
+  }
+
+  // DEV_NOTE: A follow-up step's end: a settled change request ends its entry with its outcome; one still open (a
+  // database step that failed, a refusal that left it Committed / Mismatch) keeps it for a retry, and the model hears
+  // it isn't confirmed yet, never a guess
+  private async endFollowUp(
+    toolCallId: string,
+    entry: Schemas.ConversationChangeRequestEntry,
+    response: Schemas.ChangeRequestStepResponse,
+  ): Promise<Schemas.HostToolOutput> {
+    const status = response.changeRequest?.changeRequestStatus;
+    const isOpen =
+      status === undefined ||
+      status === Schemas.ChangeRequestStatusIntEnum.Committed ||
+      status === Schemas.ChangeRequestStatusIntEnum.Mismatch;
+    if (response.failure === Schemas.ChangeRequestFailureEnum.NotFound) {
+      this.patchChangeRequest(toolCallId, null);
+      return HostToolsProvider.output(Schemas.HostToolStatusEnum.Error, TOOL_TEXT.notWaiting);
+    }
+    if (response.failure === Schemas.ChangeRequestFailureEnum.ServerError || isOpen) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.VerifyChangeRequest,
+        message: response.message ?? "Follow-up end not recorded; resumed later",
+        metadata: { conversationPublicId: this.name, changeRequestPublicId: entry.publicId },
+      });
+      await this.scheduleCommitRetry();
+      return HostToolsProvider.output(
+        Schemas.HostToolStatusEnum.NeedsReview,
+        TOOL_TEXT.commitUnconfirmed,
+        entry.publicId,
+      );
+    }
+    this.patchChangeRequest(toolCallId, null);
     return ConversationDO.commitOutput(entry.publicId, status);
   }
 
@@ -1631,6 +1788,24 @@ export class ConversationDO extends Think<Env> {
         return HostToolsProvider.output(
           Schemas.HostToolStatusEnum.Committed,
           TOOL_TEXT.committed,
+          changeRequestPublicId,
+        );
+      case Schemas.ChangeRequestStatusIntEnum.Verified:
+        return HostToolsProvider.output(
+          Schemas.HostToolStatusEnum.Verified,
+          TOOL_TEXT.verified,
+          changeRequestPublicId,
+        );
+      case Schemas.ChangeRequestStatusIntEnum.Mismatch:
+        return HostToolsProvider.output(
+          Schemas.HostToolStatusEnum.Error,
+          TOOL_TEXT.undoing,
+          changeRequestPublicId,
+        );
+      case Schemas.ChangeRequestStatusIntEnum.Undone:
+        return HostToolsProvider.output(
+          Schemas.HostToolStatusEnum.Undone,
+          TOOL_TEXT.undone,
           changeRequestPublicId,
         );
       case Schemas.ChangeRequestStatusIntEnum.NeedsHuman:
@@ -1899,11 +2074,13 @@ export class ConversationDO extends Think<Env> {
 
     // DEV_NOTE: The args passed the input_schema and the read-before is parsed JSON; anything that isn't JSON is refused
     const edited = Schemas.ZChangeRequestPayload.safeParse({
-      version: 1,
+      version: 2,
       kind: payload.kind,
       args,
       before,
       changes,
+      result: null,
+      mismatches: null,
     });
     if (!edited.success) return refuse(EDIT_INVALID_MESSAGE);
     const saved = await repo.saveEdit({
@@ -2045,11 +2222,10 @@ export class ConversationDO extends Think<Env> {
       this.reply(ws, { type: "error", message: CHANGE_NOT_WAITING_MESSAGE });
     }
     await this.cancelExpiry(entry);
-    if (status === Schemas.ChangeRequestStatusIntEnum.Committing) {
-      this.patchChangeRequest(toolCallId, {
-        stage: Schemas.ConversationChangeRequestStageEnum.Committing,
-        expiryScheduleId: null,
-      });
+    // DEV_NOTE: A commit under way, or one that landed with its read-after or undo still to run: left to it
+    const openStage = DECIDED_OPEN_STAGE[status];
+    if (openStage) {
+      this.patchChangeRequest(toolCallId, { stage: openStage, expiryScheduleId: null });
       return null;
     }
     const isApproved = status === Schemas.ChangeRequestStatusIntEnum.Approved;

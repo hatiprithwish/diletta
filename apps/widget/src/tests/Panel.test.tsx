@@ -240,6 +240,7 @@ describe("Change request cards", () => {
     isUndoable: true,
     wasEdited: false,
     editableFields: [editable],
+    mismatches: null,
   });
   const cardOf = (
     members: Schemas.WidgetChangeRequest[],
@@ -314,6 +315,72 @@ describe("Change request cards", () => {
     renderPanel(withCard(decided));
     expect(screen.getByText("Rejected. Nothing changed.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument();
+  });
+
+  // DEV_NOTE: M3-6's settled cards: checked, undone with what the check found, needs a person
+  it("shows a verified card, an undone one with expected vs found, and one that needs a person", () => {
+    const settled = (publicId: string, status: Schemas.ChangeRequestStatusIntEnum) => ({
+      ...member(publicId),
+      changeRequestStatus: status,
+      editableFields: [],
+      mismatches:
+        status === Schemas.ChangeRequestStatusIntEnum.Undone
+          ? [
+              {
+                field: "amount",
+                expected: { isFound: true as const, value: 300 },
+                found: { isFound: true as const, value: 999 },
+              },
+            ]
+          : null,
+    });
+    const { unmount } = render(
+      <Panel
+        view={{
+          ...base,
+          ...withCard(cardOf([settled("1", Schemas.ChangeRequestStatusIntEnum.Verified)])),
+        }}
+        {...noopActions}
+      />,
+    );
+    const verified = screen.getByRole("region", { name: "Record updated" });
+    expect(within(verified).getByText("Saved and checked")).toBeInTheDocument();
+    unmount();
+
+    const { unmount: unmountUndone } = render(
+      <Panel
+        view={{
+          ...base,
+          ...withCard(cardOf([settled("2", Schemas.ChangeRequestStatusIntEnum.Undone)])),
+        }}
+        {...noopActions}
+      />,
+    );
+    const undone = screen.getByRole("region", { name: "Change undone" });
+    expect(
+      within(undone).getByText(
+        "The app didn't save EXT-2 as expected, so I undid it. Nothing changed.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(undone).getByText("Expected")).toBeInTheDocument();
+    expect(within(undone).getByText("999")).toBeInTheDocument();
+    unmountUndone();
+
+    renderPanel(
+      withCard(
+        cardOf([
+          settled("3", Schemas.ChangeRequestStatusIntEnum.Verified),
+          settled("4", Schemas.ChangeRequestStatusIntEnum.NeedsHuman),
+        ]),
+      ),
+    );
+    const flagged = screen.getByRole("region", { name: "This change needs a person" });
+    expect(within(flagged).getByText("EXT-3 was saved and checked.")).toBeInTheDocument();
+    expect(
+      within(flagged).getByText(
+        "EXT-4 is flagged for your team. Please leave it as is until they review it.",
+      ),
+    ).toBeInTheDocument();
   });
 });
 
