@@ -208,18 +208,18 @@ Exit: approve → commit → verify → undo works end to end against the test h
 
 Exit: all 14 pages live on staging with real data, light and dark, every action behind `can()`.
 
-| ID    | Task                                                                                                                                  | Done when                                                    | Lane     |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------- |
-| M4-1  | Shell: shadcn Sidebar collapsing to an icon rail, bot switcher, grouped nav with Settings as a nested group, breadcrumb, theme switch | Matches the design canvas                                    | Product  |
-| M4-2  | Rollups: hourly Cron into `activity_rollups` with `chatbot_id`                                                                        | Re-runnable for any company and day                          | Platform |
-| M4-3  | Overview, Usage, Impact                                                                                                               | Numbers match raw `model_calls` and actions for a sample day | Product  |
-| M4-4  | Conversations: list + transcript with per-turn cost                                                                                   | Turn totals equal `model_calls` by `turn_id`                 | Product  |
-| M4-5  | Changes: list, detail timeline from `activity_log`, mark resolved                                                                     | `needs_human` items resolvable                               | Product  |
-| M4-6  | Quality inbox: triage, create test (PII rewrite + review), fixed, dismissed                                                           | CHECKs on source and status hold                             | Product  |
-| M4-7  | Knowledge: sources, sync status, gap clusters with sample questions                                                                   | Cluster links to the doc that closed it                      | Product  |
-| M4-8  | Tests: runs, cases, failure detail with grader output                                                                                 | Opens transcript from R2                                     | Product  |
-| M4-9  | Security: identity and origins, key rotation, retention and erasure, injection events, audit log                                      | Each action writes an audit row                              | Product  |
-| M4-10 | Settings: Bots (versions, publish, rollback as copy, read-only switch), Model keys, Connections, Team, Budget                         | Publish blocked without a model key                          | Product  |
+| ID    | Task                                                                                                                                    | Done when                                                    | Lane     |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------- |
+| M4-1  | Shell: shadcn Sidebar collapsing to an icon rail, company header, grouped nav with Settings as a nested group, breadcrumb, theme switch | Matches the design canvas                                    | Product  |
+| M4-2  | Rollups: hourly Cron into `activity_rollups` with `chatbot_id`                                                                          | Re-runnable for any company and day                          | Platform |
+| M4-3  | Overview, Usage, Impact                                                                                                                 | Numbers match raw `model_calls` and actions for a sample day | Product  |
+| M4-4  | Conversations: list + transcript with per-turn cost                                                                                     | Turn totals equal `model_calls` by `turn_id`                 | Product  |
+| M4-5  | Changes: list, detail timeline from `activity_log`, mark resolved                                                                       | `needs_human` items resolvable                               | Product  |
+| M4-6  | Quality inbox: triage, create test (PII rewrite + review), fixed, dismissed                                                             | CHECKs on source and status hold                             | Product  |
+| M4-7  | Knowledge: sources, sync status, gap clusters with sample questions                                                                     | Cluster links to the doc that closed it                      | Product  |
+| M4-8  | Tests: runs, cases, failure detail with grader output                                                                                   | Opens transcript from R2                                     | Product  |
+| M4-9  | Security: identity and origins, key rotation, retention and erasure, injection events, audit log                                        | Each action writes an audit row                              | Product  |
+| M4-10 | Settings: Bots (versions, publish, rollback as copy, read-only switch), Model keys, Connections, Team, Budget                           | Publish blocked without a model key                          | Product  |
 
 ### M5 Evals and learning
 
