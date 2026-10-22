@@ -54,6 +54,26 @@ export const CHANGE_REQUEST_STATUS_LABEL_MAP: Record<
 export const CHANGE_REQUEST_APPROVAL_EXPIRY_MS = 15 * 60_000;
 export const CHANGE_REQUEST_MAX_PENDING = 20;
 
+// DEV_NOTE: The undo window (M3-7), a platform default. A change request that ends (Verified, Undone, Failed, Rejected,
+// Expired) gets undo_until = its end + CHANGE_REQUEST_UNDO_WINDOW_MS: a Verified one can be undone by the user until
+// then, and every one's values (encrypted_changes) are purged after it. NeedsHuman keeps undo_until null: its values
+// stay until a person resolves it (M4-5). The conversation doesn't auto-close while a Verified one can be undone.
+export const CHANGE_REQUEST_UNDO_WINDOW_MS = 60 * 60_000;
+
+// DEV_NOTE: A user undo cut short (an eviction, a failed write) resumes only once the widget sends the host token
+// again. If it hasn't by undo_until + CHANGE_REQUEST_UNDO_GRACE_MS, the DO hands it to a person (NeedsHuman
+// undo_interrupted: it may have been sent), and the purge stops sparing its values.
+export const CHANGE_REQUEST_UNDO_GRACE_MS = 60 * 60_000;
+
+// DEV_NOTE: The statuses whose values are purged a window after they end (CHANGE_REQUEST_UNDO_WINDOW_MS)
+export const CHANGE_REQUEST_PURGED_STATUSES: ReadonlySet<ChangeRequestStatusIntEnum> = new Set([
+  ChangeRequestStatusIntEnum.Verified,
+  ChangeRequestStatusIntEnum.Undone,
+  ChangeRequestStatusIntEnum.Failed,
+  ChangeRequestStatusIntEnum.Rejected,
+  ChangeRequestStatusIntEnum.Expired,
+]);
+
 // DEV_NOTE: What a change request does to the host record, from its tool: a Write with a read-before updates an
 // existing record; a Write whose readback reads the call's result (a new id) creates one, with nothing to read before;
 // a Destructive tool deletes the record its read-before found.
@@ -128,7 +148,8 @@ export function parseChangeRequestPayload(value: unknown): ChangeRequestPayload 
 // the host call (the conversation, chatbot, company or tool no longer allowed it, or the payload couldn't be read), or
 // the host call ended so (@app/adapter outcome). After a commit landed (M3-6): the read-after couldn't tell whether the
 // record shows the change (verify_unknown); it didn't, and the tool has no inverse_op (not_undoable); the undo didn't
-// succeed (undo_failed), or it did but the record doesn't read back as before (undo_unconfirmed).
+// succeed (undo_failed), or it did but the record doesn't read back as before (undo_unconfirmed). The user's undo
+// (M3-7) was cut short and the user never came back to finish it (undo_interrupted: it may have been sent).
 export enum ChangeRequestErrorCodeEnum {
   ConversationClosed = "conversation_closed",
   ChatbotUnavailable = "chatbot_unavailable",
@@ -145,6 +166,14 @@ export enum ChangeRequestErrorCodeEnum {
   NotUndoable = "not_undoable",
   UndoFailed = "undo_failed",
   UndoUnconfirmed = "undo_unconfirmed",
+  UndoInterrupted = "undo_interrupted",
+}
+
+// DEV_NOTE: Who undid an Undone change request (M3-7): the user (their Undo within the window) or the system (the
+// auto-undo of a Mismatch, M3-6). Read from the undo key the row holds, so it outlives the purge.
+export enum ChangeRequestUndoneByEnum {
+  User = "user",
+  System = "system",
 }
 
 // Whole Change Request Body — DB shape (status stored as integer)
@@ -215,7 +244,10 @@ export type ChangeRequestEditableField = z.infer<typeof ZChangeRequestEditableFi
 // id): the widget shows the card in the reply that made the call. null when the DO no longer holds the open entry
 // (the call's own output then names the change request). wasEdited: the user changed values (M3-5), so the diff is the
 // re-checked one. mismatches (M3-6): what the read-after found other than the commit set (null when it found none, or
-// once purged), host data like changes. Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
+// once purged), host data like changes. undoUntil (M3-7, epoch ms): set while the user can undo it (Verified, the tool
+// has an inverse_op, the values not purged, before the window ends); isUndoing: the user's undo of it is under way;
+// undoneBy: who undid an Undone one (null otherwise).
+// Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
 export const ZWidgetChangeRequest = z.object({
   publicId: z.string(),
   toolName: z.string(),
@@ -231,6 +263,9 @@ export const ZWidgetChangeRequest = z.object({
   wasEdited: z.boolean(),
   editableFields: z.array(ZChangeRequestEditableField),
   mismatches: z.array(ZChangeRequestMismatch).nullable(),
+  undoUntil: z.number().int().nullable(),
+  isUndoing: z.boolean(),
+  undoneBy: z.enum(ChangeRequestUndoneByEnum).nullable(),
 });
 export type WidgetChangeRequest = z.infer<typeof ZWidgetChangeRequest>;
 
@@ -269,6 +304,8 @@ export enum ChangeRequestDecisionEnum {
 //   ConversationClosed / ChatbotUnavailable: re-checked on every step (rule 3.23).
 //   ReadOnly: the company is read-only (is_read_only): the agent may only read, so nothing commits.
 //   ToolUnavailable: the tool version or its connection is no longer Active, or its ops no longer load.
+//   NotUndoable: the user asked to undo one whose tool has no inverse_op (M3-7).
+//   UndoWindowClosed: the user asked to undo one after its undo_until, or whose values are purged (M3-7).
 export enum ChangeRequestFailureEnum {
   NotFound = "NotFound",
   InvalidTransition = "InvalidTransition",
@@ -279,6 +316,8 @@ export enum ChangeRequestFailureEnum {
   ChatbotUnavailable = "ChatbotUnavailable",
   ReadOnly = "ReadOnly",
   ToolUnavailable = "ToolUnavailable",
+  NotUndoable = "NotUndoable",
+  UndoWindowClosed = "UndoWindowClosed",
   ServerError = "ServerError",
 }
 
@@ -288,7 +327,9 @@ export const CHANGE_REQUEST_ENTITY_TYPE = "change_request";
 
 // DEV_NOTE: Edited (M3-5) and Undoing (M3-6) are the events that aren't a status change: the user changed a Proposed
 // one's values (it stays Proposed; each edit is its own event, an edit id part in the dedupe key), and the auto-undo
-// of a Mismatch started (its key stored first; a resumed undo writes another, with an attempt part).
+// of a Mismatch started (its key stored first; a resumed undo writes another, with an attempt part). The user's undo
+// of a Verified one (M3-7) writes Undoing too (actor: the chatbot user), while it stays Verified; UndoNotSent marks the
+// end of one that reached nothing (it stays Verified, so it isn't a status change either).
 export enum ChangeRequestEntityActionEnum {
   Proposed = "proposed",
   Edited = "edited",
@@ -302,6 +343,7 @@ export enum ChangeRequestEntityActionEnum {
   Verified = "verified",
   Mismatch = "mismatch",
   Undoing = "undoing",
+  UndoNotSent = "undo_not_sent",
   Undone = "undone",
 }
 
@@ -333,10 +375,19 @@ export const changeRequestEventDedupeKey = (
 ): string => [changeRequestEventType(action), changeRequestPublicId, ...parts].join(":");
 
 // DEV_NOTE: The commit's Idempotency-Key (Native) and change_requests.idempotency_key: one per change request and step,
-// the same on every attempt and every resume. Its undo uses its own (changeRequestUndoIdempotencyKey), stored in
-// idempotency_key when the undo starts, so a Mismatch holding it may have sent its undo already (a resume).
+// the same on every attempt and every resume. The auto-undo of a Mismatch uses its own (changeRequestUndoIdempotencyKey),
+// stored in idempotency_key when the undo starts, so a Mismatch holding it may have sent its undo already (a resume).
+// The user's undo of a Verified one (M3-7) uses another (changeRequestUserUndoIdempotencyKey): a Verified row holding
+// it is that undo under way, and an Undone one holding it was undone by the user (the column is never purged). The
+// purge builds the same key in SQL from CHANGE_REQUEST_KEY_PREFIX and CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX.
+export const CHANGE_REQUEST_KEY_PREFIX = "cr-";
+export const CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX = "-user-undo";
+
 export const changeRequestCommitIdempotencyKey = (changeRequestPublicId: string): string =>
-  `cr-${changeRequestPublicId}-commit`;
+  `${CHANGE_REQUEST_KEY_PREFIX}${changeRequestPublicId}-commit`;
 
 export const changeRequestUndoIdempotencyKey = (changeRequestPublicId: string): string =>
-  `cr-${changeRequestPublicId}-undo`;
+  `${CHANGE_REQUEST_KEY_PREFIX}${changeRequestPublicId}-undo`;
+
+export const changeRequestUserUndoIdempotencyKey = (changeRequestPublicId: string): string =>
+  `${CHANGE_REQUEST_KEY_PREFIX}${changeRequestPublicId}${CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX}`;

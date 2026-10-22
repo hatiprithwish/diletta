@@ -1628,6 +1628,83 @@ A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `providers/changeReque
 
 ---
 
+### 3.36 Undo Only Inside Its Window, Re-Checked; Values Purged Only by the Purge Job [CRITICAL]
+
+**Rule:** A Verified change request is undone by the user (M3-7) only through the widget's `change_request_undos` frame, and only after `ActionEngineRepo.startUndo` re-checks it like a commit: the conversation open, the chatbot and company active and not read-only, then under the row lock `ChangeRequestsProvider.undoRefusal` (Verified with no undo under way, the tool has an `inverse_op`, the values not purged, before `undo_until`) and the tool version still loading. The user's own undo key (`changeRequestUserUndoIdempotencyKey`) and its `undoing` event (actor: the chatbot user) are stored before `HostToolCallProvider.undo`; the change request stays Verified until `finishUndo` ends it (Undone / stays Verified with an `undo_not_sent` event when nothing may have reached the host / NeedsHuman), or until the DO hands an undo never resumed to a person (`abandonUndo`, `undo_interrupted`) after `undo_until` + `CHANGE_REQUEST_UNDO_GRACE_MS`. `undo_until` is written only through `ChangeRequestsProvider.undoUntil` (end + `CHANGE_REQUEST_UNDO_WINDOW_MS`; NeedsHuman null). `encrypted_changes`, `iv` and `encryption_key_version` are nulled only by `ChangeRequestsDAL.purgeChangeRequestValues` via `ChangeRequestPurgeRepo` (the `ChangeRequestPurge` cron, `withPlatform`), never before `undo_until`, and for a Verified row holding the user's undo key not before `undo_until` + the grace (the SQL builds that key from `CHANGE_REQUEST_KEY_PREFIX` / `CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX`, never a literal). An undo makes no model call: every later turn hears it through `userUndos` (summaries, never values).
+
+**Violations:**
+
+- Sending `inverse_op` for a Verified change request without `startUndo`, or trusting the widget's view of the window
+- Undoing after `undo_until`, on a read-only company, or a NeedsHuman / Undone / Mismatch row through the user path
+- Setting `undo_until` by hand in a step, or giving NeedsHuman one
+- Nulling the payload anywhere but the purge, or purging a row whose window hasn't ended or whose user undo is under way
+- Running a model call (or a continuation) to announce an undo, or putting values in `userUndos`
+- Writing a status event for an undo that changed no status (use `undo_not_sent`), or guessing who undid a change from its payload instead of `undoneBy`
+
+**Detection Pattern:**
+
+```regex
+startUndo\(|undoRefusal\(|purgeChangeRequestValues\(
+undoUntil:
+encryptedChanges: null
+WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `ChangeRequestPurgeRepo.ts`, `ChangeRequestsDAL.ts`, `providers/changeRequests.ts`, `providers/widgetFrames.ts`, `apps/widget/src/hooks/useChangeReview.ts`, `apps/widget/src/lib/changeRequestView.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (view.undoUntil > Date.now()) await HostToolCallProvider.undo({ plan, getHostToken })
+- ✅ repo.startUndo → runFollowUp(plan) → finishUndo
+- ❌ await tx.update(changeRequests).set({ encryptedChanges: null }).where(eq(changeRequests.status, Verified))
+- ✅ ChangeRequestPurgeRepo.purgeExpiredValues() (undo_until < now, undo under way skipped)
+```
+
+**Fix:** Mirror `ConversationDO.undoChangeRequests` / `runUserUndo`, `ActionEngineRepo.startUndo` and `ChangeRequestPurgeRepo`.
+
+---
+
+### 3.37 A Missing Host Token Is Asked For, Never Guessed Around [CRITICAL]
+
+**Rule:** When a host call as the user finds no token, or the host refuses it (TokenNeeded / TokenRejected), the Conversation DO asks the widget for a fresh one (M3-8) and tries the same call once more (`withFreshToken`), but only when a second try can't write twice: nothing may have landed (`mayHaveLanded !== true`), or the call is a resume (the adapter starts a resume's `mayHaveLanded` at true even when it sends nothing; the same plan resends it as a resume). The ask is `HostTokenAsk` (`src/hostToken/`): `token_needed` with `reason: refresh` to every open socket, a wait of at most `HOST_TOKEN_WAIT_MS` for a `host_token` frame (no socket = no wait), shared by every step asking meanwhile, and not repeated for `HOST_TOKEN_WAIT_MS` after one timed out unless a token arrives. A fresh token the host refuses too ends the step as it did before M3-8. A token the host refused is dropped from `this.hostToken` (unless a newer one arrived meanwhile), so the answer, edit and undo gates answer `reason: answer`. A read with no token still tells the model to ask the user to sign in. A commit, read-after, undo or the undo's re-read with no token keeps its entry (`waitForToken`: `tokenNeededSince` from the first wait, `isUnsent` when its first send reached nothing) and resumes on the next `host_token`; `isUnsent` reaches `startCommit` / `startFollowUp` so that resume is a fresh send (never a resend guessing it landed), and it is cleared before every send. A step still waiting `HOST_TOKEN_GRACE_MS` after it first needed the token goes to a person only through `ActionEngineRepo.handOverForToken` (Approved / Committing / Committed / Mismatch → NeedsHuman `token_needed`); a user undo keeps `abandonUndo`. `reason: answer` is only for the reply to the widget's own answer, edit or undo frame (the widget resends that frame once); the widget answers `refresh` silently, with no UI, through `lib/hostTokenSender.ts` (one `getHostToken` call at a time; one that throws, rejects or hangs past `WIDGET_HOST_TOKEN_FETCH_TIMEOUT_MS` never blocks the next send).
+
+**Violations:**
+
+- Ending a commit, read-after or undo Failed / NeedsHuman for a missing or refused token without asking for a fresh one first, or before the grace has passed
+- Retrying a fresh (non-resume) host call after a token failure that may have landed, retrying a resume as a fresh send, or retrying more than once per fresh token
+- Keeping a token the host refused in `this.hostToken`, or asking the widget again while a timed-out ask's cooldown runs
+- A shared widget token fetch that a throwing or hung `getHostToken` can block
+- Passing `isUnsent: true` for a step whose last send may have reached the host, or leaving it set across a send
+- Sending `token_needed` without `reason`, or `reason: answer` for the DO's own step (the widget would resend an unrelated frame)
+- Showing a notice, spinner or card for a `refresh` ask in the widget
+- Keeping the waiter or the token anywhere but DO memory (rule 3.11)
+
+**Detection Pattern:**
+
+```regex
+type: "token_needed"
+WidgetTokenNeededReasonEnum
+isUnsent
+handOverForToken\(
+tokenNeededSince
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `src/hostToken/HostTokenAsk.ts`, `apps/widget/src/hooks/useChangeReview.ts`, `apps/widget/src/lib/hostTokenSender.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (read.outcome === TokenNeeded) return output(Error, TOOL_TEXT.tokenNeeded)   // never asked the widget
+- ✅ const { response, isWaiting } = await this.withFreshToken(() => HostToolCallProvider.read(...), { isResume: false, signal })
+- ❌ await repo.finishCommit({ hostCall: committed /* TokenRejected, nothing landed */ })   // ends it Failed at once
+- ✅ if (isWaiting) await this.waitForToken(toolCallId, !plan.isResume)
+```
+
+**Fix:** Mirror `ConversationDO.withFreshToken` / `waitForToken` / `handOverTokenWaits`, `HostTokenAsk`, `ActionEngineRepo.handOverForToken` and the widget's `createHostTokenSender`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:

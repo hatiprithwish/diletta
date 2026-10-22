@@ -5,6 +5,7 @@ import Constants from "@/config/Constants";
 import AppLogger from "@/providers/logger";
 import CronScheduleProvider from "@/providers/cronSchedule";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
+import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
@@ -28,13 +29,21 @@ vi.mock("@/crons/OutboxSweepCron", () => ({ default: vi.fn().mockResolvedValue(u
 vi.mock("@/crons/ModelCallUsageBackfillCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/crons/ChangeRequestPurgeCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/crons/KnowledgeResyncCron", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/crons/ActivityLogPartitionsCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { OutboxSweep, ModelCallUsageBackfill, KnowledgeResync, ActivityLogPartitions } =
-  Schemas.CronJobEnum;
+const {
+  OutboxSweep,
+  ModelCallUsageBackfill,
+  ChangeRequestPurge,
+  KnowledgeResync,
+  ActivityLogPartitions,
+} = Schemas.CronJobEnum;
 const at = (iso: string) => Date.parse(iso);
 
 describe("CronScheduleProvider.getDueJobs", () => {
@@ -42,6 +51,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:37:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
+      ChangeRequestPurge,
     ]);
   });
 
@@ -49,6 +59,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:00:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
+      ChangeRequestPurge,
       KnowledgeResync,
     ]);
   });
@@ -57,6 +68,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:00:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
+      ChangeRequestPurge,
       KnowledgeResync,
       ActivityLogPartitions,
     ]);
@@ -77,6 +89,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T08:30:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
+      ChangeRequestPurge,
     ]);
   });
 });
@@ -97,12 +110,14 @@ describe("scheduled()", () => {
     await run(Constants.CRON_TRIGGER, "2026-10-11T03:00:00Z");
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
     expect(runModelCallUsageBackfill).toHaveBeenCalledTimes(1);
+    expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
 
     vi.clearAllMocks();
     await run(Constants.CRON_TRIGGER, "2026-10-11T03:01:00Z");
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
+    expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).not.toHaveBeenCalled();
     expect(runActivityLogPartitions).not.toHaveBeenCalled();
   });

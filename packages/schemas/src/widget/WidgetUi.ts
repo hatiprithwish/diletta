@@ -49,7 +49,8 @@ export enum WidgetChangeCardStageEnum {
 
 // DEV_NOTE: How one record's change stands, in DESIGN.md §8 words (the status line under a decided record). Saved =
 // committed, its read-after still to come; Verified = saved and read back as set (M3-6); Undoing / Undone = it didn't
-// read back as set, so it is being / was put back.
+// read back as set, so it is being / was put back. UserUndoing / UserUndone (M3-7): the user's Undo of a saved and
+// checked change is under way / put the record back.
 export enum WidgetChangeOutcomeEnum {
   Waiting = "waiting",
   Saving = "saving",
@@ -57,6 +58,8 @@ export enum WidgetChangeOutcomeEnum {
   Verified = "verified",
   Undoing = "undoing",
   Undone = "undone",
+  UserUndoing = "user_undoing",
+  UserUndone = "user_undone",
   Rejected = "rejected",
   Expired = "expired",
   Failed = "failed",
@@ -135,6 +138,11 @@ export interface WidgetChangeCardView {
   approveLabel: string;
   canEdit: boolean;
   expiresAt: number | null;
+  // DEV_NOTE: The card's Undo (M3-7, DESIGN.md widget-Verified): undoCount records the user can still undo (saved and
+  // checked, inside their window); undoUntil (epoch ms) the earliest end of their windows, shown as "Undo available
+  // until HH:MM" (null when there is nothing to undo)
+  undoCount: number;
+  undoUntil: number | null;
   notice: string | null;
 }
 
@@ -153,6 +161,7 @@ export interface WidgetChangeCardActions {
   ) => void;
   onToggleRecord: (cardId: string, changeRequestPublicId: string) => void;
   onShowMore: (cardId: string) => void;
+  onUndo: (cardId: string) => void;
 }
 
 export interface WidgetChangeCardProps {

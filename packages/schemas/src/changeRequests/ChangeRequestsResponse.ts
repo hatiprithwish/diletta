@@ -35,8 +35,8 @@ export interface StartCommitResponse extends ChangeRequestStepResponse {
 }
 
 // DEV_NOTE: What a landed commit needs next (M3-6): Verify = read the record back (readback_op with the args and the
-// commit's result); Undo = the auto-undo of a Mismatch (inverse_op under the change request's undo key, isResume when
-// an earlier undo may have reached the host). tool: the change request's tool version, its ops read again by its id.
+// commit's result); Undo = the auto-undo of a Mismatch, or the user's undo of a Verified one (M3-7) (inverse_op under
+// the change request's undo key, isResume when an earlier undo may have reached the host). tool: the change request's tool version, its ops read again by its id.
 export enum ChangeRequestFollowUpEnum {
   Verify = "verify",
   Undo = "undo",
@@ -71,6 +71,11 @@ export interface GetEditPlanResponse extends ChangeRequestStepResponse {
 
 export interface ChangeRequestViewsResponse extends ApiResponse {
   changeRequests?: WidgetChangeRequest[];
+}
+
+// DEV_NOTE: How many change requests the purge (M3-7) emptied in one run
+export interface PurgeChangeRequestValuesResponse extends ApiResponse {
+  purgedCount?: number;
 }
 
 // DEV_NOTE: The turn's tools, and how many pins were left out (Disabled, Draft or missing version, connection not

@@ -1,8 +1,19 @@
 import * as Schemas from "@app/schemas";
 
+// DEV_NOTE: The widget's answers to a refused undo (M3-7). Each says what did not happen: the change stands as saved.
+export const UNDO_TEXT = {
+  notAvailable: "This change can't be undone any more. Nothing changed.",
+  windowClosed: "The time to undo this change has passed. Nothing changed.",
+  unavailable: "This change can't be undone right now. Nothing changed.",
+  readOnly: "Changes are turned off right now",
+  closed: "This conversation has ended",
+  notSent: "Your undo couldn't be sent. Please try again.",
+  notMade: "The app didn't take the undo, so your change stands as saved.",
+} as const;
+
 // DEV_NOTE: The change request rules ActionEngineRepo applies (M3-4), pure so they are unit-tested on their own: the
 // approval deadline, the status a commit's host call ends in, the status its read-after and auto-undo end in (M3-6),
-// the error code a refused step stores, and the widget's view of a row.
+// the undo window and the user's undo (M3-7), the error code a refused step stores, and the widget's view of a row.
 export default class ChangeRequestsProvider {
   // DEV_NOTE: The one approval deadline: the row's created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS (the DO schedules
   // its expiry at the same time; the database enforces it on an approval)
@@ -14,10 +25,129 @@ export default class ChangeRequestsProvider {
     return now >= ChangeRequestsProvider.deadline(row);
   }
 
+  // DEV_NOTE: The undo_until a status change stores (M3-7): a status that ends the change request (CHANGE_REQUEST_
+  // PURGED_STATUSES) → now + CHANGE_REQUEST_UNDO_WINDOW_MS (the Verified one's undo window; for all of them, when the
+  // purge empties its values); NeedsHuman → null (its values stay until a person resolves it); any status on the way
+  // (Approved, Committing, Committed, Mismatch) → undefined, left as it is.
+  static undoUntil(
+    status: Schemas.ChangeRequestStatusIntEnum,
+    now: number,
+  ): Date | null | undefined {
+    if (Schemas.CHANGE_REQUEST_PURGED_STATUSES.has(status)) {
+      return new Date(now + Schemas.CHANGE_REQUEST_UNDO_WINDOW_MS);
+    }
+    if (status === Schemas.ChangeRequestStatusIntEnum.NeedsHuman) return null;
+    return undefined;
+  }
+
+  // DEV_NOTE: The row holds the user's undo key (M3-7): its undo was started by the user (under way while Verified)
+  static hasUserUndoKey(row: Pick<Schemas.ChangeRequest, "idempotencyKey" | "publicId">): boolean {
+    return row.idempotencyKey === Schemas.changeRequestUserUndoIdempotencyKey(row.publicId);
+  }
+
+  // DEV_NOTE: The user's undo of this Verified change request is under way (M3-7)
+  static isUserUndoing(
+    row: Pick<Schemas.ChangeRequest, "status" | "idempotencyKey" | "publicId">,
+  ): boolean {
+    return (
+      row.status === Schemas.ChangeRequestStatusIntEnum.Verified &&
+      ChangeRequestsProvider.hasUserUndoKey(row)
+    );
+  }
+
+  // DEV_NOTE: Who undid an Undone change request, from the undo key it holds (null for any other status)
+  static undoneBy(
+    row: Pick<Schemas.ChangeRequest, "status" | "idempotencyKey" | "publicId">,
+  ): Schemas.ChangeRequestUndoneByEnum | null {
+    if (row.status !== Schemas.ChangeRequestStatusIntEnum.Undone) return null;
+    return ChangeRequestsProvider.hasUserUndoKey(row)
+      ? Schemas.ChangeRequestUndoneByEnum.User
+      : Schemas.ChangeRequestUndoneByEnum.System;
+  }
+
+  // DEV_NOTE: When the DO stops waiting for the host token to resume a user undo cut short, and hands it to a person:
+  // undo_until + CHANGE_REQUEST_UNDO_GRACE_MS (from now when the row has no undo_until)
+  static undoGiveUpAt(undoUntil: number | null, now: number): number {
+    return (undoUntil ?? now) + Schemas.CHANGE_REQUEST_UNDO_GRACE_MS;
+  }
+
+  // DEV_NOTE: How the DO answers an undo the database refused (M3-7): the widget's text, whether the change request
+  // can no longer be undone at all (its undo window goes), and whether the conversation is closed
+  static undoRefusalReply(failure: Schemas.ChangeRequestFailureEnum | undefined): {
+    message: string;
+    isWindowEnded: boolean;
+    isClosed: boolean;
+  } {
+    switch (failure) {
+      case Schemas.ChangeRequestFailureEnum.NotFound:
+      case Schemas.ChangeRequestFailureEnum.InvalidTransition:
+      case Schemas.ChangeRequestFailureEnum.NotUndoable:
+        return { message: UNDO_TEXT.notAvailable, isWindowEnded: true, isClosed: false };
+      case Schemas.ChangeRequestFailureEnum.UndoWindowClosed:
+        return { message: UNDO_TEXT.windowClosed, isWindowEnded: true, isClosed: false };
+      case Schemas.ChangeRequestFailureEnum.ConversationClosed:
+        return { message: UNDO_TEXT.closed, isWindowEnded: false, isClosed: true };
+      case Schemas.ChangeRequestFailureEnum.ReadOnly:
+        return { message: UNDO_TEXT.readOnly, isWindowEnded: false, isClosed: false };
+      case Schemas.ChangeRequestFailureEnum.ToolUnavailable:
+      case Schemas.ChangeRequestFailureEnum.ChatbotUnavailable:
+        return { message: UNDO_TEXT.unavailable, isWindowEnded: false, isClosed: false };
+      default:
+        return { message: UNDO_TEXT.notSent, isWindowEnded: false, isClosed: false };
+    }
+  }
+
+  // DEV_NOTE: The DO's undo windows after a view went out (by Think tool call id): a view the user can undo
+  // (undoUntil) keeps its window under its tool call id; one under the user's undo leaves them as they are (its open
+  // entry holds the conversation meanwhile); any other drops its window
+  static nextUndoWindows(
+    windows: Record<string, Schemas.ConversationUndoWindow>,
+    view: Pick<Schemas.WidgetChangeRequest, "publicId" | "toolCallId" | "undoUntil" | "isUndoing">,
+  ): Record<string, Schemas.ConversationUndoWindow> {
+    if (view.isUndoing) return windows;
+    const next = Object.fromEntries(
+      Object.entries(windows).filter(([, window]) => window.publicId !== view.publicId),
+    );
+    if (view.undoUntil !== null && view.toolCallId) {
+      next[view.toolCallId] = { publicId: view.publicId, undoUntil: view.undoUntil };
+    }
+    return next;
+  }
+
+  // DEV_NOTE: The undo windows still open at now
+  static openUndoWindows(
+    windows: Record<string, Schemas.ConversationUndoWindow>,
+    now: number,
+  ): Record<string, Schemas.ConversationUndoWindow> {
+    return Object.fromEntries(
+      Object.entries(windows).filter(([, window]) => window.undoUntil > now),
+    );
+  }
+
+  // DEV_NOTE: Whether the user may undo it now (M3-7), else why not: Verified with no undo under way, its tool has an
+  // inverse_op, its values not purged, and before its undo_until
+  static undoRefusal(
+    row: Schemas.ChangeRequestRow,
+    now: number,
+  ): Schemas.ChangeRequestFailureEnum | null {
+    if (
+      row.status !== Schemas.ChangeRequestStatusIntEnum.Verified ||
+      ChangeRequestsProvider.isUserUndoing(row)
+    ) {
+      return Schemas.ChangeRequestFailureEnum.InvalidTransition;
+    }
+    if (!row.isUndoable) return Schemas.ChangeRequestFailureEnum.NotUndoable;
+    if (!row.undoUntil || now >= row.undoUntil.getTime() || !row.encryptedChanges) {
+      return Schemas.ChangeRequestFailureEnum.UndoWindowClosed;
+    }
+    return null;
+  }
+
   // DEV_NOTE: The change request's status from how its commit's host call ended: Succeeded or AlreadyApplied →
   // Committed (then read back: verifyEnd); Unknown → NeedsHuman; any other outcome → Failed when nothing may have
-  // landed, else NeedsHuman (a token refused after a send that may have landed is never resent here: M3-8). A resume
-  // that sent nothing this time (attempts 0) proves nothing about the earlier attempt, so it can't end Failed either.
+  // landed, else NeedsHuman. A missing or refused token gets here only once the DO asked the widget for a fresh one and
+  // that one was refused too (M3-8); with no fresh token the DO waits instead. A resume that sent nothing this time
+  // (attempts 0) proves nothing about the earlier attempt, so it can't end Failed either.
   static commitEnd(
     hostCall: Schemas.FinishCommitRequest["hostCall"],
     isResume: boolean,
@@ -70,12 +200,16 @@ export default class ChangeRequestsProvider {
     }
   }
 
-  // DEV_NOTE: The auto-undo's end: its host call succeeded (or an Emulated check proved it already landed) and the
-  // record reads back as before → Undone; it succeeded but doesn't read back so → NeedsHuman undo_unconfirmed; it
-  // didn't succeed → NeedsHuman undo_failed (the commit landed, so a person must look, whatever the undo did)
+  // DEV_NOTE: An undo's end: its host call succeeded (or an Emulated check proved it already landed) and the record
+  // reads back as before → Undone; it succeeded but doesn't read back so → NeedsHuman undo_unconfirmed; it didn't
+  // succeed → NeedsHuman undo_failed (the auto-undo of a Mismatch: the commit landed wrong, so a person must look,
+  // whatever the undo did). The user's undo of a Verified one (isUserUndo, M3-7) that nothing may have reached the host
+  // (refused, failed or no token, before any send that may have landed) goes back to Verified: the change stands as
+  // checked, and the user may try again within the window.
   static undoEnd(
     undo: Schemas.FinishUndoRequest["undo"],
     check: Schemas.ChangeRequestReadAfterCheck | null,
+    isUserUndo = false,
   ): {
     status: Schemas.ChangeRequestStatusIntEnum;
     errorCode: Schemas.ChangeRequestErrorCodeEnum | null;
@@ -83,6 +217,11 @@ export default class ChangeRequestsProvider {
     const isSent =
       undo.outcome === Schemas.HostCallOutcomeEnum.Succeeded ||
       undo.outcome === Schemas.HostCallOutcomeEnum.AlreadyApplied;
+    const mayHaveLanded =
+      undo.outcome === Schemas.HostCallOutcomeEnum.Unknown || undo.mayHaveLanded === true;
+    if (!isSent && isUserUndo && !mayHaveLanded) {
+      return { status: Schemas.ChangeRequestStatusIntEnum.Verified, errorCode: null };
+    }
     if (!isSent) {
       return {
         status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
@@ -116,6 +255,8 @@ export default class ChangeRequestsProvider {
       case Schemas.ChangeRequestFailureEnum.PastDeadline:
       case Schemas.ChangeRequestFailureEnum.InvalidEdit:
       case Schemas.ChangeRequestFailureEnum.NoChange:
+      case Schemas.ChangeRequestFailureEnum.NotUndoable:
+      case Schemas.ChangeRequestFailureEnum.UndoWindowClosed:
       case Schemas.ChangeRequestFailureEnum.ServerError:
         return Schemas.ChangeRequestErrorCodeEnum.ServerError;
     }
@@ -123,10 +264,12 @@ export default class ChangeRequestsProvider {
 
   // DEV_NOTE: The widget's view. Without a readable payload (purged, M3-7) changes are null, and kind is known only
   // for a destructive tool. editableFields (M3-5) count only while Proposed. toolCallId is the DO's to fill (it holds
-  // the open entries by Think tool call id).
+  // the open entries by Think tool call id). undoUntil (M3-7) only while the user can undo it at now (undoRefusal; the
+  // DO re-checks on the undo itself); undoneBy from the undo key.
   static toView(
     row: Schemas.ChangeRequestRow,
     payload: Schemas.ChangeRequestPayload | null,
+    now: number,
     editableFields: Schemas.ChangeRequestEditableField[] = [],
   ): Schemas.WidgetChangeRequest {
     const kind =
@@ -150,6 +293,12 @@ export default class ChangeRequestsProvider {
       wasEdited: row.wasEdited,
       editableFields: isProposed && payload ? editableFields : [],
       mismatches: payload?.mismatches ?? null,
+      undoUntil:
+        payload && row.undoUntil && ChangeRequestsProvider.undoRefusal(row, now) === null
+          ? row.undoUntil.getTime()
+          : null,
+      isUndoing: ChangeRequestsProvider.isUserUndoing(row),
+      undoneBy: ChangeRequestsProvider.undoneBy(row),
     };
   }
 

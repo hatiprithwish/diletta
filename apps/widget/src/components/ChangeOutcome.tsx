@@ -17,6 +17,8 @@ const OUTCOME_TEXT: Record<Schemas.WidgetChangeOutcomeEnum, string> = {
   [Schemas.WidgetChangeOutcomeEnum.Verified]: "Saved and checked",
   [Schemas.WidgetChangeOutcomeEnum.Undoing]: "Didn't save as expected. Undoing…",
   [Schemas.WidgetChangeOutcomeEnum.Undone]: "Undone. Nothing changed.",
+  [Schemas.WidgetChangeOutcomeEnum.UserUndoing]: "Undoing…",
+  [Schemas.WidgetChangeOutcomeEnum.UserUndone]: "Undone. Back as it was.",
   [Schemas.WidgetChangeOutcomeEnum.Rejected]: "Rejected. Nothing changed.",
   [Schemas.WidgetChangeOutcomeEnum.Expired]: "Expired. Nothing changed.",
   [Schemas.WidgetChangeOutcomeEnum.Failed]: "Couldn't save. Nothing changed.",
@@ -31,7 +33,8 @@ export default function ChangeOutcome({ outcome }: Schemas.WidgetChangeOutcomePr
       className="flex items-center gap-1.5 text-widget-row text-subtle-foreground"
     >
       {(outcome === Schemas.WidgetChangeOutcomeEnum.Saving ||
-        outcome === Schemas.WidgetChangeOutcomeEnum.Undoing) && (
+        outcome === Schemas.WidgetChangeOutcomeEnum.Undoing ||
+        outcome === Schemas.WidgetChangeOutcomeEnum.UserUndoing) && (
         <span className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-border border-t-brand-text" />
       )}
       {outcome === Schemas.WidgetChangeOutcomeEnum.Saved && (
@@ -40,7 +43,8 @@ export default function ChangeOutcome({ outcome }: Schemas.WidgetChangeOutcomePr
       {outcome === Schemas.WidgetChangeOutcomeEnum.Verified && (
         <Checks className="size-3.5 shrink-0 text-brand-text" weight="bold" />
       )}
-      {outcome === Schemas.WidgetChangeOutcomeEnum.Undone && (
+      {(outcome === Schemas.WidgetChangeOutcomeEnum.Undone ||
+        outcome === Schemas.WidgetChangeOutcomeEnum.UserUndone) && (
         <ArrowCounterClockwise className="size-3.5 shrink-0 text-warning" />
       )}
       {(outcome === Schemas.WidgetChangeOutcomeEnum.Rejected ||

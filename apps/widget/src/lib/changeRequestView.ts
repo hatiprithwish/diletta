@@ -64,10 +64,16 @@ export function groupChangeRequests(
 const isProposed = (changeRequest: Schemas.WidgetChangeRequest) =>
   changeRequest.changeRequestStatus === Schemas.ChangeRequestStatusIntEnum.Proposed;
 
+// DEV_NOTE: A record's outcome from its change request. The user's own undo (M3-7) reads apart from the auto-undo of a
+// mismatch: under way while the change request is still Verified (isUndoing), and Undone by the user (undoneBy, from
+// the server: it outlives the purge).
 export function outcomeOf(
-  status: Schemas.ChangeRequestStatusIntEnum,
+  changeRequest: Pick<
+    Schemas.WidgetChangeRequest,
+    "changeRequestStatus" | "isUndoing" | "undoneBy"
+  >,
 ): Schemas.WidgetChangeOutcomeEnum {
-  switch (status) {
+  switch (changeRequest.changeRequestStatus) {
     case Schemas.ChangeRequestStatusIntEnum.Proposed:
       return Schemas.WidgetChangeOutcomeEnum.Waiting;
     case Schemas.ChangeRequestStatusIntEnum.Approved:
@@ -76,11 +82,15 @@ export function outcomeOf(
     case Schemas.ChangeRequestStatusIntEnum.Committed:
       return Schemas.WidgetChangeOutcomeEnum.Saved;
     case Schemas.ChangeRequestStatusIntEnum.Verified:
-      return Schemas.WidgetChangeOutcomeEnum.Verified;
+      return changeRequest.isUndoing
+        ? Schemas.WidgetChangeOutcomeEnum.UserUndoing
+        : Schemas.WidgetChangeOutcomeEnum.Verified;
     case Schemas.ChangeRequestStatusIntEnum.Mismatch:
       return Schemas.WidgetChangeOutcomeEnum.Undoing;
     case Schemas.ChangeRequestStatusIntEnum.Undone:
-      return Schemas.WidgetChangeOutcomeEnum.Undone;
+      return changeRequest.undoneBy === Schemas.ChangeRequestUndoneByEnum.User
+        ? Schemas.WidgetChangeOutcomeEnum.UserUndone
+        : Schemas.WidgetChangeOutcomeEnum.Undone;
     case Schemas.ChangeRequestStatusIntEnum.Rejected:
       return Schemas.WidgetChangeOutcomeEnum.Rejected;
     case Schemas.ChangeRequestStatusIntEnum.Expired:
@@ -203,7 +213,7 @@ function toRecord(
     isIncluded: !review.excluded[changeRequest.publicId],
     isProposed: isProposed(changeRequest),
     wasEdited: changeRequest.wasEdited,
-    outcome: outcomeOf(changeRequest.changeRequestStatus),
+    outcome: outcomeOf(changeRequest),
     status: changeRequest.changeRequestStatus,
   };
 }
@@ -224,6 +234,8 @@ const OUTCOME_WORD: Record<Schemas.WidgetChangeOutcomeEnum, string> = {
   [Schemas.WidgetChangeOutcomeEnum.Verified]: "saved and checked",
   [Schemas.WidgetChangeOutcomeEnum.Undoing]: "being undone",
   [Schemas.WidgetChangeOutcomeEnum.Undone]: "undone",
+  [Schemas.WidgetChangeOutcomeEnum.UserUndoing]: "being undone",
+  [Schemas.WidgetChangeOutcomeEnum.UserUndone]: "undone",
   [Schemas.WidgetChangeOutcomeEnum.Rejected]: "rejected",
   [Schemas.WidgetChangeOutcomeEnum.Expired]: "expired",
   [Schemas.WidgetChangeOutcomeEnum.Failed]: "not saved",
@@ -292,6 +304,7 @@ function settledView(
     records.filter((record) => record.outcome === outcome);
   const verified = withOutcome(Schemas.WidgetChangeOutcomeEnum.Verified);
   const undone = withOutcome(Schemas.WidgetChangeOutcomeEnum.Undone);
+  const userUndone = withOutcome(Schemas.WidgetChangeOutcomeEnum.UserUndone);
   const flagged = withOutcome(Schemas.WidgetChangeOutcomeEnum.NeedsPerson);
   const was = (count: number) => (count === 1 ? "was" : "were");
   const savedNote =
@@ -309,8 +322,12 @@ function settledView(
       mismatchLines: [],
       notes: [
         ...savedNote,
-        ...(undone.length > 0
-          ? [`${listNames(undone.map(recordName))} ${was(undone.length)} undone.`]
+        ...(undone.length + userUndone.length > 0
+          ? [
+              `${listNames([...undone, ...userUndone].map(recordName))} ${was(
+                undone.length + userUndone.length,
+              )} undone.`,
+            ]
           : []),
         isOne
           ? `${names} is flagged for your team. Please leave it as is until they review it.`
@@ -327,6 +344,19 @@ function settledView(
         isOne ? "it" : "them"
       }.${verified.length === 0 ? " Nothing changed." : ""}`,
       mismatchLines: mismatchLinesOf(kind, undone, members),
+      notes: savedNote,
+    };
+  }
+  // DEV_NOTE: The user's own Undo (M3-7): what they undid is back as before; anything still saved says so
+  if (userUndone.length > 0) {
+    const isOne = userUndone.length === 1;
+    return {
+      tone: Schemas.WidgetChangeCardToneEnum.Undone,
+      title: isOne ? "Change undone" : "Changes undone",
+      subtitle: `You undid ${listNames(userUndone.map(recordName))}. ${
+        isOne ? "It's" : "They're"
+      } back as before.`,
+      mismatchLines: [],
       notes: savedNote,
     };
   }
@@ -412,6 +442,9 @@ export function toChangeCard(
     .map((record) => group.members.find((m) => m.publicId === record.changeRequestPublicId))
     .map((member) => member?.expiresAt ?? null)
     .filter((expiresAt): expiresAt is number => expiresAt !== null);
+  // DEV_NOTE: What the card's Undo would undo (M3-7): the server's undoUntil, only while it lies ahead (the card hides
+  // the button when it passes; the DO re-checks the window on the undo itself)
+  const undoUntils = undoableMembers(group.members, Date.now()).map((member) => member.undoUntil);
   const isCollapsed =
     layout === Schemas.WidgetChangeCardLayoutEnum.Bulk && !review.expanded[group.cardId];
   const shown = isCollapsed ? records.slice(0, Schemas.WIDGET_CHANGE_BULK_VISIBLE_ROWS) : records;
@@ -423,7 +456,8 @@ export function toChangeCard(
     layout,
     stage,
     tone: settled?.tone ?? Schemas.WidgetChangeCardToneEnum.Review,
-    isSending: proposed.length > 0 && review.sending[group.cardId] === true,
+    isSending:
+      (proposed.length > 0 || undoUntils.length > 0) && review.sending[group.cardId] === true,
     title: settled && !isPlainSettled ? settled.title : title,
     subtitle,
     mismatchLines: settled?.mismatchLines ?? [],
@@ -436,8 +470,25 @@ export function toChangeCard(
       layout === Schemas.WidgetChangeCardLayoutEnum.Card &&
       proposed.some((record) => record.editFields.some((field) => field.editable !== null)),
     expiresAt: expiries.length > 0 ? Math.min(...expiries) : null,
+    undoCount: undoUntils.length,
+    undoUntil: undoUntils.length > 0 ? Math.min(...undoUntils) : null,
     notice: review.notices[group.cardId] ?? null,
   };
+}
+
+// DEV_NOTE: The members of a card the user can undo now (M3-7): saved and checked, not being undone, before their
+// undoUntil
+export function undoableMembers(
+  members: Schemas.WidgetChangeRequest[],
+  now: number,
+): (Schemas.WidgetChangeRequest & { undoUntil: number })[] {
+  return members.filter(
+    (member): member is Schemas.WidgetChangeRequest & { undoUntil: number } =>
+      member.changeRequestStatus === Schemas.ChangeRequestStatusIntEnum.Verified &&
+      !member.isUndoing &&
+      member.undoUntil !== null &&
+      member.undoUntil > now,
+  );
 }
 
 // DEV_NOTE: Every reply's cards, by reply id

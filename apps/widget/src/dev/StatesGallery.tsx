@@ -28,6 +28,7 @@ const actions: Schemas.WidgetPanelActions = {
   onEditValue: noop,
   onToggleRecord: noop,
   onShowMore: noop,
+  onUndo: noop,
 };
 
 const value = (raw: string | null): Schemas.ChangeRequestValue =>
@@ -83,6 +84,15 @@ function sample(
     wasEdited: false,
     editableFields: options.editableFields ?? [],
     mismatches: options.mismatches ?? null,
+    undoUntil:
+      status === Schemas.ChangeRequestStatusIntEnum.Verified ? Date.now() + 3_600_000 : null,
+    isUndoing: false,
+    undoneBy:
+      status === Schemas.ChangeRequestStatusIntEnum.Undone
+        ? options.mismatches
+          ? Schemas.ChangeRequestUndoneByEnum.System
+          : Schemas.ChangeRequestUndoneByEnum.User
+        : null,
   };
 }
 
@@ -326,6 +336,18 @@ const STATES: Schemas.WidgetGalleryState[] = [
         CLOSE_ASK,
         reply("EXT-B-019 didn't close, so I put it back. The other two are closed.", [
           card(withLast(Schemas.ChangeRequestStatusIntEnum.Undone)),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Undone by you",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("Done. Want me to schedule the next inspection for these three?", [
+          card(closeThree(Schemas.ChangeRequestStatusIntEnum.Undone)),
         ]),
       ],
     },
