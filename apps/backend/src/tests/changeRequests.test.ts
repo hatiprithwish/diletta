@@ -65,6 +65,56 @@ describe("ChangeRequestsProvider.commitEnd", () => {
   });
 });
 
+describe("ChangeRequestsProvider.verifyEnd and undoEnd (M3-6)", () => {
+  const check = (verdict: Schemas.ChangeRequestCheckVerdictEnum) => ({ verdict, mismatches: [] });
+  const { Matches, Differs, Unknown } = Schemas.ChangeRequestCheckVerdictEnum;
+
+  it("verifies a read-after that matches, undoes one that differs, and hands an unknown to a person", () => {
+    expect(ChangeRequestsProvider.verifyEnd(check(Matches))).toEqual({
+      status: Schemas.ChangeRequestStatusIntEnum.Verified,
+      errorCode: null,
+    });
+    expect(ChangeRequestsProvider.verifyEnd(check(Differs))).toEqual({
+      status: Schemas.ChangeRequestStatusIntEnum.Mismatch,
+      errorCode: null,
+    });
+    expect(ChangeRequestsProvider.verifyEnd(check(Unknown))).toEqual({
+      status: NeedsHuman,
+      errorCode: Schemas.ChangeRequestErrorCodeEnum.VerifyUnknown,
+    });
+  });
+
+  it("ends an undo Undone only when it succeeded and the record reads back as before", () => {
+    const sent = { outcome: Outcome.Succeeded, attempts: 1 };
+    expect(ChangeRequestsProvider.undoEnd(sent, check(Matches)).status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Undone,
+    );
+    expect(
+      ChangeRequestsProvider.undoEnd(
+        { outcome: Outcome.AlreadyApplied, attempts: 0 },
+        check(Matches),
+      ).status,
+    ).toBe(Schemas.ChangeRequestStatusIntEnum.Undone);
+    for (const after of [check(Differs), check(Unknown), null]) {
+      expect(ChangeRequestsProvider.undoEnd(sent, after)).toEqual({
+        status: NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoUnconfirmed,
+      });
+    }
+    for (const outcome of [
+      Outcome.Unknown,
+      Outcome.Refused,
+      Outcome.Failed,
+      Outcome.TokenRejected,
+    ]) {
+      expect(ChangeRequestsProvider.undoEnd({ outcome, attempts: 1 }, check(Matches))).toEqual({
+        status: NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoFailed,
+      });
+    }
+  });
+});
+
 describe("ChangeRequestsProvider deadline and view", () => {
   it("puts the deadline at created_at + the approval expiry", () => {
     const deadline = 1_000 + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS;
@@ -84,11 +134,13 @@ describe("ChangeRequestsProvider deadline and view", () => {
 
   it("offers editable fields only while Proposed with a readable payload, and leaves the tool call id to the DO", () => {
     const payload: Schemas.ChangeRequestPayload = {
-      version: 1,
+      version: 2,
       kind: Schemas.ChangeRequestKindEnum.Update,
       args: { recordId: "rec_alpha", amount: 1 },
       before: null,
       changes: [],
+      result: null,
+      mismatches: null,
     };
     const editable: Schemas.ChangeRequestEditableField[] = [
       {

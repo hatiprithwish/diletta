@@ -242,10 +242,14 @@ export type PreparedTurn<TModel, TCaps> =
 // without a pause, or approved and handed to Think. Committing: its commit started; one still Committing on a wake
 // was cut by an eviction and is resumed. executionId is Think's durable-pause id, read after the turn parks. turnId is
 // the turn that proposed it.
+// DEV_NOTE: Where an open change request stands in the DO: waiting for the user, approved, committing, then (M3-6)
+// its read-after (verifying) and a mismatch's auto-undo (undoing). Every stage past pending resumes on the host token.
 export enum ConversationChangeRequestStageEnum {
   Pending = "pending",
   Approved = "approved",
   Committing = "committing",
+  Verifying = "verifying",
+  Undoing = "undoing",
 }
 
 export const ZConversationChangeRequestEntry = z.object({

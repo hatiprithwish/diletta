@@ -47,15 +47,41 @@ export enum WidgetChangeCardStageEnum {
   Settled = "settled",
 }
 
-// DEV_NOTE: How one record's change stands, in DESIGN.md §8 words (the status line under a decided record)
+// DEV_NOTE: How one record's change stands, in DESIGN.md §8 words (the status line under a decided record). Saved =
+// committed, its read-after still to come; Verified = saved and read back as set (M3-6); Undoing / Undone = it didn't
+// read back as set, so it is being / was put back.
 export enum WidgetChangeOutcomeEnum {
   Waiting = "waiting",
   Saving = "saving",
   Saved = "saved",
+  Verified = "verified",
+  Undoing = "undoing",
+  Undone = "undone",
   Rejected = "rejected",
   Expired = "expired",
   Failed = "failed",
   NeedsPerson = "needs_person",
+}
+
+// DEV_NOTE: How a settled card reads (M3-6, DESIGN.md §7): verified = every record saved and checked (widget-Verified);
+// undone = a record didn't save as expected and was put back (widget-MismatchAutoUndone); needs_person = one needs a
+// person (widget-MismatchNeedsHuman); plain = any other mix (rejected, expired, failed), counted in the subtitle.
+// review covers a card still waiting for the user.
+export enum WidgetChangeCardToneEnum {
+  Review = "review",
+  Verified = "verified",
+  Undone = "undone",
+  NeedsPerson = "needs_person",
+  Plain = "plain",
+}
+
+// DEV_NOTE: One field the read-after found other than the change set it: the record's label (mono; null for a new
+// record), the field, what was expected and what was found, as display text (null = empty)
+export interface WidgetMismatchLineView {
+  label: string | null;
+  field: string;
+  expected: string | null;
+  found: string | null;
 }
 
 // DEV_NOTE: One diff line: the field (a machine value, mono), what the record holds and what the change sets, as
@@ -95,9 +121,14 @@ export interface WidgetChangeCardView {
   kind: ChangeRequestKindEnum | null;
   layout: WidgetChangeCardLayoutEnum;
   stage: WidgetChangeCardStageEnum;
+  tone: WidgetChangeCardToneEnum;
   isSending: boolean;
   title: string;
   subtitle: string;
+  // DEV_NOTE: A settled card's own lines (M3-6): what a mismatch found (undone), which records saved and which one is
+  // flagged (needs_person); empty otherwise
+  mismatchLines: WidgetMismatchLineView[];
+  notes: string[];
   records: WidgetChangeRecordView[];
   hiddenCount: number;
   includedCount: number;

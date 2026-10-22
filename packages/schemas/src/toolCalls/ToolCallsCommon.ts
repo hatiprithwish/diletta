@@ -85,7 +85,8 @@ export interface RuntimeTool {
 export const HOST_TOOL_OUTPUT_MAX_CHARS = 8_000;
 
 // DEV_NOTE: What a host tool call returns (transcript, widget, model). Ok carries a read tool's host response (data);
-// Committed / Failed / NeedsReview end an approved write; NoChange = the record already holds every value, so nothing
+// Verified / Undone / Failed / NeedsReview end an approved write (M3-6: Verified = made and read back as set; Undone =
+// it didn't read back as set, so it was undone; Committed = made, its read-after still to come); NoChange = the record already holds every value, so nothing
 // was proposed; Proposed is never returned (a proposal parks the turn: Think's paused output). message is safe text
 // for the model: no values, no host text. changeRequestId is the change request's public id.
 export enum HostToolStatusEnum {
@@ -94,6 +95,8 @@ export enum HostToolStatusEnum {
   Blocked = "blocked",
   NoChange = "no_change",
   Committed = "committed",
+  Verified = "verified",
+  Undone = "undone",
   Failed = "failed",
   NeedsReview = "needs_review",
 }

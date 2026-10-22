@@ -1,8 +1,8 @@
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The change request rules ActionEngineRepo applies (M3-4), pure so they are unit-tested on their own: the
-// approval deadline, the status a commit's host call ends in, the error code a refused step stores, and the widget's
-// view of a row.
+// approval deadline, the status a commit's host call ends in, the status its read-after and auto-undo end in (M3-6),
+// the error code a refused step stores, and the widget's view of a row.
 export default class ChangeRequestsProvider {
   // DEV_NOTE: The one approval deadline: the row's created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS (the DO schedules
   // its expiry at the same time; the database enforces it on an approval)
@@ -15,7 +15,7 @@ export default class ChangeRequestsProvider {
   }
 
   // DEV_NOTE: The change request's status from how its commit's host call ended: Succeeded or AlreadyApplied →
-  // Committed (verified by read-after in M3-6); Unknown → NeedsHuman; any other outcome → Failed when nothing may have
+  // Committed (then read back: verifyEnd); Unknown → NeedsHuman; any other outcome → Failed when nothing may have
   // landed, else NeedsHuman (a token refused after a send that may have landed is never resent here: M3-8). A resume
   // that sent nothing this time (attempts 0) proves nothing about the earlier attempt, so it can't end Failed either.
   static commitEnd(
@@ -48,6 +48,54 @@ export default class ChangeRequestsProvider {
         };
       }
     }
+  }
+
+  // DEV_NOTE: The read-after's end (Schemas.checkReadAfter, step Commit): the record shows the change → Verified; it
+  // shows something else → Mismatch (then auto-undone: undoStart); the read couldn't tell → NeedsHuman, never an
+  // undo on a guess. (A read that couldn't even be sent for want of the token is the DO's to wait on, never here.)
+  static verifyEnd(check: Schemas.ChangeRequestReadAfterCheck): {
+    status: Schemas.ChangeRequestStatusIntEnum;
+    errorCode: Schemas.ChangeRequestErrorCodeEnum | null;
+  } {
+    switch (check.verdict) {
+      case Schemas.ChangeRequestCheckVerdictEnum.Matches:
+        return { status: Schemas.ChangeRequestStatusIntEnum.Verified, errorCode: null };
+      case Schemas.ChangeRequestCheckVerdictEnum.Differs:
+        return { status: Schemas.ChangeRequestStatusIntEnum.Mismatch, errorCode: null };
+      case Schemas.ChangeRequestCheckVerdictEnum.Unknown:
+        return {
+          status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+          errorCode: Schemas.ChangeRequestErrorCodeEnum.VerifyUnknown,
+        };
+    }
+  }
+
+  // DEV_NOTE: The auto-undo's end: its host call succeeded (or an Emulated check proved it already landed) and the
+  // record reads back as before → Undone; it succeeded but doesn't read back so → NeedsHuman undo_unconfirmed; it
+  // didn't succeed → NeedsHuman undo_failed (the commit landed, so a person must look, whatever the undo did)
+  static undoEnd(
+    undo: Schemas.FinishUndoRequest["undo"],
+    check: Schemas.ChangeRequestReadAfterCheck | null,
+  ): {
+    status: Schemas.ChangeRequestStatusIntEnum;
+    errorCode: Schemas.ChangeRequestErrorCodeEnum | null;
+  } {
+    const isSent =
+      undo.outcome === Schemas.HostCallOutcomeEnum.Succeeded ||
+      undo.outcome === Schemas.HostCallOutcomeEnum.AlreadyApplied;
+    if (!isSent) {
+      return {
+        status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoFailed,
+      };
+    }
+    if (check?.verdict === Schemas.ChangeRequestCheckVerdictEnum.Matches) {
+      return { status: Schemas.ChangeRequestStatusIntEnum.Undone, errorCode: null };
+    }
+    return {
+      status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+      errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoUnconfirmed,
+    };
   }
 
   // DEV_NOTE: What a commit refused before its host call stores as error_code
@@ -101,6 +149,7 @@ export default class ChangeRequestsProvider {
       isUndoable: row.isUndoable,
       wasEdited: row.wasEdited,
       editableFields: isProposed && payload ? editableFields : [],
+      mismatches: payload?.mismatches ?? null,
     };
   }
 

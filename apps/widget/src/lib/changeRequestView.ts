@@ -74,16 +74,19 @@ export function outcomeOf(
     case Schemas.ChangeRequestStatusIntEnum.Committing:
       return Schemas.WidgetChangeOutcomeEnum.Saving;
     case Schemas.ChangeRequestStatusIntEnum.Committed:
-    case Schemas.ChangeRequestStatusIntEnum.Verified:
       return Schemas.WidgetChangeOutcomeEnum.Saved;
-    case Schemas.ChangeRequestStatusIntEnum.Rejected:
+    case Schemas.ChangeRequestStatusIntEnum.Verified:
+      return Schemas.WidgetChangeOutcomeEnum.Verified;
+    case Schemas.ChangeRequestStatusIntEnum.Mismatch:
+      return Schemas.WidgetChangeOutcomeEnum.Undoing;
     case Schemas.ChangeRequestStatusIntEnum.Undone:
+      return Schemas.WidgetChangeOutcomeEnum.Undone;
+    case Schemas.ChangeRequestStatusIntEnum.Rejected:
       return Schemas.WidgetChangeOutcomeEnum.Rejected;
     case Schemas.ChangeRequestStatusIntEnum.Expired:
       return Schemas.WidgetChangeOutcomeEnum.Expired;
     case Schemas.ChangeRequestStatusIntEnum.Failed:
       return Schemas.WidgetChangeOutcomeEnum.Failed;
-    case Schemas.ChangeRequestStatusIntEnum.Mismatch:
     case Schemas.ChangeRequestStatusIntEnum.NeedsHuman:
       return Schemas.WidgetChangeOutcomeEnum.NeedsPerson;
   }
@@ -218,6 +221,9 @@ const OUTCOME_WORD: Record<Schemas.WidgetChangeOutcomeEnum, string> = {
   [Schemas.WidgetChangeOutcomeEnum.Waiting]: "waiting",
   [Schemas.WidgetChangeOutcomeEnum.Saving]: "saving",
   [Schemas.WidgetChangeOutcomeEnum.Saved]: "saved",
+  [Schemas.WidgetChangeOutcomeEnum.Verified]: "saved and checked",
+  [Schemas.WidgetChangeOutcomeEnum.Undoing]: "being undone",
+  [Schemas.WidgetChangeOutcomeEnum.Undone]: "undone",
   [Schemas.WidgetChangeOutcomeEnum.Rejected]: "rejected",
   [Schemas.WidgetChangeOutcomeEnum.Expired]: "expired",
   [Schemas.WidgetChangeOutcomeEnum.Failed]: "not saved",
@@ -232,6 +238,118 @@ function settledSummary(records: Schemas.WidgetChangeRecordView[]): string {
   );
   const summary = parts.join(", ");
   return `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.`;
+}
+
+// DEV_NOTE: "A", "A and B", "A, B and C"
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+const recordName = (record: Schemas.WidgetChangeRecordView) => record.label ?? "the new record";
+
+const SAVED_WORD: Record<Schemas.ChangeRequestKindEnum | "change", string> = {
+  [Schemas.ChangeRequestKindEnum.Update]: "updated",
+  [Schemas.ChangeRequestKindEnum.Create]: "added",
+  [Schemas.ChangeRequestKindEnum.Delete]: "deleted",
+  change: "changed",
+};
+
+// DEV_NOTE: What the read-after found, per undone record (DESIGN.md widget-MismatchAutoUndone: expected vs found). A
+// delete that didn't remove the record shows that, not its fields.
+function mismatchLinesOf(
+  kind: Schemas.ChangeRequestKindEnum | null,
+  records: Schemas.WidgetChangeRecordView[],
+  members: Schemas.WidgetChangeRequest[],
+): Schemas.WidgetMismatchLineView[] {
+  return records.flatMap((record) => {
+    const mismatches =
+      members.find((member) => member.publicId === record.changeRequestPublicId)?.mismatches ?? [];
+    if (kind === Schemas.ChangeRequestKindEnum.Delete) {
+      const [first] = mismatches;
+      return first
+        ? [{ label: record.label, field: first.field, expected: "Deleted", found: "Still there" }]
+        : [];
+    }
+    return mismatches.map((mismatch) => ({
+      label: record.label,
+      field: mismatch.field,
+      expected: displayValue(mismatch.expected),
+      found: displayValue(mismatch.found),
+    }));
+  });
+}
+
+// DEV_NOTE: A settled card's tone and words (DESIGN.md §7–8: say what did NOT happen). A record that needs a person
+// leads, then one that was undone; a card whose every record was saved and checked says so; any other mix counts its
+// outcomes. Each record stands on its own (one change request = one record): an undone one never undoes the others.
+function settledView(
+  kind: Schemas.ChangeRequestKindEnum | null,
+  records: Schemas.WidgetChangeRecordView[],
+  members: Schemas.WidgetChangeRequest[],
+): Pick<Schemas.WidgetChangeCardView, "tone" | "title" | "subtitle" | "mismatchLines" | "notes"> {
+  const withOutcome = (outcome: Schemas.WidgetChangeOutcomeEnum) =>
+    records.filter((record) => record.outcome === outcome);
+  const verified = withOutcome(Schemas.WidgetChangeOutcomeEnum.Verified);
+  const undone = withOutcome(Schemas.WidgetChangeOutcomeEnum.Undone);
+  const flagged = withOutcome(Schemas.WidgetChangeOutcomeEnum.NeedsPerson);
+  const was = (count: number) => (count === 1 ? "was" : "were");
+  const savedNote =
+    verified.length > 0
+      ? [`${listNames(verified.map(recordName))} ${was(verified.length)} saved and checked.`]
+      : [];
+
+  if (flagged.length > 0) {
+    const isOne = flagged.length === 1;
+    const names = listNames(flagged.map(recordName));
+    return {
+      tone: Schemas.WidgetChangeCardToneEnum.NeedsPerson,
+      title: isOne ? "This change needs a person" : "These changes need a person",
+      subtitle: `I couldn't confirm ${names} saved correctly.`,
+      mismatchLines: [],
+      notes: [
+        ...savedNote,
+        ...(undone.length > 0
+          ? [`${listNames(undone.map(recordName))} ${was(undone.length)} undone.`]
+          : []),
+        isOne
+          ? `${names} is flagged for your team. Please leave it as is until they review it.`
+          : `${names} are flagged for your team. Please leave them as they are until they review them.`,
+      ],
+    };
+  }
+  if (undone.length > 0) {
+    const isOne = undone.length === 1;
+    return {
+      tone: Schemas.WidgetChangeCardToneEnum.Undone,
+      title: isOne ? "Change undone" : "Changes undone",
+      subtitle: `The app didn't save ${listNames(undone.map(recordName))} as expected, so I undid ${
+        isOne ? "it" : "them"
+      }.${verified.length === 0 ? " Nothing changed." : ""}`,
+      mismatchLines: mismatchLinesOf(kind, undone, members),
+      notes: savedNote,
+    };
+  }
+  if (verified.length === records.length && records.length > 0) {
+    const word = SAVED_WORD[KIND_KEY(kind)];
+    const isOne = records.length === 1;
+    return {
+      tone: Schemas.WidgetChangeCardToneEnum.Verified,
+      title: isOne ? `Record ${word}` : `${records.length} records ${word}`,
+      subtitle: isOne
+        ? "Saved and checked: the record matches the change."
+        : "Saved and checked: each record matches the change.",
+      mismatchLines: [],
+      notes: [],
+    };
+  }
+  return {
+    tone: Schemas.WidgetChangeCardToneEnum.Plain,
+    title: "",
+    subtitle: "",
+    mismatchLines: [],
+    notes: [],
+  };
 }
 
 export function toChangeCard(
@@ -265,22 +383,30 @@ export function toChangeCard(
           ? `${verb} a record`
           : `${verb} ${plural(records.length, "record")}`;
 
+  const settled =
+    stage === Schemas.WidgetChangeCardStageEnum.Settled
+      ? settledView(kind, records, group.members)
+      : null;
+  const isPlainSettled = settled?.tone === Schemas.WidgetChangeCardToneEnum.Plain;
+
   const fields = new Set(records.flatMap((record) => record.lines.map((line) => line.field)));
   const subtitle =
-    stage === Schemas.WidgetChangeCardStageEnum.Settled
-      ? settledSummary(records)
-      : stage === Schemas.WidgetChangeCardStageEnum.Editing
-        ? "Your edits are checked again before anything is saved."
-        : layout === Schemas.WidgetChangeCardLayoutEnum.Bulk
-          ? [
-              fields.size === 1 ? `${[...fields][0]} only.` : null,
-              unticked > 0
-                ? `You unticked ${plural(unticked, "record")}.`
-                : "Untick any you want to keep as they are.",
-            ]
-              .filter(Boolean)
-              .join(" ")
-          : "Nothing is saved until you approve.";
+    settled && !isPlainSettled
+      ? settled.subtitle
+      : stage === Schemas.WidgetChangeCardStageEnum.Settled
+        ? settledSummary(records)
+        : stage === Schemas.WidgetChangeCardStageEnum.Editing
+          ? "Your edits are checked again before anything is saved."
+          : layout === Schemas.WidgetChangeCardLayoutEnum.Bulk
+            ? [
+                fields.size === 1 ? `${[...fields][0]} only.` : null,
+                unticked > 0
+                  ? `You unticked ${plural(unticked, "record")}.`
+                  : "Untick any you want to keep as they are.",
+              ]
+                .filter(Boolean)
+                .join(" ")
+            : "Nothing is saved until you approve.";
 
   const expiries = proposed
     .map((record) => group.members.find((m) => m.publicId === record.changeRequestPublicId))
@@ -296,9 +422,12 @@ export function toChangeCard(
     kind,
     layout,
     stage,
+    tone: settled?.tone ?? Schemas.WidgetChangeCardToneEnum.Review,
     isSending: proposed.length > 0 && review.sending[group.cardId] === true,
-    title,
+    title: settled && !isPlainSettled ? settled.title : title,
     subtitle,
+    mismatchLines: settled?.mismatchLines ?? [],
+    notes: settled?.notes ?? [],
     records: shown,
     hiddenCount: records.length - shown.length,
     includedCount: included.length,
@@ -344,6 +473,10 @@ export function hostToolStepLabel(part: Parameters<typeof getToolName>[0]): {
   switch (parsed.data.status) {
     case Schemas.HostToolStatusEnum.Committed:
       return { label: "Change saved", isFailed: false };
+    case Schemas.HostToolStatusEnum.Verified:
+      return { label: "Change saved and checked", isFailed: false };
+    case Schemas.HostToolStatusEnum.Undone:
+      return { label: "Change undone", isFailed: true };
     case Schemas.HostToolStatusEnum.Failed:
       return { label: "Change not saved", isFailed: true };
     case Schemas.HostToolStatusEnum.NeedsReview:

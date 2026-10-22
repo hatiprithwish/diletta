@@ -56,6 +56,7 @@ function sample(
   options: {
     status?: Schemas.ChangeRequestStatusIntEnum;
     editableFields?: Schemas.ChangeRequestEditableField[];
+    mismatches?: Schemas.ChangeRequestMismatch[];
   } = {},
 ): Schemas.WidgetChangeRequest {
   const status = options.status ?? Schemas.ChangeRequestStatusIntEnum.Proposed;
@@ -81,6 +82,7 @@ function sample(
     isUndoable: true,
     wasEdited: false,
     editableFields: options.editableFields ?? [],
+    mismatches: options.mismatches ?? null,
   };
 }
 
@@ -95,6 +97,16 @@ const closeThree = (status?: Schemas.ChangeRequestStatusIntEnum) =>
       editableFields: [EDITABLE_STATUS, EDITABLE_DATE],
     }),
   );
+
+// DEV_NOTE: M3-6's settled cards: every record checked; one didn't save as expected and was undone; one needs a person
+const STATUS_NOT_SAVED: Schemas.ChangeRequestMismatch[] = [
+  { field: "status", expected: value("Closed"), found: value("Open") },
+];
+const checkedThree = () => closeThree(Schemas.ChangeRequestStatusIntEnum.Verified);
+const withLast = (status: Schemas.ChangeRequestStatusIntEnum) => [
+  ...checkedThree().slice(0, 2),
+  sample("cr2", "EXT-B-019", CLOSE_CHANGES, { status, mismatches: STATUS_NOT_SAVED }),
+];
 
 const reviewOf = (members: Schemas.WidgetChangeRequest[]): Schemas.WidgetChangeReviewState => ({
   ...EMPTY_REVIEW,
@@ -290,6 +302,42 @@ const STATES: Schemas.WidgetGalleryState[] = [
               status: Schemas.ChangeRequestStatusIntEnum.Rejected,
             }),
           ]),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Verified",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("Done. Want me to schedule the next inspection for these three?", [
+          card(checkedThree()),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Changes undone",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("EXT-B-019 didn't close, so I put it back. The other two are closed.", [
+          card(withLast(Schemas.ChangeRequestStatusIntEnum.Undone)),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Needs a person",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("I couldn't confirm EXT-B-019. Your team will check it.", [
+          card(withLast(Schemas.ChangeRequestStatusIntEnum.NeedsHuman)),
         ]),
       ],
     },

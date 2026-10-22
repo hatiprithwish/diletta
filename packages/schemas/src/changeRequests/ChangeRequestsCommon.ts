@@ -81,21 +81,54 @@ export const ZChangeRequestChange = z.object({
 });
 export type ChangeRequestChange = z.infer<typeof ZChangeRequestChange>;
 
+// DEV_NOTE: One compare field the read-after (M3-6) found other than the commit set it: expected = what the commit
+// sent (absent for a delete: the record should be gone), found = what the record shows. Host data, like a diff row.
+export const ZChangeRequestMismatch = z.object({
+  field: z.string(),
+  expected: ZChangeRequestValue,
+  found: ZChangeRequestValue,
+});
+export type ChangeRequestMismatch = z.infer<typeof ZChangeRequestMismatch>;
+
 // DEV_NOTE: change_requests.encrypted_changes, as JSON before encryption (CompanyKeyProvider): the validated args the
-// commit sends, the read-before response (the {before.*} of the undo, M3-7; null when there was no read-before) and
-// the diff the user approved. Purged after the undo window (M3-7). version = this payload's own shape.
-export const ZChangeRequestPayload = z.object({
+// commit sends, the read-before response (the {before.*} of the undo; null when there was no read-before) and the
+// diff the user approved. v2 (M3-6) adds the commit's response (result: the {result.*} of the read-after and the undo,
+// null until the commit answers or when its body was empty or unreadable) and what the read-after found other than
+// the commit set (mismatches, null until a read-after found any). Purged after the undo window (M3-7). version = this
+// payload's own shape: never edit a released one; parseChangeRequestPayload upgrades an older one on read.
+export const ZChangeRequestPayloadV1 = z.object({
   version: z.literal(1),
   kind: z.enum(ChangeRequestKindEnum),
   args: z.record(z.string(), z.json()),
   before: z.json().nullable(),
   changes: z.array(ZChangeRequestChange),
 });
+
+export const ZChangeRequestPayload = z.object({
+  version: z.literal(2),
+  kind: z.enum(ChangeRequestKindEnum),
+  args: z.record(z.string(), z.json()),
+  before: z.json().nullable(),
+  changes: z.array(ZChangeRequestChange),
+  result: z.json().nullable(),
+  mismatches: z.array(ZChangeRequestMismatch).nullable(),
+});
 export type ChangeRequestPayload = z.infer<typeof ZChangeRequestPayload>;
+
+// DEV_NOTE: A stored payload at today's shape (v1 → v2: no result or mismatches yet), or null when it is neither
+export function parseChangeRequestPayload(value: unknown): ChangeRequestPayload | null {
+  const current = ZChangeRequestPayload.safeParse(value);
+  if (current.success) return current.data;
+  const v1 = ZChangeRequestPayloadV1.safeParse(value);
+  if (!v1.success) return null;
+  return { ...v1.data, version: 2, result: null, mismatches: null };
+}
 
 // DEV_NOTE: change_requests.error_code: why a change request ended Failed or NeedsHuman. The step was refused before
 // the host call (the conversation, chatbot, company or tool no longer allowed it, or the payload couldn't be read), or
-// the host call ended so (@app/adapter outcome).
+// the host call ended so (@app/adapter outcome). After a commit landed (M3-6): the read-after couldn't tell whether the
+// record shows the change (verify_unknown); it didn't, and the tool has no inverse_op (not_undoable); the undo didn't
+// succeed (undo_failed), or it did but the record doesn't read back as before (undo_unconfirmed).
 export enum ChangeRequestErrorCodeEnum {
   ConversationClosed = "conversation_closed",
   ChatbotUnavailable = "chatbot_unavailable",
@@ -108,6 +141,10 @@ export enum ChangeRequestErrorCodeEnum {
   HostRefused = "host_refused",
   HostFailed = "host_failed",
   HostUnknown = "host_unknown",
+  VerifyUnknown = "verify_unknown",
+  NotUndoable = "not_undoable",
+  UndoFailed = "undo_failed",
+  UndoUnconfirmed = "undo_unconfirmed",
 }
 
 // Whole Change Request Body — DB shape (status stored as integer)
@@ -177,7 +214,8 @@ export type ChangeRequestEditableField = z.infer<typeof ZChangeRequestEditableFi
 // tool no longer loads). toolCallId is Think's tool call id (the model's, already in the transcript; not a database
 // id): the widget shows the card in the reply that made the call. null when the DO no longer holds the open entry
 // (the call's own output then names the change request). wasEdited: the user changed values (M3-5), so the diff is the
-// re-checked one. Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
+// re-checked one. mismatches (M3-6): what the read-after found other than the commit set (null when it found none, or
+// once purged), host data like changes. Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
 export const ZWidgetChangeRequest = z.object({
   publicId: z.string(),
   toolName: z.string(),
@@ -192,6 +230,7 @@ export const ZWidgetChangeRequest = z.object({
   isUndoable: z.boolean(),
   wasEdited: z.boolean(),
   editableFields: z.array(ZChangeRequestEditableField),
+  mismatches: z.array(ZChangeRequestMismatch).nullable(),
 });
 export type WidgetChangeRequest = z.infer<typeof ZWidgetChangeRequest>;
 
@@ -247,8 +286,9 @@ export enum ChangeRequestFailureEnum {
 // (M4-5) reads straight from activity_log. Spelled once here, since the dedupe key is what makes a repeat a no-op.
 export const CHANGE_REQUEST_ENTITY_TYPE = "change_request";
 
-// DEV_NOTE: Edited (M3-5) is the one event that isn't a status change: the user changed a Proposed one's values (it
-// stays Proposed). Each edit is its own event (an edit id part in the dedupe key).
+// DEV_NOTE: Edited (M3-5) and Undoing (M3-6) are the events that aren't a status change: the user changed a Proposed
+// one's values (it stays Proposed; each edit is its own event, an edit id part in the dedupe key), and the auto-undo
+// of a Mismatch started (its key stored first; a resumed undo writes another, with an attempt part).
 export enum ChangeRequestEntityActionEnum {
   Proposed = "proposed",
   Edited = "edited",
@@ -259,6 +299,10 @@ export enum ChangeRequestEntityActionEnum {
   Committed = "committed",
   Failed = "failed",
   NeedsHuman = "needs_human",
+  Verified = "verified",
+  Mismatch = "mismatch",
+  Undoing = "undoing",
+  Undone = "undone",
 }
 
 export const CHANGE_REQUEST_STATUS_ENTITY_ACTION_MAP: Partial<
@@ -272,6 +316,9 @@ export const CHANGE_REQUEST_STATUS_ENTITY_ACTION_MAP: Partial<
   [ChangeRequestStatusIntEnum.Committed]: ChangeRequestEntityActionEnum.Committed,
   [ChangeRequestStatusIntEnum.Failed]: ChangeRequestEntityActionEnum.Failed,
   [ChangeRequestStatusIntEnum.NeedsHuman]: ChangeRequestEntityActionEnum.NeedsHuman,
+  [ChangeRequestStatusIntEnum.Verified]: ChangeRequestEntityActionEnum.Verified,
+  [ChangeRequestStatusIntEnum.Mismatch]: ChangeRequestEntityActionEnum.Mismatch,
+  [ChangeRequestStatusIntEnum.Undone]: ChangeRequestEntityActionEnum.Undone,
 };
 
 export const changeRequestEventType = (action: ChangeRequestEntityActionEnum): string =>
@@ -286,6 +333,10 @@ export const changeRequestEventDedupeKey = (
 ): string => [changeRequestEventType(action), changeRequestPublicId, ...parts].join(":");
 
 // DEV_NOTE: The commit's Idempotency-Key (Native) and change_requests.idempotency_key: one per change request and step,
-// the same on every attempt and every resume (an undo, M3-7, uses its own)
+// the same on every attempt and every resume. Its undo uses its own (changeRequestUndoIdempotencyKey), stored in
+// idempotency_key when the undo starts, so a Mismatch holding it may have sent its undo already (a resume).
 export const changeRequestCommitIdempotencyKey = (changeRequestPublicId: string): string =>
   `cr-${changeRequestPublicId}-commit`;
+
+export const changeRequestUndoIdempotencyKey = (changeRequestPublicId: string): string =>
+  `cr-${changeRequestPublicId}-undo`;

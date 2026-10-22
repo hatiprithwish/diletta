@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -56,6 +56,7 @@ let sessionA: Schemas.ConversationSession;
 const extraSessions: Schemas.ConversationSession[] = [];
 let sessionB: Schemas.ConversationSession;
 let hostToken = "";
+let hostWorkspace = "";
 // DEV_NOTE: Each fixture conversation's conversation.started root log, which every change request event hangs under
 const rootLogIds = new Map<string, string>();
 
@@ -163,10 +164,10 @@ async function propose(
   session: Schemas.ConversationSession,
   amount: number,
   isApprovalRequired = true,
+  before: unknown = { data: { id: "rec_alpha", amount: 120 } },
 ) {
   const tool = await loadUpdateTool(session);
   const args = { recordId: "rec_alpha", amount };
-  const before = { data: { id: "rec_alpha", amount: 120 } };
   const kind = Schemas.ChangeRequestKindEnum.Update;
   const proposed = await new ActionEngineRepo(env).proposeChange({
     session,
@@ -216,6 +217,63 @@ const startCommit = (session: Schemas.ConversationSession, changeRequestPublicId
     attemptId: Utility.generateUlid(),
   });
 
+// DEV_NOTE: A commit plan for a change request that isn't the caller's (cross-company): the step must refuse it first
+async function forgedPlan(changeRequestPublicId: string): Promise<Schemas.CommitPlan> {
+  return {
+    changeRequestPublicId,
+    tool: await loadUpdateTool(sessionA),
+    payload: {
+      version: 2,
+      kind: Schemas.ChangeRequestKindEnum.Update,
+      args: { recordId: "rec_alpha", amount: 1 },
+      before: null,
+      changes: [],
+      result: null,
+      mismatches: null,
+    },
+    idempotencyKey: Schemas.changeRequestCommitIdempotencyKey(changeRequestPublicId),
+    isResume: false,
+  };
+}
+
+// DEV_NOTE: An approved change to rec_alpha, proposed from the real read-before and committed against the test host:
+// the read-after plan finishCommit hands back (M3-6)
+async function commitAlpha(session: Schemas.ConversationSession, amount: number) {
+  routeTestHostFetch();
+  const repo = new ActionEngineRepo(env);
+  const tool = await loadUpdateTool(session);
+  const read = await HostToolCallProvider.readBefore({
+    tool,
+    args: { recordId: "rec_alpha" },
+    getHostToken: () => hostToken,
+  });
+  const publicId = (await propose(session, amount, false, read.body)).changeRequest!.publicId;
+  const started = await startCommit(session, publicId);
+  const committed = await HostToolCallProvider.commit({
+    plan: started.plan!,
+    getHostToken: () => hostToken,
+  });
+  const finished = await repo.finishCommit({
+    session,
+    changeRequestPublicId: publicId,
+    hostCall: committed,
+    plan: started.plan!,
+  });
+  if (!finished.followUp) throw new Error(`${finished.message}: ${committed.outcome}`);
+  return { publicId, followUp: finished.followUp };
+}
+
+const readAlpha = async () =>
+  (
+    await HostToolCallProvider.readAfter({
+      plan: {
+        tool: await loadUpdateTool(sessionA),
+        payload: (await forgedPlan("x")).payload,
+      },
+      getHostToken: () => hostToken,
+    })
+  ).body as { data?: Record<string, unknown> } | undefined;
+
 // DEV_NOTE: Moves a proposal's created_at back, so its approval deadline has passed
 const ageChangeRequest = (publicId: string, ageMs: number) =>
   withOwnerDb((ownerDb) =>
@@ -253,8 +311,8 @@ const setReadOnly = (companyId: string, isReadOnly: boolean) =>
 beforeAll(async () => {
   sessionA = await createFixture("A");
   sessionB = await createFixture("B");
-  const workspace = newTestHostWorkspace();
-  hostToken = (await mintTestHostTokens(workspace)).hostToken;
+  hostWorkspace = newTestHostWorkspace();
+  hostToken = (await mintTestHostTokens(hostWorkspace)).hostToken;
   await resetTestHost(hostToken);
 });
 
@@ -404,7 +462,7 @@ describe("ActionEngineRepo change requests", () => {
       session: sessionA,
       changeRequestPublicId: publicId,
       hostCall: committed,
-      isResume: false,
+      plan: started.plan!,
     });
     expect(finished.changeRequest?.changeRequestStatus).toBe(
       Schemas.ChangeRequestStatusIntEnum.Committed,
@@ -449,7 +507,7 @@ describe("ActionEngineRepo change requests", () => {
       session: sessionA,
       changeRequestPublicId: publicId,
       hostCall: { outcome: Schemas.HostCallOutcomeEnum.Failed, mayHaveLanded: false, attempts: 0 },
-      isResume: true,
+      plan: resumedAgain.plan!,
     });
     expect(finished.changeRequest?.changeRequestStatus).toBe(
       Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
@@ -475,12 +533,12 @@ describe("ActionEngineRepo change requests", () => {
       const repo = new ActionEngineRepo(env);
       const proposed = await propose(sessionA, 10, false);
       const publicId = proposed.changeRequest!.publicId;
-      await startCommit(sessionA, publicId);
+      const started = await startCommit(sessionA, publicId);
       const finished = await repo.finishCommit({
         session: sessionA,
         changeRequestPublicId: publicId,
         hostCall: { outcome, mayHaveLanded, attempts: 1 },
-        isResume: false,
+        plan: started.plan!,
       });
       expect(finished.changeRequest?.changeRequestStatus).toBe(status);
     },
@@ -628,10 +686,12 @@ function editedPayload(plan: Schemas.EditPlan, amount: number): Schemas.ChangeRe
   const args = { ...plan.payload.args, amount };
   const before = { data: { id: "rec_alpha", amount: 120 } };
   return {
-    version: 1,
+    version: 2,
     kind: plan.payload.kind,
     args,
     before,
+    result: null,
+    mismatches: null,
     changes: Schemas.buildChangeRequestChanges({
       kind: plan.payload.kind,
       callOp: plan.tool.ops.callOp,
@@ -641,6 +701,227 @@ function editedPayload(plan: Schemas.EditPlan, amount: number): Schemas.ChangeRe
     }),
   };
 }
+
+describe("ActionEngineRepo read-after and auto-undo (M3-6)", { timeout: 90_000 }, () => {
+  // DEV_NOTE: The host token lives minutes; the whole file runs longer, so these get a fresh one
+  beforeEach(async () => {
+    hostToken = (await mintTestHostTokens(hostWorkspace)).hostToken;
+  });
+
+  it("reads a landed commit back: Verified, its result kept, one event per step", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId, followUp } = await commitAlpha(sessionA, 410);
+    expect(followUp).toMatchObject({
+      followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
+      idempotencyKey: null,
+      isResume: false,
+    });
+    expect(followUp.payload.result).toMatchObject({ data: { id: "rec_alpha", amount: 410 } });
+
+    const read = await HostToolCallProvider.readAfter({
+      plan: followUp,
+      getHostToken: () => hostToken,
+    });
+    const verified = await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: followUp,
+      readback: read,
+    });
+    expect(verified.followUp).toBeUndefined();
+    expect(verified.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Verified,
+    );
+    expect(verified.changeRequest?.mismatches).toBeNull();
+
+    const row = await getRow(publicId);
+    expect(row?.hostRef).toBeNull();
+    expect(row?.errorCode).toBeNull();
+    expect(Buffer.from(row?.encryptedChanges ?? []).toString("utf8")).not.toContain("410");
+    const events = await eventsOf(publicId);
+    expect(events.map((event) => event.entityAction)).toEqual([
+      "proposed",
+      "approved",
+      "committing",
+      "committed",
+      "verified",
+    ]);
+    expect(JSON.stringify(events.map((event) => event.detail))).not.toContain("410");
+  });
+
+  it("starts the auto-undo of a mismatch in the same step, resumes it, and ends Undone once it reads back", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId, followUp } = await commitAlpha(sessionA, 420);
+    // DEV_NOTE: A concurrent edit on the host: the record reads back 999, not the 420 the commit set
+    const overwritten = {
+      outcome: Schemas.HostCallOutcomeEnum.Succeeded,
+      httpStatus: 200,
+      body: { data: { id: "rec_alpha", amount: 999 } },
+      attempts: 1,
+    };
+    const mismatched = await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: followUp,
+      readback: overwritten,
+    });
+    expect(mismatched.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Mismatch,
+    );
+    expect(mismatched.changeRequest?.mismatches).toEqual([
+      {
+        field: "amount",
+        expected: { isFound: true, value: 420 },
+        found: { isFound: true, value: 999 },
+      },
+    ]);
+    expect(mismatched.followUp).toMatchObject({
+      followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
+      idempotencyKey: Schemas.changeRequestUndoIdempotencyKey(publicId),
+      isResume: false,
+    });
+    expect((await getRow(publicId))?.idempotencyKey).toBe(
+      Schemas.changeRequestUndoIdempotencyKey(publicId),
+    );
+
+    // DEV_NOTE: An eviction before the undo's end: the stored key makes the next attempt a resume
+    const resumed = await repo.startFollowUp({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    expect(resumed.followUp).toMatchObject({
+      followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
+      isResume: true,
+    });
+    expect(resumed.followUp?.payload.mismatches).toHaveLength(1);
+
+    const undo = await HostToolCallProvider.undo({
+      plan: resumed.followUp!,
+      getHostToken: () => hostToken,
+    });
+    expect([
+      Schemas.HostCallOutcomeEnum.Succeeded,
+      Schemas.HostCallOutcomeEnum.AlreadyApplied,
+    ]).toContain(undo.outcome);
+    const reread = await HostToolCallProvider.readAfter({
+      plan: resumed.followUp!,
+      getHostToken: () => hostToken,
+    });
+    const undone = await repo.finishUndo({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: resumed.followUp!,
+      undo,
+      readback: reread,
+    });
+    expect(undone.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Undone,
+    );
+    expect((await readAlpha())?.data?.amount).toBe(
+      (followUp.payload.before as { data: { amount: number } }).data.amount,
+    );
+    expect((await eventsOf(publicId)).map((event) => event.entityAction)).toEqual([
+      "proposed",
+      "approved",
+      "committing",
+      "committed",
+      "mismatch",
+      "undoing",
+      "undoing",
+      "undone",
+    ]);
+  });
+
+  it("ends a mismatch NeedsHuman when the tool can't be undone, and a read-after that can't tell too", async () => {
+    const repo = new ActionEngineRepo(env);
+    const first = await commitAlpha(sessionA, 430);
+    const notUndoable: Schemas.FollowUpPlan = {
+      ...first.followUp,
+      tool: { ...first.followUp.tool, ops: { ...first.followUp.tool.ops, inverseOp: null } },
+    };
+    const ended = await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: first.publicId,
+      plan: notUndoable,
+      readback: {
+        outcome: Schemas.HostCallOutcomeEnum.Succeeded,
+        httpStatus: 200,
+        body: { data: { id: "rec_alpha", amount: 1 } },
+        attempts: 1,
+      },
+    });
+    expect(ended.followUp).toBeUndefined();
+    expect(ended.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+    );
+    expect((await getRow(first.publicId))?.errorCode).toBe(
+      Schemas.ChangeRequestErrorCodeEnum.NotUndoable,
+    );
+
+    // DEV_NOTE: The host didn't answer the read-after: a person checks, nothing is undone on a guess
+    const second = await commitAlpha(sessionA, 440);
+    const unknown = await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: second.publicId,
+      plan: second.followUp,
+      readback: { outcome: Schemas.HostCallOutcomeEnum.Failed, attempts: 3 },
+    });
+    expect(unknown.followUp).toBeUndefined();
+    expect(unknown.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+    );
+    expect((await getRow(second.publicId))?.errorCode).toBe(
+      Schemas.ChangeRequestErrorCodeEnum.VerifyUnknown,
+    );
+    expect((await readAlpha())?.data?.amount).toBe(440);
+  });
+
+  it("ends an undo that didn't succeed NeedsHuman, and resumes a commit's read-after from the row", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId, followUp } = await commitAlpha(sessionA, 450);
+
+    // DEV_NOTE: An eviction between the commit's end and the read-after: the row says what comes next
+    const resumed = await repo.startFollowUp({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    expect(resumed.followUp?.followUp).toBe(Schemas.ChangeRequestFollowUpEnum.Verify);
+    expect(resumed.followUp?.payload.result).toEqual(followUp.payload.result);
+
+    const mismatched = await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: resumed.followUp!,
+      readback: {
+        outcome: Schemas.HostCallOutcomeEnum.Succeeded,
+        httpStatus: 200,
+        body: { data: { id: "rec_alpha", amount: 2 } },
+        attempts: 1,
+      },
+    });
+    const failed = await repo.finishUndo({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: mismatched.followUp!,
+      undo: { outcome: Schemas.HostCallOutcomeEnum.Unknown, mayHaveLanded: true, attempts: 3 },
+      readback: null,
+    });
+    expect(failed.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+    );
+    expect((await getRow(publicId))?.errorCode).toBe(Schemas.ChangeRequestErrorCodeEnum.UndoFailed);
+
+    // DEV_NOTE: Settled: no step takes it up again
+    const again = await repo.startFollowUp({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    expect(again.failure).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
+  });
+});
 
 describe("ActionEngineRepo edits (M3-5)", () => {
   it("edits a Proposed change request: new payload encrypted, was_edited, an edited event by the user", async () => {
@@ -739,79 +1020,112 @@ describe("ActionEngineRepo edits (M3-5)", () => {
 });
 
 describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
-  it("never lets another company's session read, decide or commit a change request", async () => {
-    const repo = new ActionEngineRepo(env);
-    const publicId = (await propose(sessionA, 21)).changeRequest!.publicId;
+  // DEV_NOTE: Every step is a round trip to the staging branch, and this one tries them all
+  it(
+    "never lets another company's session read, decide or commit a change request",
+    { timeout: 90_000 },
+    async () => {
+      const repo = new ActionEngineRepo(env);
+      const publicId = (await propose(sessionA, 21)).changeRequest!.publicId;
 
-    // DEV_NOTE: Company B's own session, and one that names A's conversation under B's tenant key
-    const forged = {
-      ...sessionB,
-      conversationId: sessionA.conversationId,
-      conversationPublicId: sessionA.conversationPublicId,
-    };
-    for (const session of [sessionB, forged]) {
-      const views = await repo.getChangeRequestViews({
-        session,
+      // DEV_NOTE: Company B's own session, and one that names A's conversation under B's tenant key
+      const forged = {
+        ...sessionB,
+        conversationId: sessionA.conversationId,
+        conversationPublicId: sessionA.conversationPublicId,
+      };
+      for (const session of [sessionB, forged]) {
+        const views = await repo.getChangeRequestViews({
+          session,
+          changeRequestPublicIds: [publicId],
+        });
+        expect(views.changeRequests ?? []).toEqual([]);
+        const decided = await repo.decideChangeRequest({
+          session,
+          changeRequestPublicId: publicId,
+          decision: Schemas.ChangeRequestDecisionEnum.Reject,
+          isExpired: false,
+        });
+        expect(decided.isSuccess).toBe(false);
+        expect(decided.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        const started = await startCommit(session, publicId);
+        expect(started.plan).toBeUndefined();
+        expect(started.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        const finished = await repo.finishCommit({
+          session,
+          changeRequestPublicId: publicId,
+          hostCall: { outcome: Schemas.HostCallOutcomeEnum.Succeeded, attempts: 1 },
+          plan: await forgedPlan(publicId),
+        });
+        expect(finished.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        // DEV_NOTE: Nor its read-after or undo (M3-6)
+        const followUpPlan: Schemas.FollowUpPlan = {
+          ...(await forgedPlan(publicId)),
+          followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
+        };
+        const followed = await repo.startFollowUp({
+          session,
+          changeRequestPublicId: publicId,
+          attemptId: Utility.generateUlid(),
+        });
+        expect(followed.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        const verified = await repo.finishVerify({
+          session,
+          changeRequestPublicId: publicId,
+          plan: followUpPlan,
+          readback: { outcome: Schemas.HostCallOutcomeEnum.Succeeded, body: {}, attempts: 1 },
+        });
+        expect(verified.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        const undone = await repo.finishUndo({
+          session,
+          changeRequestPublicId: publicId,
+          plan: { ...followUpPlan, followUp: Schemas.ChangeRequestFollowUpEnum.Undo },
+          undo: { outcome: Schemas.HostCallOutcomeEnum.Succeeded, attempts: 1 },
+          readback: null,
+        });
+        expect(undone.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        const executionSet = await repo.setExecutionId({
+          session,
+          changeRequestPublicId: publicId,
+          thinkExecutionId: "forged",
+        });
+        expect(executionSet.isSuccess).toBe(false);
+        expect(executionSet.isNotFound).toBe(true);
+        const planned = await repo.getEditPlan({ session, changeRequestPublicId: publicId });
+        expect(planned.plan).toBeUndefined();
+        expect([
+          Schemas.ChangeRequestFailureEnum.NotFound,
+          Schemas.ChangeRequestFailureEnum.ConversationClosed,
+        ]).toContain(planned.failure);
+        const saved = await repo.saveEdit({
+          session,
+          changeRequestPublicId: publicId,
+          payload: {
+            version: 2,
+            kind: Schemas.ChangeRequestKindEnum.Update,
+            args: { recordId: "rec_alpha", amount: 1 },
+            before: null,
+            changes: [],
+            result: null,
+            mismatches: null,
+          },
+          editId: Utility.generateUlid(),
+        });
+        expect(saved.isSuccess).toBe(false);
+        expect(saved.changeRequest).toBeUndefined();
+      }
+
+      const stillProposed = await repo.getChangeRequestViews({
+        session: sessionA,
         changeRequestPublicIds: [publicId],
       });
-      expect(views.changeRequests ?? []).toEqual([]);
-      const decided = await repo.decideChangeRequest({
-        session,
-        changeRequestPublicId: publicId,
-        decision: Schemas.ChangeRequestDecisionEnum.Reject,
-        isExpired: false,
-      });
-      expect(decided.isSuccess).toBe(false);
-      expect(decided.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
-      const started = await startCommit(session, publicId);
-      expect(started.plan).toBeUndefined();
-      expect(started.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
-      const finished = await repo.finishCommit({
-        session,
-        changeRequestPublicId: publicId,
-        hostCall: { outcome: Schemas.HostCallOutcomeEnum.Succeeded, attempts: 1 },
-        isResume: false,
-      });
-      expect(finished.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
-      const executionSet = await repo.setExecutionId({
-        session,
-        changeRequestPublicId: publicId,
-        thinkExecutionId: "forged",
-      });
-      expect(executionSet.isSuccess).toBe(false);
-      expect(executionSet.isNotFound).toBe(true);
-      const planned = await repo.getEditPlan({ session, changeRequestPublicId: publicId });
-      expect(planned.plan).toBeUndefined();
-      expect([
-        Schemas.ChangeRequestFailureEnum.NotFound,
-        Schemas.ChangeRequestFailureEnum.ConversationClosed,
-      ]).toContain(planned.failure);
-      const saved = await repo.saveEdit({
-        session,
-        changeRequestPublicId: publicId,
-        payload: {
-          version: 1,
-          kind: Schemas.ChangeRequestKindEnum.Update,
-          args: { recordId: "rec_alpha", amount: 1 },
-          before: null,
-          changes: [],
-        },
-        editId: Utility.generateUlid(),
-      });
-      expect(saved.isSuccess).toBe(false);
-      expect(saved.changeRequest).toBeUndefined();
-    }
-
-    const stillProposed = await repo.getChangeRequestViews({
-      session: sessionA,
-      changeRequestPublicIds: [publicId],
-    });
-    expect(stillProposed.changeRequests?.[0]?.changeRequestStatus).toBe(
-      Schemas.ChangeRequestStatusIntEnum.Proposed,
-    );
-    expect((await getRow(publicId))?.thinkExecutionId).toBeNull();
-    expect((await getRow(publicId))?.wasEdited).toBe(false);
-  });
+      expect(stillProposed.changeRequests?.[0]?.changeRequestStatus).toBe(
+        Schemas.ChangeRequestStatusIntEnum.Proposed,
+      );
+      expect((await getRow(publicId))?.thinkExecutionId).toBeNull();
+      expect((await getRow(publicId))?.wasEdited).toBe(false);
+    },
+  );
 
   it("never loads another company's tools or records a tool call under its tenant", async () => {
     const repo = new ActionEngineRepo(env);
