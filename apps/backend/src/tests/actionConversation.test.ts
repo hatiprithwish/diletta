@@ -75,6 +75,9 @@ const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 const ORIGIN = "https://app.example.com";
 const END_TO_END_TIMEOUT_MS = 90_000;
+// DEV_NOTE: One frame can wait on a whole turn: every step is a fresh connection plus round trips to the staging branch
+// (an auto-commit turn takes ~30 s from a far region), so a frame gets most of the test's time, not a fixed 20 s
+const FRAME_WAIT_MS = 60_000;
 const createdCompanyIds: string[] = [];
 let ownerPool: Pool | null = null;
 let rsaKey: Awaited<ReturnType<typeof createKey>>;
@@ -229,7 +232,7 @@ async function connect(tenant: Tenant, options: { conversation?: string; roles?:
       if (seen) return resolve(seen);
       const timer = setTimeout(
         () => reject(new Error(`Frame never arrived; got ${frames.map((f) => f.type).join(", ")}`)),
-        20_000,
+        FRAME_WAIT_MS,
       );
       waiters.push({
         match: (frame) => frames.indexOf(frame) >= from && match(frame),
