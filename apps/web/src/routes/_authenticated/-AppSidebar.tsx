@@ -34,10 +34,26 @@ import {
 } from "@app/ui/components/dropdown-menu";
 import { Avatar, AvatarFallback } from "@app/ui/components/avatar";
 import Utilities from "@/utils";
-import { NAV_GROUPS, SETTINGS_NAV, isPathActive } from "./-nav";
+import { NAV_GROUPS, getActiveNestedTo, isPathActive } from "./-nav";
 
 export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
   const pathname = useLocation({ select: (location) => location.pathname });
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  const isRail = state === "collapsed" && !isMobile;
+  const activeNestedTo = getActiveNestedTo(pathname);
+  const [openNested, setOpenNested] = useState<Record<string, boolean>>(() =>
+    activeNestedTo ? { [activeNestedTo]: true } : {},
+  );
+  const [prevActiveNestedTo, setPrevActiveNestedTo] = useState(activeNestedTo);
+
+  // Opens a nested group when navigation lands on one of its pages (state adjusted during render, no effect)
+  if (activeNestedTo !== prevActiveNestedTo) {
+    setPrevActiveNestedTo(activeNestedTo);
+    if (activeNestedTo) setOpenNested((open) => ({ ...open, [activeNestedTo]: true }));
+  }
+
+  // DEV_NOTE: On mobile the sidebar is a Sheet, which shadcn doesn't close on navigation
+  const closeMobile = () => setOpenMobile(false);
 
   return (
     <Sidebar collapsible="icon">
@@ -45,7 +61,7 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild className="hover:bg-transparent">
-              <Link to="/overview">
+              <Link to="/overview" onClick={closeMobile}>
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <ChatCircle weight="bold" />
                 </div>
@@ -69,22 +85,71 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
             )}
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarMenu>
-              {group.items.map((item) => (
-                <SidebarMenuItem key={item.to}>
-                  <SidebarMenuButton
+              {group.items.map((item) => {
+                const isActive = isPathActive(pathname, item.to);
+
+                // A plain page, or a nested group in the icon rail (its sub-items are hidden there, so the icon
+                // links straight to the group's first page)
+                if (!("items" in item) || isRail) {
+                  return (
+                    <SidebarMenuItem key={item.to}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={isActive}
+                        tooltip={item.label}
+                        className="text-subtle-foreground"
+                      >
+                        <Link
+                          to={"items" in item ? item.items[0].to : item.to}
+                          onClick={closeMobile}
+                        >
+                          <item.icon />
+                          <span>{item.label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                }
+
+                return (
+                  <Collapsible
+                    key={item.to}
                     asChild
-                    isActive={isPathActive(pathname, item.to)}
-                    tooltip={item.label}
-                    className="text-subtle-foreground"
+                    open={openNested[item.to] ?? false}
+                    onOpenChange={(open) =>
+                      setOpenNested((current) => ({ ...current, [item.to]: open }))
+                    }
+                    className="group/collapsible"
                   >
-                    <Link to={item.to}>
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-              {group.label === "Admin" && <SettingsNavItem pathname={pathname} />}
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton className="text-subtle-foreground">
+                          <item.icon />
+                          <span>{item.label}</span>
+                          <CaretRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {item.items.map((subItem) => (
+                            <SidebarMenuSubItem key={subItem.to}>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={isPathActive(pathname, subItem.to)}
+                                className="text-subtle-foreground"
+                              >
+                                <Link to={subItem.to} onClick={closeMobile}>
+                                  <span>{subItem.label}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroup>
         ))}
@@ -94,70 +159,6 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
         <AccountMenu admin={admin} />
       </SidebarFooter>
     </Sidebar>
-  );
-}
-
-// DEV_NOTE: Settings is a Collapsible, open while a settings page is active. In the icon rail the sub-items are
-// hidden, so the gear links straight to the first settings page instead.
-function SettingsNavItem({ pathname }: Schemas.DashboardSettingsNavProps) {
-  const { state, isMobile } = useSidebar();
-  const isSettingsActive = isPathActive(pathname, SETTINGS_NAV.to);
-  const [isOpen, setIsOpen] = useState(isSettingsActive);
-  const [wasSettingsActive, setWasSettingsActive] = useState(isSettingsActive);
-
-  // Opens the group when navigation lands on a settings page (state adjusted during render, no effect)
-  if (isSettingsActive !== wasSettingsActive) {
-    setWasSettingsActive(isSettingsActive);
-    if (isSettingsActive) setIsOpen(true);
-  }
-
-  if (state === "collapsed" && !isMobile) {
-    return (
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          asChild
-          isActive={isSettingsActive}
-          tooltip={SETTINGS_NAV.label}
-          className="text-subtle-foreground"
-        >
-          <Link to={SETTINGS_NAV.items[0].to}>
-            <SETTINGS_NAV.icon />
-            <span>{SETTINGS_NAV.label}</span>
-          </Link>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    );
-  }
-
-  return (
-    <Collapsible asChild open={isOpen} onOpenChange={setIsOpen} className="group/collapsible">
-      <SidebarMenuItem>
-        <CollapsibleTrigger asChild>
-          <SidebarMenuButton className="text-subtle-foreground">
-            <SETTINGS_NAV.icon />
-            <span>{SETTINGS_NAV.label}</span>
-            <CaretRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-          </SidebarMenuButton>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <SidebarMenuSub>
-            {SETTINGS_NAV.items.map((item) => (
-              <SidebarMenuSubItem key={item.to}>
-                <SidebarMenuSubButton
-                  asChild
-                  isActive={isPathActive(pathname, item.to)}
-                  className="text-subtle-foreground"
-                >
-                  <Link to={item.to}>
-                    <span>{item.label}</span>
-                  </Link>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-            ))}
-          </SidebarMenuSub>
-        </CollapsibleContent>
-      </SidebarMenuItem>
-    </Collapsible>
   );
 }
 

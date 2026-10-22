@@ -479,12 +479,14 @@ font-mono
 
 ### 2.7 Dashboard Shell [WARNING]
 
-**Rule:** Dashboard pages render inside the M4-1 shell (`_authenticated/route.tsx`), which reads `/dashboard/me` before any page and shows No access to a 403 or an operator. Navigation comes only from `_authenticated/-nav.ts` (sidebar and breadcrumb both read it); a new page adds its entry there and its route under `_authenticated/` (Settings pages under `settings/`). Every page opens with `PageHeader` (`@/components/page-header`). No bot switcher and no chatbot in a page path (DESIGN.md §6). `-data.ts` keeps keys and `queryOptions` in its `Queries` class and the hooks as plain exported functions.
+**Rule:** Dashboard pages render inside the M4-1 shell (`_authenticated/route.tsx`), which reads `/dashboard/me` before any page and shows No access to a 403 or an operator. Navigation comes only from `_authenticated/-nav.ts` (sidebar and breadcrumb only map it; an item with `items`, like Settings, is a nested group); a new page adds its entry there and its route under `_authenticated/` (a nested group's pages under its `to`, e.g. `settings/`). `/dashboard/me` query keys carry the Clerk user. Every page opens with `PageHeader` (`@/components/page-header`). No bot switcher and no chatbot in a page path (DESIGN.md §6). `-data.ts` keeps keys and `queryOptions` in its `Queries` class and the hooks as plain exported functions.
 
 **Violations:**
 
 - A page that builds its own sidebar, top bar or `<h1>` header instead of `PageHeader`
 - A nav link or breadcrumb label hard-coded outside `-nav.ts`
+- Sidebar or breadcrumb code that places an item by matching a label (`group.label === "Admin"`)
+- A query key for per-user data without the Clerk user id
 - A second `/dashboard/me` read outside `useMe`
 - A bot switcher, or a `$botId` segment in a dashboard route
 - A hook (`useQuery`, `useAuth`) inside a `Queries` class

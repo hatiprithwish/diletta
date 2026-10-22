@@ -11,6 +11,7 @@ export interface DashboardSidebarProps {
   admin: AdminProfile;
 }
 
-export interface DashboardSettingsNavProps {
-  pathname: string;
+export interface DashboardShellMessageProps {
+  title: string;
+  description: string;
 }
