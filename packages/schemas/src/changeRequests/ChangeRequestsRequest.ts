@@ -75,6 +75,20 @@ export interface StartFollowUpRequest {
   attemptId: string;
 }
 
+// DEV_NOTE: The user's undo of a Verified change request (M3-7), from the widget's change_request_undos frame.
+// attemptId (a fresh ULID) parts this undo's undoing event from a resumed one's.
+export interface StartUndoRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+  attemptId: string;
+}
+
+// DEV_NOTE: A user undo cut short that the DO stops waiting for (M3-7): handed to a person (NeedsHuman undo_interrupted)
+export interface AbandonUndoRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+}
+
 // DEV_NOTE: How the read-after ended (@app/adapter readback), for Verified / Mismatch / NeedsHuman. plan: the one the
 // Repo handed out.
 export interface FinishVerifyRequest {
@@ -84,8 +98,9 @@ export interface FinishVerifyRequest {
   readback: Pick<HostCallResponse, "outcome" | "httpStatus" | "body" | "attempts">;
 }
 
-// DEV_NOTE: How the auto-undo ended: its host call, and the read after it (null when the undo didn't succeed, so
-// nothing was read), for Undone / NeedsHuman
+// DEV_NOTE: How an undo ended (the auto-undo of a Mismatch, or the user's undo of a Verified one, M3-7): its host
+// call, and the read after it (null when the undo didn't succeed, so nothing was read), for Undone / NeedsHuman (or,
+// for the user's undo that nothing may have reached the host, back to Verified)
 export interface FinishUndoRequest {
   session: ConversationSession;
   changeRequestPublicId: string;

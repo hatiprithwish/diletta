@@ -31,6 +31,10 @@ import * as Schemas from "@app/schemas";
 // another (an approval and the expiry) changes nothing and answers InvalidTransition with the row as it stands. Every
 // refused step names a failure: a rolled-back transaction (TenantRollbackError, a lost connection) is ServerError, so
 // the DO can tell "try again" from "this is settled".
+//
+// Undo window (M3-7): a status that ends a change request stores undo_until (ChangeRequestsProvider.undoUntil): a
+// Verified one can be undone by the user until then (startUndo, re-checked like a commit), and the purge empties every
+// one's values after it (ChangeRequestPurgeRepo). NeedsHuman keeps undo_until null.
 export default class ActionEngineRepo {
   private db: NodePgDatabase;
   private env: Env;
@@ -263,6 +267,7 @@ export default class ActionEngineRepo {
             isUndoable: tool.ops.inverseOp !== null,
           },
           payload,
+          Date.now(),
           ChangeRequestsProvider.editableFields(tool, payload),
         ),
       };
@@ -311,6 +316,7 @@ export default class ActionEngineRepo {
         id: row.id,
         status,
         fromStatuses: [Schemas.ChangeRequestStatusIntEnum.Proposed],
+        undoUntil: ChangeRequestsProvider.undoUntil(status, Date.now()),
       });
       if (!updated.isSuccess || !updated.changeRequest) {
         throw new TenantRollbackError(updated.message ?? "Change request not updated");
@@ -331,7 +337,11 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: isExpired && !params.isExpired ? "Approval came after the deadline" : "Decided",
         outboxIds: [outboxId],
-        changeRequest: ChangeRequestsProvider.toView(next, await this.decryptPayload(tx, next)),
+        changeRequest: ChangeRequestsProvider.toView(
+          next,
+          await this.decryptPayload(tx, next),
+          Date.now(),
+        ),
       };
     });
   }
@@ -406,7 +416,7 @@ export default class ActionEngineRepo {
           message: "Commit not started",
           failure,
           outboxIds: ended.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+          changeRequest: ChangeRequestsProvider.toView(ended.row, payload, Date.now()),
         };
       }
 
@@ -425,7 +435,7 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: isResume ? "Commit resumed" : "Commit started",
         outboxIds: started.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(started.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(started.row, payload, Date.now()),
         plan: {
           changeRequestPublicId: row.publicId,
           tool: runtime.tool,
@@ -466,7 +476,7 @@ export default class ActionEngineRepo {
           isSuccess: true,
           message: "Commit finished",
           outboxIds: moved.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
         };
       }
 
@@ -489,7 +499,7 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Commit finished",
         outboxIds: moved.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(moved.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(moved.row, payload, Date.now()),
         followUp: {
           changeRequestPublicId: row.publicId,
           followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
@@ -503,9 +513,11 @@ export default class ActionEngineRepo {
   }
 
   // DEV_NOTE: The next step of a landed commit, read from the row (M3-6): Committed → the read-after, Mismatch → the
-  // auto-undo (isResume when its key is already stored: the undo may have been sent). For a write that already landed,
-  // so the conversation, chatbot and company aren't re-checked: reading it back or putting it back is cleanup, never
-  // a new change. A tool version that no longer loads, or an unreadable payload, can't take the step: NeedsHuman.
+  // auto-undo (isResume when its key is already stored: the undo may have been sent), and a Verified one holding its
+  // undo key → the user's undo an eviction cut short (M3-7, isResume). For a write that already landed (or an undo
+  // already sent), so the conversation, chatbot and company aren't re-checked: reading it back or putting it back is
+  // cleanup, never a new change. A tool version that no longer loads, or an unreadable payload, can't take the step:
+  // NeedsHuman.
   async startFollowUp(params: Schemas.StartFollowUpRequest): Promise<Schemas.FollowUpResponse> {
     const { session } = params;
     return await this.step(session, async (tx): Promise<Schemas.FollowUpResponse> => {
@@ -513,7 +525,11 @@ export default class ActionEngineRepo {
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
       const isVerify = row.status === Schemas.ChangeRequestStatusIntEnum.Committed;
-      if (!isVerify && row.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch) {
+      if (
+        !isVerify &&
+        row.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch &&
+        !ChangeRequestsProvider.isUserUndoing(row)
+      ) {
         return await this.refuseTransition(tx, row);
       }
       const rootLogId = await this.findRootLogId(tx, session);
@@ -547,7 +563,7 @@ export default class ActionEngineRepo {
           message: "Follow-up not started",
           failure: Schemas.ChangeRequestFailureEnum.ToolUnavailable,
           outboxIds: ended.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+          changeRequest: ChangeRequestsProvider.toView(ended.row, payload, Date.now()),
         };
       }
 
@@ -556,7 +572,7 @@ export default class ActionEngineRepo {
           isSuccess: true,
           message: "Read-after resumed",
           outboxIds: [],
-          changeRequest: ChangeRequestsProvider.toView(row, payload),
+          changeRequest: ChangeRequestsProvider.toView(row, payload, Date.now()),
           followUp: {
             changeRequestPublicId: row.publicId,
             followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
@@ -621,7 +637,7 @@ export default class ActionEngineRepo {
           isSuccess: true,
           message: "Read-after finished",
           outboxIds: moved.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
         };
       }
 
@@ -650,15 +666,19 @@ export default class ActionEngineRepo {
     });
   }
 
-  // DEV_NOTE: Mismatch → the auto-undo's end (ChangeRequestsProvider.undoEnd): Undone when the undo succeeded and the
-  // record reads back as before, else NeedsHuman
+  // DEV_NOTE: An undo's end (ChangeRequestsProvider.undoEnd): Mismatch (the auto-undo) or a Verified one holding the
+  // user's undo key (M3-7) → Undone when the undo succeeded and the record reads back as before, else NeedsHuman. The
+  // user's undo that nothing may have reached the host stays Verified (an undo_not_sent event, not a status change):
+  // the commit's key again (so neither a resume nor the purge takes it for an undo under way), its undo_until as it
+  // was. The end of the user's undo is the chatbot user's, like its start.
   async finishUndo(params: Schemas.FinishUndoRequest): Promise<Schemas.ChangeRequestStepResponse> {
     const { session, plan, undo, readback } = params;
     return await this.step(session, async (tx) => {
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
-      if (row.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch) {
+      const isUserUndo = ChangeRequestsProvider.isUserUndoing(row);
+      if (row.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch && !isUserUndo) {
         return await this.refuseTransition(tx, row);
       }
       const { readbackOp } = plan.tool.ops;
@@ -672,24 +692,120 @@ export default class ActionEngineRepo {
               readback,
             })
           : null;
-      const ended = ChangeRequestsProvider.undoEnd(undo, check);
+      const ended = ChangeRequestsProvider.undoEnd(undo, check, isUserUndo);
+      const isKept = ended.status === Schemas.ChangeRequestStatusIntEnum.Verified;
       const moved = await this.moveStatus(tx, {
         session,
         row,
         rootLogId: await this.findRootLogId(tx, session),
         status: ended.status,
         errorCode: ended.errorCode,
+        actorType: isUserUndo
+          ? Schemas.ActivityLogActorTypeIntEnum.ChatbotUser
+          : Schemas.ActivityLogActorTypeIntEnum.System,
+        ...(isKept
+          ? {
+              action: Schemas.ChangeRequestEntityActionEnum.UndoNotSent,
+              idempotencyKey: Schemas.changeRequestCommitIdempotencyKey(row.publicId),
+              undoUntil: "keep" as const,
+              dedupeParts: [Utility.generateUlid()],
+            }
+          : {}),
         detail: {
           outcome: undo.outcome,
           mayHaveLanded: undo.mayHaveLanded === true,
           readbackOutcome: readback?.outcome ?? null,
+          isUserUndo,
         },
       });
       return {
         isSuccess: true,
         message: "Undo finished",
         outboxIds: moved.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+        changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
+      };
+    });
+  }
+
+  // DEV_NOTE: The user's undo of a Verified change request (M3-7), re-checked like a commit, since it writes to the host
+  // again: the conversation open, the company and chatbot active and not read-only, then under the row lock Verified
+  // with no undo under way, its tool has an inverse_op, its values not purged and before its undo_until
+  // (ChangeRequestsProvider.undoRefusal), and its tool version still loading. A refusal changes nothing. Otherwise the
+  // undo key is stored with its undoing event by the chatbot user (beginUndo); it stays Verified until the undo ends.
+  async startUndo(params: Schemas.StartUndoRequest): Promise<Schemas.FollowUpResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx): Promise<Schemas.FollowUpResponse> => {
+      const checked = await this.checkConversation(tx, session, true);
+      if (!checked.isSuccess) {
+        return { isSuccess: false, message: checked.message, failure: checked.failure };
+      }
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      const refusal = ChangeRequestsProvider.undoRefusal(row, Date.now());
+      if (refusal === Schemas.ChangeRequestFailureEnum.InvalidTransition) {
+        return await this.refuseTransition(tx, row);
+      }
+      const payload = await this.decryptPayload(tx, row);
+      const refuse = (
+        failure: Schemas.ChangeRequestFailureEnum,
+        message: string,
+      ): Schemas.FollowUpResponse => ({
+        isSuccess: false,
+        message,
+        failure,
+        changeRequest: ChangeRequestsProvider.toView(row, payload, Date.now()),
+      });
+      if (refusal) return refuse(refusal, "Change request can't be undone now");
+      const loaded = await this.loadTool(tx, session.companyId, row.toolId);
+      if (!loaded.isSuccess) return refuse(loaded.failure, loaded.message);
+      if (!loaded.tool.ops.inverseOp || !payload) {
+        return refuse(
+          Schemas.ChangeRequestFailureEnum.NotUndoable,
+          payload ? "Tool has no inverse op" : "Change request payload unreadable",
+        );
+      }
+      return await this.beginUndo(tx, {
+        session,
+        row,
+        rootLogId: checked.rootLogId,
+        tool: loaded.tool,
+        payload,
+        dedupeParts: [`user-${params.attemptId}`],
+      });
+    });
+  }
+
+  // DEV_NOTE: A user undo cut short whose user never came back with the host token (M3-7): past undo_until +
+  // CHANGE_REQUEST_UNDO_GRACE_MS, the DO hands it to a person (NeedsHuman undo_interrupted: its undo may have been sent),
+  // so its values are kept on purpose and the conversation can close. Only a Verified row still holding the user's undo
+  // key (an undo that ended meanwhile is left as it stands).
+  async abandonUndo(
+    params: Schemas.AbandonUndoRequest,
+  ): Promise<Schemas.ChangeRequestStepResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx) => {
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      if (!ChangeRequestsProvider.isUserUndoing(row)) return await this.refuseTransition(tx, row);
+      const moved = await this.moveStatus(tx, {
+        session,
+        row,
+        rootLogId: await this.findRootLogId(tx, session),
+        status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted,
+        detail: { reason: Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted },
+      });
+      return {
+        isSuccess: true,
+        message: "Interrupted undo handed to a person",
+        outboxIds: moved.outboxIds,
+        changeRequest: ChangeRequestsProvider.toView(
+          moved.row,
+          await this.decryptPayload(tx, moved.row),
+          Date.now(),
+        ),
       };
     });
   }
@@ -801,6 +917,7 @@ export default class ActionEngineRepo {
         changeRequest: ChangeRequestsProvider.toView(
           next,
           payload,
+          Date.now(),
           ChangeRequestsProvider.editableFields(ready.tool, payload),
         ),
       };
@@ -824,6 +941,7 @@ export default class ActionEngineRepo {
         return { isSuccess: false, message: listed.message };
       }
       const payloads = await this.decryptPayloads(tx, session.companyId, listed.changeRequests);
+      const now = Date.now();
       const changeRequests: Schemas.WidgetChangeRequest[] = [];
       const tools = new Map<string, Schemas.RuntimeTool | null>();
       for (const [index, row] of listed.changeRequests.entries()) {
@@ -838,7 +956,7 @@ export default class ActionEngineRepo {
           const tool = tools.get(row.toolId);
           if (tool) editableFields = ChangeRequestsProvider.editableFields(tool, payload);
         }
-        changeRequests.push(ChangeRequestsProvider.toView(row, payload, editableFields));
+        changeRequests.push(ChangeRequestsProvider.toView(row, payload, now, editableFields));
       }
       return { isSuccess: true, message: "Change requests fetched", changeRequests };
     });
@@ -948,7 +1066,7 @@ export default class ActionEngineRepo {
       return { isSuccess: false, response: await this.refuseTransition(tx, row) };
     }
     const payload = await this.decryptPayload(tx, row);
-    const view = ChangeRequestsProvider.toView(row, payload);
+    const view = ChangeRequestsProvider.toView(row, payload, Date.now());
     if (ChangeRequestsProvider.isPastDeadline(row, Date.now())) {
       return {
         isSuccess: false,
@@ -1019,10 +1137,11 @@ export default class ActionEngineRepo {
     return { isSuccess: true, tool: runtime.tool };
   }
 
-  // DEV_NOTE: A Mismatch's auto-undo starts: a tool with no inverse_op can't be undone (NeedsHuman not_undoable);
-  // otherwise the undo key is stored first, with its undoing event (it stays Mismatch), so a resume knows the undo
-  // may have been sent (isResume: a Native tool resends with the same key, an Emulated one checks first, None doesn't
-  // resend and ends NeedsHuman)
+  // DEV_NOTE: An undo starts: a Mismatch's auto-undo, or the user's undo of a Verified one (M3-7: the row is Verified;
+  // its actor is the chatbot user, its undo_until kept). A tool with no inverse_op can't be undone (a Mismatch ends
+  // NeedsHuman not_undoable; startUndo refuses the user's before this); otherwise the undo key is stored first, with
+  // its undoing event (the status stays), so a resume knows the undo may have been sent (isResume: a Native tool
+  // resends with the same key, an Emulated one checks first, None doesn't resend and ends NeedsHuman)
   private async beginUndo(
     tx: NodePgTransaction<EmptyRelations>,
     params: {
@@ -1048,26 +1167,34 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Mismatch can't be undone",
         outboxIds: ended.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(ended.row, payload, Date.now()),
       };
     }
-    const idempotencyKey = Schemas.changeRequestUndoIdempotencyKey(row.publicId);
+    const isUserUndo = row.status === Schemas.ChangeRequestStatusIntEnum.Verified;
+    const idempotencyKey = isUserUndo
+      ? Schemas.changeRequestUserUndoIdempotencyKey(row.publicId)
+      : Schemas.changeRequestUndoIdempotencyKey(row.publicId);
     const isResume = row.idempotencyKey === idempotencyKey;
     const started = await this.moveStatus(tx, {
       session,
       row,
       rootLogId: params.rootLogId,
-      status: Schemas.ChangeRequestStatusIntEnum.Mismatch,
+      status: row.status,
       action: Schemas.ChangeRequestEntityActionEnum.Undoing,
+      actorType:
+        isUserUndo && !isResume
+          ? Schemas.ActivityLogActorTypeIntEnum.ChatbotUser
+          : Schemas.ActivityLogActorTypeIntEnum.System,
       idempotencyKey,
-      detail: { isResume },
+      undoUntil: "keep",
+      detail: { isResume, isUserUndo },
       dedupeParts: params.dedupeParts,
     });
     return {
       isSuccess: true,
       message: isResume ? "Undo resumed" : "Undo started",
       outboxIds: started.outboxIds,
-      changeRequest: ChangeRequestsProvider.toView(started.row, payload),
+      changeRequest: ChangeRequestsProvider.toView(started.row, payload, Date.now()),
       followUp: {
         changeRequestPublicId: row.publicId,
         followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
@@ -1098,12 +1225,19 @@ export default class ActionEngineRepo {
       isSuccess: false,
       message: "Change request not in a status this step starts from",
       failure: Schemas.ChangeRequestFailureEnum.InvalidTransition,
-      changeRequest: ChangeRequestsProvider.toView(row, await this.decryptPayload(tx, row)),
+      changeRequest: ChangeRequestsProvider.toView(
+        row,
+        await this.decryptPayload(tx, row),
+        Date.now(),
+      ),
     };
   }
 
   // DEV_NOTE: One status change and its event, in the caller's transaction (rolled back with it on failure). payload
   // (re-encrypted here) and hostRef go in the same update; action names an event that isn't the status's own (undoing).
+  // undoUntil: "follow" (default) stores what the status calls for (ChangeRequestsProvider.undoUntil, M3-7); "keep"
+  // leaves it (an undo starting, or the user's undo that reached nothing). actorType: the system unless the user's
+  // own step (the user's undo).
   private async moveStatus(
     tx: NodePgTransaction<EmptyRelations>,
     params: {
@@ -1116,6 +1250,8 @@ export default class ActionEngineRepo {
       errorCode?: Schemas.ChangeRequestErrorCodeEnum | null;
       hostRef?: string | null;
       payload?: Schemas.ChangeRequestPayload;
+      undoUntil?: "follow" | "keep";
+      actorType?: Schemas.ActivityLogActorTypeIntEnum;
       detail: Record<string, string | number | boolean | null>;
       dedupeParts?: string[];
     },
@@ -1145,6 +1281,10 @@ export default class ActionEngineRepo {
       errorCode: params.errorCode,
       hostRef: params.hostRef,
       payload,
+      undoUntil:
+        params.undoUntil === "keep"
+          ? undefined
+          : ChangeRequestsProvider.undoUntil(params.status, Date.now()),
     });
     if (!updated.isSuccess || !updated.changeRequest) {
       throw new TenantRollbackError(updated.message ?? "Change request not updated");
@@ -1155,7 +1295,7 @@ export default class ActionEngineRepo {
       rootLogId: params.rootLogId,
       status: params.status,
       action: params.action,
-      actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+      actorType: params.actorType ?? Schemas.ActivityLogActorTypeIntEnum.System,
       detail: { ...params.detail, errorCode: params.errorCode ?? null },
       dedupeParts: params.dedupeParts,
     });

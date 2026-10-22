@@ -312,7 +312,7 @@ eRegister goes live when every box below is ticked.
 - [x] JWT algorithm pinning: which algorithms eRegister signs with (M2-1, review item #7) — RS256 and ES256 only, `kid` required; `none` and HS\* rejected. Confirm eRegister signs with one of the two before M7.
 - [x] Drizzle on Postgres (from the scaffold): which parts go to raw-SQL migrations beyond RLS, partitions and halfvec? (M0-2) — anything drizzle-kit can't express (RLS policies, partitions, extensions, `halfvec` columns and indexes) goes in a custom migration (`db:generate:sql`) in the same journal as drizzle-kit output.
 - [x] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7) — 200 KiB gzipped for the script-tag bundle (`WIDGET_BUNDLE_MAX_GZIP_BYTES`, the build fails above it); 170.7 KiB at M2-7, with the widget's own small markdown parser instead of a library.
-- [ ] Approval expiry and undo window default values (M3-4, M3-7) — approval expiry decided in M3-4: 15 minutes (`CHANGE_REQUEST_APPROVAL_EXPIRY_MS`); the undo window is still open (M3-7).
+- [x] Approval expiry and undo window default values (M3-4, M3-7) — approval expiry decided in M3-4: 15 minutes (`CHANGE_REQUEST_APPROVAL_EXPIRY_MS`); undo window decided in M3-7: 1 hour from the end (`CHANGE_REQUEST_UNDO_WINDOW_MS`), values purged after it (NeedsHuman kept until resolved).
 - [ ] Load test target: concurrent conversations per company (M6-5)
 - [ ] Cluster size that opens a Quality item (M5-6)
 - [ ] Budget alerts at 50 / 80 / 100% of `spending_budget` (Cron in the architecture): no task owns them after M2-4. Fold into M6-6, or a new task? (see `docs/runbooks/budget.md` › Known gaps)

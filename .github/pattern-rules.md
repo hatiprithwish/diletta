@@ -1601,6 +1601,43 @@ A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `providers/changeReque
 
 ---
 
+### 3.36 Undo Only Inside Its Window, Re-Checked; Values Purged Only by the Purge Job [CRITICAL]
+
+**Rule:** A Verified change request is undone by the user (M3-7) only through the widget's `change_request_undos` frame, and only after `ActionEngineRepo.startUndo` re-checks it like a commit: the conversation open, the chatbot and company active and not read-only, then under the row lock `ChangeRequestsProvider.undoRefusal` (Verified with no undo under way, the tool has an `inverse_op`, the values not purged, before `undo_until`) and the tool version still loading. The user's own undo key (`changeRequestUserUndoIdempotencyKey`) and its `undoing` event (actor: the chatbot user) are stored before `HostToolCallProvider.undo`; the change request stays Verified until `finishUndo` ends it (Undone / stays Verified with an `undo_not_sent` event when nothing may have reached the host / NeedsHuman), or until the DO hands an undo never resumed to a person (`abandonUndo`, `undo_interrupted`) after `undo_until` + `CHANGE_REQUEST_UNDO_GRACE_MS`. `undo_until` is written only through `ChangeRequestsProvider.undoUntil` (end + `CHANGE_REQUEST_UNDO_WINDOW_MS`; NeedsHuman null). `encrypted_changes`, `iv` and `encryption_key_version` are nulled only by `ChangeRequestsDAL.purgeChangeRequestValues` via `ChangeRequestPurgeRepo` (the `ChangeRequestPurge` cron, `withPlatform`), never before `undo_until`, and for a Verified row holding the user's undo key not before `undo_until` + the grace (the SQL builds that key from `CHANGE_REQUEST_KEY_PREFIX` / `CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX`, never a literal). An undo makes no model call: every later turn hears it through `userUndos` (summaries, never values).
+
+**Violations:**
+
+- Sending `inverse_op` for a Verified change request without `startUndo`, or trusting the widget's view of the window
+- Undoing after `undo_until`, on a read-only company, or a NeedsHuman / Undone / Mismatch row through the user path
+- Setting `undo_until` by hand in a step, or giving NeedsHuman one
+- Nulling the payload anywhere but the purge, or purging a row whose window hasn't ended or whose user undo is under way
+- Running a model call (or a continuation) to announce an undo, or putting values in `userUndos`
+- Writing a status event for an undo that changed no status (use `undo_not_sent`), or guessing who undid a change from its payload instead of `undoneBy`
+
+**Detection Pattern:**
+
+```regex
+startUndo\(|undoRefusal\(|purgeChangeRequestValues\(
+undoUntil:
+encryptedChanges: null
+WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `ChangeRequestPurgeRepo.ts`, `ChangeRequestsDAL.ts`, `providers/changeRequests.ts`, `providers/widgetFrames.ts`, `apps/widget/src/hooks/useChangeReview.ts`, `apps/widget/src/lib/changeRequestView.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (view.undoUntil > Date.now()) await HostToolCallProvider.undo({ plan, getHostToken })
+- ✅ repo.startUndo → runFollowUp(plan) → finishUndo
+- ❌ await tx.update(changeRequests).set({ encryptedChanges: null }).where(eq(changeRequests.status, Verified))
+- ✅ ChangeRequestPurgeRepo.purgeExpiredValues() (undo_until < now, undo under way skipped)
+```
+
+**Fix:** Mirror `ConversationDO.undoChangeRequests` / `runUserUndo`, `ActionEngineRepo.startUndo` and `ChangeRequestPurgeRepo`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:

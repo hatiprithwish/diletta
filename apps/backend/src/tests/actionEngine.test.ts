@@ -21,6 +21,7 @@ import {
 import HostToolCallProvider from "@/providers/hostToolCall";
 import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
+import ChangeRequestPurgeRepo from "@/repositories/ChangeRequestPurgeRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import Utility from "@/utils/Utility";
 import {
@@ -923,6 +924,263 @@ describe("ActionEngineRepo read-after and auto-undo (M3-6)", { timeout: 90_000 }
   });
 });
 
+// DEV_NOTE: A change to rec_alpha committed and read back as set: Verified, with its undo window (M3-7)
+async function verifyAlpha(session: Schemas.ConversationSession, amount: number) {
+  const { publicId, followUp } = await commitAlpha(session, amount);
+  const read = await HostToolCallProvider.readAfter({
+    plan: followUp,
+    getHostToken: () => hostToken,
+  });
+  const verified = await new ActionEngineRepo(env).finishVerify({
+    session,
+    changeRequestPublicId: publicId,
+    plan: followUp,
+    readback: read,
+  });
+  if (verified.changeRequest?.changeRequestStatus !== Schemas.ChangeRequestStatusIntEnum.Verified) {
+    throw new Error(`Not verified: ${verified.message}`);
+  }
+  return { publicId, followUp, view: verified.changeRequest };
+}
+
+const startUndo = (session: Schemas.ConversationSession, changeRequestPublicId: string) =>
+  new ActionEngineRepo(env).startUndo({
+    session,
+    changeRequestPublicId,
+    attemptId: Utility.generateUlid(),
+  });
+
+const setUndoUntil = (publicId: string, undoUntil: Date | null) =>
+  withOwnerDb((ownerDb) =>
+    ownerDb.update(changeRequests).set({ undoUntil }).where(eq(changeRequests.publicId, publicId)),
+  );
+
+describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 120_000 }, () => {
+  beforeEach(async () => {
+    hostToken = (await mintTestHostTokens(hostWorkspace)).hostToken;
+  });
+
+  it("opens the undo window at Verified, and undoes it for the user: undoing by the user, Undone, values back", async () => {
+    const repo = new ActionEngineRepo(env);
+    const before = Date.now();
+    const { publicId, followUp, view } = await verifyAlpha(sessionA, 510);
+    const verifiedRow = await getRow(publicId);
+    const undoUntil = verifiedRow?.undoUntil?.getTime() ?? 0;
+    expect(undoUntil).toBeGreaterThanOrEqual(before + Schemas.CHANGE_REQUEST_UNDO_WINDOW_MS);
+    expect(undoUntil).toBeLessThanOrEqual(Date.now() + Schemas.CHANGE_REQUEST_UNDO_WINDOW_MS);
+    expect(view.undoUntil).toBe(undoUntil);
+    expect(view.isUndoing).toBe(false);
+
+    const started = await startUndo(sessionA, publicId);
+    expect(started.followUp).toMatchObject({
+      followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
+      idempotencyKey: Schemas.changeRequestUserUndoIdempotencyKey(publicId),
+      isResume: false,
+    });
+    expect(started.changeRequest).toMatchObject({
+      changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+      isUndoing: true,
+      undoUntil: null,
+    });
+    const undoingRow = await getRow(publicId);
+    expect(undoingRow?.idempotencyKey).toBe(Schemas.changeRequestUserUndoIdempotencyKey(publicId));
+    expect(undoingRow?.undoUntil?.getTime()).toBe(undoUntil);
+    // DEV_NOTE: A second undo while this one runs is refused; an eviction resumes it from the row
+    expect((await startUndo(sessionA, publicId)).failure).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+    const resumed = await repo.startFollowUp({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    expect(resumed.followUp).toMatchObject({
+      followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
+      isResume: true,
+    });
+
+    const undo = await HostToolCallProvider.undo({
+      plan: resumed.followUp!,
+      getHostToken: () => hostToken,
+    });
+    const reread = await HostToolCallProvider.readAfter({
+      plan: resumed.followUp!,
+      getHostToken: () => hostToken,
+    });
+    const undone = await repo.finishUndo({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: resumed.followUp!,
+      undo,
+      readback: reread,
+    });
+    expect(undone.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Undone,
+    );
+    expect((await readAlpha())?.data?.amount).toBe(
+      (followUp.payload.before as { data: { amount: number } }).data.amount,
+    );
+    // DEV_NOTE: Undone ends it: its values live one more window, then the purge empties them
+    expect((await getRow(publicId))?.undoUntil?.getTime()).toBeGreaterThan(undoUntil);
+
+    const events = await eventsOf(publicId);
+    expect(events.map((event) => event.entityAction)).toEqual([
+      "proposed",
+      "approved",
+      "committing",
+      "committed",
+      "verified",
+      "undoing",
+      "undoing",
+      "undone",
+    ]);
+    expect(events[5]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
+    expect(events[5]?.actorId).toBe(sessionA.chatbotUserId);
+    expect(events[6]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.System);
+    expect(events[7]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
+    expect(undone.changeRequest?.undoneBy).toBe(Schemas.ChangeRequestUndoneByEnum.User);
+  });
+
+  it("refuses an undo after the window, of one that isn't Verified, on a read-only company or a disabled tool, changing nothing", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId } = await verifyAlpha(sessionA, 520);
+
+    await setReadOnly(sessionA.companyId, true);
+    try {
+      expect((await startUndo(sessionA, publicId)).failure).toBe(
+        Schemas.ChangeRequestFailureEnum.ReadOnly,
+      );
+    } finally {
+      await setReadOnly(sessionA.companyId, false);
+    }
+    await setToolStatus(sessionA.companyId, Schemas.ToolDefinitionStatusIntEnum.Disabled);
+    try {
+      expect((await startUndo(sessionA, publicId)).failure).toBe(
+        Schemas.ChangeRequestFailureEnum.ToolUnavailable,
+      );
+    } finally {
+      await setToolStatus(sessionA.companyId, Schemas.ToolDefinitionStatusIntEnum.Active);
+    }
+    await setUndoUntil(publicId, new Date(Date.now() - 1_000));
+    const late = await startUndo(sessionA, publicId);
+    expect(late.failure).toBe(Schemas.ChangeRequestFailureEnum.UndoWindowClosed);
+    expect(late.changeRequest?.undoUntil).toBeNull();
+    const row = await getRow(publicId);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+    expect(row?.idempotencyKey).toBe(Schemas.changeRequestCommitIdempotencyKey(publicId));
+    expect((await eventsOf(publicId)).map((event) => event.entityAction)).not.toContain("undoing");
+
+    // DEV_NOTE: A rejection ends the proposal: its window opens for the purge, but there is nothing to undo
+    const rejectedId = (await propose(sessionA, 521)).changeRequest!.publicId;
+    await repo.decideChangeRequest({
+      session: sessionA,
+      changeRequestPublicId: rejectedId,
+      decision: Schemas.ChangeRequestDecisionEnum.Reject,
+      isExpired: false,
+    });
+    expect((await getRow(rejectedId))?.undoUntil).not.toBeNull();
+    expect((await startUndo(sessionA, rejectedId)).failure).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+  });
+
+  it("takes a user undo that never reached the host back to Verified, its window kept, and lets the user try again", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId } = await verifyAlpha(sessionA, 530);
+    const undoUntil = (await getRow(publicId))?.undoUntil?.getTime();
+    const started = await startUndo(sessionA, publicId);
+    const kept = await repo.finishUndo({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: started.followUp!,
+      undo: { outcome: Schemas.HostCallOutcomeEnum.Refused, attempts: 1 },
+      readback: null,
+    });
+    expect(kept.changeRequest).toMatchObject({
+      changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+      isUndoing: false,
+      undoUntil,
+    });
+    const row = await getRow(publicId);
+    expect(row?.idempotencyKey).toBe(Schemas.changeRequestCommitIdempotencyKey(publicId));
+    expect(row?.undoUntil?.getTime()).toBe(undoUntil);
+    expect((await readAlpha())?.data?.amount).toBe(530);
+    // DEV_NOTE: Not a status change: one verified event, then the undo's start and its undo_not_sent end
+    expect((await eventsOf(publicId)).map((event) => event.entityAction).slice(-3)).toEqual([
+      "verified",
+      "undoing",
+      "undo_not_sent",
+    ]);
+    expect((await startUndo(sessionA, publicId)).followUp?.isResume).toBe(false);
+  });
+
+  it("hands an undo nobody came back to finish to a person, and only one still under way", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId } = await verifyAlpha(sessionA, 535);
+    expect(
+      (await repo.abandonUndo({ session: sessionA, changeRequestPublicId: publicId })).failure,
+    ).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
+    await startUndo(sessionA, publicId);
+    const abandoned = await repo.abandonUndo({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+    });
+    expect(abandoned.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+    );
+    const row = await getRow(publicId);
+    expect(row?.errorCode).toBe(Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted);
+    expect(row?.undoUntil).toBeNull();
+    expect(row?.encryptedChanges).not.toBeNull();
+  });
+
+  it("purges the values once the window ends, keeping a NeedsHuman one and an undo under way", async () => {
+    const repo = new ActionEngineRepo(env);
+    const expired = (await verifyAlpha(sessionA, 540)).publicId;
+    await setUndoUntil(expired, new Date(Date.now() - 1_000));
+    const open = (await verifyAlpha(sessionA, 541)).publicId;
+
+    const flagged = await commitAlpha(sessionA, 542);
+    await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: flagged.publicId,
+      plan: flagged.followUp,
+      readback: { outcome: Schemas.HostCallOutcomeEnum.Failed, attempts: 3 },
+    });
+    expect((await getRow(flagged.publicId))?.undoUntil).toBeNull();
+
+    const undoing = (await verifyAlpha(sessionA, 543)).publicId;
+    await startUndo(sessionA, undoing);
+    await setUndoUntil(undoing, new Date(Date.now() - 1_000));
+
+    // DEV_NOTE: An undo under way spared only until undo_until + the grace period
+    const stale = (await verifyAlpha(sessionA, 544)).publicId;
+    await startUndo(sessionA, stale);
+    await setUndoUntil(stale, new Date(Date.now() - Schemas.CHANGE_REQUEST_UNDO_GRACE_MS - 1_000));
+
+    const purged = await new ChangeRequestPurgeRepo(env).purgeExpiredValues();
+    expect(purged.isSuccess).toBe(true);
+    expect(purged.purgedCount).toBeGreaterThanOrEqual(1);
+
+    expect((await getRow(stale))?.encryptedChanges).toBeNull();
+    const purgedRow = await getRow(expired);
+    expect(purgedRow).toMatchObject({
+      encryptedChanges: null,
+      iv: null,
+      encryptionKeyVersion: null,
+    });
+    expect(purgedRow?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+    for (const kept of [open, flagged.publicId, undoing]) {
+      expect((await getRow(kept))?.encryptedChanges).not.toBeNull();
+    }
+    const views = await repo.getChangeRequestViews({
+      session: sessionA,
+      changeRequestPublicIds: [expired],
+    });
+    expect(views.changeRequests?.[0]).toMatchObject({ changes: null, undoUntil: null });
+  });
+});
+
 describe("ActionEngineRepo edits (M3-5)", () => {
   it("edits a Proposed change request: new payload encrypted, was_edited, an edited event by the user", async () => {
     const repo = new ActionEngineRepo(env);
@@ -1084,6 +1342,14 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
           readback: null,
         });
         expect(undone.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        // DEV_NOTE: Nor the user's undo (M3-7)
+        const undoStarted = await startUndo(session, publicId);
+        expect(undoStarted.followUp).toBeUndefined();
+        expect(undoStarted.changeRequest).toBeUndefined();
+        expect([
+          Schemas.ChangeRequestFailureEnum.NotFound,
+          Schemas.ChangeRequestFailureEnum.ConversationClosed,
+        ]).toContain(undoStarted.failure);
         const executionSet = await repo.setExecutionId({
           session,
           changeRequestPublicId: publicId,

@@ -13,7 +13,9 @@ import Utility from "@/utils/Utility";
 //     one is refused never holds it);
 //   - the widget's change_request_decision frame (M3-4): approve or reject one proposal, handled by the DO itself, and
 //     its change_request_batch_decision and change_request_edits frames (M3-5): several answers at once, and new values
-//     for proposals (the DO re-checks every edit; nothing is approved by one).
+//     for proposals (the DO re-checks every edit; nothing is approved by one);
+//   - the widget's change_request_undos frame (M3-7): the user's undo of Verified changes within their window (the DO
+//     re-checks each like a commit).
 // Everything else is refused with a reason for the log; the widget only learns the frame was refused. Think's own tool
 // approval frames stay refused: an approval goes through the DO's decision path only.
 export default class WidgetFrameProvider {
@@ -86,6 +88,12 @@ export default class WidgetFrameProvider {
             })),
           }
         : { kind: "refuse", reason: "Malformed change request edits" };
+    }
+    if (envelope.data.type === Schemas.WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE) {
+      const undos = Schemas.ZWidgetChangeRequestUndosFrame.safeParse(json);
+      return undos.success
+        ? { kind: "undos", changeRequestPublicIds: undos.data.changeRequestIds }
+        : { kind: "refuse", reason: "Malformed change request undos" };
     }
     if (Schemas.ZWidgetPassThroughFrame.safeParse(json).success) {
       return { kind: "pass", frame: message };

@@ -19,7 +19,7 @@ import { ModelUnavailableError } from "@/providers/modelCallRecording";
 import SearchHelpDocsProvider from "@/providers/searchHelpDocs";
 import TranscriptProvider from "@/providers/transcript";
 import WidgetFrameProvider from "@/providers/widgetFrames";
-import ChangeRequestsProvider from "@/providers/changeRequests";
+import ChangeRequestsProvider, { UNDO_TEXT } from "@/providers/changeRequests";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
@@ -103,6 +103,13 @@ const DECIDED_OPEN_STAGE: Partial<
   [Schemas.ChangeRequestStatusIntEnum.Mismatch]: Schemas.ConversationChangeRequestStageEnum.Undoing,
 };
 
+// DEV_NOTE: How a landed commit's follow-up ended: what execute answers, and how its undo's host call ended (null when no
+// undo was sent)
+interface FollowUpRun {
+  output: Schemas.HostToolOutput;
+  undoOutcome: Schemas.HostCallOutcomeEnum | null;
+}
+
 // DEV_NOTE: A change request the database decided, with the status its pause is resolved by
 interface DecidedChangeRequest {
   toolCallId: string;
@@ -166,8 +173,15 @@ interface DecidedChangeRequest {
 // stored rating back, or null when it wasn't saved.
 // The ratings already given go out with the conversation frame on connect (read by the worker before the upgrade).
 //
-// Auto-close: idle for CONVERSATION_IDLE_CLOSE_MS with no open change request → Closed (Answered if any reply
-// completed, else Abandoned). A close that can't act yet retries no sooner than CONVERSATION_CLOSE_RETRY_MS.
+// Undo (M3-7): a Verified change request can be undone by the user until its undo_until (CHANGE_REQUEST_UNDO_WINDOW_MS
+// after it was verified). The DO keeps those in undoWindows (re-sent on connect, so the card keeps its Undo button)
+// and the change_request_undos frame asks for them: each is re-checked like a commit (ActionEngineRepo.startUndo),
+// then undone like a Mismatch (inverse_op as the user, then read again → Undone, back to Verified when nothing may
+// have reached the host, else NeedsHuman). No model call: the next turn's system prompt says what the user undid.
+//
+// Auto-close: idle for CONVERSATION_IDLE_CLOSE_MS with no open change request and no undo window still open → Closed
+// (Answered if any reply completed, else Abandoned). A close that can't act yet retries no sooner than
+// CONVERSATION_CLOSE_RETRY_MS.
 //
 // The host bearer token lives in a plain field, in memory only: never in Think state, configure, SQLite or a log
 // (pattern rule 3.11). An eviction drops it; the widget sends it again.
@@ -222,7 +236,9 @@ export class ConversationDO extends Think<Env> {
 
   getSystemPrompt(): string {
     const turn = this.activeTurn;
-    return turn?.spec ? ConversationDO.buildInstructions(turn.spec, turn.tools.length > 0) : "";
+    return turn?.spec
+      ? ConversationDO.buildInstructions(turn.spec, turn.tools.length > 0, turn.userUndoNotes)
+      : "";
   }
 
   // DEV_NOTE: Every turn's tool set (Think calls this at turn start). beforeTurn decides which are active. Search: the
@@ -360,6 +376,8 @@ export class ConversationDO extends Think<Env> {
         roles: roles.roles,
         rolesExpiresAt: roles.expiresAt,
         changeRequests: {},
+        undoWindows: {},
+        userUndos: {},
       });
       await this.armAutoClose();
     } else {
@@ -386,8 +404,8 @@ export class ConversationDO extends Think<Env> {
       feedback,
     });
 
-    // DEV_NOTE: The change requests still open, so a reconnecting widget can show them (a database read only when
-    // there are some)
+    // DEV_NOTE: The change requests still open, and the Verified ones the user can still undo, so a reconnecting widget
+    // can show them (a database read only when there are some)
     await this.sendOpenChangeRequests(connection);
   }
 
@@ -433,6 +451,10 @@ export class ConversationDO extends Think<Env> {
       await this.editChangeRequests(ws, admission.edits);
       return;
     }
+    if (admission.kind === "undos") {
+      await this.undoChangeRequests(ws, admission.changeRequestPublicIds);
+      return;
+    }
     if (!(await this.startTurn(ws, admission.requestId, admission.message.id))) {
       return;
     }
@@ -474,14 +496,22 @@ export class ConversationDO extends Think<Env> {
 
   // DEV_NOTE: Scheduled (schedule()); public because the scheduler calls it by name. Closing is marked before the first
   // await, so no message is admitted into a conversation on its way to Closed; if the database write fails the mark is
-  // lifted and the close retried later. A conversation with an open change request waits (its expiry ends it first).
+  // lifted and the close retried later. A conversation with an open change request waits (its expiry ends it first),
+  // and so does one with a Verified change the user can still undo (until its undo window ends, M3-7).
   async closeIfIdle(): Promise<void> {
+    this.dropEndedUndoWindows();
     const state = this.getRuntimeState();
     if (!state || state.isClosed || this.isClosing) return;
 
     const idleMs = Date.now() - state.lastActivityAt;
     const hasOpenChange = Object.keys(state.changeRequests).length > 0;
-    if (idleMs < Constants.CONVERSATION_IDLE_CLOSE_MS || this.isBusy() || hasOpenChange) {
+    const hasUndoWindow = Object.keys(state.undoWindows).length > 0;
+    if (
+      idleMs < Constants.CONVERSATION_IDLE_CLOSE_MS ||
+      this.isBusy() ||
+      hasOpenChange ||
+      hasUndoWindow
+    ) {
       this.patchRuntimeState({ closeScheduleId: null });
       await this.armAutoClose();
       // DEV_NOTE: The open change requests' backstop: an expiry whose schedule never ran, a commit left to resume
@@ -602,14 +632,17 @@ export class ConversationDO extends Think<Env> {
     return true;
   }
 
-  // DEV_NOTE: A turn prepared for Think: its config, tools, model and budget, and whether the transcript already holds
-  // untrusted content (then every write in it needs approval)
+  // DEV_NOTE: A turn prepared for Think: its config, tools, model and budget, whether the transcript already holds
+  // untrusted content (then every write in it needs approval), and the changes the user undid in this conversation
+  // (M3-7: every turn, since the transcript still says they were made)
   private preparedTurn(
     turn: Schemas.ActiveTurn<LanguageModel, TurnBudget>,
     prepared: Extract<Schemas.PreparedTurn<LanguageModel, TurnBudget>, { isSuccess: true }>,
   ): Schemas.ActiveTurn<LanguageModel, TurnBudget> {
+    const userUndoNotes = Object.values(this.getRuntimeState()?.userUndos ?? {});
     return {
       ...turn,
+      userUndoNotes,
       model: prepared.model,
       spec: prepared.spec,
       caps: prepared.caps,
@@ -638,6 +671,7 @@ export class ConversationDO extends Think<Env> {
       isUntrusted: false,
       toolCallKeys: [],
       isLoopStopped: false,
+      userUndoNotes: [],
     };
   }
 
@@ -1021,9 +1055,11 @@ export class ConversationDO extends Think<Env> {
     if (previousId) {
       await this.cancelSchedule(previousId);
     }
+    // DEV_NOTE: Not before the last undo window ends (M3-7): the close waits for it anyway
     const runAt = Math.max(
       state.lastActivityAt + Constants.CONVERSATION_IDLE_CLOSE_MS,
       Date.now() + Constants.CONVERSATION_CLOSE_RETRY_MS,
+      ...Object.values(state.undoWindows).map((window) => window.undoUntil),
     );
     const scheduled = await this.schedule(new Date(runAt), "closeIfIdle");
 
@@ -1097,21 +1133,53 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
+  // DEV_NOTE: Every change request view the DO sends to every socket goes through here, so the undo windows (M3-7)
+  // follow the views: a Verified one the user can undo is kept (by its tool call id), any other drops its window
   private broadcastChangeRequest(changeRequest: Schemas.WidgetChangeRequest | undefined): void {
     if (!changeRequest) return;
     const view = this.withToolCallId(changeRequest);
+    this.trackUndoWindow(view);
     for (const connection of this.getConnections()) {
       this.send(connection, { type: "change_request", changeRequest: view });
     }
   }
 
-  // DEV_NOTE: The view with the Think tool call id of its open entry (the widget places the card by it); null once the
-  // entry is gone (the call's output names the change request then)
+  // DEV_NOTE: The view with the Think tool call id of its open entry or undo window (the widget places the card by
+  // it); null once neither holds it (the call's output names the change request then)
   private withToolCallId(changeRequest: Schemas.WidgetChangeRequest): Schemas.WidgetChangeRequest {
-    const found = Object.entries(this.getRuntimeState()?.changeRequests ?? {}).find(
-      ([, entry]) => entry.publicId === changeRequest.publicId,
-    );
+    const state = this.getRuntimeState();
+    const found =
+      Object.entries(state?.changeRequests ?? {}).find(
+        ([, entry]) => entry.publicId === changeRequest.publicId,
+      ) ??
+      Object.entries(state?.undoWindows ?? {}).find(
+        ([, window]) => window.publicId === changeRequest.publicId,
+      );
     return { ...changeRequest, toolCallId: found?.[0] ?? null };
+  }
+
+  // DEV_NOTE: What a view changes in the undo bookkeeping (M3-7), no await between read and write: its undo window
+  // (ChangeRequestsProvider.nextUndoWindows), and, once the user's undo of it ended Undone (by whichever path: the
+  // undo itself or its resume), its summary for every later turn's system prompt
+  private trackUndoWindow(view: Schemas.WidgetChangeRequest): void {
+    const state = this.getRuntimeState();
+    if (!state) return;
+    const isUserUndone = view.undoneBy === Schemas.ChangeRequestUndoneByEnum.User;
+    this.patchRuntimeState({
+      undoWindows: ChangeRequestsProvider.nextUndoWindows(state.undoWindows, view),
+      ...(isUserUndone && !state.userUndos[view.publicId]
+        ? { userUndos: { ...state.userUndos, [view.publicId]: view.summary } }
+        : {}),
+    });
+  }
+
+  // DEV_NOTE: Undo windows past their end go (the database refuses an undo after undo_until anyway)
+  private dropEndedUndoWindows(): void {
+    const state = this.getRuntimeState();
+    if (!state) return;
+    const undoWindows = ChangeRequestsProvider.openUndoWindows(state.undoWindows, Date.now());
+    if (Object.keys(undoWindows).length === Object.keys(state.undoWindows).length) return;
+    this.patchRuntimeState({ undoWindows });
   }
 
   // DEV_NOTE: Critical events recorded with a step, relayed after its commit; the Cron sweep publishes any this misses
@@ -1519,9 +1587,10 @@ export class ConversationDO extends Think<Env> {
       // DEV_NOTE: A commit that landed but whose read-after or undo didn't finish takes up from there (M3-6)
       if (
         entry.stage === Schemas.ConversationChangeRequestStageEnum.Verifying ||
-        entry.stage === Schemas.ConversationChangeRequestStageEnum.Undoing
+        entry.stage === Schemas.ConversationChangeRequestStageEnum.Undoing ||
+        entry.stage === Schemas.ConversationChangeRequestStageEnum.UserUndoing
       ) {
-        return await this.runFollowUp(toolCallId, entry, null);
+        return (await this.runFollowUp(toolCallId, entry, null)).output;
       }
       this.patchChangeRequest(toolCallId, {
         stage: Schemas.ConversationChangeRequestStageEnum.Committing,
@@ -1569,7 +1638,9 @@ export class ConversationDO extends Think<Env> {
       });
       this.relayEvents(finished.outboxIds);
       this.broadcastChangeRequest(finished.changeRequest);
-      if (finished.followUp) return await this.runFollowUp(toolCallId, entry, finished.followUp);
+      if (finished.followUp) {
+        return (await this.runFollowUp(toolCallId, entry, finished.followUp)).output;
+      }
       if (
         finished.changeRequest &&
         finished.failure !== Schemas.ChangeRequestFailureEnum.ServerError
@@ -1632,7 +1703,7 @@ export class ConversationDO extends Think<Env> {
       status === Schemas.ChangeRequestStatusIntEnum.Committed ||
       status === Schemas.ChangeRequestStatusIntEnum.Mismatch
     ) {
-      return await this.runFollowUp(toolCallId, entry, null);
+      return (await this.runFollowUp(toolCallId, entry, null)).output;
     }
     this.patchChangeRequest(toolCallId, null);
     if (status === undefined) {
@@ -1650,10 +1721,14 @@ export class ConversationDO extends Think<Env> {
     toolCallId: string,
     entry: Schemas.ConversationChangeRequestEntry,
     plan: Schemas.FollowUpPlan | null,
-  ): Promise<Schemas.HostToolOutput> {
+  ): Promise<FollowUpRun> {
     const state = this.getRuntimeState();
-    if (!state)
-      return HostToolsProvider.output(Schemas.HostToolStatusEnum.Error, TOOL_TEXT.unavailable);
+    if (!state) {
+      return {
+        output: HostToolsProvider.output(Schemas.HostToolStatusEnum.Error, TOOL_TEXT.unavailable),
+        undoOutcome: null,
+      };
+    }
     const repo = this.actionEngineRepo();
     let next = plan;
     if (!next) {
@@ -1664,7 +1739,9 @@ export class ConversationDO extends Think<Env> {
       });
       this.relayEvents(started.outboxIds);
       this.broadcastChangeRequest(started.changeRequest);
-      if (!started.followUp) return await this.endFollowUp(toolCallId, entry, started);
+      if (!started.followUp) {
+        return { output: await this.endFollowUp(toolCallId, entry, started), undoOutcome: null };
+      }
       next = started.followUp;
     }
     const getHostToken = () => this.hostToken;
@@ -1675,11 +1752,14 @@ export class ConversationDO extends Think<Env> {
       });
       const read = await HostToolCallProvider.readAfter({ plan: next, getHostToken });
       if (read.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded && read.attempts === 0) {
-        return HostToolsProvider.output(
-          Schemas.HostToolStatusEnum.Committed,
-          TOOL_TEXT.committed,
-          entry.publicId,
-        );
+        return {
+          output: HostToolsProvider.output(
+            Schemas.HostToolStatusEnum.Committed,
+            TOOL_TEXT.committed,
+            entry.publicId,
+          ),
+          undoOutcome: null,
+        };
       }
       if (read.outcome !== Schemas.HostCallOutcomeEnum.Succeeded) {
         this.logHostCall(next.tool, read, "Read-after didn't succeed");
@@ -1692,24 +1772,33 @@ export class ConversationDO extends Think<Env> {
       });
       this.relayEvents(verified.outboxIds);
       this.broadcastChangeRequest(verified.changeRequest);
-      if (!verified.followUp) return await this.endFollowUp(toolCallId, entry, verified);
+      if (!verified.followUp) {
+        return { output: await this.endFollowUp(toolCallId, entry, verified), undoOutcome: null };
+      }
       next = verified.followUp;
     }
 
-    this.patchChangeRequest(toolCallId, {
-      stage: Schemas.ConversationChangeRequestStageEnum.Undoing,
-    });
+    // DEV_NOTE: The user's own undo (M3-7) keeps its stage (and its give-up deadline)
+    const current = this.getRuntimeState()?.changeRequests[toolCallId];
+    if (current?.stage !== Schemas.ConversationChangeRequestStageEnum.UserUndoing) {
+      this.patchChangeRequest(toolCallId, {
+        stage: Schemas.ConversationChangeRequestStageEnum.Undoing,
+      });
+    }
     const undo = await HostToolCallProvider.undo({ plan: next, getHostToken });
     if (
       undo.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded &&
       undo.attempts === 0 &&
       undo.mayHaveLanded !== true
     ) {
-      return HostToolsProvider.output(
-        Schemas.HostToolStatusEnum.Error,
-        TOOL_TEXT.undoing,
-        entry.publicId,
-      );
+      return {
+        output: HostToolsProvider.output(
+          Schemas.HostToolStatusEnum.Error,
+          TOOL_TEXT.undoing,
+          entry.publicId,
+        ),
+        undoOutcome: undo.outcome,
+      };
     }
     const isUndoSent =
       undo.outcome === Schemas.HostCallOutcomeEnum.Succeeded ||
@@ -1727,7 +1816,7 @@ export class ConversationDO extends Think<Env> {
     });
     this.relayEvents(undone.outboxIds);
     this.broadcastChangeRequest(undone.changeRequest);
-    return await this.endFollowUp(toolCallId, entry, undone);
+    return { output: await this.endFollowUp(toolCallId, entry, undone), undoOutcome: undo.outcome };
   }
 
   // DEV_NOTE: A follow-up step's end: a settled change request ends its entry with its outcome; one still open (a
@@ -2157,6 +2246,171 @@ export class ConversationDO extends Think<Env> {
     this.reply(ws, { type: "change_request_edit", changeRequestId, isSaved, message });
   }
 
+  // DEV_NOTE: The user's undo of Verified changes (M3-7), from a card's Undo. Same gate as an answer (rate limit, the
+  // conversation claimed, the host token: the undo runs as the user); a change request with no undo window here gets
+  // its view as it stands and a refusal. Then each in order (runUserUndo); a host token that runs out midway answers
+  // token_needed and stops there. No model call: every later turn hears what was undone (userUndos).
+  private async undoChangeRequests(ws: WebSocket, publicIds: string[]): Promise<void> {
+    const refuseAll = (ids: string[], message: string) => {
+      for (const publicId of ids) this.replyUndo(ws, publicId, false, message);
+    };
+    if (!this.takeFrameSlot("decision", Constants.DECISION_FRAMES_PER_WINDOW)) {
+      refuseAll(publicIds, UNDO_TEXT.notSent);
+      return;
+    }
+    this.dropEndedUndoWindows();
+    const state = this.getRuntimeState();
+    if (!state || state.isClosed) {
+      this.sendClosed(ws);
+      return;
+    }
+    const windows: [string, Schemas.ConversationUndoWindow][] = [];
+    const notUndoable: string[] = [];
+    for (const publicId of publicIds) {
+      const found = Object.entries(state.undoWindows).find(
+        ([, window]) => window.publicId === publicId,
+      );
+      if (found) {
+        windows.push(found);
+      } else {
+        notUndoable.push(publicId);
+      }
+    }
+    if (notUndoable.length > 0) {
+      refuseAll(notUndoable, UNDO_TEXT.notAvailable);
+      const views = await this.actionEngineRepo().getChangeRequestViews({
+        session: state.session,
+        changeRequestPublicIds: notUndoable,
+      });
+      for (const view of views.changeRequests ?? []) this.broadcastChangeRequest(view);
+    }
+    const ids = windows.map(([, window]) => window.publicId);
+    if (windows.length === 0) return;
+    if (this.isClosing) {
+      refuseAll(ids, CLOSING_MESSAGE);
+      return;
+    }
+    if (this.isBusy()) {
+      refuseAll(ids, TURN_IN_PROGRESS_MESSAGE);
+      return;
+    }
+    if (!this.hostToken) {
+      this.reply(ws, { type: "token_needed" });
+      return;
+    }
+
+    this.isDeciding = true;
+    try {
+      this.patchRuntimeState({ lastActivityAt: Date.now() });
+      for (const [toolCallId, window] of windows) {
+        const undone = await this.runUserUndo(ws, toolCallId, window);
+        if (undone === "tokenNeeded") {
+          this.reply(ws, { type: "token_needed" });
+          return;
+        }
+        if (undone === "closed") return;
+      }
+    } finally {
+      this.isDeciding = false;
+    }
+  }
+
+  // DEV_NOTE: One user undo: startUndo re-checks it like a commit and stores the user's undo key; an open entry (stage
+  // user_undoing, given up at undo_until + CHANGE_REQUEST_UNDO_GRACE_MS) is kept from then on, so an eviction or a failed
+  // write resumes it like an auto-undo (on host_token, the retry, the auto-close's check). Then runFollowUp sends
+  // inverse_op as the user and reads the record again. Undone → noted for later turns (trackUndoWindow); back to
+  // Verified (nothing reached the host) → the widget hears why.
+  private async runUserUndo(
+    ws: WebSocket,
+    toolCallId: string,
+    window: Schemas.ConversationUndoWindow,
+  ): Promise<"started" | "refused" | "tokenNeeded" | "closed"> {
+    const state = this.getRuntimeState();
+    if (!state) return "closed";
+    if (this.commitsInFlight.has(window.publicId)) {
+      this.replyUndo(ws, window.publicId, false, UNDO_TEXT.notAvailable);
+      return "refused";
+    }
+    const started = await this.actionEngineRepo().startUndo({
+      session: state.session,
+      changeRequestPublicId: window.publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    this.relayEvents(started.outboxIds);
+    if (!started.isSuccess || !started.followUp) {
+      this.broadcastChangeRequest(started.changeRequest);
+      AppLogger.warn({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.UndoChangeRequest,
+        message: started.message ?? "Undo refused",
+        metadata: { conversationPublicId: this.name, failure: started.failure ?? null },
+      });
+      return this.refuseUndoStep(ws, toolCallId, window, started.failure);
+    }
+
+    const entry: Schemas.ConversationChangeRequestEntry = {
+      publicId: window.publicId,
+      toolName: started.followUp.tool.name,
+      turnId: null,
+      stage: Schemas.ConversationChangeRequestStageEnum.UserUndoing,
+      expiresAt: ChangeRequestsProvider.undoGiveUpAt(window.undoUntil, Date.now()),
+      executionId: null,
+      expiryScheduleId: null,
+    };
+    this.patchRuntimeState({
+      changeRequests: { ...(this.getRuntimeState()?.changeRequests ?? {}), [toolCallId]: entry },
+    });
+    this.broadcastChangeRequest(started.changeRequest);
+    this.replyUndo(ws, window.publicId, true, null);
+
+    this.commitsInFlight.add(window.publicId);
+    let run: FollowUpRun;
+    try {
+      run = await this.runFollowUp(toolCallId, entry, started.followUp);
+    } finally {
+      this.commitsInFlight.delete(window.publicId);
+    }
+    if (run.output.status === Schemas.HostToolStatusEnum.Verified) {
+      if (
+        run.undoOutcome === Schemas.HostCallOutcomeEnum.TokenNeeded ||
+        run.undoOutcome === Schemas.HostCallOutcomeEnum.TokenRejected
+      ) {
+        return "tokenNeeded";
+      }
+      this.reply(ws, { type: "error", message: UNDO_TEXT.notMade });
+    }
+    return "started";
+  }
+
+  // DEV_NOTE: An undo the database refused (ChangeRequestsProvider.undoRefusalReply): the widget hears why (nothing
+  // changed); a change request that can no longer be undone drops its window; a closed conversation is closed here too
+  private refuseUndoStep(
+    ws: WebSocket,
+    toolCallId: string,
+    window: Schemas.ConversationUndoWindow,
+    failure: Schemas.ChangeRequestFailureEnum | undefined,
+  ): "refused" | "closed" {
+    const reply = ChangeRequestsProvider.undoRefusalReply(failure);
+    if (reply.isWindowEnded) {
+      const { [toolCallId]: _ended, ...undoWindows } = this.getRuntimeState()?.undoWindows ?? {};
+      this.patchRuntimeState({ undoWindows });
+    }
+    this.replyUndo(ws, window.publicId, false, reply.message);
+    if (!reply.isClosed) return "refused";
+    this.patchRuntimeState({ isClosed: true });
+    this.sendClosed(ws);
+    return "closed";
+  }
+
+  private replyUndo(
+    ws: WebSocket,
+    changeRequestId: string,
+    isStarted: boolean,
+    message: string | null,
+  ): void {
+    this.reply(ws, { type: "change_request_undo", changeRequestId, isStarted, message });
+  }
+
   // DEV_NOTE: Ends a Pending proposal by its expiry, with the conversation claimed (isDeciding) by the caller: the
   // database decides, then the pause is resolved
   private async resolvePending(
@@ -2439,7 +2693,9 @@ export class ConversationDO extends Think<Env> {
   }
 
   // DEV_NOTE: The auto-close's check while change requests are open: an expiry whose schedule never ran (past its
-  // deadline by more than a retry) is run now, and approved commits are resumed
+  // deadline by more than a retry) is run now, and approved commits are resumed. A user undo still cut short past its
+  // give-up time (no host token came back to resume it) is handed to a person (M3-7), so its values are kept on
+  // purpose and the conversation can close.
   private async sweepChangeRequests(): Promise<void> {
     const state = this.getRuntimeState();
     if (!state) return;
@@ -2453,23 +2709,54 @@ export class ConversationDO extends Think<Env> {
       }
     }
     await this.resumeCommits();
+    await this.abandonStaleUndos();
   }
 
-  // DEV_NOTE: The open change requests as they stand, to one socket (on connect)
-  private async sendOpenChangeRequests(connection: Connection): Promise<void> {
+  private async abandonStaleUndos(): Promise<void> {
     const state = this.getRuntimeState();
     if (!state) return;
-    const publicIds = Object.values(state.changeRequests).map((entry) => entry.publicId);
+    const now = Date.now();
+    for (const [toolCallId, entry] of Object.entries(state.changeRequests)) {
+      if (entry.stage !== Schemas.ConversationChangeRequestStageEnum.UserUndoing) continue;
+      if (entry.expiresAt > now || this.commitsInFlight.has(entry.publicId)) continue;
+      const abandoned = await this.actionEngineRepo().abandonUndo({
+        session: state.session,
+        changeRequestPublicId: entry.publicId,
+      });
+      this.relayEvents(abandoned.outboxIds);
+      this.broadcastChangeRequest(abandoned.changeRequest);
+      if (abandoned.failure === Schemas.ChangeRequestFailureEnum.ServerError) continue;
+      AppLogger.warn({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.UndoChangeRequest,
+        message: "User undo never resumed; handed to a person",
+        metadata: { conversationPublicId: this.name, changeRequestPublicId: entry.publicId },
+      });
+      this.patchChangeRequest(toolCallId, null);
+    }
+  }
+
+  // DEV_NOTE: The open change requests and those still in their undo window as they stand, to one socket (on connect).
+  // A window the view no longer carries (undone elsewhere, purged) is dropped (trackUndoWindow).
+  private async sendOpenChangeRequests(connection: Connection): Promise<void> {
+    this.dropEndedUndoWindows();
+    const state = this.getRuntimeState();
+    if (!state) return;
+    const publicIds = [
+      ...new Set([
+        ...Object.values(state.changeRequests).map((entry) => entry.publicId),
+        ...Object.values(state.undoWindows).map((window) => window.publicId),
+      ]),
+    ];
     if (publicIds.length === 0) return;
     const views = await this.actionEngineRepo().getChangeRequestViews({
       session: state.session,
       changeRequestPublicIds: publicIds,
     });
     for (const changeRequest of views.changeRequests ?? []) {
-      this.send(connection, {
-        type: "change_request",
-        changeRequest: this.withToolCallId(changeRequest),
-      });
+      const view = this.withToolCallId(changeRequest);
+      this.trackUndoWindow(view);
+      this.send(connection, { type: "change_request", changeRequest: view });
     }
   }
 
@@ -2544,8 +2831,13 @@ export class ConversationDO extends Think<Env> {
   }
 
   // DEV_NOTE: The trusted system prompt: the company's persona, then its procedures, then how to use the help docs
-  // when the bot has knowledge (M2-6), then how to act in the user's app when the turn has host tools (M3-4)
-  private static buildInstructions(spec: Schemas.ConfigSpec, hasHostTools: boolean): string {
+  // when the bot has knowledge (M2-6), then how to act in the user's app when the turn has host tools (M3-4), then the
+  // changes the user undid since the model last ran (M3-7)
+  private static buildInstructions(
+    spec: Schemas.ConfigSpec,
+    hasHostTools: boolean,
+    userUndoNotes: string[],
+  ): string {
     const procedures = spec.procedures.map(
       (procedure) =>
         `### ${procedure.name}\nWhen to use: ${procedure.whenToUse}\nSteps:\n${procedure.steps}`,
@@ -2555,6 +2847,7 @@ export class ConversationDO extends Think<Env> {
       procedures.length > 0 ? `## Procedures\n\n${procedures.join("\n\n")}` : null,
       ConversationDO.hasKnowledge(spec) ? SearchHelpDocsProvider.instructions : null,
       hasHostTools ? HostToolsProvider.instructions : null,
+      HostToolsProvider.userUndoText(userUndoNotes),
     ]
       .filter((part): part is string => part !== null)
       .join("\n\n");

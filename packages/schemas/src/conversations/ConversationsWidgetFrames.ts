@@ -153,10 +153,27 @@ export const ZWidgetChangeRequestEditsFrame = z.object({
 });
 export type WidgetChangeRequestEditsFrame = z.infer<typeof ZWidgetChangeRequestEditsFrame>;
 
+// DEV_NOTE: The user's undo of Verified changes within their undo window (M3-7), by change request public id (a card's
+// Undo sends every record of it the user can still undo). The DO re-checks each like a commit (the conversation, the
+// chatbot and company, read-only, the tool, the window) before anything reaches the host; the answer is one
+// change_request_undo frame per change request.
+export const WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE = "change_request_undos";
+
+export const ZWidgetChangeRequestUndosFrame = z.object({
+  type: z.literal(WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE),
+  changeRequestIds: z
+    .array(ZChangeRequestPublicId)
+    .min(1)
+    .max(CHANGE_REQUEST_MAX_PENDING)
+    .refine((ids) => new Set(ids).size === ids.length, "Each change request once"),
+});
+export type WidgetChangeRequestUndosFrame = z.infer<typeof ZWidgetChangeRequestUndosFrame>;
+
 // DEV_NOTE: Server-side only — what the widget frame allowlist decided (WidgetFrameProvider.admit). pass: hand the
 // frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. feedback: a
 // rating for the DO to store. hostToken: the user's host token for the DO's memory. decisions: answers to proposals
-// (the single decision frame is a list of one). edits: new values for proposals (M3-5). refuse: drop it and tell the widget (reason is logged only, and never holds the frame's content).
+// (the single decision frame is a list of one). edits: new values for proposals (M3-5). undos: the user's undo of
+// Verified changes (M3-7). refuse: drop it and tell the widget (reason is logged only, and never holds the frame's content).
 export type WidgetFrameAdmission =
   | { kind: "pass"; frame: string }
   | { kind: "chat"; requestId: string; message: { id: string; text: string }; frame: string }
@@ -170,6 +187,7 @@ export type WidgetFrameAdmission =
       kind: "edits";
       edits: { changeRequestPublicId: string; values: ChangeRequestEditValues }[];
     }
+  | { kind: "undos"; changeRequestPublicIds: string[] }
   | { kind: "refuse"; reason: string };
 
 // DEV_NOTE: Server-side only — one Think transcript message reduced to what the read model keeps (TranscriptProvider).
@@ -213,7 +231,8 @@ export interface UnsyncedTranscript {
 // Think reports for it; the DO's own fallback end of a widget request never does). tools are the config's loaded host tools. isUntrusted: the turn holds untrusted content (help docs or host data
 // read in this or an earlier turn), so every write needs approval. toolCallKeys are the turn's host calls (tool name +
 // args), for the loop guard; isLoopStopped ends the turn's loop once one repeats. startedAt (epoch ms) lets a
-// continuation Think never ran be dropped instead of holding the conversation.
+// continuation Think never ran be dropped instead of holding the conversation. userUndoNotes (M3-7): the summaries of
+// the changes the user undid in this conversation, for this turn's system prompt.
 export interface ActiveTurn<TModel, TCaps> {
   requestId: string;
   startedAt: number;
@@ -229,6 +248,7 @@ export interface ActiveTurn<TModel, TCaps> {
   isUntrusted: boolean;
   toolCallKeys: string[];
   isLoopStopped: boolean;
+  userUndoNotes: string[];
 }
 
 // DEV_NOTE: Server-side only — a prepared turn's config, routed model and budget, or why it can't run (isClosed: the
@@ -244,24 +264,37 @@ export type PreparedTurn<TModel, TCaps> =
 // the turn that proposed it.
 // DEV_NOTE: Where an open change request stands in the DO: waiting for the user, approved, committing, then (M3-6)
 // its read-after (verifying) and a mismatch's auto-undo (undoing). Every stage past pending resumes on the host token.
+// UserUndoing (M3-7): the user's undo of a Verified one, from its start until it ends; its expiresAt is when the DO
+// stops waiting for the host token to resume it (undo_until + CHANGE_REQUEST_UNDO_GRACE_MS) and hands it to a person,
+// and it has no proposing turn (turnId null).
 export enum ConversationChangeRequestStageEnum {
   Pending = "pending",
   Approved = "approved",
   Committing = "committing",
   Verifying = "verifying",
   Undoing = "undoing",
+  UserUndoing = "user_undoing",
 }
 
 export const ZConversationChangeRequestEntry = z.object({
   publicId: z.string(),
   toolName: z.string(),
-  turnId: z.string(),
+  turnId: z.string().nullable(),
   stage: z.enum(ConversationChangeRequestStageEnum),
   expiresAt: z.number().int(),
   executionId: z.string().nullable(),
   expiryScheduleId: z.string().nullable(),
 });
 export type ConversationChangeRequestEntry = z.infer<typeof ZConversationChangeRequestEntry>;
+
+// DEV_NOTE: Server-side only — a Verified change request the user can still undo (M3-7), by the Think tool call id that
+// proposed it: re-sent on connect (so the card keeps its Undo button), and the auto-close waits for undoUntil (epoch
+// ms). The database's undo_until decides; this only keeps the conversation open and the card current.
+export const ZConversationUndoWindow = z.object({
+  publicId: z.string(),
+  undoUntil: z.number().int(),
+});
+export type ConversationUndoWindow = z.infer<typeof ZConversationUndoWindow>;
 
 // DEV_NOTE: Server-side only — the verified companion JWT's roles and its exp (epoch ms), from the worker to the
 // Conversation DO in a header only the worker sets (Constants.CONVERSATION_ROLES_HEADER)
@@ -280,7 +313,10 @@ export type ConversationRolesGrant = z.infer<typeof ZConversationRolesGrant>;
 // defaulted so a conversation stored before M2-4 still parses. Actions (M3-4): roles are the host user's roles from
 // the newest connect's companion JWT (approval rules match them), and count only until rolesExpiresAt (epoch ms, that
 // JWT's exp; after it the user has no roles until a fresh connect); changeRequests holds this conversation's open
-// change requests by Think tool call id until they end. Internal ids only; never the host bearer token.
+// change requests by Think tool call id until they end. Undo (M3-7): undoWindows holds the Verified ones the user can
+// still undo, by Think tool call id; userUndos the summaries (no values) of those the user undid in this conversation,
+// by public id, told to every later turn (the transcript still says they were made). Internal ids only; never the
+// host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
@@ -295,5 +331,7 @@ export const ZConversationRuntimeState = z.object({
   roles: z.array(z.string()).default([]),
   rolesExpiresAt: z.number().int().default(0),
   changeRequests: z.record(z.string(), ZConversationChangeRequestEntry).default({}),
+  undoWindows: z.record(z.string(), ZConversationUndoWindow).default({}),
+  userUndos: z.record(z.string(), z.string()).default({}),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;

@@ -6,6 +6,7 @@ import {
   groupChangeRequests,
   parseEditText,
   toChangeCard,
+  undoableMembers,
 } from "@/lib/changeRequestView";
 import { toMessageViews } from "@/lib/transcriptView";
 import { EMPTY_REVIEW } from "@/store/widgetStore";
@@ -51,6 +52,9 @@ function changeRequest(
     wasEdited: false,
     editableFields: [AMOUNT],
     mismatches: null,
+    undoUntil: null,
+    isUndoing: false,
+    undoneBy: null,
     ...patch,
   };
 }
@@ -217,13 +221,67 @@ describe("toChangeCard", () => {
     const members = [
       changeRequest("a", {
         changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        undoneBy: Schemas.ChangeRequestUndoneByEnum.System,
         editableFields: [],
+        mismatches: [
+          {
+            field: "amount",
+            expected: { isFound: true, value: 300 },
+            found: { isFound: true, value: 999 },
+          },
+        ],
       }),
     ];
     const card = toChangeCard(group(members), review(members));
     expect(card.subtitle).toBe(
       "The app didn't save rec_a as expected, so I undid it. Nothing changed.",
     );
+  });
+
+  // DEV_NOTE: M3-7: the card's Undo, and what the user's own undo reads like
+  it("offers Undo for the checked records still inside their window, until the earliest one ends", () => {
+    const now = Date.now();
+    const verified = (publicId: string, patch: Partial<Schemas.WidgetChangeRequest>) =>
+      changeRequest(publicId, {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+        editableFields: [],
+        ...patch,
+      });
+    const members = [
+      verified("a", { undoUntil: now + 60_000 }),
+      verified("b", { undoUntil: now + 30_000 }),
+      verified("c", { undoUntil: now - 1 }),
+      verified("d", { undoUntil: null }),
+    ];
+    const card = toChangeCard(group(members), review(members));
+    expect(card.undoCount).toBe(2);
+    expect(card.undoUntil).toBe(now + 30_000);
+    expect(undoableMembers(members, now).map((member) => member.publicId)).toEqual(["a", "b"]);
+
+    const undoing = [verified("a", { undoUntil: null, isUndoing: true })];
+    const undoingCard = toChangeCard(group(undoing), review(undoing));
+    expect(undoingCard.undoCount).toBe(0);
+    expect(undoingCard.records[0]?.outcome).toBe(Schemas.WidgetChangeOutcomeEnum.UserUndoing);
+  });
+
+  it("says the user undid a record, apart from an undo after a mismatch", () => {
+    const members = [
+      changeRequest("a", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        undoneBy: Schemas.ChangeRequestUndoneByEnum.User,
+        editableFields: [],
+      }),
+      changeRequest("b", {
+        changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+        editableFields: [],
+      }),
+    ];
+    const card = toChangeCard(group(members), review(members));
+    expect(card.tone).toBe(Schemas.WidgetChangeCardToneEnum.Undone);
+    expect(card.title).toBe("Change undone");
+    expect(card.subtitle).toBe("You undid rec_a. It's back as before.");
+    expect(card.notes).toEqual(["rec_b was saved and checked."]);
+    expect(card.records[0]?.outcome).toBe(Schemas.WidgetChangeOutcomeEnum.UserUndone);
   });
 
   it("leads with the record that needs a person, and names the saved ones", () => {

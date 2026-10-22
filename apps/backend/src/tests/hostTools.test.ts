@@ -162,3 +162,12 @@ describe("HostToolsProvider host data for the model", () => {
     ).toContain("approves");
   });
 });
+
+describe("HostToolsProvider.userUndoText (M3-7)", () => {
+  it("tells the model what the user undid, by summary only, and nothing when there is none", () => {
+    expect(HostToolsProvider.userUndoText([])).toBeNull();
+    const text = HostToolsProvider.userUndoText(["update_record: 1 field changed"]);
+    expect(text).toContain("the user undid these changes");
+    expect(text).toContain("- update_record: 1 field changed");
+  });
+});

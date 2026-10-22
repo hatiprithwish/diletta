@@ -261,6 +261,29 @@ describe("WidgetFrameProvider.admit host token and change request decisions", ()
     }
   });
 
+  it("admits the user's undo of change requests, each once, and refuses empty or repeated ones", () => {
+    const frame = { type: "change_request_undos", changeRequestIds: ["cr_1", "cr_2"] };
+    expect(WidgetFrameProvider.admit(JSON.stringify(frame), none)).toEqual({
+      kind: "undos",
+      changeRequestPublicIds: ["cr_1", "cr_2"],
+    });
+    const refused = [
+      { type: "change_request_undos", changeRequestIds: [] },
+      { type: "change_request_undos", changeRequestIds: ["cr_1", "cr_1"] },
+      {
+        type: "change_request_undos",
+        changeRequestIds: Array.from(
+          { length: Schemas.CHANGE_REQUEST_MAX_PENDING + 1 },
+          (_, index) => `cr_${index}`,
+        ),
+      },
+      { type: "change_request_undos", changeRequestIds: [""] },
+    ];
+    for (const undo of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(undo), none).kind).toBe("refuse");
+    }
+  });
+
   it("refuses a malformed decision, and Think's own tool approval frames", () => {
     const refused = [
       { type: "change_request_decision", changeRequestId: "cr_1", decision: "maybe" },

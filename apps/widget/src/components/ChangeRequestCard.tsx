@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import {
   ArrowCounterClockwise,
   Check,
+  Clock,
   PencilSimple,
   Plus,
   Trash,
@@ -19,7 +21,8 @@ import DiffLine from "@/components/DiffLine";
 // icon, the title and one line, one row per record (mono id + its diff), and the footer actions. Renders the view
 // only; every action goes up (useChangeReview). The buttons wait while an answer or an edit is on its way. A settled
 // card (M3-6) takes its tone's icon: Verified ✓, Changes undone (with what the check found), Needs a person (which
-// records saved, which is flagged).
+// records saved, which is flagged). A card with records the user can still undo (M3-7, widget-Verified) shows Undo and
+// "Undo available until HH:MM", hidden once that time passes.
 const KIND_ICON = {
   [Schemas.ChangeRequestKindEnum.Update]: PencilSimple,
   [Schemas.ChangeRequestKindEnum.Create]: Plus,
@@ -40,6 +43,24 @@ const TONE_ICON = {
 
 const EXPIRY_NOTE = "This request expires if it isn't approved soon.";
 
+// DEV_NOTE: The undo window's end as a clock time (DESIGN.md widget-Verified: "16:42"), in the visitor's time zone
+const UNDO_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+// DEV_NOTE: Whether the undo window (epoch ms) is still open, re-rendering when it ends
+function useIsBefore(until: number | null): boolean {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (until === null || until <= Date.now()) return;
+    const timer = setTimeout(() => setNow(Date.now()), until - Date.now());
+    return () => clearTimeout(timer);
+  }, [until]);
+  return until !== null && until > now;
+}
+
 export default function ChangeRequestCard({ card, actions }: Schemas.WidgetChangeCardProps) {
   const toneIcon =
     card.tone === Schemas.WidgetChangeCardToneEnum.Review ||
@@ -51,6 +72,7 @@ export default function ChangeRequestCard({ card, actions }: Schemas.WidgetChang
   const isEditing = card.stage === Schemas.WidgetChangeCardStageEnum.Editing;
   const isSettled = card.stage === Schemas.WidgetChangeCardStageEnum.Settled;
   const isBulk = card.layout === Schemas.WidgetChangeCardLayoutEnum.Bulk;
+  const canUndo = useIsBefore(card.undoUntil) && card.undoCount > 0 && !isEditing;
 
   return (
     <section
@@ -171,6 +193,23 @@ export default function ChangeRequestCard({ card, actions }: Schemas.WidgetChang
             </Button>
           </div>
           <p className="text-widget-note text-muted-foreground">{EXPIRY_NOTE}</p>
+        </footer>
+      )}
+      {canUndo && card.undoUntil !== null && (
+        <footer className="flex flex-wrap items-center gap-2.5 border-t border-muted px-3 py-2.5">
+          <Button
+            variant="outline"
+            onClick={() => actions.onUndo(card.id)}
+            disabled={isSending}
+            className="text-body"
+          >
+            <ArrowCounterClockwise />
+            Undo
+          </Button>
+          <span className="flex items-center gap-1.5 text-caption text-muted-foreground">
+            <Clock className="size-3.5 shrink-0" />
+            Undo available until {UNDO_TIME_FORMAT.format(card.undoUntil)}
+          </span>
         </footer>
       )}
       {card.notice && (

@@ -166,6 +166,7 @@ export enum LogAction {
   CommitChangeRequest = "CommitChangeRequest",
   VerifyChangeRequest = "VerifyChangeRequest",
   UndoChangeRequest = "UndoChangeRequest",
+  PurgeChangeRequestValues = "PurgeChangeRequestValues",
   EditChangeRequest = "EditChangeRequest",
   UpdateChangeRequestPayload = "UpdateChangeRequestPayload",
   ReceiveHostToken = "ReceiveHostToken",
