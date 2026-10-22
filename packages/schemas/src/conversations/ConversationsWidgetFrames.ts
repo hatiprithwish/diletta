@@ -232,7 +232,7 @@ export interface UnsyncedTranscript {
 // read in this or an earlier turn), so every write needs approval. toolCallKeys are the turn's host calls (tool name +
 // args), for the loop guard; isLoopStopped ends the turn's loop once one repeats. startedAt (epoch ms) lets a
 // continuation Think never ran be dropped instead of holding the conversation. userUndoNotes (M3-7): the summaries of
-// the changes the user undid since the model last ran, for this turn's system prompt.
+// the changes the user undid in this conversation, for this turn's system prompt.
 export interface ActiveTurn<TModel, TCaps> {
   requestId: string;
   startedAt: number;
@@ -264,18 +264,22 @@ export type PreparedTurn<TModel, TCaps> =
 // the turn that proposed it.
 // DEV_NOTE: Where an open change request stands in the DO: waiting for the user, approved, committing, then (M3-6)
 // its read-after (verifying) and a mismatch's auto-undo (undoing). Every stage past pending resumes on the host token.
+// UserUndoing (M3-7): the user's undo of a Verified one, from its start until it ends; its expiresAt is when the DO
+// stops waiting for the host token to resume it (undo_until + CHANGE_REQUEST_UNDO_GRACE_MS) and hands it to a person,
+// and it has no proposing turn (turnId null).
 export enum ConversationChangeRequestStageEnum {
   Pending = "pending",
   Approved = "approved",
   Committing = "committing",
   Verifying = "verifying",
   Undoing = "undoing",
+  UserUndoing = "user_undoing",
 }
 
 export const ZConversationChangeRequestEntry = z.object({
   publicId: z.string(),
   toolName: z.string(),
-  turnId: z.string(),
+  turnId: z.string().nullable(),
   stage: z.enum(ConversationChangeRequestStageEnum),
   expiresAt: z.number().int(),
   executionId: z.string().nullable(),
@@ -310,8 +314,9 @@ export type ConversationRolesGrant = z.infer<typeof ZConversationRolesGrant>;
 // the newest connect's companion JWT (approval rules match them), and count only until rolesExpiresAt (epoch ms, that
 // JWT's exp; after it the user has no roles until a fresh connect); changeRequests holds this conversation's open
 // change requests by Think tool call id until they end. Undo (M3-7): undoWindows holds the Verified ones the user can
-// still undo, by Think tool call id; userUndoNotes the summaries (no values) of those the user undid since the model
-// last ran, told to the next turn or continuation. Internal ids only; never the host bearer token.
+// still undo, by Think tool call id; userUndos the summaries (no values) of those the user undid in this conversation,
+// by public id, told to every later turn (the transcript still says they were made). Internal ids only; never the
+// host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
@@ -327,6 +332,6 @@ export const ZConversationRuntimeState = z.object({
   rolesExpiresAt: z.number().int().default(0),
   changeRequests: z.record(z.string(), ZConversationChangeRequestEntry).default({}),
   undoWindows: z.record(z.string(), ZConversationUndoWindow).default({}),
-  userUndoNotes: z.array(z.string()).default([]),
+  userUndos: z.record(z.string(), z.string()).default({}),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;

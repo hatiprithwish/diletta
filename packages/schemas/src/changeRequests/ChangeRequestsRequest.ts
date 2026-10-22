@@ -83,6 +83,12 @@ export interface StartUndoRequest {
   attemptId: string;
 }
 
+// DEV_NOTE: A user undo cut short that the DO stops waiting for (M3-7): handed to a person (NeedsHuman undo_interrupted)
+export interface AbandonUndoRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+}
+
 // DEV_NOTE: How the read-after ended (@app/adapter readback), for Verified / Mismatch / NeedsHuman. plan: the one the
 // Repo handed out.
 export interface FinishVerifyRequest {

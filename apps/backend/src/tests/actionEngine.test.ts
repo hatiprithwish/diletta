@@ -974,7 +974,7 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
     const started = await startUndo(sessionA, publicId);
     expect(started.followUp).toMatchObject({
       followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
-      idempotencyKey: Schemas.changeRequestUndoIdempotencyKey(publicId),
+      idempotencyKey: Schemas.changeRequestUserUndoIdempotencyKey(publicId),
       isResume: false,
     });
     expect(started.changeRequest).toMatchObject({
@@ -983,7 +983,7 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
       undoUntil: null,
     });
     const undoingRow = await getRow(publicId);
-    expect(undoingRow?.idempotencyKey).toBe(Schemas.changeRequestUndoIdempotencyKey(publicId));
+    expect(undoingRow?.idempotencyKey).toBe(Schemas.changeRequestUserUndoIdempotencyKey(publicId));
     expect(undoingRow?.undoUntil?.getTime()).toBe(undoUntil);
     // DEV_NOTE: A second undo while this one runs is refused; an eviction resumes it from the row
     expect((await startUndo(sessionA, publicId)).failure).toBe(
@@ -1037,6 +1037,8 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
     expect(events[5]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
     expect(events[5]?.actorId).toBe(sessionA.chatbotUserId);
     expect(events[6]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.System);
+    expect(events[7]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.ChatbotUser);
+    expect(undone.changeRequest?.undoneBy).toBe(Schemas.ChangeRequestUndoneByEnum.User);
   });
 
   it("refuses an undo after the window, of one that isn't Verified, on a read-only company or a disabled tool, changing nothing", async () => {
@@ -1103,7 +1105,33 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
     expect(row?.idempotencyKey).toBe(Schemas.changeRequestCommitIdempotencyKey(publicId));
     expect(row?.undoUntil?.getTime()).toBe(undoUntil);
     expect((await readAlpha())?.data?.amount).toBe(530);
+    // DEV_NOTE: Not a status change: one verified event, then the undo's start and its undo_not_sent end
+    expect((await eventsOf(publicId)).map((event) => event.entityAction).slice(-3)).toEqual([
+      "verified",
+      "undoing",
+      "undo_not_sent",
+    ]);
     expect((await startUndo(sessionA, publicId)).followUp?.isResume).toBe(false);
+  });
+
+  it("hands an undo nobody came back to finish to a person, and only one still under way", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId } = await verifyAlpha(sessionA, 535);
+    expect(
+      (await repo.abandonUndo({ session: sessionA, changeRequestPublicId: publicId })).failure,
+    ).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
+    await startUndo(sessionA, publicId);
+    const abandoned = await repo.abandonUndo({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+    });
+    expect(abandoned.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+    );
+    const row = await getRow(publicId);
+    expect(row?.errorCode).toBe(Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted);
+    expect(row?.undoUntil).toBeNull();
+    expect(row?.encryptedChanges).not.toBeNull();
   });
 
   it("purges the values once the window ends, keeping a NeedsHuman one and an undo under way", async () => {
@@ -1125,10 +1153,16 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
     await startUndo(sessionA, undoing);
     await setUndoUntil(undoing, new Date(Date.now() - 1_000));
 
+    // DEV_NOTE: An undo under way spared only until undo_until + the grace period
+    const stale = (await verifyAlpha(sessionA, 544)).publicId;
+    await startUndo(sessionA, stale);
+    await setUndoUntil(stale, new Date(Date.now() - Schemas.CHANGE_REQUEST_UNDO_GRACE_MS - 1_000));
+
     const purged = await new ChangeRequestPurgeRepo(env).purgeExpiredValues();
     expect(purged.isSuccess).toBe(true);
     expect(purged.purgedCount).toBeGreaterThanOrEqual(1);
 
+    expect((await getRow(stale))?.encryptedChanges).toBeNull();
     const purgedRow = await getRow(expired);
     expect(purgedRow).toMatchObject({
       encryptedChanges: null,

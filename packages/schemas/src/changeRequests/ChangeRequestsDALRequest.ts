@@ -46,7 +46,7 @@ export type UpdateChangeRequestStatusDALRequest = Pick<
 
 // DEV_NOTE: Platform (withPlatform, every company): nulls the values (encrypted_changes, iv, encryption_key_version)
 // of at most limit change requests whose undo_until is before `before`, except a Verified one whose user undo is under
-// way (M3-7)
+// way (M3-7), until its undo_until + CHANGE_REQUEST_UNDO_GRACE_MS
 export interface PurgeChangeRequestValuesDALRequest {
   before: Date;
   limit: number;

@@ -244,6 +244,7 @@ describe("Change request cards", () => {
     mismatches: null,
     undoUntil: null,
     isUndoing: false,
+    undoneBy: null,
   });
   const cardOf = (
     members: Schemas.WidgetChangeRequest[],

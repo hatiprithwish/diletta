@@ -65,12 +65,12 @@ const isProposed = (changeRequest: Schemas.WidgetChangeRequest) =>
   changeRequest.changeRequestStatus === Schemas.ChangeRequestStatusIntEnum.Proposed;
 
 // DEV_NOTE: A record's outcome from its change request. The user's own undo (M3-7) reads apart from the auto-undo of a
-// mismatch: under way while the change request is still Verified (isUndoing), and Undone with no mismatch found
-// (an auto-undo always carries what the read-after found).
+// mismatch: under way while the change request is still Verified (isUndoing), and Undone by the user (undoneBy, from
+// the server: it outlives the purge).
 export function outcomeOf(
   changeRequest: Pick<
     Schemas.WidgetChangeRequest,
-    "changeRequestStatus" | "isUndoing" | "mismatches"
+    "changeRequestStatus" | "isUndoing" | "undoneBy"
   >,
 ): Schemas.WidgetChangeOutcomeEnum {
   switch (changeRequest.changeRequestStatus) {
@@ -88,9 +88,9 @@ export function outcomeOf(
     case Schemas.ChangeRequestStatusIntEnum.Mismatch:
       return Schemas.WidgetChangeOutcomeEnum.Undoing;
     case Schemas.ChangeRequestStatusIntEnum.Undone:
-      return changeRequest.mismatches?.length
-        ? Schemas.WidgetChangeOutcomeEnum.Undone
-        : Schemas.WidgetChangeOutcomeEnum.UserUndone;
+      return changeRequest.undoneBy === Schemas.ChangeRequestUndoneByEnum.User
+        ? Schemas.WidgetChangeOutcomeEnum.UserUndone
+        : Schemas.WidgetChangeOutcomeEnum.Undone;
     case Schemas.ChangeRequestStatusIntEnum.Rejected:
       return Schemas.WidgetChangeOutcomeEnum.Rejected;
     case Schemas.ChangeRequestStatusIntEnum.Expired:

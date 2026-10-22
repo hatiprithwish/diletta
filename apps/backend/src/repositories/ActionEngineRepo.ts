@@ -267,6 +267,7 @@ export default class ActionEngineRepo {
             isUndoable: tool.ops.inverseOp !== null,
           },
           payload,
+          Date.now(),
           ChangeRequestsProvider.editableFields(tool, payload),
         ),
       };
@@ -336,7 +337,11 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: isExpired && !params.isExpired ? "Approval came after the deadline" : "Decided",
         outboxIds: [outboxId],
-        changeRequest: ChangeRequestsProvider.toView(next, await this.decryptPayload(tx, next)),
+        changeRequest: ChangeRequestsProvider.toView(
+          next,
+          await this.decryptPayload(tx, next),
+          Date.now(),
+        ),
       };
     });
   }
@@ -411,7 +416,7 @@ export default class ActionEngineRepo {
           message: "Commit not started",
           failure,
           outboxIds: ended.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+          changeRequest: ChangeRequestsProvider.toView(ended.row, payload, Date.now()),
         };
       }
 
@@ -430,7 +435,7 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: isResume ? "Commit resumed" : "Commit started",
         outboxIds: started.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(started.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(started.row, payload, Date.now()),
         plan: {
           changeRequestPublicId: row.publicId,
           tool: runtime.tool,
@@ -471,7 +476,7 @@ export default class ActionEngineRepo {
           isSuccess: true,
           message: "Commit finished",
           outboxIds: moved.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
         };
       }
 
@@ -494,7 +499,7 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Commit finished",
         outboxIds: moved.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(moved.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(moved.row, payload, Date.now()),
         followUp: {
           changeRequestPublicId: row.publicId,
           followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
@@ -558,7 +563,7 @@ export default class ActionEngineRepo {
           message: "Follow-up not started",
           failure: Schemas.ChangeRequestFailureEnum.ToolUnavailable,
           outboxIds: ended.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+          changeRequest: ChangeRequestsProvider.toView(ended.row, payload, Date.now()),
         };
       }
 
@@ -567,7 +572,7 @@ export default class ActionEngineRepo {
           isSuccess: true,
           message: "Read-after resumed",
           outboxIds: [],
-          changeRequest: ChangeRequestsProvider.toView(row, payload),
+          changeRequest: ChangeRequestsProvider.toView(row, payload, Date.now()),
           followUp: {
             changeRequestPublicId: row.publicId,
             followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
@@ -632,7 +637,7 @@ export default class ActionEngineRepo {
           isSuccess: true,
           message: "Read-after finished",
           outboxIds: moved.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
         };
       }
 
@@ -661,10 +666,11 @@ export default class ActionEngineRepo {
     });
   }
 
-  // DEV_NOTE: An undo's end (ChangeRequestsProvider.undoEnd): Mismatch (the auto-undo) or a Verified one holding its
-  // undo key (the user's undo, M3-7) → Undone when the undo succeeded and the record reads back as before, else
-  // NeedsHuman. The user's undo that nothing may have reached the host goes back to Verified: the commit's key again
-  // (so neither a resume nor the purge takes it for an undo under way) and its undo_until as it was.
+  // DEV_NOTE: An undo's end (ChangeRequestsProvider.undoEnd): Mismatch (the auto-undo) or a Verified one holding the
+  // user's undo key (M3-7) → Undone when the undo succeeded and the record reads back as before, else NeedsHuman. The
+  // user's undo that nothing may have reached the host stays Verified (an undo_not_sent event, not a status change):
+  // the commit's key again (so neither a resume nor the purge takes it for an undo under way), its undo_until as it
+  // was. The end of the user's undo is the chatbot user's, like its start.
   async finishUndo(params: Schemas.FinishUndoRequest): Promise<Schemas.ChangeRequestStepResponse> {
     const { session, plan, undo, readback } = params;
     return await this.step(session, async (tx) => {
@@ -694,11 +700,15 @@ export default class ActionEngineRepo {
         rootLogId: await this.findRootLogId(tx, session),
         status: ended.status,
         errorCode: ended.errorCode,
+        actorType: isUserUndo
+          ? Schemas.ActivityLogActorTypeIntEnum.ChatbotUser
+          : Schemas.ActivityLogActorTypeIntEnum.System,
         ...(isKept
           ? {
+              action: Schemas.ChangeRequestEntityActionEnum.UndoNotSent,
               idempotencyKey: Schemas.changeRequestCommitIdempotencyKey(row.publicId),
-              isUndoUntilKept: true,
-              dedupeParts: [`undo-not-sent-${Utility.generateUlid()}`],
+              undoUntil: "keep" as const,
+              dedupeParts: [Utility.generateUlid()],
             }
           : {}),
         detail: {
@@ -712,7 +722,7 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Undo finished",
         outboxIds: moved.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+        changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
       };
     });
   }
@@ -744,7 +754,7 @@ export default class ActionEngineRepo {
         isSuccess: false,
         message,
         failure,
-        changeRequest: ChangeRequestsProvider.toView(row, payload),
+        changeRequest: ChangeRequestsProvider.toView(row, payload, Date.now()),
       });
       if (refusal) return refuse(refusal, "Change request can't be undone now");
       const loaded = await this.loadTool(tx, session.companyId, row.toolId);
@@ -763,6 +773,40 @@ export default class ActionEngineRepo {
         payload,
         dedupeParts: [`user-${params.attemptId}`],
       });
+    });
+  }
+
+  // DEV_NOTE: A user undo cut short whose user never came back with the host token (M3-7): past undo_until +
+  // CHANGE_REQUEST_UNDO_GRACE_MS, the DO hands it to a person (NeedsHuman undo_interrupted: its undo may have been sent),
+  // so its values are kept on purpose and the conversation can close. Only a Verified row still holding the user's undo
+  // key (an undo that ended meanwhile is left as it stands).
+  async abandonUndo(
+    params: Schemas.AbandonUndoRequest,
+  ): Promise<Schemas.ChangeRequestStepResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx) => {
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      if (!ChangeRequestsProvider.isUserUndoing(row)) return await this.refuseTransition(tx, row);
+      const moved = await this.moveStatus(tx, {
+        session,
+        row,
+        rootLogId: await this.findRootLogId(tx, session),
+        status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted,
+        detail: { reason: Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted },
+      });
+      return {
+        isSuccess: true,
+        message: "Interrupted undo handed to a person",
+        outboxIds: moved.outboxIds,
+        changeRequest: ChangeRequestsProvider.toView(
+          moved.row,
+          await this.decryptPayload(tx, moved.row),
+          Date.now(),
+        ),
+      };
     });
   }
 
@@ -873,6 +917,7 @@ export default class ActionEngineRepo {
         changeRequest: ChangeRequestsProvider.toView(
           next,
           payload,
+          Date.now(),
           ChangeRequestsProvider.editableFields(ready.tool, payload),
         ),
       };
@@ -896,6 +941,7 @@ export default class ActionEngineRepo {
         return { isSuccess: false, message: listed.message };
       }
       const payloads = await this.decryptPayloads(tx, session.companyId, listed.changeRequests);
+      const now = Date.now();
       const changeRequests: Schemas.WidgetChangeRequest[] = [];
       const tools = new Map<string, Schemas.RuntimeTool | null>();
       for (const [index, row] of listed.changeRequests.entries()) {
@@ -910,7 +956,7 @@ export default class ActionEngineRepo {
           const tool = tools.get(row.toolId);
           if (tool) editableFields = ChangeRequestsProvider.editableFields(tool, payload);
         }
-        changeRequests.push(ChangeRequestsProvider.toView(row, payload, editableFields));
+        changeRequests.push(ChangeRequestsProvider.toView(row, payload, now, editableFields));
       }
       return { isSuccess: true, message: "Change requests fetched", changeRequests };
     });
@@ -1020,7 +1066,7 @@ export default class ActionEngineRepo {
       return { isSuccess: false, response: await this.refuseTransition(tx, row) };
     }
     const payload = await this.decryptPayload(tx, row);
-    const view = ChangeRequestsProvider.toView(row, payload);
+    const view = ChangeRequestsProvider.toView(row, payload, Date.now());
     if (ChangeRequestsProvider.isPastDeadline(row, Date.now())) {
       return {
         isSuccess: false,
@@ -1121,12 +1167,14 @@ export default class ActionEngineRepo {
         isSuccess: true,
         message: "Mismatch can't be undone",
         outboxIds: ended.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+        changeRequest: ChangeRequestsProvider.toView(ended.row, payload, Date.now()),
       };
     }
-    const idempotencyKey = Schemas.changeRequestUndoIdempotencyKey(row.publicId);
-    const isResume = row.idempotencyKey === idempotencyKey;
     const isUserUndo = row.status === Schemas.ChangeRequestStatusIntEnum.Verified;
+    const idempotencyKey = isUserUndo
+      ? Schemas.changeRequestUserUndoIdempotencyKey(row.publicId)
+      : Schemas.changeRequestUndoIdempotencyKey(row.publicId);
+    const isResume = row.idempotencyKey === idempotencyKey;
     const started = await this.moveStatus(tx, {
       session,
       row,
@@ -1138,7 +1186,7 @@ export default class ActionEngineRepo {
           ? Schemas.ActivityLogActorTypeIntEnum.ChatbotUser
           : Schemas.ActivityLogActorTypeIntEnum.System,
       idempotencyKey,
-      isUndoUntilKept: true,
+      undoUntil: "keep",
       detail: { isResume, isUserUndo },
       dedupeParts: params.dedupeParts,
     });
@@ -1146,7 +1194,7 @@ export default class ActionEngineRepo {
       isSuccess: true,
       message: isResume ? "Undo resumed" : "Undo started",
       outboxIds: started.outboxIds,
-      changeRequest: ChangeRequestsProvider.toView(started.row, payload),
+      changeRequest: ChangeRequestsProvider.toView(started.row, payload, Date.now()),
       followUp: {
         changeRequestPublicId: row.publicId,
         followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
@@ -1177,14 +1225,19 @@ export default class ActionEngineRepo {
       isSuccess: false,
       message: "Change request not in a status this step starts from",
       failure: Schemas.ChangeRequestFailureEnum.InvalidTransition,
-      changeRequest: ChangeRequestsProvider.toView(row, await this.decryptPayload(tx, row)),
+      changeRequest: ChangeRequestsProvider.toView(
+        row,
+        await this.decryptPayload(tx, row),
+        Date.now(),
+      ),
     };
   }
 
   // DEV_NOTE: One status change and its event, in the caller's transaction (rolled back with it on failure). payload
   // (re-encrypted here) and hostRef go in the same update; action names an event that isn't the status's own (undoing).
-  // undo_until follows the status (ChangeRequestsProvider.undoUntil, M3-7) unless isUndoUntilKept (an undo starting,
-  // or the user's undo going back to Verified). actorType: the system unless the user's own step (the user's undo).
+  // undoUntil: "follow" (default) stores what the status calls for (ChangeRequestsProvider.undoUntil, M3-7); "keep"
+  // leaves it (an undo starting, or the user's undo that reached nothing). actorType: the system unless the user's
+  // own step (the user's undo).
   private async moveStatus(
     tx: NodePgTransaction<EmptyRelations>,
     params: {
@@ -1197,7 +1250,7 @@ export default class ActionEngineRepo {
       errorCode?: Schemas.ChangeRequestErrorCodeEnum | null;
       hostRef?: string | null;
       payload?: Schemas.ChangeRequestPayload;
-      isUndoUntilKept?: boolean;
+      undoUntil?: "follow" | "keep";
       actorType?: Schemas.ActivityLogActorTypeIntEnum;
       detail: Record<string, string | number | boolean | null>;
       dedupeParts?: string[];
@@ -1228,9 +1281,10 @@ export default class ActionEngineRepo {
       errorCode: params.errorCode,
       hostRef: params.hostRef,
       payload,
-      undoUntil: params.isUndoUntilKept
-        ? undefined
-        : ChangeRequestsProvider.undoUntil(params.status, Date.now()),
+      undoUntil:
+        params.undoUntil === "keep"
+          ? undefined
+          : ChangeRequestsProvider.undoUntil(params.status, Date.now()),
     });
     if (!updated.isSuccess || !updated.changeRequest) {
       throw new TenantRollbackError(updated.message ?? "Change request not updated");

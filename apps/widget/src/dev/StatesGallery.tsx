@@ -87,6 +87,12 @@ function sample(
     undoUntil:
       status === Schemas.ChangeRequestStatusIntEnum.Verified ? Date.now() + 3_600_000 : null,
     isUndoing: false,
+    undoneBy:
+      status === Schemas.ChangeRequestStatusIntEnum.Undone
+        ? options.mismatches
+          ? Schemas.ChangeRequestUndoneByEnum.System
+          : Schemas.ChangeRequestUndoneByEnum.User
+        : null,
   };
 }
 

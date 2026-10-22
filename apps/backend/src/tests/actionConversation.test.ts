@@ -1622,7 +1622,7 @@ describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TI
     const state = await getRuntimeState(socket.publicId);
     expect(state.undoWindows).toEqual({});
     expect(state.changeRequests).toEqual({});
-    expect(state.userUndoNotes).toEqual([row?.summary]);
+    expect(state.userUndos).toEqual({ [verified.publicId]: row?.summary });
 
     // DEV_NOTE: No model call for the undo; the next message's system prompt says what the user undid, once
     const callsBefore = gatewayRequests().length;
@@ -1631,7 +1631,8 @@ describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TI
     expect(JSON.stringify(gatewayRequests().at(-1)?.body)).toContain(
       "the user undid these changes",
     );
-    expect((await getRuntimeState(socket.publicId)).userUndoNotes).toEqual([]);
+    // DEV_NOTE: Kept for every later turn: the transcript still says the change was made
+    expect((await getRuntimeState(socket.publicId)).userUndos).toEqual(state.userUndos);
     socket.socket.close(1000);
   });
 
@@ -1710,6 +1711,91 @@ describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TI
     expect((await getChangeRequestRow(verified.publicId))?.status).toBe(
       Schemas.ChangeRequestStatusIntEnum.Verified,
     );
+  });
+
+  // DEV_NOTE: A user undo cut short after startUndo (an eviction): the row holds the user's undo key and the DO an open
+  // user_undoing entry, as runUserUndo leaves them
+  async function cutShortUndo(
+    conversationPublicId: string,
+    verified: Schemas.WidgetChangeRequest,
+    expiresAt: number,
+  ) {
+    const stub = await getAgentByName(env.CONVERSATION_DO, conversationPublicId);
+    const { session } = await getRuntimeState(conversationPublicId);
+    const started = await new ActionEngineRepo(env).startUndo({
+      session,
+      changeRequestPublicId: verified.publicId,
+      attemptId: Utility.generateUlid(),
+    });
+    expect(started.followUp?.isResume).toBe(false);
+    await runInDurableObject(stub, async (instance) => {
+      Reflect.set(instance, "hostToken", null);
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({
+        ...state,
+        changeRequests: {
+          [verified.toolCallId ?? ""]: {
+            publicId: verified.publicId,
+            toolName: "update_record",
+            turnId: null,
+            stage: Schemas.ConversationChangeRequestStageEnum.UserUndoing,
+            expiresAt,
+            executionId: null,
+            expiryScheduleId: null,
+          },
+        },
+      });
+    });
+    return stub;
+  }
+
+  it("resumes a user undo cut short once the host token is back, and every later turn hears it", async () => {
+    const { tenant, socket, verified } = await verifyAlpha(350);
+    socket.socket.close(1000);
+    await cutShortUndo(socket.publicId, verified, Date.now() + 3_600_000);
+
+    const second = await connect(tenant, { conversation: socket.publicId });
+    const from = second.frames.length;
+    sendHostToken(second, tenant.hostToken);
+    const undone = asChangeRequest(
+      await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Undone), from),
+    );
+    expect(undone.undoneBy).toBe(Schemas.ChangeRequestUndoneByEnum.User);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+    const state = await getRuntimeState(socket.publicId);
+    expect(state.changeRequests).toEqual({});
+    expect(Object.keys(state.userUndos)).toEqual([verified.publicId]);
+    second.socket.close(1000);
+  });
+
+  it("hands a user undo nobody came back to finish to a person, then lets the conversation close", async () => {
+    const { socket, verified } = await verifyAlpha(360);
+    socket.socket.close(1000);
+    const stub = await cutShortUndo(socket.publicId, verified, Date.now() - 1);
+    const idleSince = Date.now() - Constants.CONVERSATION_IDLE_CLOSE_MS - 1_000;
+    const closeWhenIdle = () =>
+      runInDurableObject(stub, async (instance) => {
+        const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+        instance.configure<Schemas.ConversationRuntimeState>({
+          ...state,
+          lastActivityAt: idleSince,
+          undoWindows: {},
+        });
+        await instance.closeIfIdle();
+      });
+
+    await closeWhenIdle();
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (Object.keys((await getRuntimeState(socket.publicId)).changeRequests).length === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const row = await getChangeRequestRow(verified.publicId);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.NeedsHuman);
+    expect(row?.errorCode).toBe(Schemas.ChangeRequestErrorCodeEnum.UndoInterrupted);
+    expect(row?.encryptedChanges).not.toBeNull();
+
+    await closeWhenIdle();
+    expect((await getRuntimeState(socket.publicId)).isClosed).toBe(true);
   });
 
   it("empties encrypted_changes once the window ends, and the card no longer offers Undo", async () => {

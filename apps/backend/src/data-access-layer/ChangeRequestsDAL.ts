@@ -416,8 +416,9 @@ export default class ChangeRequestsDAL {
   }
   // DEV_NOTE: Platform (M3-7, withPlatform: the purge spans companies). Nulls the values of change requests whose
   // undo window ended, oldest first, at most limit per call, skipping rows another transaction holds (a step under way
-  // purges on a later run). A Verified row holding its undo key is the user's undo under way: its values are what the
-  // undo sends and checks, so it is left (the key is Schemas.changeRequestUndoIdempotencyKey, spelled here in SQL).
+  // purges on a later run). A Verified row holding the user's undo key is that undo under way: its values are what the
+  // undo sends and checks, so it is spared until undo_until + CHANGE_REQUEST_UNDO_GRACE_MS (by then the DO has handed
+  // it to a person). The key is built from the same constants as Schemas.changeRequestUserUndoIdempotencyKey.
   async purgeChangeRequestValues(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.PurgeChangeRequestValuesDALRequest,
@@ -428,7 +429,7 @@ export default class ChangeRequestsDAL {
       const conditions = [
         lt(changeRequests.undoUntil, params.before),
         isNotNull(changeRequests.encryptedChanges),
-        sql`NOT (${changeRequests.status} = ${Schemas.ChangeRequestStatusIntEnum.Verified} AND ${changeRequests.idempotencyKey} IS NOT DISTINCT FROM ('cr-' || ${changeRequests.publicId} || '-undo'))`,
+        sql`NOT (${changeRequests.status} = ${Schemas.ChangeRequestStatusIntEnum.Verified} AND ${changeRequests.idempotencyKey} IS NOT DISTINCT FROM (${Schemas.CHANGE_REQUEST_KEY_PREFIX}::text || ${changeRequests.publicId} || ${Schemas.CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX}::text) AND ${changeRequests.undoUntil} >= ${new Date(params.before.getTime() - Schemas.CHANGE_REQUEST_UNDO_GRACE_MS)})`,
       ];
       const due = tx
         .select({ id: changeRequests.id })

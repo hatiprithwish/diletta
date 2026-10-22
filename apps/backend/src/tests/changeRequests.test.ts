@@ -6,6 +6,7 @@ import ChangeRequestsProvider from "@/providers/changeRequests";
 
 const { Committed, NeedsHuman, Failed } = Schemas.ChangeRequestStatusIntEnum;
 const Outcome = Schemas.HostCallOutcomeEnum;
+const NOW = 10_000;
 
 const row = (overrides: Partial<Schemas.ChangeRequestRow> = {}): Schemas.ChangeRequestRow => ({
   id: "1",
@@ -121,13 +122,13 @@ describe("ChangeRequestsProvider deadline and view", () => {
     expect(ChangeRequestsProvider.deadline(row())).toBe(deadline);
     expect(ChangeRequestsProvider.isPastDeadline(row(), deadline - 1)).toBe(false);
     expect(ChangeRequestsProvider.isPastDeadline(row(), deadline)).toBe(true);
-    expect(ChangeRequestsProvider.toView(row(), null).expiresAt).toBe(deadline);
+    expect(ChangeRequestsProvider.toView(row(), null, NOW).expiresAt).toBe(deadline);
   });
 
   it("shows no kind without a payload, except for a destructive tool", () => {
-    expect(ChangeRequestsProvider.toView(row(), null).kind).toBeNull();
+    expect(ChangeRequestsProvider.toView(row(), null, NOW).kind).toBeNull();
     const destructive = row({ toolRisk: Schemas.ToolDefinitionRiskIntEnum.Destructive });
-    expect(ChangeRequestsProvider.toView(destructive, null).kind).toBe(
+    expect(ChangeRequestsProvider.toView(destructive, null, NOW).kind).toBe(
       Schemas.ChangeRequestKindEnum.Delete,
     );
   });
@@ -151,13 +152,15 @@ describe("ChangeRequestsProvider deadline and view", () => {
         isRequired: false,
       },
     ];
-    expect(ChangeRequestsProvider.toView(row(), payload, editable).editableFields).toEqual(
+    expect(ChangeRequestsProvider.toView(row(), payload, NOW, editable).editableFields).toEqual(
       editable,
     );
-    expect(ChangeRequestsProvider.toView(row(), null, editable).editableFields).toEqual([]);
+    expect(ChangeRequestsProvider.toView(row(), null, NOW, editable).editableFields).toEqual([]);
     const approved = row({ status: Schemas.ChangeRequestStatusIntEnum.Approved });
-    expect(ChangeRequestsProvider.toView(approved, payload, editable).editableFields).toEqual([]);
-    expect(ChangeRequestsProvider.toView(row(), payload).toolCallId).toBeNull();
+    expect(ChangeRequestsProvider.toView(approved, payload, NOW, editable).editableFields).toEqual(
+      [],
+    );
+    expect(ChangeRequestsProvider.toView(row(), payload, NOW).toolCallId).toBeNull();
   });
 });
 
@@ -166,7 +169,7 @@ describe("ChangeRequestsProvider undo window (M3-7)", () => {
   const { Verified, Undone, Rejected, Expired, Approved, Committing, Mismatch } =
     Schemas.ChangeRequestStatusIntEnum;
   const now = 5_000_000;
-  const undoKey = Schemas.changeRequestUndoIdempotencyKey("cr_1");
+  const undoKey = Schemas.changeRequestUserUndoIdempotencyKey("cr_1");
   const verified = (overrides: Partial<Schemas.ChangeRequestRow> = {}) =>
     row({
       status: Verified,
@@ -244,12 +247,88 @@ describe("ChangeRequestsProvider undo window (M3-7)", () => {
       result: null,
       mismatches: null,
     };
-    const open = verified({ undoUntil: new Date(Date.now() + 60_000) });
-    expect(ChangeRequestsProvider.toView(open, payload).undoUntil).toBe(open.undoUntil?.getTime());
-    expect(ChangeRequestsProvider.toView(open, null).undoUntil).toBeNull();
-    const ended = verified({ undoUntil: new Date(Date.now() - 1) });
-    expect(ChangeRequestsProvider.toView(ended, payload).undoUntil).toBeNull();
-    const undoing = ChangeRequestsProvider.toView({ ...open, idempotencyKey: undoKey }, payload);
+    const open = verified({ undoUntil: new Date(NOW + 60_000) });
+    expect(ChangeRequestsProvider.toView(open, payload, NOW).undoUntil).toBe(
+      open.undoUntil?.getTime(),
+    );
+    expect(ChangeRequestsProvider.toView(open, null, NOW).undoUntil).toBeNull();
+    const ended = verified({ undoUntil: new Date(NOW - 1) });
+    expect(ChangeRequestsProvider.toView(ended, payload, NOW).undoUntil).toBeNull();
+    const undoing = ChangeRequestsProvider.toView(
+      { ...open, idempotencyKey: undoKey },
+      payload,
+      NOW,
+    );
     expect(undoing).toMatchObject({ undoUntil: null, isUndoing: true });
+  });
+});
+
+describe("ChangeRequestsProvider who undid it, refusals and undo windows (M3-7)", () => {
+  const { Verified, Undone } = Schemas.ChangeRequestStatusIntEnum;
+  const userKey = Schemas.changeRequestUserUndoIdempotencyKey("cr_1");
+  const autoKey = Schemas.changeRequestUndoIdempotencyKey("cr_1");
+
+  it("reads who undid it from the undo key, which outlives the purge", () => {
+    expect(ChangeRequestsProvider.undoneBy(row({ status: Undone, idempotencyKey: userKey }))).toBe(
+      Schemas.ChangeRequestUndoneByEnum.User,
+    );
+    expect(ChangeRequestsProvider.undoneBy(row({ status: Undone, idempotencyKey: autoKey }))).toBe(
+      Schemas.ChangeRequestUndoneByEnum.System,
+    );
+    expect(
+      ChangeRequestsProvider.undoneBy(row({ status: Verified, idempotencyKey: userKey })),
+    ).toBeNull();
+    expect(
+      ChangeRequestsProvider.isUserUndoing(row({ status: Verified, idempotencyKey: autoKey })),
+    ).toBe(false);
+    expect(
+      ChangeRequestsProvider.toView(row({ status: Undone, idempotencyKey: userKey }), null, NOW),
+    ).toMatchObject({ undoneBy: Schemas.ChangeRequestUndoneByEnum.User, changes: null });
+    expect(userKey).toBe(
+      `${Schemas.CHANGE_REQUEST_KEY_PREFIX}cr_1${Schemas.CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX}`,
+    );
+  });
+
+  it("gives up waiting for a cut-short undo a grace period after its window", () => {
+    expect(ChangeRequestsProvider.undoGiveUpAt(5_000, NOW)).toBe(
+      5_000 + Schemas.CHANGE_REQUEST_UNDO_GRACE_MS,
+    );
+    expect(ChangeRequestsProvider.undoGiveUpAt(null, NOW)).toBe(
+      NOW + Schemas.CHANGE_REQUEST_UNDO_GRACE_MS,
+    );
+  });
+
+  it("answers each refusal in safe text, ending the window only when it can't be undone at all", () => {
+    const F = Schemas.ChangeRequestFailureEnum;
+    expect(ChangeRequestsProvider.undoRefusalReply(F.UndoWindowClosed)).toEqual({
+      message: "The time to undo this change has passed. Nothing changed.",
+      isWindowEnded: true,
+      isClosed: false,
+    });
+    for (const failure of [F.NotFound, F.InvalidTransition, F.NotUndoable]) {
+      expect(ChangeRequestsProvider.undoRefusalReply(failure).isWindowEnded).toBe(true);
+    }
+    for (const failure of [F.ReadOnly, F.ToolUnavailable, F.ChatbotUnavailable, F.ServerError]) {
+      expect(ChangeRequestsProvider.undoRefusalReply(failure)).toMatchObject({
+        isWindowEnded: false,
+        isClosed: false,
+      });
+    }
+    expect(ChangeRequestsProvider.undoRefusalReply(F.ConversationClosed).isClosed).toBe(true);
+  });
+
+  it("keeps an undo window by tool call id while the view can be undone, and drops it otherwise", () => {
+    const view = { publicId: "cr_1", toolCallId: "call_1", undoUntil: NOW + 1, isUndoing: false };
+    const opened = ChangeRequestsProvider.nextUndoWindows({}, view);
+    expect(opened).toEqual({ call_1: { publicId: "cr_1", undoUntil: NOW + 1 } });
+    expect(ChangeRequestsProvider.nextUndoWindows(opened, { ...view, isUndoing: true })).toBe(
+      opened,
+    );
+    expect(ChangeRequestsProvider.nextUndoWindows(opened, { ...view, undoUntil: null })).toEqual(
+      {},
+    );
+    expect(ChangeRequestsProvider.nextUndoWindows({}, { ...view, toolCallId: null })).toEqual({});
+    expect(ChangeRequestsProvider.openUndoWindows(opened, NOW)).toEqual(opened);
+    expect(ChangeRequestsProvider.openUndoWindows(opened, NOW + 1)).toEqual({});
   });
 });

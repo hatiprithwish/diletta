@@ -54,6 +54,7 @@ function changeRequest(
     mismatches: null,
     undoUntil: null,
     isUndoing: false,
+    undoneBy: null,
     ...patch,
   };
 }
@@ -220,6 +221,7 @@ describe("toChangeCard", () => {
     const members = [
       changeRequest("a", {
         changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        undoneBy: Schemas.ChangeRequestUndoneByEnum.System,
         editableFields: [],
         mismatches: [
           {
@@ -266,6 +268,7 @@ describe("toChangeCard", () => {
     const members = [
       changeRequest("a", {
         changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Undone,
+        undoneBy: Schemas.ChangeRequestUndoneByEnum.User,
         editableFields: [],
       }),
       changeRequest("b", {
