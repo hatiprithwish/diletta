@@ -34,6 +34,29 @@ export interface StartCommitResponse extends ChangeRequestStepResponse {
   plan?: CommitPlan;
 }
 
+// DEV_NOTE: What a landed commit needs next (M3-6): Verify = read the record back (readback_op with the args and the
+// commit's result); Undo = the auto-undo of a Mismatch (inverse_op under the change request's undo key, isResume when
+// an earlier undo may have reached the host). tool: the change request's tool version, its ops read again by its id.
+export enum ChangeRequestFollowUpEnum {
+  Verify = "verify",
+  Undo = "undo",
+}
+
+export interface FollowUpPlan {
+  changeRequestPublicId: string;
+  followUp: ChangeRequestFollowUpEnum;
+  tool: RuntimeTool;
+  payload: ChangeRequestPayload;
+  idempotencyKey: string | null;
+  isResume: boolean;
+}
+
+// DEV_NOTE: A step after which the change request needs another (finishCommit → Verify, finishVerify → Undo,
+// startFollowUp → either); no followUp = it ended (or the step was refused)
+export interface FollowUpResponse extends ChangeRequestStepResponse {
+  followUp?: FollowUpPlan;
+}
+
 // DEV_NOTE: What an edit is checked against: the tool as stored for this change request (re-checked Active) and the
 // decrypted payload (its args are what the edit starts from)
 export interface EditPlan {

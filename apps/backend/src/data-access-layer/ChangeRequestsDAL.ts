@@ -200,6 +200,16 @@ export default class ChangeRequestsDAL {
           status: params.status,
           ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
           ...(params.errorCode !== undefined ? { errorCode: params.errorCode } : {}),
+          ...(params.hostRef !== undefined ? { hostRef: params.hostRef } : {}),
+          ...(params.payload
+            ? {
+                encryptedChanges: params.payload.encryptedChanges
+                  ? Buffer.from(params.payload.encryptedChanges)
+                  : null,
+                iv: params.payload.iv ? Buffer.from(params.payload.iv) : null,
+                encryptionKeyVersion: params.payload.encryptionKeyVersion,
+              }
+            : {}),
           updatedAt: new Date(),
         })
         .where(and(...conditions))

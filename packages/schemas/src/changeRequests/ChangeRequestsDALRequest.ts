@@ -29,7 +29,8 @@ export type FindChangeRequestDALRequest = Pick<
 };
 
 // DEV_NOTE: Moves a change request to status, only from one of fromStatuses (the row matches nothing otherwise:
-// isNotFound). idempotencyKey and errorCode are set when given (errorCode null clears it).
+// isNotFound). idempotencyKey and errorCode are set when given (errorCode null clears it); so are hostRef and an
+// encrypted payload (M3-6: the commit's result, the read-after's mismatches), in the same update as the status.
 export type UpdateChangeRequestStatusDALRequest = Pick<
   ChangeRequest,
   "companyId" | "id" | "status"
@@ -37,6 +38,8 @@ export type UpdateChangeRequestStatusDALRequest = Pick<
   fromStatuses: ChangeRequestStatusIntEnum[];
   idempotencyKey?: string;
   errorCode?: ChangeRequestErrorCodeEnum | null;
+  hostRef?: string | null;
+  payload?: Pick<ChangeRequest, "encryptedChanges" | "iv" | "encryptionKeyVersion">;
 };
 
 // DEV_NOTE: The durable pause's execution id, set once (only while still null)

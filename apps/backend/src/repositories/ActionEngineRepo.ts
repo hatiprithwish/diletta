@@ -1,5 +1,6 @@
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
+import { z } from "zod";
 import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import ToolCallsDAL from "@/data-access-layer/ToolCallsDAL";
@@ -157,11 +158,13 @@ export default class ActionEngineRepo {
       );
       // DEV_NOTE: Args and the read-before response are parsed JSON already; a value that isn't JSON fails the proposal
       const parsedPayload = Schemas.ZChangeRequestPayload.safeParse({
-        version: 1,
+        version: 2,
         kind: params.kind,
         args: params.args,
         before: params.before ?? null,
         changes: params.changes,
+        result: null,
+        mismatches: null,
       });
       if (!parsedPayload.success) {
         return {
@@ -434,12 +437,12 @@ export default class ActionEngineRepo {
     });
   }
 
-  // DEV_NOTE: Committing → the commit's end, from the host call (@app/adapter): ChangeRequestsProvider.commitEnd
-  async finishCommit(
-    params: Schemas.FinishCommitRequest,
-  ): Promise<Schemas.ChangeRequestStepResponse> {
-    const { session, hostCall } = params;
-    return await this.step(session, async (tx) => {
+  // DEV_NOTE: Committing → the commit's end, from the host call (@app/adapter): ChangeRequestsProvider.commitEnd. A
+  // commit that landed (Committed) keeps its response in the payload (the read-after and the undo read {result.*}) and
+  // the created record's id as host_ref, and hands back the read-after (M3-6).
+  async finishCommit(params: Schemas.FinishCommitRequest): Promise<Schemas.FollowUpResponse> {
+    const { session, hostCall, plan } = params;
+    return await this.step(session, async (tx): Promise<Schemas.FollowUpResponse> => {
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
@@ -447,23 +450,246 @@ export default class ActionEngineRepo {
         return await this.refuseTransition(tx, row);
       }
 
-      const ended = ChangeRequestsProvider.commitEnd(hostCall, params.isResume);
+      const ended = ChangeRequestsProvider.commitEnd(hostCall, plan.isResume);
+      const rootLogId = await this.findRootLogId(tx, session);
+      const detail = { outcome: hostCall.outcome, mayHaveLanded: hostCall.mayHaveLanded === true };
+      if (ended.status !== Schemas.ChangeRequestStatusIntEnum.Committed) {
+        const moved = await this.moveStatus(tx, {
+          session,
+          row,
+          rootLogId,
+          status: ended.status,
+          errorCode: ended.errorCode,
+          detail,
+        });
+        return {
+          isSuccess: true,
+          message: "Commit finished",
+          outboxIds: moved.outboxIds,
+          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+        };
+      }
+
+      // DEV_NOTE: The response is parsed JSON already (null = empty or unreadable body)
+      const parsedResult = z.json().safeParse(hostCall.body ?? null);
+      const result = parsedResult.success ? parsedResult.data : null;
+      const payload: Schemas.ChangeRequestPayload = { ...plan.payload, result };
+      const { readbackOp } = plan.tool.ops;
+      const moved = await this.moveStatus(tx, {
+        session,
+        row,
+        rootLogId,
+        status: Schemas.ChangeRequestStatusIntEnum.Committed,
+        errorCode: null,
+        detail,
+        payload,
+        hostRef: readbackOp ? Schemas.getChangeRequestHostRef(readbackOp, result) : null,
+      });
+      return {
+        isSuccess: true,
+        message: "Commit finished",
+        outboxIds: moved.outboxIds,
+        changeRequest: ChangeRequestsProvider.toView(moved.row, payload),
+        followUp: {
+          changeRequestPublicId: row.publicId,
+          followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
+          tool: plan.tool,
+          payload,
+          idempotencyKey: null,
+          isResume: false,
+        },
+      };
+    });
+  }
+
+  // DEV_NOTE: The next step of a landed commit, read from the row (M3-6): Committed → the read-after, Mismatch → the
+  // auto-undo (isResume when its key is already stored: the undo may have been sent). For a write that already landed,
+  // so the conversation, chatbot and company aren't re-checked: reading it back or putting it back is cleanup, never
+  // a new change. A tool version that no longer loads, or an unreadable payload, can't take the step: NeedsHuman.
+  async startFollowUp(params: Schemas.StartFollowUpRequest): Promise<Schemas.FollowUpResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx): Promise<Schemas.FollowUpResponse> => {
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      const isVerify = row.status === Schemas.ChangeRequestStatusIntEnum.Committed;
+      if (!isVerify && row.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch) {
+        return await this.refuseTransition(tx, row);
+      }
+      const rootLogId = await this.findRootLogId(tx, session);
+      const loaded = await this.loadTool(tx, session.companyId, row.toolId);
+      if (!loaded.isSuccess && loaded.failure === Schemas.ChangeRequestFailureEnum.ServerError) {
+        return { isSuccess: false, message: loaded.message, failure: loaded.failure };
+      }
+      const payload = await this.decryptPayload(tx, row);
+      if (!loaded.isSuccess || !payload) {
+        const errorCode = !loaded.isSuccess
+          ? Schemas.ChangeRequestErrorCodeEnum.ToolUnavailable
+          : Schemas.ChangeRequestErrorCodeEnum.PayloadUnreadable;
+        const ended = await this.moveStatus(tx, {
+          session,
+          row,
+          rootLogId,
+          status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+          errorCode,
+          detail: { reason: errorCode },
+        });
+        AppLogger.warn({
+          category: Schemas.LogCategory.Action,
+          action: isVerify
+            ? Schemas.LogAction.VerifyChangeRequest
+            : Schemas.LogAction.UndoChangeRequest,
+          message: `Follow-up not started: ${errorCode}`,
+          metadata: { companyId: session.companyId, changeRequestPublicId: row.publicId },
+        });
+        return {
+          isSuccess: false,
+          message: "Follow-up not started",
+          failure: Schemas.ChangeRequestFailureEnum.ToolUnavailable,
+          outboxIds: ended.outboxIds,
+          changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+        };
+      }
+
+      if (isVerify) {
+        return {
+          isSuccess: true,
+          message: "Read-after resumed",
+          outboxIds: [],
+          changeRequest: ChangeRequestsProvider.toView(row, payload),
+          followUp: {
+            changeRequestPublicId: row.publicId,
+            followUp: Schemas.ChangeRequestFollowUpEnum.Verify,
+            tool: loaded.tool,
+            payload,
+            idempotencyKey: null,
+            isResume: false,
+          },
+        };
+      }
+      return await this.beginUndo(tx, {
+        session,
+        row,
+        rootLogId,
+        tool: loaded.tool,
+        payload,
+        dedupeParts: [`resume-${params.attemptId}`],
+      });
+    });
+  }
+
+  // DEV_NOTE: Committed → the read-after's end (Schemas.checkReadAfter → ChangeRequestsProvider.verifyEnd): Verified,
+  // NeedsHuman (it couldn't tell), or Mismatch with what it found (kept in the payload for the widget), whose auto-undo
+  // starts in the same transaction (beginUndo)
+  async finishVerify(params: Schemas.FinishVerifyRequest): Promise<Schemas.FollowUpResponse> {
+    const { session, plan, readback } = params;
+    return await this.step(session, async (tx): Promise<Schemas.FollowUpResponse> => {
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      if (row.status !== Schemas.ChangeRequestStatusIntEnum.Committed) {
+        return await this.refuseTransition(tx, row);
+      }
+      const rootLogId = await this.findRootLogId(tx, session);
+      const { readbackOp } = plan.tool.ops;
+      const check: Schemas.ChangeRequestReadAfterCheck = readbackOp
+        ? Schemas.checkReadAfter({
+            kind: plan.payload.kind,
+            step: Schemas.ChangeRequestCheckStepEnum.Commit,
+            readbackOp,
+            payload: plan.payload,
+            readback,
+          })
+        : { verdict: Schemas.ChangeRequestCheckVerdictEnum.Unknown, mismatches: [] };
+      const ended = ChangeRequestsProvider.verifyEnd(check);
+      const detail = {
+        outcome: readback.outcome,
+        httpStatus: readback.httpStatus ?? null,
+        mismatchCount: check.mismatches.length,
+      };
+
+      if (ended.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch) {
+        const moved = await this.moveStatus(tx, {
+          session,
+          row,
+          rootLogId,
+          status: ended.status,
+          errorCode: ended.errorCode,
+          detail,
+        });
+        return {
+          isSuccess: true,
+          message: "Read-after finished",
+          outboxIds: moved.outboxIds,
+          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
+        };
+      }
+
+      const payload: Schemas.ChangeRequestPayload = {
+        ...plan.payload,
+        mismatches: check.mismatches,
+      };
+      const mismatched = await this.moveStatus(tx, {
+        session,
+        row,
+        rootLogId,
+        status: Schemas.ChangeRequestStatusIntEnum.Mismatch,
+        errorCode: null,
+        detail,
+        payload,
+      });
+      const undo = await this.beginUndo(tx, {
+        session,
+        row: mismatched.row,
+        rootLogId,
+        tool: plan.tool,
+        payload,
+        dedupeParts: [],
+      });
+      return { ...undo, outboxIds: [...mismatched.outboxIds, ...(undo.outboxIds ?? [])] };
+    });
+  }
+
+  // DEV_NOTE: Mismatch → the auto-undo's end (ChangeRequestsProvider.undoEnd): Undone when the undo succeeded and the
+  // record reads back as before, else NeedsHuman
+  async finishUndo(params: Schemas.FinishUndoRequest): Promise<Schemas.ChangeRequestStepResponse> {
+    const { session, plan, undo, readback } = params;
+    return await this.step(session, async (tx) => {
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      if (row.status !== Schemas.ChangeRequestStatusIntEnum.Mismatch) {
+        return await this.refuseTransition(tx, row);
+      }
+      const { readbackOp } = plan.tool.ops;
+      const check =
+        readback && readbackOp
+          ? Schemas.checkReadAfter({
+              kind: plan.payload.kind,
+              step: Schemas.ChangeRequestCheckStepEnum.Undo,
+              readbackOp,
+              payload: plan.payload,
+              readback,
+            })
+          : null;
+      const ended = ChangeRequestsProvider.undoEnd(undo, check);
       const moved = await this.moveStatus(tx, {
         session,
         row,
         rootLogId: await this.findRootLogId(tx, session),
         status: ended.status,
         errorCode: ended.errorCode,
-        detail: { outcome: hostCall.outcome, mayHaveLanded: hostCall.mayHaveLanded === true },
+        detail: {
+          outcome: undo.outcome,
+          mayHaveLanded: undo.mayHaveLanded === true,
+          readbackOutcome: readback?.outcome ?? null,
+        },
       });
       return {
         isSuccess: true,
-        message: "Commit finished",
+        message: "Undo finished",
         outboxIds: moved.outboxIds,
-        changeRequest: ChangeRequestsProvider.toView(
-          moved.row,
-          await this.decryptPayload(tx, moved.row),
-        ),
+        changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload),
       };
     });
   }
@@ -793,6 +1019,66 @@ export default class ActionEngineRepo {
     return { isSuccess: true, tool: runtime.tool };
   }
 
+  // DEV_NOTE: A Mismatch's auto-undo starts: a tool with no inverse_op can't be undone (NeedsHuman not_undoable);
+  // otherwise the undo key is stored first, with its undoing event (it stays Mismatch), so a resume knows the undo
+  // may have been sent (isResume: a Native tool resends with the same key, an Emulated one checks first, None doesn't
+  // resend and ends NeedsHuman)
+  private async beginUndo(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: {
+      session: Schemas.ConversationSession;
+      row: Schemas.ChangeRequestRow;
+      rootLogId: string | null;
+      tool: Schemas.RuntimeTool;
+      payload: Schemas.ChangeRequestPayload;
+      dedupeParts: string[];
+    },
+  ): Promise<Schemas.FollowUpResponse> {
+    const { session, row, tool, payload } = params;
+    if (!tool.ops.inverseOp) {
+      const ended = await this.moveStatus(tx, {
+        session,
+        row,
+        rootLogId: params.rootLogId,
+        status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.NotUndoable,
+        detail: { reason: Schemas.ChangeRequestErrorCodeEnum.NotUndoable },
+      });
+      return {
+        isSuccess: true,
+        message: "Mismatch can't be undone",
+        outboxIds: ended.outboxIds,
+        changeRequest: ChangeRequestsProvider.toView(ended.row, payload),
+      };
+    }
+    const idempotencyKey = Schemas.changeRequestUndoIdempotencyKey(row.publicId);
+    const isResume = row.idempotencyKey === idempotencyKey;
+    const started = await this.moveStatus(tx, {
+      session,
+      row,
+      rootLogId: params.rootLogId,
+      status: Schemas.ChangeRequestStatusIntEnum.Mismatch,
+      action: Schemas.ChangeRequestEntityActionEnum.Undoing,
+      idempotencyKey,
+      detail: { isResume },
+      dedupeParts: params.dedupeParts,
+    });
+    return {
+      isSuccess: true,
+      message: isResume ? "Undo resumed" : "Undo started",
+      outboxIds: started.outboxIds,
+      changeRequest: ChangeRequestsProvider.toView(started.row, payload),
+      followUp: {
+        changeRequestPublicId: row.publicId,
+        followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
+        tool,
+        payload,
+        idempotencyKey,
+        isResume,
+      },
+    };
+  }
+
   // DEV_NOTE: A step that doesn't start from this status: nothing changes, and the caller gets the row as it stands
   private async refuseTransition(
     tx: NodePgTransaction<EmptyRelations>,
@@ -816,7 +1102,8 @@ export default class ActionEngineRepo {
     };
   }
 
-  // DEV_NOTE: One status change and its event, in the caller's transaction (rolled back with it on failure)
+  // DEV_NOTE: One status change and its event, in the caller's transaction (rolled back with it on failure). payload
+  // (re-encrypted here) and hostRef go in the same update; action names an event that isn't the status's own (undoing).
   private async moveStatus(
     tx: NodePgTransaction<EmptyRelations>,
     params: {
@@ -824,13 +1111,31 @@ export default class ActionEngineRepo {
       row: Schemas.ChangeRequestRow;
       rootLogId: string | null;
       status: Schemas.ChangeRequestStatusIntEnum;
+      action?: Schemas.ChangeRequestEntityActionEnum;
       idempotencyKey?: string;
       errorCode?: Schemas.ChangeRequestErrorCodeEnum | null;
+      hostRef?: string | null;
+      payload?: Schemas.ChangeRequestPayload;
       detail: Record<string, string | number | boolean | null>;
       dedupeParts?: string[];
     },
   ): Promise<{ row: Schemas.ChangeRequestRow; outboxIds: string[] }> {
     const { session, row } = params;
+    let payload: Schemas.UpdateChangeRequestStatusDALRequest["payload"];
+    if (params.payload) {
+      const encrypted = await this.encrypt(
+        tx,
+        session.companyId,
+        Schemas.EncryptedColumnEnum.ChangeRequestChanges,
+        params.payload,
+      );
+      if (!encrypted) throw new TenantRollbackError("Change request payload not encrypted");
+      payload = {
+        encryptedChanges: encrypted.encryptedValue.ciphertext,
+        iv: encrypted.encryptedValue.iv,
+        encryptionKeyVersion: encrypted.encryptionKeyVersion,
+      };
+    }
     const updated = await this.changeRequestsDal.updateChangeRequestStatus(tx, {
       companyId: session.companyId,
       id: row.id,
@@ -838,6 +1143,8 @@ export default class ActionEngineRepo {
       fromStatuses: [row.status],
       idempotencyKey: params.idempotencyKey,
       errorCode: params.errorCode,
+      hostRef: params.hostRef,
+      payload,
     });
     if (!updated.isSuccess || !updated.changeRequest) {
       throw new TenantRollbackError(updated.message ?? "Change request not updated");
@@ -847,6 +1154,7 @@ export default class ActionEngineRepo {
       changeRequest: updated.changeRequest,
       rootLogId: params.rootLogId,
       status: params.status,
+      action: params.action,
       actorType: Schemas.ActivityLogActorTypeIntEnum.System,
       detail: { ...params.detail, errorCode: params.errorCode ?? null },
       dedupeParts: params.dedupeParts,
@@ -960,8 +1268,8 @@ export default class ActionEngineRepo {
       const result = decrypted[next];
       next += 1;
       if (!result?.isSuccess || result.plaintext === undefined) return null;
-      const parsed = Schemas.ZChangeRequestPayload.safeParse(Utility.parseJson(result.plaintext));
-      if (!parsed.success) {
+      const parsed = Schemas.parseChangeRequestPayload(Utility.parseJson(result.plaintext));
+      if (!parsed) {
         AppLogger.error({
           category: Schemas.LogCategory.Action,
           action: Schemas.LogAction.GetChangeRequestDetails,
@@ -970,7 +1278,7 @@ export default class ActionEngineRepo {
         });
         return null;
       }
-      return parsed.data;
+      return parsed;
     });
   }
 }

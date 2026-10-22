@@ -7,6 +7,7 @@ import type {
   ChangeRequestPayload,
 } from "./ChangeRequestsCommon";
 import type { HostCallResponse } from "../hostAdapter/HostAdapterCommon";
+import type { CommitPlan, FollowUpPlan } from "./ChangeRequestsResponse";
 
 // DEV_NOTE: Server-side only (Conversation DO → ActionEngineRepo). Every internal id comes from the DO's verified
 // session or rows the Repo read; tool is the turn's loaded tool. Args are already checked against input_schema and are
@@ -56,13 +57,41 @@ export interface StartCommitRequest {
   attemptId: string;
 }
 
-// DEV_NOTE: How the commit's host call ended (@app/adapter), for the change request's final status. isResume: the
-// commit plan's (an earlier attempt may have reached the host).
+// DEV_NOTE: How the commit's host call ended (@app/adapter), for the change request's status. plan: the one
+// startCommit handed out (isResume: an earlier attempt may have reached the host; tool: its readback reads the result
+// for the read-after). body: the commit's response, kept for the read-after and the undo (M3-6).
 export interface FinishCommitRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
-  hostCall: Pick<HostCallResponse, "outcome" | "mayHaveLanded" | "attempts">;
-  isResume: boolean;
+  hostCall: Pick<HostCallResponse, "outcome" | "mayHaveLanded" | "attempts" | "body">;
+  plan: CommitPlan;
+}
+
+// DEV_NOTE: The next step of a landed commit that an eviction or a failed write cut short (M3-6): a Committed one is
+// read back, a Mismatch one undone. attemptId (a fresh ULID) parts a resumed undo's undoing event from the others.
+export interface StartFollowUpRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+  attemptId: string;
+}
+
+// DEV_NOTE: How the read-after ended (@app/adapter readback), for Verified / Mismatch / NeedsHuman. plan: the one the
+// Repo handed out.
+export interface FinishVerifyRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+  plan: FollowUpPlan;
+  readback: Pick<HostCallResponse, "outcome" | "httpStatus" | "body" | "attempts">;
+}
+
+// DEV_NOTE: How the auto-undo ended: its host call, and the read after it (null when the undo didn't succeed, so
+// nothing was read), for Undone / NeedsHuman
+export interface FinishUndoRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+  plan: FollowUpPlan;
+  undo: Pick<HostCallResponse, "outcome" | "mayHaveLanded" | "attempts">;
+  readback: Pick<HostCallResponse, "outcome" | "httpStatus" | "body" | "attempts"> | null;
 }
 
 export interface GetChangeRequestViewsRequest {

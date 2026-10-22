@@ -17,6 +17,8 @@ Code: `apps/backend/src/durable-objects/ConversationDO.ts` (the flow), `reposito
 5. **Approval needed.** The turn parks. The widget gets a `change_request` frame with the diff. The proposal waits `CHANGE_REQUEST_APPROVAL_EXPIRY_MS` (15 min) from its `created_at`, the one deadline: the DO schedules its expiry then, and the database turns an approval after it into Expired. The conversation doesn't auto-close while it waits. At most `CHANGE_REQUEST_MAX_PENDING` (20) proposals wait per conversation (parallel calls of one step count from their check on).
 6. **Decision.** The widget's `change_request_batch_decision` frame answers one or more proposals at once (the widget sends every answer this way; the single `change_request_decision` frame is a batch of one). At most `DECISION_FRAMES_PER_WINDOW` frames per minute per conversation. An approval needs the host token: without one the DO answers `token_needed` and decides nothing. The answers (or the expiry) claim the conversation before anything else, so a second click, the expiry or a new message waits ("A reply is still in progress"). Each change request is decided in the database first, then the DO follows the row's status, whoever set it: Approved → commit; Committing → left to that commit; an end status → the entry goes. Next, the approved ones are committed one after another. Last, the continuation is prepared once (config, tools, model, budget), and every pause Think holds is resolved from its own storage (`approveExecution` / `rejectExecution`) back to back. Each action's `execute` answers its commit's cached outcome, and Think merges the resolutions into **one** continuation (it coalesces those that land within 50 ms).
 7. **Commit.** Approved → Committing (key `cr-<publicId>-commit` stored first) → the host write → Committed, Failed (nothing may have landed) or NeedsHuman (it may have). A change needing no approval commits inside its `execute`.
+8. **Read-after (M3-6).** A Committed change is read back as the user before `execute` answers (`readback_op` with the args and the commit's own response, kept encrypted in the payload; a create's new id also goes in `host_ref`). `Schemas.checkReadAfter` judges it: every field the args set reads back as sent (a delete: the record answers 404) → **Verified**; it reads back otherwise → **Mismatch**, with what it found; the read failed, answered something else, or there's nothing to compare → **NeedsHuman** (`verify_unknown`). An unknown is never undone.
+9. **Auto-undo (M3-6).** A Mismatch is undone at once, on its own (other change requests of the same answer stay as they are). No `inverse_op` → NeedsHuman (`not_undoable`). Otherwise the undo key `cr-<publicId>-undo` is stored first (event `change_request.undoing`), `inverse_op` is sent (args, read-before, the commit's result; an Emulated tool checks first whether it already landed), and the record is read again: back to its read-before values (a create: gone) → **Undone**; anything else → NeedsHuman (`undo_failed` when the undo didn't succeed, `undo_unconfirmed` when it did but the record doesn't read back so).
 
 ## Edits (M3-5)
 
@@ -45,18 +47,23 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 | Rejected   | the user rejected                                                                           |
 | Expired    | nobody answered within the expiry                                                           |
 | Committing | the commit started (a resumed commit writes a second `committing` event)                    |
-| Committed  | the host answered 2xx, or an Emulated readback proved the write landed                      |
+| Committed  | the host answered 2xx, or an Emulated readback proved the write landed; read-after to come  |
+| Verified   | the read-after shows the change (a delete: the record is gone)                              |
+| Mismatch   | the read-after shows something else; its auto-undo is starting or running                   |
+| Undone     | the auto-undo put the record back and the read after it confirms that                       |
 | Failed     | the host refused or failed, and no send may have landed                                     |
-| NeedsHuman | the outcome is unknown: a send may have landed (timeout, 5xx, a token refused after a send) |
+| NeedsHuman | a person must look: the commit or its undo may have landed, or the read-after couldn't tell |
 
-M3-6 adds the read-after (Committed → Verified / Mismatch → auto-undo).
+`change_request.undoing` (M3-6) isn't a status change either: the auto-undo of a Mismatch started (a resumed undo writes another).
 
 ## When something is stuck
 
 - **A change request stays Committing (or Approved).** The DO was evicted mid-commit, or a database write before or after the host call failed. The commit runs as the user, so it resumes only once the DO holds the host token again: on the widget's next `host_token` frame (every reconnect sends one), on the `ACTION_COMMIT_RETRY_MS` retry after a failed write, and on the auto-close's check. It resumes with `isResume: true` (a Native tool resends with the same key, an Emulated one reads back first, a None tool goes to NeedsHuman). A resume that can't send for want of the token stays Committing. Nothing resumes a conversation nobody reconnects to; check the host by hand and move it to NeedsHuman.
+- **A change request stays Committed or Mismatch.** Its read-after or undo was cut short (an eviction, a failed database write, no host token before the send). It resumes like a commit: on the next `host_token` frame, the `ACTION_COMMIT_RETRY_MS` retry, and the auto-close's check. A Mismatch whose `idempotency_key` is `cr-<publicId>-undo` may have sent its undo already, so it resumes with `isResume` (a None tool then ends NeedsHuman unsent).
+- **Many Undone or `verify_unknown` for one tool.** The host stores a value in another form than it was sent (lowercased email, rounded number, "20.00" for 20): the read-after can't see the change, so it is undone. Fix the tool's `input_schema` (send the stored form) or its `compare` map; nothing in the engine loosens the comparison.
 - **NeedsHuman.** Check the record in the host (the change request's tool call holds the tool and version; the payload is encrypted). M4-5 resolves these from the dashboard.
 - **"Think holds no pause for this change request"** (warn log). Think's pending-approval row was gone when the user answered (swept, or resolved elsewhere), or Think couldn't resolve it. An approval is still committed; there's no continuation, so the model doesn't mention it until the next message.
-- **`error_code`.** `Schemas.ChangeRequestErrorCodeEnum`: why a change request ended Failed / NeedsHuman (a refused step: `tool_unavailable`, `read_only`, `conversation_closed`, `chatbot_unavailable`, `payload_unreadable`, `server_error`; the host call: `token_needed`, `token_rejected`, `host_refused`, `host_failed`, `host_unknown`).
+- **`error_code`.** `Schemas.ChangeRequestErrorCodeEnum`: why a change request ended Failed / NeedsHuman (a refused step: `tool_unavailable`, `read_only`, `conversation_closed`, `chatbot_unavailable`, `payload_unreadable`, `server_error`; the host call: `token_needed`, `token_rejected`, `host_refused`, `host_failed`, `host_unknown`; after a commit landed (M3-6): `verify_unknown`, `not_undoable`, `undo_failed`, `undo_unconfirmed`).
 - **"Continuation not prepared"** (warn log). The answer was applied, but the model couldn't run (no key, budget used up). The chat shows the generic unavailable text after it.
 - **Host token.** The DO holds it in memory only. After an eviction the widget must send it again (`host_token` frame). Since M3-5 the widget sends it on every connect (`getHostToken` init option). On `token_needed` for an answer or an edit, it fetches a fresh one and sends that frame again once. A host without `getHostToken` can't approve changes. Reads that need a token still answer "sign in again" until M3-8.
 - **The model replied twice after a bulk answer.** Think fired a continuation before the last pause was resolved (the resolutions came more than 50 ms apart). Each continuation is prepared like a turn, so a second one with no prepared turn ends with the generic safe text. Look for slow `approveExecution` storage writes.
@@ -80,12 +87,14 @@ Large commits run in the Conversation DO, not a Workflow: the host token lives i
 
 - `src/tests/actionConversation.test.ts`: end to end through the widget socket, the DO and the test host, including the eviction test (the Done-when), a double-clicked approval, an approval after the deadline, a decision the database already took, and a commit cut short by an eviction resumed on the host token.
 - `src/tests/actionConversation.test.ts` › "edit and bulk review" (M3-5, the Done-when): an edited value is re-checked (a host change in between shows in the new diff) and is what commits; locked fields, bad values and no-change edits are refused; an edit after the deadline is refused; an edit or an approval without the host token asks for it; a batch commits the approved, rejects the rest, and the model replies once.
-- `src/tests/actionEngine.test.ts`: `ActionEngineRepo` as `diletta_app`, including cross-company isolation (and `getEditPlan` / `saveEdit`).
+- `src/tests/actionConversation.test.ts` › "read-after, auto-undo and needs a person" (M3-6, the Done-when): a create and a delete verified; a commit overwritten on the host (`overwrite` fault) undone, with what was found on the frame; an undo that fails and a tool with no `inverse_op` handed to a person; a read-after the host won't answer handed to a person, nothing undone.
+- `src/tests/actionEngine.test.ts`: `ActionEngineRepo` as `diletta_app`, including cross-company isolation (and `getEditPlan` / `saveEdit`, M3-6's `finishVerify` / `startFollowUp` / `finishUndo`, an undo resumed from the stored key).
 - `src/tests/hostTools.test.ts`: approval decisions, role expiry, the loop guard key, untrusted history, the fence.
-- `src/tests/changeRequests.test.ts`: the deadline, how a commit's host call ends, error codes, the view.
+- `src/tests/changeRequests.test.ts`: the deadline, how a commit's host call, its read-after and its undo end, error codes, the view.
+- `packages/schemas` `ChangeRequestsVerify.test.ts`: `checkReadAfter` per kind and step, `host_ref`, the payload upgrade.
 - A DO under test reaches the test host through `routeTestHostFetch()` (call it after `mockCloudflare`).
 
 ## Not built yet
 
-- Read-after, verify, auto-undo (M3-6); undo within the window and purge after it (M3-7).
+- Undo within the window (the widget's Undo button, `undo_until`) and purging the payload after it (M3-7).
 - `token_needed` pushed when a read needs a token, and the widget fetching one silently (M3-8).
