@@ -135,6 +135,12 @@ export default class Constants {
   static readonly ACTION_PENDING_APPROVAL_TTL_MS = 24 * 60 * 60_000;
   static readonly ACTION_COMMIT_RETRY_MS = 60_000;
   static readonly DECISION_FRAMES_PER_WINDOW = 30;
+  // DEV_NOTE: Token refresh (M3-8): a step that needs the host token and has none (or the host refused it) asks the
+  // widget (token_needed, reason refresh) and waits up to HOST_TOKEN_WAIT_MS for a host_token frame, then tries once
+  // more. A change request still waiting for one HOST_TOKEN_GRACE_MS after it first needed it (the widget closed, or
+  // its host gives none) is handed to a person; the grace covers a page reload.
+  static readonly HOST_TOKEN_WAIT_MS = 15_000;
+  static readonly HOST_TOKEN_GRACE_MS = 5 * 60_000;
   // DEV_NOTE: The change request values purge (M3-7), every minute: at most CHANGE_REQUEST_PURGE_BATCH_SIZE rows per
   // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
   static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;

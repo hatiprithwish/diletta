@@ -10,6 +10,7 @@ import {
   undoableMembers,
 } from "@/lib/changeRequestView";
 import type { ChangeRequestGroup } from "@/lib/changeRequestView";
+import { createHostTokenSender } from "@/lib/hostTokenSender";
 import { EMPTY_REVIEW } from "@/store/widgetStore";
 
 // DEV_NOTE: The review cards' side of the chat socket (M3-5). The DO's change_request frames go into the store by
@@ -21,9 +22,11 @@ import { EMPTY_REVIEW } from "@/store/widgetStore";
 // can still undo in one change_request_undos frame; a refused one shows its reason on the card. Nothing here decides
 // anything: the DO re-checks every answer, edit and undo.
 //
-// Host token (minimal, M3-5): sent on every connect (getHostToken, never stored). When an answer, an edit or an undo gets
-// token_needed, a fresh token is fetched and sent, and that frame is sent again once; a second token_needed, or no
-// getHostToken, says to sign in again.
+// Host token: sent on every connect (getHostToken, never stored). When an answer, an edit or an undo gets token_needed
+// (reason answer, M3-5), a fresh token is fetched and sent, and that frame is sent again once; a second token_needed, or
+// no getHostToken, says to sign in again. When the DO asks for one for its own step (reason refresh, M3-8: a read in a
+// turn, a commit to resume, a token the host refused) a fresh one is sent silently, with no UI, even when none comes
+// (the DO decides what happens then). One getHostToken call at a time: a second ask meanwhile shares it.
 const SIGN_IN_NOTICE = "Sign in to the app again to approve changes. Nothing changed.";
 const CHECK_VALUES_NOTICE = (fields: string[]) =>
   `Check ${fields.join(", ")}: the value doesn't fit. Nothing was sent.`;
@@ -75,17 +78,18 @@ export function useChangeReview(params: {
     [messagesRef, storeApi],
   );
 
+  const sendRef = useLatest(send);
+  // DEV_NOTE: One sender per hook (made on first use), reading the latest getter and socket send
+  // (lib/hostTokenSender.ts)
+  const hostTokenSenderRef = useRef<(() => Promise<boolean>) | null>(null);
   const sendHostToken = useCallback(async (): Promise<boolean> => {
-    const getHostToken = getHostTokenRef.current;
-    if (!getHostToken) return false;
-    try {
-      const token = await getHostToken();
-      send(JSON.stringify({ type: Schemas.WIDGET_HOST_TOKEN_FRAME_TYPE, token }));
-      return true;
-    } catch {
-      return false;
-    }
-  }, [getHostTokenRef, send]);
+    hostTokenSenderRef.current ??= createHostTokenSender({
+      getHostToken: () => getHostTokenRef.current,
+      send: (frame) => sendRef.current(frame),
+      timeoutMs: Schemas.WIDGET_HOST_TOKEN_FETCH_TIMEOUT_MS,
+    });
+    return await hostTokenSenderRef.current();
+  }, [getHostTokenRef, sendRef]);
 
   const sendReviewFrame = useCallback(
     (cardId: string, frame: string) => {
@@ -173,6 +177,10 @@ export function useChangeReview(params: {
           return true;
         }
         case "token_needed": {
+          if (frame.reason === Schemas.WidgetTokenNeededReasonEnum.Refresh) {
+            void sendHostToken();
+            return true;
+          }
           const last = lastFrameRef.current;
           if (!last || last.isRetried) {
             if (last) forgetEdits(last.cardId);

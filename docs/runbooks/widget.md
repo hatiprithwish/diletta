@@ -8,13 +8,13 @@ Before any conversation exists, it reads its settings from `GET /widget/bootstra
 
 A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`):
 
-| Option         | Required | What it is                                                                                                                                                                                   |
-| -------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apiBase`      | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`)                                                                     |
-| `getToken`     | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                                                                                                 |
-| `getHostToken` | no       | `() => Promise<string>`: the signed-in user's bearer token for the host's own API. The chatbot reads and changes records as this user (`jwt_forward`). Without it, changes can't be approved |
-| `chatbot`      | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                                                                                       |
-| `theme`        | no       | `"light"` (default) or `"dark"`                                                                                                                                                              |
+| Option         | Required | What it is                                                                                                                                                                                                                                           |
+| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiBase`      | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`)                                                                                                                             |
+| `getToken`     | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                                                                                                                                                         |
+| `getHostToken` | no       | `() => Promise<string>`: the signed-in user's bearer token for the host's own API. The chatbot reads and changes records as this user (`jwt_forward`). Called again whenever the chatbot asks for a fresh one. Without it, changes can't be approved |
+| `chatbot`      | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                                                                                                                                               |
+| `theme`        | no       | `"light"` (default) or `"dark"`                                                                                                                                                                                                                      |
 
 **Script tag.** The static Worker in `apps/widget/wrangler.jsonc` serves the bundle (`diletta-widget.js`).
 
@@ -49,6 +49,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 - **Reload.** Opening the panel resumes the saved conversation. The server sends the transcript and the ratings already given.
 - **New chat.** Clears the saved id and shows the welcome screen. The old conversation closes on its own after 30 minutes idle.
 - **Every connect** gets a fresh token through `getToken`, sent in `Sec-WebSocket-Protocol`. Tokens are never stored.
+- **Host token (M3-8).** Sent after every connect through `getHostToken`, never stored. When the chatbot needs a fresh one mid-conversation (it has none after a server restart, or the host refused it), it asks, and the widget calls `getHostToken` again with nothing shown to the visitor. If `getHostToken` fails, a lookup tells the visitor to sign in again, and an approved change that can't be finished within 5 minutes (the widget was closed) goes to the company's team as "needs a person". `getHostToken` should return a token the host's API still accepts, refreshing it if needed.
 
 **The greeting.** Its first line is the welcome heading; any following lines are the paragraph under it.
 

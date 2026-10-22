@@ -612,6 +612,8 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
             expiresAt: Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS,
             executionId: paused.executionId,
             expiryScheduleId: null,
+            tokenNeededSince: null,
+            isUnsent: false,
           },
         },
       });
@@ -892,6 +894,7 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
       session,
       changeRequestPublicId: publicId,
       attemptId: Utility.generateUlid(),
+      isUnsent: false,
     });
     expect(started.plan?.isResume).toBe(false);
 
@@ -908,6 +911,8 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
             expiresAt: Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS,
             executionId: null,
             expiryScheduleId: null,
+            tokenNeededSince: null,
+            isUnsent: false,
           },
         },
       });
@@ -1742,6 +1747,8 @@ describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TI
             expiresAt,
             executionId: null,
             expiryScheduleId: null,
+            tokenNeededSince: null,
+            isUnsent: false,
           },
         },
       });
@@ -1823,5 +1830,307 @@ describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TI
     );
     expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(340);
     second.socket.close(1000);
+  });
+});
+
+// DEV_NOTE: Token refresh (M3-8): the DO asks the widget for a fresh host token (token_needed, reason refresh) when a
+// step finds none or the host refuses it, and the widget answers with no UI. A change request whose token never comes
+// back (the widget closed) goes to a person after HOST_TOKEN_GRACE_MS.
+describe("Action engine: token refresh (M3-8)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  const isRefresh = (frame: Frame) =>
+    frame.type === "token_needed" && frame.reason === Schemas.WidgetTokenNeededReasonEnum.Refresh;
+
+  it("asks for the host token when a read finds none, and the read goes on with no UI (the Done-when)", async () => {
+    const tenant = await createTenant({ tools: ["get_record"] });
+    scriptModel([
+      (model) =>
+        anthropicToolCallsStream(model, [
+          { id: "toolu_read", name: "get_record", input: { recordId: "rec_bravo" } },
+        ]),
+      reply("Bravo Labs owes 45.5."),
+    ]);
+    routeTestHostFetch();
+    // DEV_NOTE: No host_token after connect: the DO's memory holds none, as after an eviction
+    const socket = await connect(tenant);
+    const done = sendChat(socket, "req-1", "What does Bravo owe?");
+    await socket.waitFor(isRefresh);
+    sendHostToken(socket, tenant.hostToken);
+    await done;
+
+    const toolResult = JSON.stringify(gatewayRequests()[1]?.body?.messages);
+    expect(toolResult).toContain("Bravo Labs");
+    expect(toolResult).not.toContain("signed in again");
+    const rows = await waitForToolCalls(tenant.companyId, 1);
+    expect(rows.map((row) => [row.status, row.errorCode])).toEqual([
+      [Schemas.ToolCallStatusIntEnum.Ok, null],
+    ]);
+    // DEV_NOTE: Nothing for the widget to show: no error or notice frame
+    expect(socket.frames.some((frame) => frame.type === "error")).toBe(false);
+    socket.socket.close(1000);
+  });
+
+  it("asks for a fresh token when the host refuses the commit's, and commits once with it", async () => {
+    const tenant = await createTenant({ tools: ["update_record"] });
+    scriptModel([updateAlpha(360), reply("Waiting for you."), reply("Done.")]);
+    routeTestHostFetch();
+    const socket = await connect(tenant);
+    sendHostToken(socket, tenant.hostToken);
+    await sendChat(socket, "req-1", "Set Alpha's amount to 360");
+    const proposed = asChangeRequest(
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)),
+    );
+    await waitForExecutionId(socket.publicId);
+    // DEV_NOTE: The host refuses the commit's token before anything runs (an expired token)
+    await setTestHostFaults(tenant.workspace, [
+      {
+        kind: Schemas.TestHostFaultKindEnum.Status,
+        method: Schemas.ToolOpMethodEnum.Patch,
+        status: 401,
+        isApplied: false,
+      },
+    ]);
+    const from = socket.frames.length;
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    await socket.waitFor(isRefresh, from);
+    const { hostToken: freshToken } = await mintTestHostTokens(tenant.workspace);
+    sendHostToken(socket, freshToken);
+
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(360);
+    const row = await getChangeRequestRow(proposed.publicId);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+    expect(row?.errorCode).toBeNull();
+    socket.socket.close(1000);
+  });
+
+  // DEV_NOTE: A change request the DO holds with no turn running (as after a wake): proposed with no approval needed
+  // (Approved), Committing when its commit already started once. The first socket is closed; the caller connects
+  // again if it needs one.
+  async function seedEntry(options: {
+    toolName: "update_record" | "create_record";
+    args: Record<string, unknown>;
+    stage:
+      | Schemas.ConversationChangeRequestStageEnum.Approved
+      | Schemas.ConversationChangeRequestStageEnum.Committing;
+  }) {
+    const tenant = await createTenant({ tools: [options.toolName] });
+    routeTestHostFetch();
+    const first = await connect(tenant);
+    first.socket.close(1000);
+    const stub = await getAgentByName(env.CONVERSATION_DO, first.publicId);
+    const toolCallId = `toolu_${crypto.randomUUID().slice(0, 8)}`;
+
+    const { session } = await getRuntimeState(first.publicId);
+    const repo = new ActionEngineRepo(env);
+    const loaded = await repo.loadTurnTools({
+      session,
+      pins: [{ name: options.toolName, version: 1 }],
+      isReadOnly: false,
+    });
+    const hostTool = loaded.tools?.[0];
+    if (!hostTool?.ops.readbackOp || hostTool.risk === Schemas.ToolDefinitionRiskIntEnum.Read) {
+      throw new Error(`${options.toolName} not loaded as a write tool`);
+    }
+    const kind = Schemas.getChangeRequestKind(hostTool.risk, hostTool.ops.readbackOp);
+    const before = Schemas.hasReadBefore(kind)
+      ? await readHostRecord(tenant.hostToken, String(options.args.recordId))
+      : null;
+    const turnId = Utility.generateUlid();
+    const proposed = await repo.proposeChange({
+      session,
+      turnId,
+      tool: hostTool,
+      args: options.args,
+      kind,
+      before,
+      changes: Schemas.buildChangeRequestChanges({
+        kind,
+        callOp: hostTool.ops.callOp,
+        readbackOp: hostTool.ops.readbackOp,
+        args: options.args,
+        before,
+      }),
+      isApprovalRequired: false,
+      hasUntrustedContext: false,
+      latencyMs: 1,
+    });
+    const publicId = proposed.changeRequest?.publicId;
+    if (!publicId) throw new Error(proposed.message);
+    if (options.stage === Schemas.ConversationChangeRequestStageEnum.Committing) {
+      const started = await repo.startCommit({
+        session,
+        changeRequestPublicId: publicId,
+        attemptId: Utility.generateUlid(),
+        isUnsent: false,
+      });
+      if (!started.plan) throw new Error(started.message);
+    }
+
+    await runInDurableObject(stub, async (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({
+        ...state,
+        changeRequests: {
+          [toolCallId]: {
+            publicId,
+            toolName: options.toolName,
+            turnId,
+            stage: options.stage,
+            expiresAt: Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS,
+            executionId: null,
+            expiryScheduleId: null,
+            tokenNeededSince: null,
+            isUnsent: false,
+          },
+        },
+      });
+    });
+    return { tenant, stub, toolCallId, publicId, conversationPublicId: first.publicId };
+  }
+
+  // DEV_NOTE: The write action's execute (Think calls it after a wake to resume a commit), reached directly
+  const runExecute = (instance: unknown, toolCallId: string) => {
+    const commitChange: unknown = Reflect.get(instance as object, "commitChange");
+    if (typeof commitChange !== "function") throw new Error("commitChange not found");
+    return commitChange.call(instance, toolCallId) as Promise<Schemas.HostToolOutput>;
+  };
+
+  // DEV_NOTE: The Done-when's other half. An approved commit cut short by an eviction, and no widget left to send the
+  // host token: the retry starts the grace (sending nothing), and once the grace has passed the change request goes to
+  // a person, the host untouched.
+  it("hands a commit whose widget closed to a person once the grace for the token has passed", async () => {
+    const { tenant, stub, toolCallId, publicId, conversationPublicId } = await seedEntry({
+      toolName: "update_record",
+      args: { recordId: "rec_alpha", amount: 370 },
+      stage: Schemas.ConversationChangeRequestStageEnum.Approved,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await evictDurableObject(stub, { webSockets: "close" });
+
+    // DEV_NOTE: The retry after the wake: no token, no socket. The grace starts; nothing is sent or ended.
+    await runInDurableObject(stub, async (instance) => {
+      await instance.retryCommits();
+    });
+    const waiting = (await getRuntimeState(conversationPublicId)).changeRequests[toolCallId];
+    expect(waiting?.tokenNeededSince).toEqual(expect.any(Number));
+    expect((await getChangeRequestRow(publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Approved,
+    );
+
+    // DEV_NOTE: The grace has passed with no widget back: handed to a person
+    await runInDurableObject(stub, async (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      const entry = state.changeRequests[toolCallId];
+      if (!entry) throw new Error("Entry gone");
+      instance.configure<Schemas.ConversationRuntimeState>({
+        ...state,
+        changeRequests: {
+          [toolCallId]: {
+            ...entry,
+            tokenNeededSince: Date.now() - Constants.HOST_TOKEN_GRACE_MS - 1_000,
+          },
+        },
+      });
+      await instance.retryCommits();
+    });
+    const row = await getChangeRequestRow(publicId);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.NeedsHuman);
+    expect(row?.errorCode).toBe(Schemas.ChangeRequestErrorCodeEnum.TokenNeeded);
+    expect((await getRuntimeState(conversationPublicId)).changeRequests).toEqual({});
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+  });
+
+  // DEV_NOTE: A resume's response says it may have landed even when it sent nothing (the adapter starts a resume's
+  // mayHaveLanded at true), so it must still wait for the token rather than end NeedsHuman on it
+  it("keeps a Committing commit resumed with no host token waiting for one, never NeedsHuman on it", async () => {
+    const { stub, toolCallId, publicId, conversationPublicId } = await seedEntry({
+      toolName: "update_record",
+      args: { recordId: "rec_alpha", amount: 375 },
+      stage: Schemas.ConversationChangeRequestStageEnum.Committing,
+    });
+    const output = await runInDurableObject(stub, async (instance) => {
+      Reflect.set(instance, "hostToken", null);
+      return await runExecute(instance, toolCallId);
+    });
+    expect(output.status).toBe(Schemas.HostToolStatusEnum.Error);
+    expect((await getChangeRequestRow(publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Committing,
+    );
+    const entry = (await getRuntimeState(conversationPublicId)).changeRequests[toolCallId];
+    expect(entry?.tokenNeededSince).toEqual(expect.any(Number));
+    // DEV_NOTE: The earlier attempt may have landed: its resume stays a resume
+    expect(entry?.isUnsent).toBe(false);
+  });
+
+  it("asks for a fresh token when the host refuses a resumed Native commit, and creates the record once", async () => {
+    const { tenant, stub, toolCallId, publicId, conversationPublicId } = await seedEntry({
+      toolName: "create_record",
+      args: { name: "Token Labs", email: "token@example.com", amount: 12 },
+      stage: Schemas.ConversationChangeRequestStageEnum.Committing,
+    });
+    // DEV_NOTE: The token goes straight into memory: a host_token frame would resume the commit itself meanwhile
+    const socket = await connect(tenant, { conversation: conversationPublicId });
+    await setTestHostFaults(tenant.workspace, [
+      {
+        kind: Schemas.TestHostFaultKindEnum.Status,
+        method: Schemas.ToolOpMethodEnum.Post,
+        status: 401,
+        isApplied: false,
+      },
+    ]);
+    const from = socket.frames.length;
+    const running = runInDurableObject(stub, async (instance) => {
+      Reflect.set(instance, "hostToken", tenant.hostToken);
+      return await runExecute(instance, toolCallId);
+    });
+    await socket.waitFor(isRefresh, from);
+    sendHostToken(socket, (await mintTestHostTokens(tenant.workspace)).hostToken);
+
+    expect((await running).status).toBe(Schemas.HostToolStatusEnum.Verified);
+    const row = await getChangeRequestRow(publicId);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+    expect((await readHostRecord(tenant.hostToken, row?.hostRef ?? ""))?.data?.name).toBe(
+      "Token Labs",
+    );
+    socket.socket.close(1000);
+  });
+
+  // DEV_NOTE: A token the host refused is dropped from memory, so the gates ask the widget for one; with no widget to
+  // answer, a first send that reached nothing waits as unsent, and the next host_token sends it fresh
+  it("drops a token the host refused, and sends an unsent commit fresh once a token comes back", async () => {
+    const { tenant, stub, toolCallId, publicId, conversationPublicId } = await seedEntry({
+      toolName: "update_record",
+      args: { recordId: "rec_alpha", amount: 380 },
+      stage: Schemas.ConversationChangeRequestStageEnum.Approved,
+    });
+    await setTestHostFaults(tenant.workspace, [
+      {
+        kind: Schemas.TestHostFaultKindEnum.Status,
+        method: Schemas.ToolOpMethodEnum.Patch,
+        status: 401,
+        isApplied: false,
+      },
+    ]);
+    const heldToken = await runInDurableObject(stub, async (instance) => {
+      Reflect.set(instance, "hostToken", tenant.hostToken);
+      await runExecute(instance, toolCallId);
+      return Reflect.get(instance, "hostToken") as unknown;
+    });
+    expect(heldToken).toBeNull();
+    expect((await getChangeRequestRow(publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Committing,
+    );
+    expect((await getRuntimeState(conversationPublicId)).changeRequests[toolCallId]).toMatchObject({
+      isUnsent: true,
+      tokenNeededSince: expect.any(Number),
+    });
+
+    const socket = await connect(tenant, { conversation: conversationPublicId });
+    const from = socket.frames.length;
+    sendHostToken(socket, tenant.hostToken);
+    await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from);
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(380);
+    expect((await getRuntimeState(conversationPublicId)).changeRequests).toEqual({});
+    socket.socket.close(1000);
   });
 });

@@ -50,11 +50,13 @@ export interface DecideChangeRequest {
 }
 
 // DEV_NOTE: attemptId (a fresh ULID per commit attempt) parts a resumed attempt's committing event from the others, so
-// a retried transaction of the same attempt dedupes
+// a retried transaction of the same attempt dedupes. isUnsent (M3-8): the DO's entry knows its last attempt reached
+// nothing (its token was missing or refused on the first send), so a Committing row is sent fresh (isResume false).
 export interface StartCommitRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
   attemptId: string;
+  isUnsent: boolean;
 }
 
 // DEV_NOTE: How the commit's host call ended (@app/adapter), for the change request's status. plan: the one
@@ -69,10 +71,12 @@ export interface FinishCommitRequest {
 
 // DEV_NOTE: The next step of a landed commit that an eviction or a failed write cut short (M3-6): a Committed one is
 // read back, a Mismatch one undone. attemptId (a fresh ULID) parts a resumed undo's undoing event from the others.
+// isUnsent (M3-8): the undo's last send reached nothing (token missing or refused), so it is sent fresh (isResume false).
 export interface StartFollowUpRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
   attemptId: string;
+  isUnsent: boolean;
 }
 
 // DEV_NOTE: The user's undo of a Verified change request (M3-7), from the widget's change_request_undos frame.
@@ -85,6 +89,13 @@ export interface StartUndoRequest {
 
 // DEV_NOTE: A user undo cut short that the DO stops waiting for (M3-7): handed to a person (NeedsHuman undo_interrupted)
 export interface AbandonUndoRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+}
+
+// DEV_NOTE: A step past the user's answer that waited HOST_TOKEN_GRACE_MS for a host token that never came (the widget
+// closed, M3-8): handed to a person (NeedsHuman token_needed)
+export interface HandOverForTokenRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
 }

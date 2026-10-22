@@ -216,6 +216,7 @@ const startCommit = (session: Schemas.ConversationSession, changeRequestPublicId
     session,
     changeRequestPublicId,
     attemptId: Utility.generateUlid(),
+    isUnsent: false,
   });
 
 // DEV_NOTE: A commit plan for a change request that isn't the caller's (cross-company): the step must refuse it first
@@ -790,6 +791,7 @@ describe("ActionEngineRepo read-after and auto-undo (M3-6)", { timeout: 90_000 }
       session: sessionA,
       changeRequestPublicId: publicId,
       attemptId: Utility.generateUlid(),
+      isUnsent: false,
     });
     expect(resumed.followUp).toMatchObject({
       followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
@@ -887,6 +889,7 @@ describe("ActionEngineRepo read-after and auto-undo (M3-6)", { timeout: 90_000 }
       session: sessionA,
       changeRequestPublicId: publicId,
       attemptId: Utility.generateUlid(),
+      isUnsent: false,
     });
     expect(resumed.followUp?.followUp).toBe(Schemas.ChangeRequestFollowUpEnum.Verify);
     expect(resumed.followUp?.payload.result).toEqual(followUp.payload.result);
@@ -919,6 +922,7 @@ describe("ActionEngineRepo read-after and auto-undo (M3-6)", { timeout: 90_000 }
       session: sessionA,
       changeRequestPublicId: publicId,
       attemptId: Utility.generateUlid(),
+      isUnsent: false,
     });
     expect(again.failure).toBe(Schemas.ChangeRequestFailureEnum.InvalidTransition);
   });
@@ -993,6 +997,7 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
       session: sessionA,
       changeRequestPublicId: publicId,
       attemptId: Utility.generateUlid(),
+      isUnsent: false,
     });
     expect(resumed.followUp).toMatchObject({
       followUp: Schemas.ChangeRequestFollowUpEnum.Undo,
@@ -1181,6 +1186,94 @@ describe("ActionEngineRepo undo window and the user's undo (M3-7)", { timeout: 1
   });
 });
 
+// DEV_NOTE: Token refresh (M3-8): the DO's isUnsent hint, and the hand-over of a step whose host token never came
+describe("ActionEngineRepo token refresh (M3-8)", { timeout: 120_000 }, () => {
+  beforeEach(async () => {
+    hostToken = (await mintTestHostTokens(hostWorkspace)).hostToken;
+  });
+
+  it("sends a Committing commit fresh when the DO knows its last send reached nothing, else resumes it", async () => {
+    const publicId = (await propose(sessionA, 611, false)).changeRequest!.publicId;
+    const first = await startCommit(sessionA, publicId);
+    expect(first.plan?.isResume).toBe(false);
+    const unsent = await new ActionEngineRepo(env).startCommit({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      attemptId: Utility.generateUlid(),
+      isUnsent: true,
+    });
+    expect(unsent.plan?.isResume).toBe(false);
+    expect(unsent.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Committing,
+    );
+    expect((await startCommit(sessionA, publicId)).plan?.isResume).toBe(true);
+  });
+
+  it("starts an auto-undo fresh when its last send reached nothing, else resumes it", async () => {
+    const repo = new ActionEngineRepo(env);
+    const { publicId, followUp } = await commitAlpha(sessionA, 612);
+    await repo.finishVerify({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      plan: followUp,
+      readback: {
+        outcome: Schemas.HostCallOutcomeEnum.Succeeded,
+        httpStatus: 200,
+        body: { data: { id: "rec_alpha", amount: 999 } },
+        attempts: 1,
+      },
+    });
+    const startFollowUp = (isUnsent: boolean) =>
+      repo.startFollowUp({
+        session: sessionA,
+        changeRequestPublicId: publicId,
+        attemptId: Utility.generateUlid(),
+        isUnsent,
+      });
+    expect((await startFollowUp(true)).followUp?.isResume).toBe(false);
+    expect((await startFollowUp(false)).followUp?.isResume).toBe(true);
+  });
+
+  it("hands a change request waiting for the host token to a person, only past the user's answer and before its end", async () => {
+    const repo = new ActionEngineRepo(env);
+    const handOver = (publicId: string) =>
+      repo.handOverForToken({ session: sessionA, changeRequestPublicId: publicId });
+
+    const proposed = (await propose(sessionA, 613)).changeRequest!.publicId;
+    expect((await handOver(proposed)).failure).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+    expect((await getRow(proposed))?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Proposed);
+
+    const approved = (await propose(sessionA, 614, false)).changeRequest!.publicId;
+    const committing = (await propose(sessionA, 615, false)).changeRequest!.publicId;
+    await startCommit(sessionA, committing);
+    const { publicId: committed } = await commitAlpha(sessionA, 616);
+    for (const publicId of [approved, committing, committed]) {
+      const handedOver = await handOver(publicId);
+      expect(handedOver.isSuccess).toBe(true);
+      expect(handedOver.changeRequest?.changeRequestStatus).toBe(
+        Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+      );
+      const row = await getRow(publicId);
+      expect(row?.errorCode).toBe(Schemas.ChangeRequestErrorCodeEnum.TokenNeeded);
+      expect(row?.undoUntil).toBeNull();
+      expect((await eventsOf(publicId)).at(-1)?.entityAction).toBe(
+        Schemas.ChangeRequestEntityActionEnum.NeedsHuman,
+      );
+    }
+    // DEV_NOTE: Ended ones stay as they are: a second hand-over and a Verified one are refused
+    expect((await handOver(approved)).failure).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+    const { publicId: verified } = await verifyAlpha(sessionA, 617);
+    expect((await handOver(verified)).failure).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+    expect((await getRow(verified))?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+  });
+});
+
 describe("ActionEngineRepo edits (M3-5)", () => {
   it("edits a Proposed change request: new payload encrypted, was_edited, an edited event by the user", async () => {
     const repo = new ActionEngineRepo(env);
@@ -1325,6 +1418,7 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
           session,
           changeRequestPublicId: publicId,
           attemptId: Utility.generateUlid(),
+          isUnsent: false,
         });
         expect(followed.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
         const verified = await repo.finishVerify({
@@ -1342,6 +1436,13 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
           readback: null,
         });
         expect(undone.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        // DEV_NOTE: Nor hand it to a person (M3-8)
+        const handedOver = await repo.handOverForToken({
+          session,
+          changeRequestPublicId: publicId,
+        });
+        expect(handedOver.failure).toBe(Schemas.ChangeRequestFailureEnum.NotFound);
+        expect(handedOver.changeRequest).toBeUndefined();
         // DEV_NOTE: Nor the user's undo (M3-7)
         const undoStarted = await startUndo(session, publicId);
         expect(undoStarted.followUp).toBeUndefined();
