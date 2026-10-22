@@ -81,4 +81,30 @@ describe("ChangeRequestsProvider deadline and view", () => {
       Schemas.ChangeRequestKindEnum.Delete,
     );
   });
+
+  it("offers editable fields only while Proposed with a readable payload, and leaves the tool call id to the DO", () => {
+    const payload: Schemas.ChangeRequestPayload = {
+      version: 1,
+      kind: Schemas.ChangeRequestKindEnum.Update,
+      args: { recordId: "rec_alpha", amount: 1 },
+      before: null,
+      changes: [],
+    };
+    const editable: Schemas.ChangeRequestEditableField[] = [
+      {
+        field: "amount",
+        type: Schemas.ChangeRequestFieldTypeEnum.Number,
+        enumValues: null,
+        format: null,
+        isRequired: false,
+      },
+    ];
+    expect(ChangeRequestsProvider.toView(row(), payload, editable).editableFields).toEqual(
+      editable,
+    );
+    expect(ChangeRequestsProvider.toView(row(), null, editable).editableFields).toEqual([]);
+    const approved = row({ status: Schemas.ChangeRequestStatusIntEnum.Approved });
+    expect(ChangeRequestsProvider.toView(approved, payload, editable).editableFields).toEqual([]);
+    expect(ChangeRequestsProvider.toView(row(), payload).toolCallId).toBeNull();
+  });
 });

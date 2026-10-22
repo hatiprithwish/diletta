@@ -4,7 +4,7 @@ import { createWidgetStore } from "@/store/widgetStore";
 import WidgetRoot from "@/WidgetRoot";
 
 // DEV_NOTE: The script-tag build (dist/embed/diletta-widget.js). The host page loads it and calls
-//   window.Diletta.init({ apiBase, chatbot?, theme?, getToken })
+//   window.Diletta.init({ apiBase, chatbot?, theme?, getToken, getHostToken? })
 // which mounts one widget (a second init replaces the first) and returns that widget's controller; window.Diletta.open
 // / close / setTheme / destroy act on the current widget. A controller only ever acts on its own widget, so an old
 // one can't destroy a newer init. Bad options throw, so a host developer sees the mistake at once. Called from a
@@ -20,7 +20,12 @@ function mount(options: Schemas.WidgetInitOptions, config: Schemas.WidgetEmbedCo
   }
   const store = createWidgetStore(config.theme ?? Schemas.WidgetThemeEnum.Light);
   const root = createRoot(container);
-  root.render(<WidgetRoot options={{ ...config, getToken: options.getToken }} store={store} />);
+  root.render(
+    <WidgetRoot
+      options={{ ...config, getToken: options.getToken, getHostToken: options.getHostToken }}
+      store={store}
+    />,
+  );
   return {
     store,
     unmount: () => {
@@ -54,6 +59,9 @@ function init(options: Schemas.WidgetInitOptions): Schemas.WidgetController {
   const config = Schemas.ZWidgetEmbedConfig.parse(options);
   if (typeof options.getToken !== "function") {
     throw new TypeError("Diletta.init: getToken must be a function returning a companion JWT");
+  }
+  if (options.getHostToken !== undefined && typeof options.getHostToken !== "function") {
+    throw new TypeError("Diletta.init: getHostToken must be a function returning the host token");
   }
   current?.unmount();
   const mounted = mount(options, config);

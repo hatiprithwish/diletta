@@ -4,6 +4,7 @@ import type {
   ChangeRequestChange,
   ChangeRequestDecisionEnum,
   ChangeRequestKindEnum,
+  ChangeRequestPayload,
 } from "./ChangeRequestsCommon";
 import type { HostCallResponse } from "../hostAdapter/HostAdapterCommon";
 
@@ -80,4 +81,21 @@ export interface LoadTurnToolsRequest {
   session: ConversationSession;
   pins: { name: string; version: number }[];
   isReadOnly: boolean;
+}
+
+// DEV_NOTE: An edit's first step (M3-5): what the edit is checked against, read from a Proposed change request still
+// before its deadline (the conversation, chatbot and company re-checked, the tool version still loading)
+export interface GetEditPlanRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+}
+
+// DEV_NOTE: An edit's last step: the re-checked payload (the edited args, the fresh read-before and the diff rebuilt
+// from both) replaces the stored one, only while the change request is still Proposed and before its deadline.
+// editId (a fresh ULID per edit) parts this edit's event from the others.
+export interface SaveEditRequest {
+  session: ConversationSession;
+  changeRequestPublicId: string;
+  payload: ChangeRequestPayload;
+  editId: string;
 }

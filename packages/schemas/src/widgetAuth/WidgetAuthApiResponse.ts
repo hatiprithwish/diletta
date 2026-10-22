@@ -56,19 +56,31 @@ export type WidgetFeedbackMessage = z.infer<typeof ZWidgetFeedbackMessage>;
 
 // DEV_NOTE: One change request as it now stands (M3-4): sent to every socket when a write is proposed and at each
 // status change after it, and on connect for the ones still open. Carries the diff's values (the user's own host data,
-// to their own widget only); the review UI is M3-5.
+// to their own widget only); the widget's review card (M3-5) draws from it.
 export const ZWidgetChangeRequestMessage = z.object({
   type: z.literal("change_request"),
   changeRequest: ZWidgetChangeRequest,
 });
 export type WidgetChangeRequestMessage = z.infer<typeof ZWidgetChangeRequestMessage>;
 
-// DEV_NOTE: The DO has no usable host token for a step that needs one (an approval). The widget fetches a fresh one
-// from its host and sends it in a host_token frame (M3-8), then tries again; nothing was done.
+// DEV_NOTE: The DO has no usable host token for a step that needs one (an approval or an edit's read-before). The
+// widget fetches a fresh one from its host (getHostToken), sends it in a host_token frame and tries that step again
+// once (M3-5; M3-8 adds the read path); nothing was done.
 export const ZWidgetTokenNeededMessage = z.object({
   type: z.literal("token_needed"),
 });
 export type WidgetTokenNeededMessage = z.infer<typeof ZWidgetTokenNeededMessage>;
+
+// DEV_NOTE: The answer to one edit of a change_request_edits frame (M3-5). isSaved: the re-checked values replaced the
+// proposal's (its change_request frame, with the new diff, comes first). Otherwise message says why, in safe text
+// (no values), and nothing changed.
+export const ZWidgetChangeRequestEditMessage = z.object({
+  type: z.literal("change_request_edit"),
+  changeRequestId: z.string(),
+  isSaved: z.boolean(),
+  message: z.string().nullable(),
+});
+export type WidgetChangeRequestEditMessage = z.infer<typeof ZWidgetChangeRequestEditMessage>;
 
 export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetConversationMessage,
@@ -78,6 +90,7 @@ export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetFeedbackMessage,
   ZWidgetChangeRequestMessage,
   ZWidgetTokenNeededMessage,
+  ZWidgetChangeRequestEditMessage,
 ]);
 export type WidgetServerMessage = z.infer<typeof ZWidgetServerMessage>;
 

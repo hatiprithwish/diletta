@@ -236,6 +236,66 @@ export default class ChangeRequestsDAL {
     return response;
   }
 
+  // DEV_NOTE: An edit's re-checked payload (M3-5), only while the row is still Proposed (isNotFound otherwise: another
+  // step decided it first). Sets was_edited.
+  async updateChangeRequestPayload(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateChangeRequestPayloadDALRequest,
+  ) {
+    const response: Schemas.ChangeRequestWriteDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, id: params.id };
+
+    try {
+      const conditions = [
+        eq(changeRequests.id, params.id),
+        eq(changeRequests.companyId, params.companyId),
+        eq(changeRequests.status, Schemas.ChangeRequestStatusIntEnum.Proposed),
+      ];
+      const [changeRequest] = await tx
+        .update(changeRequests)
+        .set({
+          encryptedChanges: params.encryptedChanges ? Buffer.from(params.encryptedChanges) : null,
+          iv: params.iv ? Buffer.from(params.iv) : null,
+          encryptionKeyVersion: params.encryptionKeyVersion,
+          summary: params.summary,
+          changeCount: params.changeCount,
+          wasEdited: true,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!changeRequest) {
+        const message = "Change request is no longer Proposed";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.UpdateChangeRequestPayload,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Change request payload updated successfully";
+      response.changeRequest = changeRequest;
+    } catch (error) {
+      const message = "Unknown error in updating change request payload";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateChangeRequestPayload,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Set once: a row that already holds this execution id succeeds unchanged; one that holds another is
   // refused (a pause is never re-pointed); no row of this conversation with that public id is isNotFound
   async setChangeRequestExecutionId(

@@ -260,6 +260,7 @@ export default class ActionEngineRepo {
             isUndoable: tool.ops.inverseOp !== null,
           },
           payload,
+          ChangeRequestsProvider.editableFields(tool, payload),
         ),
       };
     });
@@ -484,6 +485,102 @@ export default class ActionEngineRepo {
     });
   }
 
+  // DEV_NOTE: An edit's first step (M3-5): the change request must still be Proposed and before its deadline, the
+  // conversation open, the company and chatbot active and not read-only, and its tool version still loading (Active,
+  // on a connection that can serve calls). Nothing changes here: the DO checks the edit against the plan (editable
+  // fields, input_schema), reads the record again and rebuilds the diff before saveEdit.
+  async getEditPlan(params: Schemas.GetEditPlanRequest): Promise<Schemas.GetEditPlanResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx): Promise<Schemas.GetEditPlanResponse> => {
+      const checked = await this.checkConversation(tx, session, true);
+      if (!checked.isSuccess) {
+        return { isSuccess: false, message: checked.message, failure: checked.failure };
+      }
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      const ready = await this.checkEditable(tx, row);
+      if (!ready.isSuccess) return ready.response;
+      return {
+        isSuccess: true,
+        message: "Edit plan ready",
+        plan: { changeRequestPublicId: row.publicId, tool: ready.tool, payload: ready.payload },
+      };
+    });
+  }
+
+  // DEV_NOTE: An edit's last step (M3-5): the re-checked payload replaces the stored one (encrypted here; summary and
+  // change count from its diff, was_edited set) with its change_request.edited event, in one transaction, only while
+  // the change request is still Proposed and before its deadline (re-checked under the row lock: an answer or the
+  // expiry that came first wins). It stays Proposed: the user approves the new diff.
+  async saveEdit(params: Schemas.SaveEditRequest): Promise<Schemas.ChangeRequestStepResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx) => {
+      const checked = await this.checkConversation(tx, session, true);
+      if (!checked.isSuccess) {
+        return { isSuccess: false, message: checked.message, failure: checked.failure };
+      }
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      const ready = await this.checkEditable(tx, row);
+      if (!ready.isSuccess) return ready.response;
+
+      const parsed = Schemas.ZChangeRequestPayload.safeParse(params.payload);
+      if (!parsed.success || parsed.data.kind !== ready.payload.kind) {
+        return {
+          isSuccess: false,
+          message: "Edited payload doesn't fit the change request",
+          failure: Schemas.ChangeRequestFailureEnum.InvalidEdit,
+        };
+      }
+      const payload = parsed.data;
+      const encrypted = await this.encrypt(
+        tx,
+        session.companyId,
+        Schemas.EncryptedColumnEnum.ChangeRequestChanges,
+        payload,
+      );
+      if (!encrypted) throw new TenantRollbackError("Edited values not encrypted");
+
+      const changeCount = Schemas.countChangedFields(payload.changes);
+      const updated = await this.changeRequestsDal.updateChangeRequestPayload(tx, {
+        companyId: session.companyId,
+        id: row.id,
+        encryptedChanges: encrypted.encryptedValue.ciphertext,
+        iv: encrypted.encryptedValue.iv,
+        encryptionKeyVersion: encrypted.encryptionKeyVersion,
+        summary: Schemas.buildChangeRequestSummary(ready.tool.name, payload.kind, changeCount),
+        changeCount,
+      });
+      if (!updated.isSuccess || !updated.changeRequest) {
+        throw new TenantRollbackError(updated.message ?? "Change request not edited");
+      }
+      const outboxId = await this.recordEvent(tx, {
+        session,
+        changeRequest: updated.changeRequest,
+        rootLogId: checked.rootLogId,
+        status: Schemas.ChangeRequestStatusIntEnum.Proposed,
+        action: Schemas.ChangeRequestEntityActionEnum.Edited,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+        detail: { toolCallId: row.toolCallId, changeCount },
+        dedupeParts: [params.editId],
+      });
+
+      const next = { ...row, ...updated.changeRequest };
+      return {
+        isSuccess: true,
+        message: "Change request edited",
+        outboxIds: [outboxId],
+        changeRequest: ChangeRequestsProvider.toView(
+          next,
+          payload,
+          ChangeRequestsProvider.editableFields(ready.tool, payload),
+        ),
+      };
+    });
+  }
+
   // DEV_NOTE: The widget's views of some of this conversation's change requests (values decrypted: the user's own
   // widget only), oldest first, each key version unwrapped once. One whose payload can't be read is sent without its
   // changes.
@@ -501,9 +598,22 @@ export default class ActionEngineRepo {
         return { isSuccess: false, message: listed.message };
       }
       const payloads = await this.decryptPayloads(tx, session.companyId, listed.changeRequests);
-      const changeRequests = listed.changeRequests.map((row, index) =>
-        ChangeRequestsProvider.toView(row, payloads[index] ?? null),
-      );
+      const changeRequests: Schemas.WidgetChangeRequest[] = [];
+      const tools = new Map<string, Schemas.RuntimeTool | null>();
+      for (const [index, row] of listed.changeRequests.entries()) {
+        const payload = payloads[index] ?? null;
+        let editableFields: Schemas.ChangeRequestEditableField[] = [];
+        // DEV_NOTE: Only a Proposed one can be edited, so only its tool is read (once per tool version)
+        if (payload && row.status === Schemas.ChangeRequestStatusIntEnum.Proposed) {
+          if (!tools.has(row.toolId)) {
+            const loaded = await this.loadTool(tx, session.companyId, row.toolId);
+            tools.set(row.toolId, loaded.isSuccess ? loaded.tool : null);
+          }
+          const tool = tools.get(row.toolId);
+          if (tool) editableFields = ChangeRequestsProvider.editableFields(tool, payload);
+        }
+        changeRequests.push(ChangeRequestsProvider.toView(row, payload, editableFields));
+      }
       return { isSuccess: true, message: "Change requests fetched", changeRequests };
     });
   }
@@ -599,6 +709,90 @@ export default class ActionEngineRepo {
     return { isSuccess: true, changeRequest: found.changeRequest };
   }
 
+  // DEV_NOTE: What an edit needs of the row it locked: Proposed (else the row as it stands), before its deadline
+  // (PastDeadline: the expiry ends it), its tool version still loading (ToolUnavailable) and its payload readable
+  private async checkEditable(
+    tx: NodePgTransaction<EmptyRelations>,
+    row: Schemas.ChangeRequestRow,
+  ): Promise<
+    | { isSuccess: true; tool: Schemas.RuntimeTool; payload: Schemas.ChangeRequestPayload }
+    | { isSuccess: false; response: Schemas.ChangeRequestStepResponse }
+  > {
+    if (row.status !== Schemas.ChangeRequestStatusIntEnum.Proposed) {
+      return { isSuccess: false, response: await this.refuseTransition(tx, row) };
+    }
+    const payload = await this.decryptPayload(tx, row);
+    const view = ChangeRequestsProvider.toView(row, payload);
+    if (ChangeRequestsProvider.isPastDeadline(row, Date.now())) {
+      return {
+        isSuccess: false,
+        response: {
+          isSuccess: false,
+          message: "Edit came after the deadline",
+          failure: Schemas.ChangeRequestFailureEnum.PastDeadline,
+          changeRequest: view,
+        },
+      };
+    }
+    const loaded = await this.loadTool(tx, row.companyId, row.toolId);
+    if (!loaded.isSuccess) {
+      return {
+        isSuccess: false,
+        response: {
+          isSuccess: false,
+          message: loaded.message,
+          failure: loaded.failure,
+          changeRequest: view,
+        },
+      };
+    }
+    if (!payload) {
+      return {
+        isSuccess: false,
+        response: {
+          isSuccess: false,
+          message: "Change request payload unreadable",
+          failure: Schemas.ChangeRequestFailureEnum.ServerError,
+          changeRequest: view,
+        },
+      };
+    }
+    return { isSuccess: true, tool: loaded.tool, payload };
+  }
+
+  // DEV_NOTE: A change request's tool version as it would run now (HostToolsProvider.toRuntimeTool), by its id
+  private async loadTool(
+    tx: NodePgTransaction<EmptyRelations>,
+    companyId: string,
+    toolId: string,
+  ): Promise<
+    | { isSuccess: true; tool: Schemas.RuntimeTool }
+    | { isSuccess: false; message: string; failure: Schemas.ChangeRequestFailureEnum }
+  > {
+    const toolRow = await this.toolDefinitionsDal.getToolDefinitionById(tx, {
+      companyId,
+      id: toolId,
+    });
+    if (!toolRow.isSuccess && !toolRow.isNotFound) {
+      return {
+        isSuccess: false,
+        message: toolRow.message ?? "Tool definition not read",
+        failure: Schemas.ChangeRequestFailureEnum.ServerError,
+      };
+    }
+    const runtime = toolRow.toolDefinition
+      ? HostToolsProvider.toRuntimeTool(toolRow.toolDefinition)
+      : { tool: null, reason: "Tool definition not found" };
+    if (!runtime.tool) {
+      return {
+        isSuccess: false,
+        message: runtime.reason,
+        failure: Schemas.ChangeRequestFailureEnum.ToolUnavailable,
+      };
+    }
+    return { isSuccess: true, tool: runtime.tool };
+  }
+
   // DEV_NOTE: A step that doesn't start from this status: nothing changes, and the caller gets the row as it stands
   private async refuseTransition(
     tx: NodePgTransaction<EmptyRelations>,
@@ -667,12 +861,14 @@ export default class ActionEngineRepo {
       changeRequest: Schemas.ChangeRequest;
       rootLogId: string | null;
       status: Schemas.ChangeRequestStatusIntEnum;
+      action?: Schemas.ChangeRequestEntityActionEnum;
       actorType: Schemas.ActivityLogActorTypeIntEnum;
       detail: Record<string, string | number | boolean | null>;
       dedupeParts?: string[];
     },
   ): Promise<string> {
-    const action = Schemas.CHANGE_REQUEST_STATUS_ENTITY_ACTION_MAP[params.status];
+    // DEV_NOTE: A status change's own action, unless the event isn't one (an edit)
+    const action = params.action ?? Schemas.CHANGE_REQUEST_STATUS_ENTITY_ACTION_MAP[params.status];
     if (!action) throw new TenantRollbackError("No event for this change request status");
     const { session, changeRequest } = params;
     const event = await CriticalEventProvider.record(tx, {

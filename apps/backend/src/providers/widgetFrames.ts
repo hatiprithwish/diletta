@@ -11,7 +11,9 @@ import Utility from "@/utils/Utility";
 //   - the widget's own feedback frame (M2-7): a rating for one reply, which the DO stores itself (Think never sees it);
 //   - the widget's host_token frame (M3-4): the user's host bearer token for the DO's memory (the reason a malformed
 //     one is refused never holds it);
-//   - the widget's change_request_decision frame (M3-4): approve or reject one proposal, handled by the DO itself.
+//   - the widget's change_request_decision frame (M3-4): approve or reject one proposal, handled by the DO itself, and
+//     its change_request_batch_decision and change_request_edits frames (M3-5): several answers at once, and new values
+//     for proposals (the DO re-checks every edit; nothing is approved by one).
 // Everything else is refused with a reason for the log; the widget only learns the frame was refused. Think's own tool
 // approval frames stay refused: an approval goes through the DO's decision path only.
 export default class WidgetFrameProvider {
@@ -51,11 +53,39 @@ export default class WidgetFrameProvider {
       const decision = Schemas.ZWidgetChangeRequestDecisionFrame.safeParse(json);
       return decision.success
         ? {
-            kind: "decision",
-            changeRequestPublicId: decision.data.changeRequestId,
-            decision: decision.data.decision,
+            kind: "decisions",
+            decisions: [
+              {
+                changeRequestPublicId: decision.data.changeRequestId,
+                decision: decision.data.decision,
+              },
+            ],
           }
         : { kind: "refuse", reason: "Malformed change request decision" };
+    }
+    if (envelope.data.type === Schemas.WIDGET_CHANGE_REQUEST_BATCH_DECISION_FRAME_TYPE) {
+      const batch = Schemas.ZWidgetChangeRequestBatchDecisionFrame.safeParse(json);
+      return batch.success
+        ? {
+            kind: "decisions",
+            decisions: batch.data.decisions.map((entry) => ({
+              changeRequestPublicId: entry.changeRequestId,
+              decision: entry.decision,
+            })),
+          }
+        : { kind: "refuse", reason: "Malformed change request decisions" };
+    }
+    if (envelope.data.type === Schemas.WIDGET_CHANGE_REQUEST_EDITS_FRAME_TYPE) {
+      const edits = Schemas.ZWidgetChangeRequestEditsFrame.safeParse(json);
+      return edits.success
+        ? {
+            kind: "edits",
+            edits: edits.data.edits.map((entry) => ({
+              changeRequestPublicId: entry.changeRequestId,
+              values: entry.values,
+            })),
+          }
+        : { kind: "refuse", reason: "Malformed change request edits" };
     }
     if (Schemas.ZWidgetPassThroughFrame.safeParse(json).success) {
       return { kind: "pass", frame: message };

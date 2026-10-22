@@ -14,6 +14,7 @@ export default function WidgetRoot({ options, store }: Schemas.WidgetRootProps) 
           apiBase={options.apiBase}
           chatbot={options.chatbot ?? null}
           getToken={options.getToken}
+          getHostToken={options.getHostToken ?? null}
         />
       </ShadowHost>
     </WidgetStoreContext>

@@ -34,6 +34,18 @@ export interface StartCommitResponse extends ChangeRequestStepResponse {
   plan?: CommitPlan;
 }
 
+// DEV_NOTE: What an edit is checked against: the tool as stored for this change request (re-checked Active) and the
+// decrypted payload (its args are what the edit starts from)
+export interface EditPlan {
+  changeRequestPublicId: string;
+  tool: RuntimeTool;
+  payload: ChangeRequestPayload;
+}
+
+export interface GetEditPlanResponse extends ChangeRequestStepResponse {
+  plan?: EditPlan;
+}
+
 export interface ChangeRequestViewsResponse extends ApiResponse {
   changeRequests?: WidgetChangeRequest[];
 }

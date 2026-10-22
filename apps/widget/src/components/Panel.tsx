@@ -29,6 +29,7 @@ export default function Panel({ view, ...actions }: Schemas.WidgetPanelProps) {
     view.messages.length,
     lastMessage?.text.length ?? 0,
     lastMessage?.role === "assistant" ? lastMessage.steps.length : 0,
+    lastMessage?.role === "assistant" ? lastMessage.changeCards.length : 0,
     isAwaitingReply,
     view.isUnavailable,
     view.notice ?? "",
@@ -99,6 +100,7 @@ export default function Panel({ view, ...actions }: Schemas.WidgetPanelProps) {
               canStop={view.canStop}
               onStop={actions.onStop}
               onRate={actions.onRate}
+              changeActions={actions}
             />
           ),
         )}

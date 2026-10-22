@@ -6,7 +6,12 @@ import type { TurnMessage } from "../messages";
 import type { KnowledgeCitation, SearchHelpDocsExcerpt } from "../knowledgeSearch";
 import { ZWidgetFeedbackRating } from "../feedback";
 import type { FeedbackRatingIntEnum } from "../feedback";
-import { ChangeRequestDecisionEnum } from "../changeRequests/ChangeRequestsCommon";
+import {
+  CHANGE_REQUEST_MAX_PENDING,
+  ChangeRequestDecisionEnum,
+  ZChangeRequestEditValues,
+} from "../changeRequests/ChangeRequestsCommon";
+import type { ChangeRequestEditValues } from "../changeRequests/ChangeRequestsCommon";
 import type { RuntimeTool } from "../toolCalls/ToolCallsCommon";
 
 // DEV_NOTE: The longest user message the widget may send, in characters. Platform constant; the composer enforces
@@ -102,16 +107,69 @@ export const ZWidgetChangeRequestDecisionFrame = z.object({
 });
 export type WidgetChangeRequestDecisionFrame = z.infer<typeof ZWidgetChangeRequestDecisionFrame>;
 
+const ZChangeRequestPublicId = z.string().trim().min(1).max(64);
+
+// DEV_NOTE: Bulk review (M3-5): the answers to several proposals at once (at most CHANGE_REQUEST_MAX_PENDING, each
+// change request once). The DO decides them all, commits the approved ones, then resolves their pauses together so
+// the model replies once. The widget sends every decision this way; the single frame above stays.
+export const WIDGET_CHANGE_REQUEST_BATCH_DECISION_FRAME_TYPE = "change_request_batch_decision";
+
+export const ZWidgetChangeRequestBatchDecisionFrame = z.object({
+  type: z.literal(WIDGET_CHANGE_REQUEST_BATCH_DECISION_FRAME_TYPE),
+  decisions: z
+    .array(
+      z.object({
+        changeRequestId: ZChangeRequestPublicId,
+        decision: z.enum(ChangeRequestDecisionEnum),
+      }),
+    )
+    .min(1)
+    .max(CHANGE_REQUEST_MAX_PENDING)
+    .refine(
+      (decisions) =>
+        new Set(decisions.map((entry) => entry.changeRequestId)).size === decisions.length,
+      "Each change request once",
+    ),
+});
+export type WidgetChangeRequestBatchDecisionFrame = z.infer<
+  typeof ZWidgetChangeRequestBatchDecisionFrame
+>;
+
+// DEV_NOTE: The user's edits to proposals (M3-5), by change request public id. Nothing is approved here: the DO
+// re-checks every edit (editable fields only, input_schema, a fresh read-before, the diff rebuilt) and the proposal
+// waits again with the new diff. The answer is one change_request_edit frame per edit.
+export const WIDGET_CHANGE_REQUEST_EDITS_FRAME_TYPE = "change_request_edits";
+
+export const ZWidgetChangeRequestEditsFrame = z.object({
+  type: z.literal(WIDGET_CHANGE_REQUEST_EDITS_FRAME_TYPE),
+  edits: z
+    .array(z.object({ changeRequestId: ZChangeRequestPublicId, values: ZChangeRequestEditValues }))
+    .min(1)
+    .max(CHANGE_REQUEST_MAX_PENDING)
+    .refine(
+      (edits) => new Set(edits.map((entry) => entry.changeRequestId)).size === edits.length,
+      "Each change request once",
+    ),
+});
+export type WidgetChangeRequestEditsFrame = z.infer<typeof ZWidgetChangeRequestEditsFrame>;
+
 // DEV_NOTE: Server-side only — what the widget frame allowlist decided (WidgetFrameProvider.admit). pass: hand the
 // frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. feedback: a
-// rating for the DO to store. hostToken: the user's host token for the DO's memory. decision: an answer to a
-// proposal. refuse: drop it and tell the widget (reason is logged only, and never holds the frame's content).
+// rating for the DO to store. hostToken: the user's host token for the DO's memory. decisions: answers to proposals
+// (the single decision frame is a list of one). edits: new values for proposals (M3-5). refuse: drop it and tell the widget (reason is logged only, and never holds the frame's content).
 export type WidgetFrameAdmission =
   | { kind: "pass"; frame: string }
   | { kind: "chat"; requestId: string; message: { id: string; text: string }; frame: string }
   | { kind: "feedback"; messageId: string; rating: FeedbackRatingIntEnum }
   | { kind: "hostToken"; token: string }
-  | { kind: "decision"; changeRequestPublicId: string; decision: ChangeRequestDecisionEnum }
+  | {
+      kind: "decisions";
+      decisions: { changeRequestPublicId: string; decision: ChangeRequestDecisionEnum }[];
+    }
+  | {
+      kind: "edits";
+      edits: { changeRequestPublicId: string; values: ChangeRequestEditValues }[];
+    }
   | { kind: "refuse"; reason: string };
 
 // DEV_NOTE: Server-side only — one Think transcript message reduced to what the read model keeps (TranscriptProvider).
