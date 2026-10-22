@@ -1640,12 +1640,14 @@ A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `ChangeRequestPurgeRep
 
 ### 3.37 A Missing Host Token Is Asked For, Never Guessed Around [CRITICAL]
 
-**Rule:** When a host call as the user finds no token, or the host refuses it (TokenNeeded / TokenRejected) and nothing may have landed (`mayHaveLanded !== true`), the Conversation DO asks the widget for a fresh one (M3-8): `requestHostToken` sends `token_needed` with `reason: refresh` to every open socket and waits at most `HOST_TOKEN_WAIT_MS` for a `host_token` frame (no socket = no wait), then the call is tried once more (`withFreshToken`). A fresh token the host refuses too ends the step as it did before M3-8. A read with no token still tells the model to ask the user to sign in. A commit, read-after or undo with no token keeps its entry (`waitForToken`: `tokenNeededSince` from the first wait, `isUnsent` when its first send reached nothing) and resumes on the next `host_token`; `isUnsent` reaches `startCommit` / `startFollowUp` so that resume is a fresh send (never a resend guessing it landed), and it is cleared before every send. A step still waiting `HOST_TOKEN_GRACE_MS` after it first needed the token goes to a person only through `ActionEngineRepo.handOverForToken` (Approved / Committing / Committed / Mismatch → NeedsHuman `token_needed`); a user undo keeps `abandonUndo`. `reason: answer` is only for the reply to the widget's own answer, edit or undo frame (the widget resends that frame once); the widget answers `refresh` silently, with no UI, one `getHostToken` call at a time.
+**Rule:** When a host call as the user finds no token, or the host refuses it (TokenNeeded / TokenRejected), the Conversation DO asks the widget for a fresh one (M3-8) and tries the same call once more (`withFreshToken`), but only when a second try can't write twice: nothing may have landed (`mayHaveLanded !== true`), or the call is a resume (the adapter starts a resume's `mayHaveLanded` at true even when it sends nothing; the same plan resends it as a resume). The ask is `HostTokenAsk` (`src/hostToken/`): `token_needed` with `reason: refresh` to every open socket, a wait of at most `HOST_TOKEN_WAIT_MS` for a `host_token` frame (no socket = no wait), shared by every step asking meanwhile, and not repeated for `HOST_TOKEN_WAIT_MS` after one timed out unless a token arrives. A fresh token the host refuses too ends the step as it did before M3-8. A token the host refused is dropped from `this.hostToken` (unless a newer one arrived meanwhile), so the answer, edit and undo gates answer `reason: answer`. A read with no token still tells the model to ask the user to sign in. A commit, read-after, undo or the undo's re-read with no token keeps its entry (`waitForToken`: `tokenNeededSince` from the first wait, `isUnsent` when its first send reached nothing) and resumes on the next `host_token`; `isUnsent` reaches `startCommit` / `startFollowUp` so that resume is a fresh send (never a resend guessing it landed), and it is cleared before every send. A step still waiting `HOST_TOKEN_GRACE_MS` after it first needed the token goes to a person only through `ActionEngineRepo.handOverForToken` (Approved / Committing / Committed / Mismatch → NeedsHuman `token_needed`); a user undo keeps `abandonUndo`. `reason: answer` is only for the reply to the widget's own answer, edit or undo frame (the widget resends that frame once); the widget answers `refresh` silently, with no UI, through `lib/hostTokenSender.ts` (one `getHostToken` call at a time; one that throws, rejects or hangs past `WIDGET_HOST_TOKEN_FETCH_TIMEOUT_MS` never blocks the next send).
 
 **Violations:**
 
 - Ending a commit, read-after or undo Failed / NeedsHuman for a missing or refused token without asking for a fresh one first, or before the grace has passed
-- Retrying a host call after a token failure that may have landed, or more than once per fresh token
+- Retrying a fresh (non-resume) host call after a token failure that may have landed, retrying a resume as a fresh send, or retrying more than once per fresh token
+- Keeping a token the host refused in `this.hostToken`, or asking the widget again while a timed-out ask's cooldown runs
+- A shared widget token fetch that a throwing or hung `getHostToken` can block
 - Passing `isUnsent: true` for a step whose last send may have reached the host, or leaving it set across a send
 - Sending `token_needed` without `reason`, or `reason: answer` for the DO's own step (the widget would resend an unrelated frame)
 - Showing a notice, spinner or card for a `refresh` ask in the widget
@@ -1661,18 +1663,18 @@ handOverForToken\(
 tokenNeededSince
 ```
 
-A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `apps/widget/src/hooks/useChangeReview.ts` and `packages/schemas` needs a reason.
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `src/hostToken/HostTokenAsk.ts`, `apps/widget/src/hooks/useChangeReview.ts`, `apps/widget/src/lib/hostTokenSender.ts` and `packages/schemas` needs a reason.
 
 **Examples:**
 
 ```
 - ❌ if (read.outcome === TokenNeeded) return output(Error, TOOL_TEXT.tokenNeeded)   // never asked the widget
-- ✅ const { response, isWaiting } = await this.withFreshToken(() => HostToolCallProvider.read(...), signal)
+- ✅ const { response, isWaiting } = await this.withFreshToken(() => HostToolCallProvider.read(...), { isResume: false, signal })
 - ❌ await repo.finishCommit({ hostCall: committed /* TokenRejected, nothing landed */ })   // ends it Failed at once
 - ✅ if (isWaiting) await this.waitForToken(toolCallId, !plan.isResume)
 ```
 
-**Fix:** Mirror `ConversationDO.withFreshToken` / `requestHostToken` / `waitForToken` / `handOverTokenWaits` and `ActionEngineRepo.handOverForToken`.
+**Fix:** Mirror `ConversationDO.withFreshToken` / `waitForToken` / `handOverTokenWaits`, `HostTokenAsk`, `ActionEngineRepo.handOverForToken` and the widget's `createHostTokenSender`.
 
 ---
 

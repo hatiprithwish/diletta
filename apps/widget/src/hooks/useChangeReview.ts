@@ -10,6 +10,7 @@ import {
   undoableMembers,
 } from "@/lib/changeRequestView";
 import type { ChangeRequestGroup } from "@/lib/changeRequestView";
+import { createHostTokenSender } from "@/lib/hostTokenSender";
 import { EMPTY_REVIEW } from "@/store/widgetStore";
 
 // DEV_NOTE: The review cards' side of the chat socket (M3-5). The DO's change_request frames go into the store by
@@ -77,25 +78,18 @@ export function useChangeReview(params: {
     [messagesRef, storeApi],
   );
 
-  const tokenFetchRef = useRef<Promise<boolean> | null>(null);
+  const sendRef = useLatest(send);
+  // DEV_NOTE: One sender per hook (made on first use), reading the latest getter and socket send
+  // (lib/hostTokenSender.ts)
+  const hostTokenSenderRef = useRef<(() => Promise<boolean>) | null>(null);
   const sendHostToken = useCallback(async (): Promise<boolean> => {
-    const getHostToken = getHostTokenRef.current;
-    if (!getHostToken) return false;
-    if (!tokenFetchRef.current) {
-      tokenFetchRef.current = (async () => {
-        try {
-          const token = await getHostToken();
-          send(JSON.stringify({ type: Schemas.WIDGET_HOST_TOKEN_FRAME_TYPE, token }));
-          return true;
-        } catch {
-          return false;
-        } finally {
-          tokenFetchRef.current = null;
-        }
-      })();
-    }
-    return await tokenFetchRef.current;
-  }, [getHostTokenRef, send]);
+    hostTokenSenderRef.current ??= createHostTokenSender({
+      getHostToken: () => getHostTokenRef.current,
+      send: (frame) => sendRef.current(frame),
+      timeoutMs: Schemas.WIDGET_HOST_TOKEN_FETCH_TIMEOUT_MS,
+    });
+    return await hostTokenSenderRef.current();
+  }, [getHostTokenRef, sendRef]);
 
   const sendReviewFrame = useCallback(
     (cardId: string, frame: string) => {

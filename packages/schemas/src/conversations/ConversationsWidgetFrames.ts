@@ -85,6 +85,9 @@ export type WidgetFeedbackFrame = z.infer<typeof ZWidgetFeedbackFrame>;
 // printable ASCII with no spaces (RFC 6750 b64token, plus "." for a JWT); WIDGET_HOST_TOKEN_MAX_CHARS bounds it.
 export const WIDGET_HOST_TOKEN_FRAME_TYPE = "host_token";
 export const WIDGET_HOST_TOKEN_MAX_CHARS = 8_192;
+// DEV_NOTE: How long the widget waits for its host's getHostToken (M3-8): a getter that hangs past it counts as no
+// token, so it can't hold back the next send (on connect, or the DO's next ask); the DO waits as long for the frame
+export const WIDGET_HOST_TOKEN_FETCH_TIMEOUT_MS = 15_000;
 
 export const ZWidgetHostTokenFrame = z.object({
   type: z.literal(WIDGET_HOST_TOKEN_FRAME_TYPE),
