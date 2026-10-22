@@ -34,4 +34,12 @@ export default tseslint.config(
       "react-x/no-array-index-key": "off",
     },
   },
+  // shadcn's use-mobile syncs from matchMedia in an effect; generated, never hand-edited
+  {
+    files: ["src/hooks/**"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+      "react-x/set-state-in-effect": "off",
+    },
+  },
 );

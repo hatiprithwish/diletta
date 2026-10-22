@@ -477,6 +477,31 @@ font-mono
 
 ---
 
+### 2.7 Dashboard Shell [WARNING]
+
+**Rule:** Dashboard pages render inside the M4-1 shell (`_authenticated/route.tsx`), which reads `/dashboard/me` before any page and shows No access to a 403 or an operator. Navigation comes only from `_authenticated/-nav.ts` (sidebar and breadcrumb both read it); a new page adds its entry there and its route under `_authenticated/` (Settings pages under `settings/`). Every page opens with `PageHeader` (`@/components/page-header`). No bot switcher and no chatbot in a page path (DESIGN.md §6). `-data.ts` keeps keys and `queryOptions` in its `Queries` class and the hooks as plain exported functions.
+
+**Violations:**
+
+- A page that builds its own sidebar, top bar or `<h1>` header instead of `PageHeader`
+- A nav link or breadcrumb label hard-coded outside `-nav.ts`
+- A second `/dashboard/me` read outside `useMe`
+- A bot switcher, or a `$botId` segment in a dashboard route
+- A hook (`useQuery`, `useAuth`) inside a `Queries` class
+
+**Detection:**
+
+```
+- ❌ apps/web/src/routes/_authenticated/changes/index.tsx: <h1 className="text-page-title">Changes</h1>
+- ❌ apps/web/src/routes/_authenticated/$botId/overview/index.tsx
+- ✅ <PageHeader title="Changes" description="…" />
+- ✅ export function useMe() { return useQuery({ ...MeQueries.detail(getToken), … }) }
+```
+
+**Fix:** Render the page through `PageHeader`, add its link to `-nav.ts`, take the bot as an optional `botId` query param.
+
+---
+
 ## 3. COMPANION PLATFORM RULES
 
 Rules from the dev plan's Architecture baseline and CLAUDE.md (Database, Runtime, Hard bans). Several need context beyond the diff: the enforcer may read the changed file and `apps/backend/src/db/tables.ts`, but flags only added or modified lines.
@@ -1688,5 +1713,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header)
 Maintainer: hatiprithwish

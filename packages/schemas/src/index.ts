@@ -36,5 +36,6 @@ export * from "./activityLog";
 export * from "./eventOutbox";
 export * from "./testHost";
 export * from "./crons";
+export * from "./dashboard";
 export * from "./log";
 export * from "./common";

@@ -1,28 +1,21 @@
 import { createFileRoute, Outlet, Link } from "@tanstack/react-router";
 import { useAuth } from "@clerk/tanstack-react-start";
-import { useEffect, useRef } from "react";
 import { Button } from "@app/ui/components/button";
-import { apiClient } from "@/providers/apiClient";
-import type * as Schemas from "@app/schemas";
+import { SidebarInset, SidebarProvider } from "@app/ui/components/sidebar";
+import { Skeleton } from "@app/ui/components/skeleton";
+import * as Schemas from "@app/schemas";
+import { ApiError } from "@/providers/apiClient";
+import { useMe } from "./-data";
+import { AppSidebar } from "./-AppSidebar";
+import { TopBar } from "./-TopBar";
+import { NoAccess } from "./-NoAccess";
 
 export const Route = createFileRoute("/_authenticated")({
   component: AuthenticatedLayout,
 });
 
 function AuthenticatedLayout() {
-  const { isSignedIn, isLoaded, getToken } = useAuth();
-  const meRequestedRef = useRef(false);
-
-  // DEV_NOTE: /dashboard/me creates the admin on first sign-in from the Clerk invite, so it runs once per session
-  // before any dashboard call. A 403 (not invited) is handled on the server; the "No access" screen comes with the
-  // dashboard shell (M4-1), which reads /dashboard/me through its own query.
-  useEffect(() => {
-    if (!isSignedIn || meRequestedRef.current) return;
-    meRequestedRef.current = true;
-    apiClient<Schemas.GetMeApiResponse>("/dashboard/me", getToken).catch(() => {
-      // Non-fatal here — the server logs failures, and every dashboard route answers 403 until the admin exists
-    });
-  }, [isSignedIn, getToken]);
+  const { isSignedIn, isLoaded } = useAuth();
 
   if (!isLoaded) return null;
 
@@ -37,5 +30,49 @@ function AuthenticatedLayout() {
     );
   }
 
-  return <Outlet />;
+  return <DashboardShell />;
+}
+
+// DEV_NOTE: /dashboard/me runs before any page: it creates the admin on first sign-in from the Clerk invite, and
+// every other dashboard route answers 403 until that admin exists.
+function DashboardShell() {
+  const me = useMe();
+
+  if (me.isPending) {
+    return (
+      <div className="flex min-h-screen items-center justify-center" aria-busy="true">
+        <Skeleton className="size-8 rounded-lg" />
+      </div>
+    );
+  }
+
+  if (me.isError) {
+    if (me.error instanceof ApiError && me.error.status === 403) return <NoAccess />;
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-section text-foreground">The dashboard didn't load</h1>
+          <p className="text-body text-muted-foreground">Check your connection and try again.</p>
+        </div>
+        <Button variant="outline" onClick={() => void me.refetch()}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  const admin = me.data.admin;
+  if (!admin || admin.role !== Schemas.AdminRoleEnum.CompanyAdmin) return <NoAccess />;
+
+  return (
+    <SidebarProvider>
+      <AppSidebar admin={admin} />
+      <SidebarInset>
+        <TopBar />
+        <div className="mx-auto w-full max-w-[1180px] px-8 pt-9 pb-12">
+          <Outlet />
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
 }
