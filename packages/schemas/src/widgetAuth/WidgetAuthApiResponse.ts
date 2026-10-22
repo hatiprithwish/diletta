@@ -63,11 +63,20 @@ export const ZWidgetChangeRequestMessage = z.object({
 });
 export type WidgetChangeRequestMessage = z.infer<typeof ZWidgetChangeRequestMessage>;
 
-// DEV_NOTE: The DO has no usable host token for a step that needs one (an approval or an edit's read-before). The
-// widget fetches a fresh one from its host (getHostToken), sends it in a host_token frame and tries that step again
-// once (M3-5; an undo too, M3-7; M3-8 adds the read path); nothing was done.
+// DEV_NOTE: Why the DO asks for a fresh host token (M3-8). Answer: the reply to the widget's own answer, edit or undo
+// frame, which did nothing; the widget fetches a token (getHostToken), sends it in a host_token frame and sends that
+// frame again once (M3-5, M3-7). Refresh: the DO needs the token for its own step (a host read in a turn, a commit,
+// read-after or undo to resume, a token the host refused); the widget only sends a fresh one, silently, with no UI. A
+// widget that sends none leaves a read to tell the model to ask the user to sign in, and a change request to a person
+// after HOST_TOKEN_GRACE_MS. A frame without reason (a DO before M3-8) is an answer.
+export enum WidgetTokenNeededReasonEnum {
+  Answer = "answer",
+  Refresh = "refresh",
+}
+
 export const ZWidgetTokenNeededMessage = z.object({
   type: z.literal("token_needed"),
+  reason: z.enum(WidgetTokenNeededReasonEnum).default(WidgetTokenNeededReasonEnum.Answer),
 });
 export type WidgetTokenNeededMessage = z.infer<typeof ZWidgetTokenNeededMessage>;
 

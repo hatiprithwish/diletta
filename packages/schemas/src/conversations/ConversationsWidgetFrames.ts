@@ -80,7 +80,7 @@ export const ZWidgetFeedbackFrame = ZWidgetFeedbackRating.extend({
 });
 export type WidgetFeedbackFrame = z.infer<typeof ZWidgetFeedbackFrame>;
 
-// DEV_NOTE: The widget's host bearer token (M3-4; M3-8 fetches it when the DO asks with token_needed). The DO keeps it
+// DEV_NOTE: The widget's host bearer token (M3-4; fetched again whenever the DO asks with token_needed, M3-8). The DO keeps it
 // in memory only, for jwt_forward host calls made as this user: never logged, persisted or sent back. A bearer token is
 // printable ASCII with no spaces (RFC 6750 b64token, plus "." for a JWT); WIDGET_HOST_TOKEN_MAX_CHARS bounds it.
 export const WIDGET_HOST_TOKEN_FRAME_TYPE = "host_token";
@@ -267,6 +267,10 @@ export type PreparedTurn<TModel, TCaps> =
 // UserUndoing (M3-7): the user's undo of a Verified one, from its start until it ends; its expiresAt is when the DO
 // stops waiting for the host token to resume it (undo_until + CHANGE_REQUEST_UNDO_GRACE_MS) and hands it to a person,
 // and it has no proposing turn (turnId null).
+// Token refresh (M3-8): tokenNeededSince (epoch ms) is when a step past pending first waited for the host token (none
+// in memory, or the host refused it, and no fresh one came); HOST_TOKEN_GRACE_MS after it the DO hands the change
+// request to a person. isUnsent: the step's last host call was its first send and reached nothing (the token was
+// missing or refused), so its resume is a fresh send, not a resend (isResume false). Both are set only by the DO.
 export enum ConversationChangeRequestStageEnum {
   Pending = "pending",
   Approved = "approved",
@@ -284,6 +288,8 @@ export const ZConversationChangeRequestEntry = z.object({
   expiresAt: z.number().int(),
   executionId: z.string().nullable(),
   expiryScheduleId: z.string().nullable(),
+  tokenNeededSince: z.number().int().nullable().default(null),
+  isUnsent: z.boolean().default(false),
 });
 export type ConversationChangeRequestEntry = z.infer<typeof ZConversationChangeRequestEntry>;
 

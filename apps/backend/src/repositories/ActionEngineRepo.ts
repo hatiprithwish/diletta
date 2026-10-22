@@ -357,10 +357,12 @@ export default class ActionEngineRepo {
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
-      const isResume = row.status === Schemas.ChangeRequestStatusIntEnum.Committing;
-      if (!isResume && row.status !== Schemas.ChangeRequestStatusIntEnum.Approved) {
+      const isCommitting = row.status === Schemas.ChangeRequestStatusIntEnum.Committing;
+      if (!isCommitting && row.status !== Schemas.ChangeRequestStatusIntEnum.Approved) {
         return await this.refuseTransition(tx, row);
       }
+      // DEV_NOTE: A Committing row whose last send reached nothing (the DO's isUnsent, M3-8) is sent fresh
+      const isResume = isCommitting && !params.isUnsent;
       if (!checked.isSuccess && checked.failure === Schemas.ChangeRequestFailureEnum.ServerError) {
         return { isSuccess: false, message: checked.message, failure: checked.failure };
       }
@@ -428,12 +430,12 @@ export default class ActionEngineRepo {
         status: Schemas.ChangeRequestStatusIntEnum.Committing,
         idempotencyKey,
         detail: { isResume },
-        dedupeParts: isResume ? [`resume-${params.attemptId}`] : [],
+        dedupeParts: isCommitting ? [`resume-${params.attemptId}`] : [],
       });
 
       return {
         isSuccess: true,
-        message: isResume ? "Commit resumed" : "Commit started",
+        message: isCommitting ? "Commit resumed" : "Commit started",
         outboxIds: started.outboxIds,
         changeRequest: ChangeRequestsProvider.toView(started.row, payload, Date.now()),
         plan: {
@@ -590,6 +592,7 @@ export default class ActionEngineRepo {
         tool: loaded.tool,
         payload,
         dedupeParts: [`resume-${params.attemptId}`],
+        isUnsent: params.isUnsent,
       });
     });
   }
@@ -661,6 +664,7 @@ export default class ActionEngineRepo {
         tool: plan.tool,
         payload,
         dedupeParts: [],
+        isUnsent: false,
       });
       return { ...undo, outboxIds: [...mismatched.outboxIds, ...(undo.outboxIds ?? [])] };
     });
@@ -772,6 +776,7 @@ export default class ActionEngineRepo {
         tool: loaded.tool,
         payload,
         dedupeParts: [`user-${params.attemptId}`],
+        isUnsent: false,
       });
     });
   }
@@ -800,6 +805,40 @@ export default class ActionEngineRepo {
       return {
         isSuccess: true,
         message: "Interrupted undo handed to a person",
+        outboxIds: moved.outboxIds,
+        changeRequest: ChangeRequestsProvider.toView(
+          moved.row,
+          await this.decryptPayload(tx, moved.row),
+          Date.now(),
+        ),
+      };
+    });
+  }
+
+  // DEV_NOTE: A change request past the user's answer whose next step waited HOST_TOKEN_GRACE_MS for a host token that
+  // never came (M3-8: the widget closed, or its host gave none): handed to a person (NeedsHuman token_needed), so the
+  // conversation can close. Approved, Committing (its commit may have landed), Committed (not read back) or Mismatch (not
+  // undone). A user undo keeps its own deadline (abandonUndo); a row that ended meanwhile is left as it stands.
+  async handOverForToken(
+    params: Schemas.HandOverForTokenRequest,
+  ): Promise<Schemas.ChangeRequestStepResponse> {
+    const { session } = params;
+    return await this.step(session, async (tx) => {
+      const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
+      if (!found.isSuccess) return found.response;
+      const row = found.changeRequest;
+      if (!TOKEN_WAIT_STATUSES.has(row.status)) return await this.refuseTransition(tx, row);
+      const moved = await this.moveStatus(tx, {
+        session,
+        row,
+        rootLogId: await this.findRootLogId(tx, session),
+        status: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
+        errorCode: Schemas.ChangeRequestErrorCodeEnum.TokenNeeded,
+        detail: { reason: Schemas.ChangeRequestErrorCodeEnum.TokenNeeded },
+      });
+      return {
+        isSuccess: true,
+        message: "Change request waiting for the host token handed to a person",
         outboxIds: moved.outboxIds,
         changeRequest: ChangeRequestsProvider.toView(
           moved.row,
@@ -1151,6 +1190,7 @@ export default class ActionEngineRepo {
       tool: Schemas.RuntimeTool;
       payload: Schemas.ChangeRequestPayload;
       dedupeParts: string[];
+      isUnsent: boolean;
     },
   ): Promise<Schemas.FollowUpResponse> {
     const { session, row, tool, payload } = params;
@@ -1174,7 +1214,8 @@ export default class ActionEngineRepo {
     const idempotencyKey = isUserUndo
       ? Schemas.changeRequestUserUndoIdempotencyKey(row.publicId)
       : Schemas.changeRequestUndoIdempotencyKey(row.publicId);
-    const isResume = row.idempotencyKey === idempotencyKey;
+    // DEV_NOTE: An undo whose last send reached nothing (the DO's isUnsent, M3-8) is sent fresh
+    const isResume = row.idempotencyKey === idempotencyKey && !params.isUnsent;
     const started = await this.moveStatus(tx, {
       session,
       row,
@@ -1437,3 +1478,11 @@ const CHANGE_REQUEST_CHECK_FAILURE_MAP: Record<
     Schemas.ChangeRequestFailureEnum.ChatbotUnavailable,
   [Schemas.ConversationCheckFailureEnum.ServerError]: Schemas.ChangeRequestFailureEnum.ServerError,
 };
+
+// DEV_NOTE: The statuses a step waits for the host token in (M3-8), handed to a person when none comes
+const TOKEN_WAIT_STATUSES: ReadonlySet<Schemas.ChangeRequestStatusIntEnum> = new Set([
+  Schemas.ChangeRequestStatusIntEnum.Approved,
+  Schemas.ChangeRequestStatusIntEnum.Committing,
+  Schemas.ChangeRequestStatusIntEnum.Committed,
+  Schemas.ChangeRequestStatusIntEnum.Mismatch,
+]);

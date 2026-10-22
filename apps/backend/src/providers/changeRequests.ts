@@ -145,7 +145,7 @@ export default class ChangeRequestsProvider {
 
   // DEV_NOTE: The change request's status from how its commit's host call ended: Succeeded or AlreadyApplied →
   // Committed (then read back: verifyEnd); Unknown → NeedsHuman; any other outcome → Failed when nothing may have
-  // landed, else NeedsHuman (a token refused after a send that may have landed is never resent here: M3-8). A resume
+  // landed, else NeedsHuman (a missing or refused token that reached nothing never gets here: the DO waits for a fresh one, M3-8). A resume
   // that sent nothing this time (attempts 0) proves nothing about the earlier attempt, so it can't end Failed either.
   static commitEnd(
     hostCall: Schemas.FinishCommitRequest["hostCall"],

@@ -1638,6 +1638,44 @@ A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `ChangeRequestPurgeRep
 
 ---
 
+### 3.37 A Missing Host Token Is Asked For, Never Guessed Around [CRITICAL]
+
+**Rule:** When a host call as the user finds no token, or the host refuses it (TokenNeeded / TokenRejected) and nothing may have landed (`mayHaveLanded !== true`), the Conversation DO asks the widget for a fresh one (M3-8): `requestHostToken` sends `token_needed` with `reason: refresh` to every open socket and waits at most `HOST_TOKEN_WAIT_MS` for a `host_token` frame (no socket = no wait), then the call is tried once more (`withFreshToken`). A fresh token the host refuses too ends the step as it did before M3-8. A read with no token still tells the model to ask the user to sign in. A commit, read-after or undo with no token keeps its entry (`waitForToken`: `tokenNeededSince` from the first wait, `isUnsent` when its first send reached nothing) and resumes on the next `host_token`; `isUnsent` reaches `startCommit` / `startFollowUp` so that resume is a fresh send (never a resend guessing it landed), and it is cleared before every send. A step still waiting `HOST_TOKEN_GRACE_MS` after it first needed the token goes to a person only through `ActionEngineRepo.handOverForToken` (Approved / Committing / Committed / Mismatch → NeedsHuman `token_needed`); a user undo keeps `abandonUndo`. `reason: answer` is only for the reply to the widget's own answer, edit or undo frame (the widget resends that frame once); the widget answers `refresh` silently, with no UI, one `getHostToken` call at a time.
+
+**Violations:**
+
+- Ending a commit, read-after or undo Failed / NeedsHuman for a missing or refused token without asking for a fresh one first, or before the grace has passed
+- Retrying a host call after a token failure that may have landed, or more than once per fresh token
+- Passing `isUnsent: true` for a step whose last send may have reached the host, or leaving it set across a send
+- Sending `token_needed` without `reason`, or `reason: answer` for the DO's own step (the widget would resend an unrelated frame)
+- Showing a notice, spinner or card for a `refresh` ask in the widget
+- Keeping the waiter or the token anywhere but DO memory (rule 3.11)
+
+**Detection Pattern:**
+
+```regex
+type: "token_needed"
+WidgetTokenNeededReasonEnum
+isUnsent
+handOverForToken\(
+tokenNeededSince
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `apps/widget/src/hooks/useChangeReview.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (read.outcome === TokenNeeded) return output(Error, TOOL_TEXT.tokenNeeded)   // never asked the widget
+- ✅ const { response, isWaiting } = await this.withFreshToken(() => HostToolCallProvider.read(...), signal)
+- ❌ await repo.finishCommit({ hostCall: committed /* TokenRejected, nothing landed */ })   // ends it Failed at once
+- ✅ if (isWaiting) await this.waitForToken(toolCallId, !plan.isResume)
+```
+
+**Fix:** Mirror `ConversationDO.withFreshToken` / `requestHostToken` / `waitForToken` / `handOverTokenWaits` and `ActionEngineRepo.handOverForToken`.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1725,5 +1763,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M3-8: 3.37 a missing host token is asked for, then handed to a person after the grace)
 Maintainer: hatiprithwish

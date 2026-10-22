@@ -185,6 +185,14 @@ interface DecidedChangeRequest {
 //
 // The host bearer token lives in a plain field, in memory only: never in Think state, configure, SQLite or a log
 // (pattern rule 3.11). An eviction drops it; the widget sends it again.
+//
+// Token refresh (M3-8): a host call that finds no token, or whose token the host refused (and nothing may have
+// landed), asks every open socket for a fresh one (token_needed, reason refresh: the widget answers silently) and waits
+// up to HOST_TOKEN_WAIT_MS, then tries once more. A read in a turn that still has none tells the model to ask the user
+// to sign in. A commit, read-after or undo that still has none keeps its entry (tokenNeededSince, and isUnsent when its
+// first send reached nothing, so its resume is sent fresh) and resumes on the next host_token; one still waiting
+// HOST_TOKEN_GRACE_MS after it first needed the token (no widget came back) is handed to a person (NeedsHuman
+// token_needed). A wake with entries to resume and no token asks the open sockets too.
 export class ConversationDO extends Think<Env> {
   static options = { sendIdentityOnConnect: false };
 
@@ -214,6 +222,10 @@ export class ConversationDO extends Think<Env> {
   };
   // DEV_NOTE: Never logged or persisted (pattern rule 3.11)
   private hostToken: string | null = null;
+  // DEV_NOTE: The open ask for a fresh host token (M3-8), shared by every step that needs one meanwhile; resolved true
+  // by the next host_token frame (tokenArrived), false after HOST_TOKEN_WAIT_MS
+  private tokenRequest: Promise<boolean> | null = null;
+  private tokenArrived: (() => void) | null = null;
   // DEV_NOTE: A write call that ended in its approval hook without a change to make (refused, nothing to change): the
   // output its execute returns right after, by Think tool call id
   private settledCalls = new Map<string, Schemas.HostToolOutput>();
@@ -322,7 +334,8 @@ export class ConversationDO extends Think<Env> {
   // DEV_NOTE: Every wake (after hibernation or an eviction): make sure an auto-close is pending and catch the read
   // model up, in the background. onStart runs while the DO holds every other event back (blockConcurrencyWhile), so
   // database work must not run inside it. A commit an eviction cut short waits for the host token (memory only, so
-  // never here on a wake): the widget's host_token frame resumes it.
+  // never here on a wake): the widget's host_token frame resumes it, and the retry or auto-close check asks for one
+  // (M3-8).
   async onStart(): Promise<void> {
     const state = this.getRuntimeState();
     if (!state) return;
@@ -439,7 +452,9 @@ export class ConversationDO extends Think<Env> {
     }
     if (admission.kind === "hostToken") {
       this.hostToken = admission.token;
-      // DEV_NOTE: A commit cut short (an eviction, a failed write) can run again now that the DO can act as the user
+      // DEV_NOTE: A step waiting in requestHostToken tries again; a commit cut short (an eviction, a failed write, no
+      // token) can run again now that the DO can act as the user
+      this.tokenArrived?.();
       this.ctx.waitUntil(this.resumeCommits());
       return;
     }
@@ -575,9 +590,11 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: Scheduled after a commit that couldn't start or finish its database write (public: the scheduler calls
-  // it by name)
+  // DEV_NOTE: Scheduled after a commit that couldn't start or finish its database write, and at the end of a wait for
+  // the host token (public: the scheduler calls it by name). A step whose grace for the token has passed is handed to a
+  // person first.
   async retryCommits(): Promise<void> {
+    await this.handOverTokenWaits();
     await this.resumeCommits();
   }
 
@@ -1323,12 +1340,16 @@ export class ConversationDO extends Think<Env> {
     this.activeTurn = { ...turn, isUntrusted: true };
 
     const startedAt = Date.now();
-    const called = await HostToolCallProvider.read({
-      tool: hostTool,
-      args,
-      getHostToken: () => this.hostToken,
+    const { response: called } = await this.withFreshToken(
+      async () =>
+        await HostToolCallProvider.read({
+          tool: hostTool,
+          args,
+          getHostToken: () => this.hostToken,
+          signal,
+        }),
       signal,
-    });
+    );
     const latencyMs = Date.now() - startedAt;
     if (called.outcome === Schemas.HostCallOutcomeEnum.Succeeded) {
       this.recordToolCall(turn, state, hostTool, args, {
@@ -1423,11 +1444,14 @@ export class ConversationDO extends Think<Env> {
       const startedAt = Date.now();
       let before: unknown = null;
       if (Schemas.hasReadBefore(kind)) {
-        const read = await HostToolCallProvider.readBefore({
-          tool: hostTool,
-          args,
-          getHostToken: () => this.hostToken,
-        });
+        const { response: read } = await this.withFreshToken(
+          async () =>
+            await HostToolCallProvider.readBefore({
+              tool: hostTool,
+              args,
+              getHostToken: () => this.hostToken,
+            }),
+        );
         if (read.outcome !== Schemas.HostCallOutcomeEnum.Succeeded) {
           const failed = ConversationDO.hostFailure(read.outcome);
           this.logHostCall(hostTool, read, "Read-before failed");
@@ -1509,6 +1533,8 @@ export class ConversationDO extends Think<Env> {
         expiresAt,
         executionId: null,
         expiryScheduleId: null,
+        tokenNeededSince: null,
+        isUnsent: false,
       };
       this.patchRuntimeState({ changeRequests });
       this.broadcastChangeRequest(changeRequest);
@@ -1600,6 +1626,7 @@ export class ConversationDO extends Think<Env> {
         session: state.session,
         changeRequestPublicId: entry.publicId,
         attemptId: Utility.generateUlid(),
+        isUnsent: entry.isUnsent,
       });
       this.relayEvents(started.outboxIds);
       this.broadcastChangeRequest(started.changeRequest);
@@ -1607,34 +1634,35 @@ export class ConversationDO extends Think<Env> {
         return await this.endUnstartedCommit(toolCallId, entry, started);
       }
 
-      const committed = await HostToolCallProvider.commit({
-        plan: started.plan,
-        getHostToken: () => this.hostToken,
-      });
+      const plan = started.plan;
+      // DEV_NOTE: From here the write may reach the host: a resume after an eviction mid-send must not send it fresh
+      this.patchChangeRequest(toolCallId, { isUnsent: false });
+      const { response: committed, isWaiting } = await this.withFreshToken(
+        async () => await HostToolCallProvider.commit({ plan, getHostToken: () => this.hostToken }),
+      );
       if (
         committed.outcome !== Schemas.HostCallOutcomeEnum.Succeeded &&
         committed.outcome !== Schemas.HostCallOutcomeEnum.AlreadyApplied
       ) {
-        this.logHostCall(started.plan.tool, committed, "Commit didn't succeed");
+        this.logHostCall(plan.tool, committed, "Commit didn't succeed");
       }
-      // DEV_NOTE: A resume that couldn't even be sent for want of the token stays Committing until the token comes back
-      if (
-        started.plan.isResume &&
-        committed.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded &&
-        committed.attempts === 0
-      ) {
+      // DEV_NOTE: No token (or a refused one and no fresh one came): the commit stays Committing until the token comes
+      // back, or goes to a person after HOST_TOKEN_GRACE_MS (M3-8). A fresh send that reached nothing resumes fresh.
+      if (isWaiting) {
+        await this.waitForToken(toolCallId, !plan.isResume);
         return HostToolsProvider.output(
           Schemas.HostToolStatusEnum.Error,
           TOOL_TEXT.commitUnconfirmed,
           entry.publicId,
         );
       }
+      this.patchChangeRequest(toolCallId, { tokenNeededSince: null });
 
       const finished = await repo.finishCommit({
         session: state.session,
         changeRequestPublicId: entry.publicId,
         hostCall: committed,
-        plan: started.plan,
+        plan,
       });
       this.relayEvents(finished.outboxIds);
       this.broadcastChangeRequest(finished.changeRequest);
@@ -1736,6 +1764,7 @@ export class ConversationDO extends Think<Env> {
         session: state.session,
         changeRequestPublicId: entry.publicId,
         attemptId: Utility.generateUlid(),
+        isUnsent: this.getRuntimeState()?.changeRequests[toolCallId]?.isUnsent ?? entry.isUnsent,
       });
       this.relayEvents(started.outboxIds);
       this.broadcastChangeRequest(started.changeRequest);
@@ -1747,11 +1776,16 @@ export class ConversationDO extends Think<Env> {
     const getHostToken = () => this.hostToken;
 
     if (next.followUp === Schemas.ChangeRequestFollowUpEnum.Verify) {
+      const verifyPlan = next;
       this.patchChangeRequest(toolCallId, {
         stage: Schemas.ConversationChangeRequestStageEnum.Verifying,
       });
-      const read = await HostToolCallProvider.readAfter({ plan: next, getHostToken });
-      if (read.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded && read.attempts === 0) {
+      const { response: read, isWaiting } = await this.withFreshToken(
+        async () => await HostToolCallProvider.readAfter({ plan: verifyPlan, getHostToken }),
+      );
+      // DEV_NOTE: Read back once the token comes back, never judged on a read the host refused for want of it (M3-8)
+      if (isWaiting) {
+        await this.waitForToken(toolCallId, false);
         return {
           output: HostToolsProvider.output(
             Schemas.HostToolStatusEnum.Committed,
@@ -1761,6 +1795,7 @@ export class ConversationDO extends Think<Env> {
           undoOutcome: null,
         };
       }
+      this.patchChangeRequest(toolCallId, { tokenNeededSince: null });
       if (read.outcome !== Schemas.HostCallOutcomeEnum.Succeeded) {
         this.logHostCall(next.tool, read, "Read-after didn't succeed");
       }
@@ -1785,12 +1820,16 @@ export class ConversationDO extends Think<Env> {
         stage: Schemas.ConversationChangeRequestStageEnum.Undoing,
       });
     }
-    const undo = await HostToolCallProvider.undo({ plan: next, getHostToken });
-    if (
-      undo.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded &&
-      undo.attempts === 0 &&
-      undo.mayHaveLanded !== true
-    ) {
+    const undoPlan = next;
+    // DEV_NOTE: From here the undo may reach the host: a resume after an eviction mid-send must not send it fresh
+    this.patchChangeRequest(toolCallId, { isUnsent: false });
+    const { response: undo, isWaiting } = await this.withFreshToken(
+      async () => await HostToolCallProvider.undo({ plan: undoPlan, getHostToken }),
+    );
+    // DEV_NOTE: No token (or a refused one and no fresh one came) and nothing landed: the undo waits for the token,
+    // or goes to a person after HOST_TOKEN_GRACE_MS (M3-8)
+    if (isWaiting) {
+      await this.waitForToken(toolCallId, !undoPlan.isResume);
       return {
         output: HostToolsProvider.output(
           Schemas.HostToolStatusEnum.Error,
@@ -1800,17 +1839,22 @@ export class ConversationDO extends Think<Env> {
         undoOutcome: undo.outcome,
       };
     }
+    this.patchChangeRequest(toolCallId, { tokenNeededSince: null });
     const isUndoSent =
       undo.outcome === Schemas.HostCallOutcomeEnum.Succeeded ||
       undo.outcome === Schemas.HostCallOutcomeEnum.AlreadyApplied;
     if (!isUndoSent) this.logHostCall(next.tool, undo, "Undo didn't succeed");
     const reread = isUndoSent
-      ? await HostToolCallProvider.readAfter({ plan: next, getHostToken })
+      ? (
+          await this.withFreshToken(
+            async () => await HostToolCallProvider.readAfter({ plan: undoPlan, getHostToken }),
+          )
+        ).response
       : null;
     const undone = await repo.finishUndo({
       session: state.session,
       changeRequestPublicId: entry.publicId,
-      plan: next,
+      plan: undoPlan,
       undo,
       readback: reread,
     });
@@ -1854,9 +1898,11 @@ export class ConversationDO extends Think<Env> {
     return ConversationDO.commitOutput(entry.publicId, status);
   }
 
-  private async scheduleCommitRetry(): Promise<void> {
+  private async scheduleCommitRetry(
+    runAt: number = Date.now() + Constants.ACTION_COMMIT_RETRY_MS,
+  ): Promise<void> {
     try {
-      await this.schedule(new Date(Date.now() + Constants.ACTION_COMMIT_RETRY_MS), "retryCommits");
+      await this.schedule(new Date(runAt), "retryCommits");
     } catch (error) {
       AppLogger.error({
         category: Schemas.LogCategory.Action,
@@ -1954,7 +2000,10 @@ export class ConversationDO extends Think<Env> {
       ([, entry]) => decisionOf.get(entry.publicId) === Schemas.ChangeRequestDecisionEnum.Approve,
     );
     if (isApproving && !this.hostToken) {
-      this.reply(ws, { type: "token_needed" });
+      this.reply(ws, {
+        type: "token_needed",
+        reason: Schemas.WidgetTokenNeededReasonEnum.Answer,
+      });
       return;
     }
 
@@ -2056,7 +2105,10 @@ export class ConversationDO extends Think<Env> {
       return;
     }
     if (!this.hostToken) {
-      this.reply(ws, { type: "token_needed" });
+      this.reply(ws, {
+        type: "token_needed",
+        reason: Schemas.WidgetTokenNeededReasonEnum.Answer,
+      });
       return;
     }
 
@@ -2069,7 +2121,10 @@ export class ConversationDO extends Think<Env> {
         if (!values) continue;
         const edited = await this.applyEdit(ws, toolCallId, entry, values);
         if (edited === "tokenNeeded") {
-          this.reply(ws, { type: "token_needed" });
+          this.reply(ws, {
+            type: "token_needed",
+            reason: Schemas.WidgetTokenNeededReasonEnum.Answer,
+          });
           return;
         }
         if (edited === "closed") return;
@@ -2295,7 +2350,10 @@ export class ConversationDO extends Think<Env> {
       return;
     }
     if (!this.hostToken) {
-      this.reply(ws, { type: "token_needed" });
+      this.reply(ws, {
+        type: "token_needed",
+        reason: Schemas.WidgetTokenNeededReasonEnum.Answer,
+      });
       return;
     }
 
@@ -2305,7 +2363,10 @@ export class ConversationDO extends Think<Env> {
       for (const [toolCallId, window] of windows) {
         const undone = await this.runUserUndo(ws, toolCallId, window);
         if (undone === "tokenNeeded") {
-          this.reply(ws, { type: "token_needed" });
+          this.reply(ws, {
+            type: "token_needed",
+            reason: Schemas.WidgetTokenNeededReasonEnum.Answer,
+          });
           return;
         }
         if (undone === "closed") return;
@@ -2356,6 +2417,8 @@ export class ConversationDO extends Think<Env> {
       expiresAt: ChangeRequestsProvider.undoGiveUpAt(window.undoUntil, Date.now()),
       executionId: null,
       expiryScheduleId: null,
+      tokenNeededSince: null,
+      isUnsent: false,
     };
     this.patchRuntimeState({
       changeRequests: { ...(this.getRuntimeState()?.changeRequests ?? {}), [toolCallId]: entry },
@@ -2680,11 +2743,16 @@ export class ConversationDO extends Think<Env> {
 
   // DEV_NOTE: Runs again an approved change whose commit never started or never recorded its end (startCommit marks a
   // Committing one isResume, so a write that may have landed is never sent fresh). Only with the host token: v1's one
-  // auth strategy (jwt_forward) sends the user's own token, which a wake never has until the widget sends it again.
+  // auth strategy (jwt_forward) sends the user's own token, which a wake never has until the widget sends it again;
+  // without one the open sockets are asked (askForResumeToken, M3-8) and their host_token frame resumes it.
   // Its outcome reaches the widget; the paused transcript part stays as Think left it.
   private async resumeCommits(): Promise<void> {
     const state = this.getRuntimeState();
-    if (!state || state.isClosed || !this.hostToken) return;
+    if (!state || state.isClosed) return;
+    if (!this.hostToken) {
+      await this.askForResumeToken();
+      return;
+    }
     for (const [toolCallId, entry] of Object.entries(state.changeRequests)) {
       if (entry.stage === Schemas.ConversationChangeRequestStageEnum.Pending) continue;
       if (this.commitsInFlight.has(entry.publicId)) continue;
@@ -2708,8 +2776,142 @@ export class ConversationDO extends Think<Env> {
         await this.expireChangeRequest({ toolCallId });
       }
     }
+    await this.handOverTokenWaits();
     await this.resumeCommits();
     await this.abandonStaleUndos();
+  }
+
+  // DEV_NOTE: A wake with steps to resume and no host token (M3-8): every such entry starts its grace (if it hasn't), a
+  // check is scheduled for its end, and the open sockets are asked for a token (their host_token frame resumes them).
+  // With no socket open nothing more happens until a widget comes back or the grace ends.
+  private async askForResumeToken(): Promise<void> {
+    const entries = Object.entries(this.getRuntimeState()?.changeRequests ?? {}).filter(
+      ([, entry]) =>
+        entry.stage !== Schemas.ConversationChangeRequestStageEnum.Pending &&
+        !this.commitsInFlight.has(entry.publicId),
+    );
+    if (entries.length === 0) return;
+    for (const [toolCallId, entry] of entries) {
+      if (entry.tokenNeededSince === null) await this.waitForToken(toolCallId, entry.isUnsent);
+    }
+    await this.requestHostToken();
+  }
+
+  // DEV_NOTE: A step left waiting for the host token (M3-8): its grace starts the first time (kept across later waits),
+  // isUnsent says whether its last send reached nothing, and a check runs when the grace ends
+  private async waitForToken(toolCallId: string, isUnsent: boolean): Promise<void> {
+    const entry = this.getRuntimeState()?.changeRequests[toolCallId];
+    if (!entry) return;
+    const tokenNeededSince = entry.tokenNeededSince ?? Date.now();
+    this.patchChangeRequest(toolCallId, { tokenNeededSince, isUnsent });
+    if (entry.tokenNeededSince !== null) return;
+    await this.scheduleCommitRetry(tokenNeededSince + Constants.HOST_TOKEN_GRACE_MS);
+  }
+
+  // DEV_NOTE: Every step still waiting for the host token HOST_TOKEN_GRACE_MS after it first needed it is handed to a
+  // person (NeedsHuman token_needed): the widget closed, or its host gives no token. A user undo keeps its own deadline
+  // (abandonStaleUndos); a step running now is left to finish.
+  private async handOverTokenWaits(): Promise<void> {
+    const state = this.getRuntimeState();
+    if (!state) return;
+    const graceStart = Date.now() - Constants.HOST_TOKEN_GRACE_MS;
+    for (const [toolCallId, entry] of Object.entries(state.changeRequests)) {
+      if (entry.tokenNeededSince === null || entry.tokenNeededSince > graceStart) continue;
+      if (
+        entry.stage === Schemas.ConversationChangeRequestStageEnum.Pending ||
+        entry.stage === Schemas.ConversationChangeRequestStageEnum.UserUndoing ||
+        this.commitsInFlight.has(entry.publicId)
+      ) {
+        continue;
+      }
+      const handedOver = await this.actionEngineRepo().handOverForToken({
+        session: state.session,
+        changeRequestPublicId: entry.publicId,
+      });
+      this.relayEvents(handedOver.outboxIds);
+      this.broadcastChangeRequest(handedOver.changeRequest);
+      if (handedOver.failure === Schemas.ChangeRequestFailureEnum.ServerError) {
+        await this.scheduleCommitRetry();
+        continue;
+      }
+      AppLogger.warn({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.HandOverChangeRequest,
+        message: "No host token came back; handed to a person",
+        metadata: { conversationPublicId: this.name, changeRequestPublicId: entry.publicId },
+      });
+      this.patchChangeRequest(toolCallId, null);
+    }
+  }
+
+  // DEV_NOTE: Asks every open socket for a fresh host token (token_needed, reason refresh) and waits for the next
+  // host_token frame, at most HOST_TOKEN_WAIT_MS (or until signal aborts). Steps asking meanwhile share the one ask.
+  // false = no socket is open (the widget closed), or no token came in time.
+  private async requestHostToken(signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    const connections = [...this.getConnections()];
+    if (connections.length === 0) return false;
+    if (!this.tokenRequest) {
+      this.tokenRequest = new Promise<boolean>((resolve) => {
+        const finish = (isArrived: boolean) => {
+          clearTimeout(timer);
+          this.tokenRequest = null;
+          this.tokenArrived = null;
+          resolve(isArrived);
+        };
+        const timer = setTimeout(() => finish(false), Constants.HOST_TOKEN_WAIT_MS);
+        this.tokenArrived = () => finish(true);
+      });
+      AppLogger.info({
+        category: Schemas.LogCategory.Action,
+        action: Schemas.LogAction.RequestHostToken,
+        message: "Host token asked of the widget",
+        metadata: { conversationPublicId: this.name, connections: connections.length },
+      });
+      for (const connection of connections) {
+        this.reply(connection, {
+          type: "token_needed",
+          reason: Schemas.WidgetTokenNeededReasonEnum.Refresh,
+        });
+      }
+    }
+    const request = this.tokenRequest;
+    if (!signal) return await request;
+    return await new Promise<boolean>((resolve) => {
+      const onAbort = () => resolve(false);
+      signal.addEventListener("abort", onAbort, { once: true });
+      void request.then((isArrived) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(isArrived);
+      });
+    });
+  }
+
+  // DEV_NOTE: One host call as the user, tried once more with a fresh token when it found none or the host refused it
+  // and nothing may have landed (M3-8). isWaiting: it still failed for want of a token and no fresh one came, so the
+  // caller waits for the token rather than ending on it (a fresh token the host refused too ends as the call did).
+  private async withFreshToken(
+    call: () => Promise<Schemas.HostCallResponse>,
+    signal?: AbortSignal,
+  ): Promise<{ response: Schemas.HostCallResponse; isWaiting: boolean }> {
+    const first = await call();
+    if (!ConversationDO.isTokenRetryable(first)) return { response: first, isWaiting: false };
+    if (!(await this.requestHostToken(signal))) return { response: first, isWaiting: true };
+    const second = await call();
+    return {
+      response: second,
+      isWaiting:
+        second.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded &&
+        ConversationDO.isTokenRetryable(second),
+    };
+  }
+
+  private static isTokenRetryable(called: Schemas.HostCallResponse): boolean {
+    return (
+      (called.outcome === Schemas.HostCallOutcomeEnum.TokenNeeded ||
+        called.outcome === Schemas.HostCallOutcomeEnum.TokenRejected) &&
+      called.mayHaveLanded !== true
+    );
   }
 
   private async abandonStaleUndos(): Promise<void> {
