@@ -54,6 +54,21 @@ export const CHANGE_REQUEST_STATUS_LABEL_MAP: Record<
 export const CHANGE_REQUEST_APPROVAL_EXPIRY_MS = 15 * 60_000;
 export const CHANGE_REQUEST_MAX_PENDING = 20;
 
+// DEV_NOTE: The undo window (M3-7), a platform default. A change request that ends (Verified, Undone, Failed, Rejected,
+// Expired) gets undo_until = its end + CHANGE_REQUEST_UNDO_WINDOW_MS: a Verified one can be undone by the user until
+// then, and every one's values (encrypted_changes) are purged after it. NeedsHuman keeps undo_until null: its values
+// stay until a person resolves it (M4-5). The conversation doesn't auto-close while a Verified one can be undone.
+export const CHANGE_REQUEST_UNDO_WINDOW_MS = 60 * 60_000;
+
+// DEV_NOTE: The statuses whose values are purged a window after they end (CHANGE_REQUEST_UNDO_WINDOW_MS)
+export const CHANGE_REQUEST_PURGED_STATUSES: ReadonlySet<ChangeRequestStatusIntEnum> = new Set([
+  ChangeRequestStatusIntEnum.Verified,
+  ChangeRequestStatusIntEnum.Undone,
+  ChangeRequestStatusIntEnum.Failed,
+  ChangeRequestStatusIntEnum.Rejected,
+  ChangeRequestStatusIntEnum.Expired,
+]);
+
 // DEV_NOTE: What a change request does to the host record, from its tool: a Write with a read-before updates an
 // existing record; a Write whose readback reads the call's result (a new id) creates one, with nothing to read before;
 // a Destructive tool deletes the record its read-before found.
@@ -215,7 +230,9 @@ export type ChangeRequestEditableField = z.infer<typeof ZChangeRequestEditableFi
 // id): the widget shows the card in the reply that made the call. null when the DO no longer holds the open entry
 // (the call's own output then names the change request). wasEdited: the user changed values (M3-5), so the diff is the
 // re-checked one. mismatches (M3-6): what the read-after found other than the commit set (null when it found none, or
-// once purged), host data like changes. Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
+// once purged), host data like changes. undoUntil (M3-7, epoch ms): set while the user can undo it (Verified, the tool
+// has an inverse_op, the values not purged, before the window ends); isUndoing: the user's undo of it is under way.
+// Internal ids structurally absent; toolName and field names are machine values (font-mono in the UI).
 export const ZWidgetChangeRequest = z.object({
   publicId: z.string(),
   toolName: z.string(),
@@ -231,6 +248,8 @@ export const ZWidgetChangeRequest = z.object({
   wasEdited: z.boolean(),
   editableFields: z.array(ZChangeRequestEditableField),
   mismatches: z.array(ZChangeRequestMismatch).nullable(),
+  undoUntil: z.number().int().nullable(),
+  isUndoing: z.boolean(),
 });
 export type WidgetChangeRequest = z.infer<typeof ZWidgetChangeRequest>;
 
@@ -269,6 +288,8 @@ export enum ChangeRequestDecisionEnum {
 //   ConversationClosed / ChatbotUnavailable: re-checked on every step (rule 3.23).
 //   ReadOnly: the company is read-only (is_read_only): the agent may only read, so nothing commits.
 //   ToolUnavailable: the tool version or its connection is no longer Active, or its ops no longer load.
+//   NotUndoable: the user asked to undo one whose tool has no inverse_op (M3-7).
+//   UndoWindowClosed: the user asked to undo one after its undo_until, or whose values are purged (M3-7).
 export enum ChangeRequestFailureEnum {
   NotFound = "NotFound",
   InvalidTransition = "InvalidTransition",
@@ -279,6 +300,8 @@ export enum ChangeRequestFailureEnum {
   ChatbotUnavailable = "ChatbotUnavailable",
   ReadOnly = "ReadOnly",
   ToolUnavailable = "ToolUnavailable",
+  NotUndoable = "NotUndoable",
+  UndoWindowClosed = "UndoWindowClosed",
   ServerError = "ServerError",
 }
 
@@ -288,7 +311,8 @@ export const CHANGE_REQUEST_ENTITY_TYPE = "change_request";
 
 // DEV_NOTE: Edited (M3-5) and Undoing (M3-6) are the events that aren't a status change: the user changed a Proposed
 // one's values (it stays Proposed; each edit is its own event, an edit id part in the dedupe key), and the auto-undo
-// of a Mismatch started (its key stored first; a resumed undo writes another, with an attempt part).
+// of a Mismatch started (its key stored first; a resumed undo writes another, with an attempt part). The user's undo
+// of a Verified one (M3-7) writes Undoing too (actor: the chatbot user), while it stays Verified.
 export enum ChangeRequestEntityActionEnum {
   Proposed = "proposed",
   Edited = "edited",
@@ -334,7 +358,8 @@ export const changeRequestEventDedupeKey = (
 
 // DEV_NOTE: The commit's Idempotency-Key (Native) and change_requests.idempotency_key: one per change request and step,
 // the same on every attempt and every resume. Its undo uses its own (changeRequestUndoIdempotencyKey), stored in
-// idempotency_key when the undo starts, so a Mismatch holding it may have sent its undo already (a resume).
+// idempotency_key when the undo starts, so a Mismatch holding it may have sent its undo already (a resume). A Verified
+// one holding it is the user's undo under way (M3-7); the purge skips it (ChangeRequestsDAL spells the same key in SQL).
 export const changeRequestCommitIdempotencyKey = (changeRequestPublicId: string): string =>
   `cr-${changeRequestPublicId}-commit`;
 

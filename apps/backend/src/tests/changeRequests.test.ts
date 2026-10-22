@@ -160,3 +160,96 @@ describe("ChangeRequestsProvider deadline and view", () => {
     expect(ChangeRequestsProvider.toView(row(), payload).toolCallId).toBeNull();
   });
 });
+
+// DEV_NOTE: M3-7: the undo window, the user's undo and the view's undoUntil
+describe("ChangeRequestsProvider undo window (M3-7)", () => {
+  const { Verified, Undone, Rejected, Expired, Approved, Committing, Mismatch } =
+    Schemas.ChangeRequestStatusIntEnum;
+  const now = 5_000_000;
+  const undoKey = Schemas.changeRequestUndoIdempotencyKey("cr_1");
+  const verified = (overrides: Partial<Schemas.ChangeRequestRow> = {}) =>
+    row({
+      status: Verified,
+      encryptedChanges: new Uint8Array([1]),
+      undoUntil: new Date(now + 1_000),
+      ...overrides,
+    });
+
+  it("sets the window on every end but NeedsHuman, clears it there, and leaves it on the way", () => {
+    for (const status of [Verified, Undone, Failed, Rejected, Expired]) {
+      expect(ChangeRequestsProvider.undoUntil(status, now)).toEqual(
+        new Date(now + Schemas.CHANGE_REQUEST_UNDO_WINDOW_MS),
+      );
+    }
+    expect(ChangeRequestsProvider.undoUntil(NeedsHuman, now)).toBeNull();
+    for (const status of [Approved, Committing, Committed, Mismatch]) {
+      expect(ChangeRequestsProvider.undoUntil(status, now)).toBeUndefined();
+    }
+  });
+
+  it("lets the user undo only a Verified, undoable, unpurged one before its window ends", () => {
+    expect(ChangeRequestsProvider.undoRefusal(verified(), now)).toBeNull();
+    expect(ChangeRequestsProvider.undoRefusal(verified({ status: Undone }), now)).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+    expect(ChangeRequestsProvider.undoRefusal(verified({ idempotencyKey: undoKey }), now)).toBe(
+      Schemas.ChangeRequestFailureEnum.InvalidTransition,
+    );
+    expect(ChangeRequestsProvider.undoRefusal(verified({ isUndoable: false }), now)).toBe(
+      Schemas.ChangeRequestFailureEnum.NotUndoable,
+    );
+    for (const overrides of [
+      { undoUntil: new Date(now) },
+      { undoUntil: null },
+      { encryptedChanges: null },
+    ]) {
+      expect(ChangeRequestsProvider.undoRefusal(verified(overrides), now)).toBe(
+        Schemas.ChangeRequestFailureEnum.UndoWindowClosed,
+      );
+    }
+  });
+
+  it("sends a user undo that reached nothing back to Verified, and anything that may have landed to a person", () => {
+    for (const outcome of [Outcome.Refused, Outcome.Failed, Outcome.TokenRejected]) {
+      expect(ChangeRequestsProvider.undoEnd({ outcome, attempts: 1 }, null, true)).toEqual({
+        status: Verified,
+        errorCode: null,
+      });
+    }
+    expect(
+      ChangeRequestsProvider.undoEnd(
+        { outcome: Outcome.Failed, attempts: 1, mayHaveLanded: true },
+        null,
+        true,
+      ),
+    ).toEqual({ status: NeedsHuman, errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoFailed });
+    expect(
+      ChangeRequestsProvider.undoEnd({ outcome: Outcome.Unknown, attempts: 1 }, null, true).status,
+    ).toBe(NeedsHuman);
+    expect(
+      ChangeRequestsProvider.undoEnd({ outcome: Outcome.Succeeded, attempts: 1 }, null, true),
+    ).toEqual({
+      status: NeedsHuman,
+      errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoUnconfirmed,
+    });
+  });
+
+  it("shows undoUntil only while the user can undo it, and marks an undo under way", () => {
+    const payload: Schemas.ChangeRequestPayload = {
+      version: 2,
+      kind: Schemas.ChangeRequestKindEnum.Update,
+      args: { recordId: "rec_alpha", amount: 1 },
+      before: null,
+      changes: [],
+      result: null,
+      mismatches: null,
+    };
+    const open = verified({ undoUntil: new Date(Date.now() + 60_000) });
+    expect(ChangeRequestsProvider.toView(open, payload).undoUntil).toBe(open.undoUntil?.getTime());
+    expect(ChangeRequestsProvider.toView(open, null).undoUntil).toBeNull();
+    const ended = verified({ undoUntil: new Date(Date.now() - 1) });
+    expect(ChangeRequestsProvider.toView(ended, payload).undoUntil).toBeNull();
+    const undoing = ChangeRequestsProvider.toView({ ...open, idempotencyKey: undoKey }, payload);
+    expect(undoing).toMatchObject({ undoUntil: null, isUndoing: true });
+  });
+});

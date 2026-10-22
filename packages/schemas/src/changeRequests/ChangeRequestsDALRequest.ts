@@ -30,7 +30,8 @@ export type FindChangeRequestDALRequest = Pick<
 
 // DEV_NOTE: Moves a change request to status, only from one of fromStatuses (the row matches nothing otherwise:
 // isNotFound). idempotencyKey and errorCode are set when given (errorCode null clears it); so are hostRef and an
-// encrypted payload (M3-6: the commit's result, the read-after's mismatches), in the same update as the status.
+// encrypted payload (M3-6: the commit's result, the read-after's mismatches), in the same update as the status, and
+// undoUntil (M3-7: the end of the undo window and of the values' life; null clears it).
 export type UpdateChangeRequestStatusDALRequest = Pick<
   ChangeRequest,
   "companyId" | "id" | "status"
@@ -40,7 +41,16 @@ export type UpdateChangeRequestStatusDALRequest = Pick<
   errorCode?: ChangeRequestErrorCodeEnum | null;
   hostRef?: string | null;
   payload?: Pick<ChangeRequest, "encryptedChanges" | "iv" | "encryptionKeyVersion">;
+  undoUntil?: Date | null;
 };
+
+// DEV_NOTE: Platform (withPlatform, every company): nulls the values (encrypted_changes, iv, encryption_key_version)
+// of at most limit change requests whose undo_until is before `before`, except a Verified one whose user undo is under
+// way (M3-7)
+export interface PurgeChangeRequestValuesDALRequest {
+  before: Date;
+  limit: number;
+}
 
 // DEV_NOTE: The durable pause's execution id, set once (only while still null)
 export type SetChangeRequestExecutionIdDALRequest = Pick<

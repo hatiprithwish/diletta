@@ -3,7 +3,12 @@ import type { RefObject } from "react";
 import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
 import { useLatest } from "@/hooks/useLatest";
-import { editText, groupChangeRequests, parseEditText } from "@/lib/changeRequestView";
+import {
+  editText,
+  groupChangeRequests,
+  parseEditText,
+  undoableMembers,
+} from "@/lib/changeRequestView";
 import type { ChangeRequestGroup } from "@/lib/changeRequestView";
 import { EMPTY_REVIEW } from "@/store/widgetStore";
 
@@ -12,10 +17,11 @@ import { EMPTY_REVIEW } from "@/store/widgetStore";
 // Approve / Reject answer every Proposed change request of the card at once (one change_request_batch_decision frame:
 // ticked → approve, unticked → reject), so the model replies once. Save edits sends the changed values only
 // (change_request_edits); the card waits for every edit's answer and goes back to review with the re-checked diff
-// once they all saved, else stays in the editor with the reason. Nothing here decides anything: the DO re-checks every
-// answer and edit.
+// once they all saved, else stays in the editor with the reason. Undo (M3-7) sends every record of the card the user
+// can still undo in one change_request_undos frame; a refused one shows its reason on the card. Nothing here decides
+// anything: the DO re-checks every answer, edit and undo.
 //
-// Host token (minimal, M3-5): sent on every connect (getHostToken, never stored). When an answer or an edit gets
+// Host token (minimal, M3-5): sent on every connect (getHostToken, never stored). When an answer, an edit or an undo gets
 // token_needed, a fresh token is fetched and sent, and that frame is sent again once; a second token_needed, or no
 // getHostToken, says to sign in again.
 const SIGN_IN_NOTICE = "Sign in to the app again to approve changes. Nothing changed.";
@@ -48,6 +54,8 @@ export function useChangeReview(params: {
   // DEV_NOTE: The edits still waiting for their answer, by change request public id → card id
   const pendingEditsRef = useRef(new Map<string, string>());
   const editFailuresRef = useRef(new Map<string, string>());
+  // DEV_NOTE: The undos still waiting for their answer, by change request public id → card id (M3-7)
+  const pendingUndosRef = useRef(new Map<string, string>());
 
   const patchReview = useCallback(
     (
@@ -152,6 +160,16 @@ export function useChangeReview(params: {
             const { [cardId]: _edited, ...editing } = review.editing;
             return { sending, editing };
           });
+          return true;
+        }
+        case "change_request_undo": {
+          const cardId = pendingUndosRef.current.get(frame.changeRequestId);
+          if (!cardId) return true;
+          pendingUndosRef.current.delete(frame.changeRequestId);
+          if (!frame.isStarted) {
+            lastFrameRef.current = null;
+            stopSending(cardId, frame.message);
+          }
           return true;
         }
         case "token_needed": {
@@ -270,6 +288,23 @@ export function useChangeReview(params: {
     [findGroup, patchReview, sendReviewFrame, storeApi],
   );
 
+  const undo = useCallback(
+    (cardId: string) => {
+      const group = findGroup(cardId);
+      if (!group) return;
+      const changeRequestIds = undoableMembers(group.members, Date.now()).map(
+        (member) => member.publicId,
+      );
+      if (changeRequestIds.length === 0) return;
+      for (const publicId of changeRequestIds) pendingUndosRef.current.set(publicId, cardId);
+      sendReviewFrame(
+        cardId,
+        JSON.stringify({ type: Schemas.WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE, changeRequestIds }),
+      );
+    },
+    [findGroup, sendReviewFrame],
+  );
+
   const actions: Schemas.WidgetChangeCardActions = useMemo(
     () => ({
       onApprove: (cardId) => decide(cardId, true),
@@ -313,14 +348,16 @@ export function useChangeReview(params: {
         }),
       onShowMore: (cardId) =>
         patchReview((review) => ({ expanded: { ...review.expanded, [cardId]: true } })),
+      onUndo: undo,
     }),
-    [decide, findGroup, patchReview, saveEdits],
+    [decide, findGroup, patchReview, saveEdits, undo],
   );
 
   // DEV_NOTE: A conversation that ends takes its review with it
   const resetReview = useCallback(() => {
     pendingEditsRef.current.clear();
     editFailuresRef.current.clear();
+    pendingUndosRef.current.clear();
     lastFrameRef.current = null;
     storeApi.getState().patch({ review: EMPTY_REVIEW });
   }, [storeApi]);

@@ -35,7 +35,7 @@ export default class Constants {
   // DEV_NOTE: The Worker's one cron trigger (wrangler.jsonc triggers.crons, equal exactly): every minute. The account's
   // Workers Free plan allows 5 cron triggers in total, so jobs that run less often are picked by time in
   // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
-  //   every minute: outbox sweep + model_calls usage backfill
+  //   every minute: outbox sweep + model_calls usage backfill + change request values purge
   //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync
   //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
   static readonly CRON_TRIGGER = "* * * * *";
@@ -135,6 +135,10 @@ export default class Constants {
   static readonly ACTION_PENDING_APPROVAL_TTL_MS = 24 * 60 * 60_000;
   static readonly ACTION_COMMIT_RETRY_MS = 60_000;
   static readonly DECISION_FRAMES_PER_WINDOW = 30;
+  // DEV_NOTE: The change request values purge (M3-7), every minute: at most CHANGE_REQUEST_PURGE_BATCH_SIZE rows per
+  // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
+  static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;
+  static readonly CHANGE_REQUEST_PURGE_MAX_BATCHES = 10;
 
   // DEV_NOTE: Knowledge ingestion (M2-5). One KnowledgeSyncWorkflow per source sync lists the source's items (at most
   // KNOWLEDGE_MAX_ITEMS_PER_SYNC: a sitemap's same-site page URLs, following nested sitemap indexes

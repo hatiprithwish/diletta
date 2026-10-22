@@ -1,4 +1,4 @@
-import { and, eq, getColumns, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, getColumns, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { changeRequests, conversations, toolCalls, toolDefinitions } from "@/db/tables";
@@ -201,6 +201,7 @@ export default class ChangeRequestsDAL {
           ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
           ...(params.errorCode !== undefined ? { errorCode: params.errorCode } : {}),
           ...(params.hostRef !== undefined ? { hostRef: params.hostRef } : {}),
+          ...(params.undoUntil !== undefined ? { undoUntil: params.undoUntil } : {}),
           ...(params.payload
             ? {
                 encryptedChanges: params.payload.encryptedChanges
@@ -407,6 +408,57 @@ export default class ChangeRequestsDAL {
         message,
         error,
         metadata: { companyId: params.companyId, conversationId: params.conversationId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+  // DEV_NOTE: Platform (M3-7, withPlatform: the purge spans companies). Nulls the values of change requests whose
+  // undo window ended, oldest first, at most limit per call, skipping rows another transaction holds (a step under way
+  // purges on a later run). A Verified row holding its undo key is the user's undo under way: its values are what the
+  // undo sends and checks, so it is left (the key is Schemas.changeRequestUndoIdempotencyKey, spelled here in SQL).
+  async purgeChangeRequestValues(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.PurgeChangeRequestValuesDALRequest,
+  ) {
+    const response: Schemas.PurgeChangeRequestValuesResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        lt(changeRequests.undoUntil, params.before),
+        isNotNull(changeRequests.encryptedChanges),
+        sql`NOT (${changeRequests.status} = ${Schemas.ChangeRequestStatusIntEnum.Verified} AND ${changeRequests.idempotencyKey} IS NOT DISTINCT FROM ('cr-' || ${changeRequests.publicId} || '-undo'))`,
+      ];
+      const due = tx
+        .select({ id: changeRequests.id })
+        .from(changeRequests)
+        .where(and(...conditions))
+        .orderBy(asc(changeRequests.undoUntil))
+        .limit(params.limit)
+        .for("update", { skipLocked: true });
+      const purged = await tx
+        .update(changeRequests)
+        .set({
+          encryptedChanges: null,
+          iv: null,
+          encryptionKeyVersion: null,
+          updatedAt: new Date(),
+        })
+        .where(inArray(changeRequests.id, due))
+        .returning({ id: changeRequests.id });
+
+      response.isSuccess = true;
+      response.message = "Change request values purged successfully";
+      response.purgedCount = purged.length;
+    } catch (error) {
+      const message = "Unknown error in purging change request values";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeChangeRequestValues,
+        message,
+        error,
+        metadata: { before: params.before.toISOString(), limit: params.limit },
       });
       response.message = message;
     }

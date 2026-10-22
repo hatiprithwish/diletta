@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as Schemas from "@app/schemas";
 import Panel from "@/components/Panel";
@@ -37,6 +37,7 @@ function renderPanel(view: Partial<Schemas.WidgetPanelView>) {
     onEditValue: vi.fn(),
     onToggleRecord: vi.fn(),
     onShowMore: vi.fn(),
+    onUndo: vi.fn(),
   };
   render(<Panel view={{ ...base, ...view }} {...actions} />);
   return actions;
@@ -241,6 +242,8 @@ describe("Change request cards", () => {
     wasEdited: false,
     editableFields: [editable],
     mismatches: null,
+    undoUntil: null,
+    isUndoing: false,
   });
   const cardOf = (
     members: Schemas.WidgetChangeRequest[],
@@ -382,6 +385,25 @@ describe("Change request cards", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  // DEV_NOTE: M3-7: a checked card offers Undo until its window ends, then hides it
+  it("sends Undo for a checked card and hides it once the window has passed", async () => {
+    const checked = (undoUntil: number | null) => ({
+      ...member("1"),
+      changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+      editableFields: [],
+      undoUntil,
+    });
+    const actions = renderPanel(withCard(cardOf([checked(Date.now() + 3_600_000)])));
+    const card = screen.getByRole("region", { name: "Record updated" });
+    expect(within(card).getByText(/^Undo available until \d{2}:\d{2}$/)).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Undo" }));
+    expect(actions.onUndo).toHaveBeenCalledWith("card-1");
+    cleanup();
+
+    renderPanel(withCard(cardOf([checked(null)])));
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
 });
 
 const noopActions = {
@@ -400,4 +422,5 @@ const noopActions = {
   onEditValue: vi.fn(),
   onToggleRecord: vi.fn(),
   onShowMore: vi.fn(),
+  onUndo: vi.fn(),
 };

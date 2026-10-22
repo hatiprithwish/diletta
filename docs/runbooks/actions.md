@@ -20,6 +20,18 @@ Code: `apps/backend/src/durable-objects/ConversationDO.ts` (the flow), `reposito
 8. **Read-after (M3-6).** A Committed change is read back as the user before `execute` answers (`readback_op` with the args and the commit's own response, kept encrypted in the payload; a create's new id also goes in `host_ref`). `Schemas.checkReadAfter` judges it: every field the args set reads back as sent (a delete: the record answers 404) → **Verified**; it reads back otherwise → **Mismatch**, with what it found; the read failed, answered something else, or there's nothing to compare → **NeedsHuman** (`verify_unknown`). An unknown is never undone.
 9. **Auto-undo (M3-6).** A Mismatch is undone at once, on its own (other change requests of the same answer stay as they are). No `inverse_op` → NeedsHuman (`not_undoable`). Otherwise the undo key `cr-<publicId>-undo` is stored first (event `change_request.undoing`), `inverse_op` is sent (args, read-before, the commit's result; an Emulated tool checks first whether it already landed), and the record is read again: back to its read-before values (a create: gone) → **Undone**; anything else → NeedsHuman (`undo_failed` when the undo didn't succeed, `undo_unconfirmed` when it did but the record doesn't read back so).
 
+## Undo window and purge (M3-7)
+
+Every change request that ends gets `undo_until` = its end + `CHANGE_REQUEST_UNDO_WINDOW_MS` (1 hour): Verified, Undone, Failed, Rejected and Expired. NeedsHuman keeps `undo_until` null, so its values stay until a person resolves it (M4-5 sets it then).
+
+1. **Undo.** While a Verified change request is inside its window and its tool has an `inverse_op`, the widget's card shows **Undo** and "Undo available until HH:MM". Undo sends one `change_request_undos` frame with every record of the card the user can still undo. Same gate as an answer: the rate limit, no turn running, and the host token (`token_needed` otherwise).
+2. **Re-checked like a commit** (`ActionEngineRepo.startUndo`): the conversation open, the chatbot and company active and not read-only, and then, under the row lock, Verified with no undo under way, the tool has an `inverse_op`, the values not purged, before `undo_until`, and the tool version still loading. A refusal changes nothing; the widget gets a `change_request_undo` answer with a safe message ("The time to undo this change has passed. Nothing changed.", …).
+3. **Started.** The undo key `cr-<publicId>-undo` is stored with a `change_request.undoing` event by the chatbot user. The change request stays Verified while the undo runs (the view says `isUndoing`); `undo_until` is left as it is, and the purge skips a Verified row holding its undo key.
+4. **Run like the auto-undo** (M3-6): `inverse_op` as the user, then the record is read again. Back as before → **Undone** (a new window for its values). The undo didn't succeed and nothing may have reached the host (refused, failed, the token refused) → back to **Verified**: the commit key again, its window kept, and the widget hears why (`token_needed`, or "The app didn't take the undo…"). Anything that may have landed, or a record that doesn't read back as before → **NeedsHuman** (`undo_failed` / `undo_unconfirmed`).
+5. **The model.** No model call for an undo. The DO keeps the summaries of what the user undid (`userUndoNotes`, no values); the next turn's or continuation's system prompt says those changes no longer stand.
+6. **The DO.** It keeps Verified change requests the user can still undo in `undoWindows` (by Think tool call id), re-sends them on connect (so the card keeps its Undo after a reload), and doesn't auto-close until the last window ends. An undo under way is an open entry (stage `undoing`), resumed like an auto-undo.
+7. **Purge.** The `ChangeRequestPurge` cron job (every minute, `ChangeRequestPurgeRepo` in `withPlatform`) nulls `encrypted_changes`, `iv` and `encryption_key_version` where `undo_until` has passed, at most `CHANGE_REQUEST_PURGE_BATCH_SIZE` × `CHANGE_REQUEST_PURGE_MAX_BATCHES` rows a run (`FOR UPDATE SKIP LOCKED`). The status, summary, counts and timeline stay. `tool_calls.encrypted_args` is not purged here (M6-1 purges it with the chat).
+
 ## Edits (M3-5)
 
 The widget's `change_request_edits` frame sends new values for Proposed change requests. Nothing is approved by an edit. Each one is re-checked like a new proposal (pattern rule 3.34):
@@ -50,17 +62,20 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 | Committed  | the host answered 2xx, or an Emulated readback proved the write landed; read-after to come  |
 | Verified   | the read-after shows the change (a delete: the record is gone)                              |
 | Mismatch   | the read-after shows something else; its auto-undo is starting or running                   |
-| Undone     | the auto-undo put the record back and the read after it confirms that                       |
+| Undone     | an undo (auto, or the user's within the window) put the record back, confirmed by a read    |
 | Failed     | the host refused or failed, and no send may have landed                                     |
 | NeedsHuman | a person must look: the commit or its undo may have landed, or the read-after couldn't tell |
 
-`change_request.undoing` (M3-6) isn't a status change either: the auto-undo of a Mismatch started (a resumed undo writes another).
+`change_request.undoing` (M3-6) isn't a status change either: the auto-undo of a Mismatch started (a resumed undo writes another). Since M3-7 it also marks the user's undo of a Verified one (actor: the chatbot user), which stays Verified until the undo ends.
 
 ## When something is stuck
 
 - **A change request stays Committing (or Approved).** The DO was evicted mid-commit, or a database write before or after the host call failed. The commit runs as the user, so it resumes only once the DO holds the host token again: on the widget's next `host_token` frame (every reconnect sends one), on the `ACTION_COMMIT_RETRY_MS` retry after a failed write, and on the auto-close's check. It resumes with `isResume: true` (a Native tool resends with the same key, an Emulated one reads back first, a None tool goes to NeedsHuman). A resume that can't send for want of the token stays Committing. Nothing resumes a conversation nobody reconnects to; check the host by hand and move it to NeedsHuman.
 - **A change request stays Committed or Mismatch.** Its read-after or undo was cut short (an eviction, a failed database write, no host token before the send). It resumes like a commit: on the next `host_token` frame, the `ACTION_COMMIT_RETRY_MS` retry, and the auto-close's check. A Mismatch whose `idempotency_key` is `cr-<publicId>-undo` may have sent its undo already, so it resumes with `isResume` (a None tool then ends NeedsHuman unsent).
 - **Many Undone or `verify_unknown` for one tool.** The host stores a value in another form than it was sent (lowercased email, rounded number, "20.00" for 20): the read-after can't see the change, so it is undone. Fix the tool's `input_schema` (send the stored form) or its `compare` map; nothing in the engine loosens the comparison.
+- **A user undo stays under way (Verified holding `cr-<publicId>-undo`).** An eviction or a failed write cut it short. It resumes like an auto-undo (next `host_token`, the retry, the auto-close's check) with `isResume`. The purge leaves it alone until it ends.
+- **"The time to undo this change has passed".** `undo_until` is in the past. Nothing was sent. The change stands as verified.
+- **Values still there after the window.** Check the cron runs (`ChangeRequestPurge` in the logs, `purgedCount`). A row with `undo_until` null (NeedsHuman, or written before M3-7) is never purged here.
 - **NeedsHuman.** Check the record in the host (the change request's tool call holds the tool and version; the payload is encrypted). M4-5 resolves these from the dashboard.
 - **"Think holds no pause for this change request"** (warn log). Think's pending-approval row was gone when the user answered (swept, or resolved elsewhere), or Think couldn't resolve it. An approval is still committed; there's no continuation, so the model doesn't mention it until the next message.
 - **`error_code`.** `Schemas.ChangeRequestErrorCodeEnum`: why a change request ended Failed / NeedsHuman (a refused step: `tool_unavailable`, `read_only`, `conversation_closed`, `chatbot_unavailable`, `payload_unreadable`, `server_error`; the host call: `token_needed`, `token_rejected`, `host_refused`, `host_failed`, `host_unknown`; after a commit landed (M3-6): `verify_unknown`, `not_undoable`, `undo_failed`, `undo_unconfirmed`).
@@ -80,6 +95,9 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 | `ACTION_PENDING_APPROVAL_TTL_MS`    | 24 h   | `apps/backend` `Constants` |
 | `ACTION_COMMIT_RETRY_MS`            | 60 s   | `apps/backend` `Constants` |
 | `DECISION_FRAMES_PER_WINDOW`        | 30/min | `apps/backend` `Constants` |
+| `CHANGE_REQUEST_UNDO_WINDOW_MS`     | 1 h    | `packages/schemas`         |
+| `CHANGE_REQUEST_PURGE_BATCH_SIZE`   | 500    | `apps/backend` `Constants` |
+| `CHANGE_REQUEST_PURGE_MAX_BATCHES`  | 10     | `apps/backend` `Constants` |
 
 Large commits run in the Conversation DO, not a Workflow: the host token lives in DO memory only, and the pending cap bounds a batch.
 
@@ -88,7 +106,8 @@ Large commits run in the Conversation DO, not a Workflow: the host token lives i
 - `src/tests/actionConversation.test.ts`: end to end through the widget socket, the DO and the test host, including the eviction test (the Done-when), a double-clicked approval, an approval after the deadline, a decision the database already took, and a commit cut short by an eviction resumed on the host token.
 - `src/tests/actionConversation.test.ts` › "edit and bulk review" (M3-5, the Done-when): an edited value is re-checked (a host change in between shows in the new diff) and is what commits; locked fields, bad values and no-change edits are refused; an edit after the deadline is refused; an edit or an approval without the host token asks for it; a batch commits the approved, rejects the rest, and the model replies once.
 - `src/tests/actionConversation.test.ts` › "read-after, auto-undo and needs a person" (M3-6, the Done-when): a create and a delete verified; a commit overwritten on the host (`overwrite` fault) undone, with what was found on the frame; an undo that fails and a tool with no `inverse_op` handed to a person; a read-after the host won't answer handed to a person, nothing undone.
-- `src/tests/actionEngine.test.ts`: `ActionEngineRepo` as `diletta_app`, including cross-company isolation (and `getEditPlan` / `saveEdit`, M3-6's `finishVerify` / `startFollowUp` / `finishUndo`, an undo resumed from the stored key).
+- `src/tests/actionConversation.test.ts` › "undo window and purge" (M3-7, the Done-when): the card's Undo puts the record back and the next turn hears it; Undo comes back after a reconnect, asks for the host token, and is refused after the window; no auto-close while a change can be undone; `encrypted_changes` is null once the window ends.
+- `src/tests/actionEngine.test.ts`: `ActionEngineRepo` as `diletta_app`, including cross-company isolation (and `getEditPlan` / `saveEdit`, M3-6's `finishVerify` / `startFollowUp` / `finishUndo`, an undo resumed from the stored key, M3-7's `startUndo` and the purge).
 - `src/tests/hostTools.test.ts`: approval decisions, role expiry, the loop guard key, untrusted history, the fence.
 - `src/tests/changeRequests.test.ts`: the deadline, how a commit's host call, its read-after and its undo end, error codes, the view.
 - `packages/schemas` `ChangeRequestsVerify.test.ts`: `checkReadAfter` per kind and step, `host_ref`, the payload upgrade.
@@ -96,5 +115,4 @@ Large commits run in the Conversation DO, not a Workflow: the host token lives i
 
 ## Not built yet
 
-- Undo within the window (the widget's Undo button, `undo_until`) and purging the payload after it (M3-7).
 - `token_needed` pushed when a read needs a token, and the widget fetching one silently (M3-8).

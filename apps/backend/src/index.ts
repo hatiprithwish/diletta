@@ -13,6 +13,7 @@ import WidgetRoutes from "@/routes/WidgetRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
+import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
@@ -29,6 +30,7 @@ export { KnowledgeSyncWorkflow } from "@/workflows/KnowledgeSyncWorkflow";
 const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.OutboxSweep]: runOutboxSweep,
   [Schemas.CronJobEnum.ModelCallUsageBackfill]: runModelCallUsageBackfill,
+  [Schemas.CronJobEnum.ChangeRequestPurge]: runChangeRequestPurge,
   [Schemas.CronJobEnum.KnowledgeResync]: runKnowledgeResync,
   [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
 };

@@ -65,7 +65,7 @@ export type WidgetChangeRequestMessage = z.infer<typeof ZWidgetChangeRequestMess
 
 // DEV_NOTE: The DO has no usable host token for a step that needs one (an approval or an edit's read-before). The
 // widget fetches a fresh one from its host (getHostToken), sends it in a host_token frame and tries that step again
-// once (M3-5; M3-8 adds the read path); nothing was done.
+// once (M3-5; an undo too, M3-7; M3-8 adds the read path); nothing was done.
 export const ZWidgetTokenNeededMessage = z.object({
   type: z.literal("token_needed"),
 });
@@ -82,6 +82,17 @@ export const ZWidgetChangeRequestEditMessage = z.object({
 });
 export type WidgetChangeRequestEditMessage = z.infer<typeof ZWidgetChangeRequestEditMessage>;
 
+// DEV_NOTE: The answer to one undo of a change_request_undos frame (M3-7). isStarted: the undo was sent (its
+// change_request frames follow: Undone, or back to Verified, or needs a person). Otherwise message says why, in safe
+// text (no values), and nothing changed.
+export const ZWidgetChangeRequestUndoMessage = z.object({
+  type: z.literal("change_request_undo"),
+  changeRequestId: z.string(),
+  isStarted: z.boolean(),
+  message: z.string().nullable(),
+});
+export type WidgetChangeRequestUndoMessage = z.infer<typeof ZWidgetChangeRequestUndoMessage>;
+
 export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetConversationMessage,
   ZWidgetErrorMessage,
@@ -91,6 +102,7 @@ export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetChangeRequestMessage,
   ZWidgetTokenNeededMessage,
   ZWidgetChangeRequestEditMessage,
+  ZWidgetChangeRequestUndoMessage,
 ]);
 export type WidgetServerMessage = z.infer<typeof ZWidgetServerMessage>;
 

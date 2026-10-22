@@ -5,6 +5,7 @@ export enum CronJobEnum {
   // Every minute
   OutboxSweep = "OutboxSweep",
   ModelCallUsageBackfill = "ModelCallUsageBackfill",
+  ChangeRequestPurge = "ChangeRequestPurge",
   // Every hour, at minute Constants.CRON_HOURLY_MINUTE
   KnowledgeResync = "KnowledgeResync",
   // Daily, at Constants.ACTIVITY_LOG_PARTITIONS_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)

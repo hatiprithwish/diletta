@@ -204,6 +204,19 @@ export default class HostToolsProvider {
     ].join("\n");
   }
 
+  // DEV_NOTE: The system prompt's note about changes the user undid with the widget's Undo since the model last ran
+  // (M3-7): the transcript still says they were made and checked, so the model is told they no longer stand.
+  // summaries are change request summaries (tool name and counts, never a value); null when there are none.
+  static userUndoText(summaries: string[]): string | null {
+    if (summaries.length === 0) return null;
+    return [
+      "## Changes the user undid",
+      "",
+      "Since your last reply, the user undid these changes in the app; those records are back as they were before. Don't say they are still in place, and don't make them again unless the user asks:",
+      ...summaries.map((summary) => `- ${summary}`),
+    ].join("\n");
+  }
+
   // DEV_NOTE: A write's model-facing text: the summary only (no values: the user sees them in the review panel)
   static toolDescription(tool: Pick<Schemas.RuntimeTool, "description" | "risk">): string {
     switch (tool.risk) {

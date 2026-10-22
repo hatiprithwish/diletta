@@ -28,8 +28,10 @@ import {
   toolCalls,
   toolDefinitions,
 } from "@/db/tables";
+import Constants from "@/config/Constants";
 import worker from "@/index";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
+import ChangeRequestPurgeRepo from "@/repositories/ChangeRequestPurgeRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import Utility from "@/utils/Utility";
@@ -1556,3 +1558,184 @@ describe(
     });
   },
 );
+
+describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  const sendUndos = (socket: Socket, changeRequestIds: string[]) =>
+    socket.socket.send(JSON.stringify({ type: "change_request_undos", changeRequestIds }));
+  const undoAnswer =
+    (changeRequestId: string) =>
+    (frame: Frame): boolean =>
+      frame.type === "change_request_undo" &&
+      (frame as unknown as Schemas.WidgetChangeRequestUndoMessage).changeRequestId ===
+        changeRequestId;
+  const asUndoAnswer = (frame: Frame) => frame as unknown as Schemas.WidgetChangeRequestUndoMessage;
+  const setUndoUntil = (publicId: string, undoUntil: Date) =>
+    withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(changeRequests)
+        .set({ undoUntil })
+        .where(eq(changeRequests.publicId, publicId)),
+    );
+
+  // DEV_NOTE: rec_alpha's amount changed, approved, committed and read back as set: Verified, inside its undo window
+  async function verifyAlpha(amount: number, after: ((model: string) => Response)[] = []) {
+    const tenant = await createTenant({ tools: ["update_record"] });
+    scriptModel([updateAlpha(amount), reply("Waiting for you."), reply("Done."), ...after]);
+    routeTestHostFetch();
+    const socket = await connect(tenant);
+    sendHostToken(socket, tenant.hostToken);
+    await sendChat(socket, "req-1", `Set Alpha's amount to ${amount}`);
+    const proposed = asChangeRequest(
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Proposed)),
+    );
+    await waitForExecutionId(socket.publicId);
+    const from = socket.frames.length;
+    sendDecision(socket, proposed.publicId, Schemas.ChangeRequestDecisionEnum.Approve);
+    const verified = asChangeRequest(
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified), from),
+    );
+    await socket.waitFor(isContinuationDone, from);
+    return { tenant, socket, verified };
+  }
+
+  it("undoes a verified change from the card's Undo: the record back, Undone, and the next turn hears it", async () => {
+    const { tenant, socket, verified } = await verifyAlpha(310, [reply("Noted.")]);
+    expect(verified.undoUntil).toBeGreaterThan(Date.now());
+    expect(verified.toolCallId).toBe("toolu_update");
+    expect(Object.values((await getRuntimeState(socket.publicId)).undoWindows)).toEqual([
+      { publicId: verified.publicId, undoUntil: verified.undoUntil },
+    ]);
+
+    const from = socket.frames.length;
+    sendUndos(socket, [verified.publicId]);
+    expect(asUndoAnswer(await socket.waitFor(undoAnswer(verified.publicId), from))).toMatchObject({
+      isStarted: true,
+      message: null,
+    });
+    const undone = asChangeRequest(
+      await socket.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Undone), from),
+    );
+    expect(undone).toMatchObject({ mismatches: null, undoUntil: null, isUndoing: false });
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(120);
+    const row = await getChangeRequestRow(verified.publicId);
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Undone);
+    const state = await getRuntimeState(socket.publicId);
+    expect(state.undoWindows).toEqual({});
+    expect(state.changeRequests).toEqual({});
+    expect(state.userUndoNotes).toEqual([row?.summary]);
+
+    // DEV_NOTE: No model call for the undo; the next message's system prompt says what the user undid, once
+    const callsBefore = gatewayRequests().length;
+    await sendChat(socket, "req-2", "Thanks");
+    expect(gatewayRequests().length).toBe(callsBefore + 1);
+    expect(JSON.stringify(gatewayRequests().at(-1)?.body)).toContain(
+      "the user undid these changes",
+    );
+    expect((await getRuntimeState(socket.publicId)).userUndoNotes).toEqual([]);
+    socket.socket.close(1000);
+  });
+
+  it("keeps Undo across a reconnect, asks for the host token, and refuses an undo after the window", async () => {
+    const { tenant, socket, verified } = await verifyAlpha(320);
+    socket.socket.close(1000);
+    // DEV_NOTE: An eviction drops the host token (memory only). Think holds the DO after a model turn, so the test
+    // drops the token itself rather than evicting; the reconnect re-sends the card with its Undo either way.
+    const stub = await getAgentByName(env.CONVERSATION_DO, socket.publicId);
+    await runInDurableObject(stub, (instance) => {
+      Reflect.set(instance, "hostToken", null);
+    });
+    const second = await connect(tenant, { conversation: socket.publicId });
+    const resent = asChangeRequest(
+      await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified)),
+    );
+    expect(resent).toMatchObject({
+      publicId: verified.publicId,
+      toolCallId: "toolu_update",
+      undoUntil: verified.undoUntil,
+    });
+    let from = second.frames.length;
+    sendUndos(second, [verified.publicId]);
+    await second.waitFor((frame) => frame.type === "token_needed", from);
+    expect((await getChangeRequestRow(verified.publicId))?.idempotencyKey).toBe(
+      Schemas.changeRequestCommitIdempotencyKey(verified.publicId),
+    );
+
+    await setUndoUntil(verified.publicId, new Date(Date.now() - 1_000));
+    sendHostToken(second, tenant.hostToken);
+    from = second.frames.length;
+    sendUndos(second, [verified.publicId]);
+    expect(asUndoAnswer(await second.waitFor(undoAnswer(verified.publicId), from))).toEqual({
+      type: "change_request_undo",
+      changeRequestId: verified.publicId,
+      isStarted: false,
+      message: "The time to undo this change has passed. Nothing changed.",
+    });
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(320);
+    expect((await getChangeRequestRow(verified.publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Verified,
+    );
+    expect((await getRuntimeState(socket.publicId)).undoWindows).toEqual({});
+    second.socket.close(1000);
+  });
+
+  it("doesn't auto-close while a change can be undone, and closes once the window ends", async () => {
+    const { socket, verified } = await verifyAlpha(330);
+    socket.socket.close(1000);
+    const stub = await getAgentByName(env.CONVERSATION_DO, socket.publicId);
+    const idleSince = Date.now() - Constants.CONVERSATION_IDLE_CLOSE_MS - 1_000;
+    await runInDurableObject(stub, async (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({ ...state, lastActivityAt: idleSince });
+      await instance.closeIfIdle();
+    });
+    expect((await getRuntimeState(socket.publicId)).isClosed).toBe(false);
+
+    await runInDurableObject(stub, async (instance) => {
+      const state = Schemas.ZConversationRuntimeState.parse(instance.getConfig());
+      instance.configure<Schemas.ConversationRuntimeState>({
+        ...state,
+        lastActivityAt: idleSince,
+        undoWindows: Object.fromEntries(
+          Object.entries(state.undoWindows).map(([toolCallId, window]) => [
+            toolCallId,
+            { ...window, undoUntil: Date.now() - 1 },
+          ]),
+        ),
+      });
+      await instance.closeIfIdle();
+    });
+    const closed = await getRuntimeState(socket.publicId);
+    expect(closed.isClosed).toBe(true);
+    expect(closed.undoWindows).toEqual({});
+    expect((await getChangeRequestRow(verified.publicId))?.status).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Verified,
+    );
+  });
+
+  it("empties encrypted_changes once the window ends, and the card no longer offers Undo", async () => {
+    const { tenant, socket, verified } = await verifyAlpha(340);
+    socket.socket.close(1000);
+    expect((await getChangeRequestRow(verified.publicId))?.encryptedChanges).not.toBeNull();
+
+    await setUndoUntil(verified.publicId, new Date(Date.now() - 1_000));
+    const purged = await new ChangeRequestPurgeRepo(env).purgeExpiredValues();
+    expect(purged.isSuccess).toBe(true);
+    const row = await getChangeRequestRow(verified.publicId);
+    expect(row).toMatchObject({ encryptedChanges: null, iv: null, encryptionKeyVersion: null });
+    expect(row?.status).toBe(Schemas.ChangeRequestStatusIntEnum.Verified);
+    expect(row?.summary).toBe(verified.summary);
+
+    const second = await connect(tenant, { conversation: socket.publicId });
+    const resent = asChangeRequest(
+      await second.waitFor(changeRequestFrame(Schemas.ChangeRequestStatusIntEnum.Verified)),
+    );
+    expect(resent).toMatchObject({ changes: null, undoUntil: null });
+    const from = second.frames.length;
+    sendUndos(second, [verified.publicId]);
+    expect(asUndoAnswer(await second.waitFor(undoAnswer(verified.publicId), from)).isStarted).toBe(
+      false,
+    );
+    expect((await readHostRecord(tenant.hostToken, "rec_alpha"))?.data?.amount).toBe(340);
+    second.socket.close(1000);
+  });
+});
