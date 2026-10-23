@@ -1,8 +1,8 @@
 import { z } from "zod";
 import {
   ACTIVITY_ROLLUPS_MAX_REBUILD_DAYS,
+  activityRollupDayCount,
   activityRollupDayKey,
-  activityRollupDays,
   ZActivityRollupDay,
 } from "./ActivityRollupsCommon";
 
@@ -23,8 +23,7 @@ export const ZRebuildActivityRollupsApiRequest = z
   })
   .refine(
     (range) =>
-      range.fromDay > range.toDay ||
-      activityRollupDays(range.fromDay, range.toDay).length <= ACTIVITY_ROLLUPS_MAX_REBUILD_DAYS,
+      activityRollupDayCount(range.fromDay, range.toDay) <= ACTIVITY_ROLLUPS_MAX_REBUILD_DAYS,
     {
       message: `A rebuild covers at most ${ACTIVITY_ROLLUPS_MAX_REBUILD_DAYS} days`,
       path: ["toDay"],

@@ -16,7 +16,8 @@ type Total = { chatbotId: string | null; metric: string; units: bigint; scale: n
 
 // DEV_NOTE: Turns one day's source groups into activity_rollups values (M4-2). Pure, so the metric set is unit-tested
 // without a database. Every group adds to its chatbot's row (if it has one) and to the company-wide row (chatbotId
-// null), so the company-wide row also holds calls with no chatbot (eval runs, background jobs). Output is sorted
+// null), so the company-wide row also holds background jobs (no chatbot). Eval calls go under the Eval scope's keys
+// (model_calls.eval.*), never the live ones, so a chatbot's live usage leaves out its test runs. Output is sorted
 // (company-wide first, then by chatbot and metric), so a rebuild of unchanged data writes the same rows.
 export default class ActivityRollupsProvider {
   static buildValues(sources: RollupSources): Schemas.ActivityRollupValue[] {
@@ -71,6 +72,9 @@ export default class ActivityRollupsProvider {
 
     const Measure = Schemas.ActivityRollupModelCallMeasureEnum;
     for (const group of sources.modelCalls) {
+      const scope = group.isEval
+        ? Schemas.ActivityRollupModelCallScopeEnum.Eval
+        : Schemas.ActivityRollupModelCallScopeEnum.Live;
       const measures: [Schemas.ActivityRollupModelCallMeasureEnum, string | number, number][] = [
         [Measure.Count, group.count, COUNT_SCALE],
         [Measure.InputTokens, group.inputTokens, COUNT_SCALE],
@@ -80,13 +84,13 @@ export default class ActivityRollupsProvider {
       for (const [measure, value, scale] of measures) {
         add(
           group.chatbotId,
-          Schemas.modelCallTaskRollupMetric(measure, group.taskType),
+          Schemas.modelCallTaskRollupMetric(scope, measure, group.taskType),
           value,
           scale,
         );
         add(
           group.chatbotId,
-          Schemas.modelCallModelRollupMetric(measure, group.provider, group.model),
+          Schemas.modelCallModelRollupMetric(scope, measure, group.provider, group.model),
           value,
           scale,
         );

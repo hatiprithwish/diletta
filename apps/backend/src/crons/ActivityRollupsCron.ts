@@ -8,10 +8,16 @@ import ActivityRollupsRepo from "@/repositories/ActivityRollupsRepo";
 // yesterday is rebuilt only by an operator (POST /operator/companies/:companyPublicId/rollups/rebuild).
 export default async function runActivityRollups(env: Env): Promise<void> {
   const result = await new ActivityRollupsRepo(env).rebuildRecent();
-  AppLogger.info({
+  const log = {
     category: Schemas.LogCategory.Rollup,
     action: Schemas.LogAction.RebuildRecentActivityRollups,
-    message: result.message ?? "Activity rollups rebuilt",
     metadata: { rebuiltCount: result.rebuiltCount, failedCount: result.failedCount },
-  });
+  };
+  // DEV_NOTE: A failed run is an error even when nothing was attempted (the company list failed, incl. a withPlatform
+  // transaction that never opened), so the runbook's alert keys on this one log
+  if (result.isSuccess) {
+    AppLogger.info({ ...log, message: result.message ?? "Activity rollups rebuilt" });
+  } else {
+    AppLogger.error({ ...log, message: result.message ?? "Activity rollups failed" });
+  }
 }

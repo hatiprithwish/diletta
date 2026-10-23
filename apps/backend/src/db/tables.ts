@@ -561,7 +561,8 @@ export const conversations = table(
   (table) => [
     t.uniqueIndex("UNQ_conversations_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_conversations_root_log_id").on(table.rootLogId),
-    t.index("IDX_conversations_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
+    t.index("IDX_conversations_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_conversations_chatbot_user_id").on(table.chatbotUserId),
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),
@@ -669,7 +670,8 @@ export const modelCalls = table(
       .index("IDX_model_calls_created_at_pending")
       .on(table.createdAt)
       .where(sql`${table.usageStatus} = ${lit(Schemas.ModelCallUsageStatusIntEnum.Pending)}`),
-    t.index("IDX_model_calls_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups, the budget seed and the activity rollup day reads
+    t.index("IDX_model_calls_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_model_calls_chatbot_id").on(table.chatbotId),
     t.index("IDX_model_calls_chatbot_user_id").on(table.chatbotUserId),
     t.index("IDX_model_calls_conversation_id").on(table.conversationId),
@@ -697,7 +699,8 @@ export const feedback = table(
     t
       .uniqueIndex("UNQ_feedback_message_id_chatbot_user_id")
       .on(table.messageId, table.chatbotUserId),
-    t.index("IDX_feedback_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
+    t.index("IDX_feedback_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_feedback_chatbot_user_id").on(table.chatbotUserId),
   ],
 );
@@ -962,7 +965,9 @@ export const activityLog = table(
   },
   (table) => [
     t.primaryKey({ name: "activity_log_pkey", columns: [table.id, table.createdAt] }),
-    t.index("IDX_activity_log_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2); on the
+    // partitioned parent, so every partition (and every one the maintenance function adds) gets it
+    t.index("IDX_activity_log_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_activity_log_actor_id").on(table.actorId),
     t.index("IDX_activity_log_entity_id").on(table.entityId),
     t.index("IDX_activity_log_parent_log_id").on(table.parentLogId),

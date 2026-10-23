@@ -4,8 +4,9 @@ import type { FeedbackRatingIntEnum } from "../feedback";
 import type { ModelCallProvider } from "../modelCalls";
 import type { ActivityRollupChangeRequestAction } from "./ActivityRollupsCommon";
 
-// DEV_NOTE: Grouped counts and sums from the source tables, one entry per group. chatbotId null = no chatbot (a
-// background or eval model call). Sums arrive as decimal strings so a cost stays exact.
+// DEV_NOTE: Grouped counts and sums from the source tables, one entry per group. A model call's chatbotId is null for
+// a background job (no chatbot); isEval says it was made for an eval run, whether or not it carries the chatbot under
+// test. Sums arrive as decimal strings so a cost stays exact.
 export type ConversationRollupGroup = {
   chatbotId: string;
   outcome: ConversationOutcomeIntEnum | null;
@@ -27,6 +28,7 @@ export type ChangeRequestRollupGroup = {
 
 export type ModelCallRollupGroup = {
   chatbotId: string | null;
+  isEval: boolean;
   taskType: string;
   provider: ModelCallProvider;
   model: string;

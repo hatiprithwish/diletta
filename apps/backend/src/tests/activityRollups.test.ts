@@ -22,6 +22,10 @@ import {
   toolDefinitions,
 } from "@/db/tables";
 import worker from "@/index";
+import AppLogger from "@/providers/logger";
+import runActivityRollups from "@/crons/ActivityRollupsCron";
+import getDbClient from "@/db/dbClient";
+import withPlatform from "@/db/withPlatform";
 import ActivityRollupsRepo from "@/repositories/ActivityRollupsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -114,6 +118,7 @@ function modelCall(values: {
   outputTokens: number | null;
   costUsd: string;
   createdAt: Date;
+  evalRunId?: string;
 }) {
   return {
     publicId: Utility.generatePublicId(),
@@ -284,7 +289,7 @@ beforeAll(async () => {
       event(Schemas.ChangeRequestEntityActionEnum.Undone, at(NEXT_DAY, "09:00:00")),
     ]);
 
-    const { QaAnswer, EvalJudge, SearchEmbed } = Schemas.ModelTaskTypeEnum;
+    const { QaAnswer, EvalJudge, SearchEmbed, KnowledgeEmbed } = Schemas.ModelTaskTypeEnum;
     const { Mid, Embed } = Schemas.ModelCallTierIntEnum;
     const anthropic = Schemas.ModelProviderEnum.Anthropic;
     const workersAi = Schemas.PlatformModelProviderEnum.WorkersAi;
@@ -311,8 +316,10 @@ beforeAll(async () => {
         costUsd: "0.000500",
         createdAt: at(DAY, "23:59:59"),
       }),
+      // DEV_NOTE: An eval call that carries the chatbot under test: eval keys only, never chatbot1's live usage
       modelCall({
-        chatbotId: null,
+        chatbotId: chatbot1,
+        evalRunId: "0",
         taskType: EvalJudge,
         tier: Mid,
         provider: anthropic,
@@ -321,6 +328,18 @@ beforeAll(async () => {
         outputTokens: 0,
         costUsd: "0.010000",
         createdAt: at(DAY, "03:00:00"),
+      }),
+      // DEV_NOTE: A background job (no chatbot): the company-wide row only
+      modelCall({
+        chatbotId: null,
+        taskType: KnowledgeEmbed,
+        tier: Embed,
+        provider: workersAi,
+        model: EMBED_MODEL,
+        inputTokens: 30,
+        outputTokens: null,
+        costUsd: "0",
+        createdAt: at(DAY, "04:00:00"),
       }),
       modelCall({
         chatbotId: chatbot2,
@@ -376,7 +395,9 @@ const qa = (measure: string) => `model_calls.${measure}.task.qa.answer`;
 const qaModel = (measure: string) => `model_calls.${measure}.model.anthropic/${MODEL}`;
 const embed = (measure: string) => `model_calls.${measure}.task.search.embed`;
 const embedModel = (measure: string) => `model_calls.${measure}.model.workers_ai/${EMBED_MODEL}`;
-const judge = (measure: string) => `model_calls.${measure}.task.eval.judge`;
+const knowledgeEmbed = (measure: string) => `model_calls.${measure}.task.knowledge.embed`;
+const evalJudge = (measure: string) => `model_calls.eval.${measure}.task.eval.judge`;
+const evalModel = (measure: string) => `model_calls.eval.${measure}.model.anthropic/${MODEL}`;
 const verified = `change_requests.verified.tool.${toolName}`;
 
 function expectedDay(): Record<string, string> {
@@ -393,6 +414,14 @@ function expectedDay(): Record<string, string> {
     [`${chatbot1}|${qaModel("input_tokens")}`]: "150",
     [`${chatbot1}|${qaModel("output_tokens")}`]: "20",
     [`${chatbot1}|${qaModel("cost_usd")}`]: "0.001500",
+    [`${chatbot1}|${evalJudge("count")}`]: "1",
+    [`${chatbot1}|${evalJudge("input_tokens")}`]: "0",
+    [`${chatbot1}|${evalJudge("output_tokens")}`]: "0",
+    [`${chatbot1}|${evalJudge("cost_usd")}`]: "0.010000",
+    [`${chatbot1}|${evalModel("count")}`]: "1",
+    [`${chatbot1}|${evalModel("input_tokens")}`]: "0",
+    [`${chatbot1}|${evalModel("output_tokens")}`]: "0",
+    [`${chatbot1}|${evalModel("cost_usd")}`]: "0.010000",
 
     [`${chatbot2}|conversations.started`]: "1",
     [`${chatbot2}|conversations.outcome.handoff`]: "1",
@@ -406,7 +435,7 @@ function expectedDay(): Record<string, string> {
     [`${chatbot2}|${embedModel("output_tokens")}`]: "0",
     [`${chatbot2}|${embedModel("cost_usd")}`]: "0.000000",
 
-    // DEV_NOTE: Company-wide = every chatbot plus the calls with none (the eval judge)
+    // DEV_NOTE: Company-wide = every chatbot plus the calls with none (the background embed)
     "company|conversations.started": "3",
     "company|conversations.outcome.answered": "1",
     "company|conversations.outcome.handoff": "1",
@@ -417,20 +446,28 @@ function expectedDay(): Record<string, string> {
     [`company|${qa("input_tokens")}`]: "150",
     [`company|${qa("output_tokens")}`]: "20",
     [`company|${qa("cost_usd")}`]: "0.001500",
-    [`company|${judge("count")}`]: "1",
-    [`company|${judge("input_tokens")}`]: "0",
-    [`company|${judge("output_tokens")}`]: "0",
-    [`company|${judge("cost_usd")}`]: "0.010000",
-    [`company|${qaModel("count")}`]: "3",
+    [`company|${qaModel("count")}`]: "2",
     [`company|${qaModel("input_tokens")}`]: "150",
     [`company|${qaModel("output_tokens")}`]: "20",
-    [`company|${qaModel("cost_usd")}`]: "0.011500",
+    [`company|${qaModel("cost_usd")}`]: "0.001500",
+    [`company|${evalJudge("count")}`]: "1",
+    [`company|${evalJudge("input_tokens")}`]: "0",
+    [`company|${evalJudge("output_tokens")}`]: "0",
+    [`company|${evalJudge("cost_usd")}`]: "0.010000",
+    [`company|${evalModel("count")}`]: "1",
+    [`company|${evalModel("input_tokens")}`]: "0",
+    [`company|${evalModel("output_tokens")}`]: "0",
+    [`company|${evalModel("cost_usd")}`]: "0.010000",
     [`company|${embed("count")}`]: "1",
     [`company|${embed("input_tokens")}`]: "10",
     [`company|${embed("output_tokens")}`]: "0",
     [`company|${embed("cost_usd")}`]: "0.000000",
-    [`company|${embedModel("count")}`]: "1",
-    [`company|${embedModel("input_tokens")}`]: "10",
+    [`company|${knowledgeEmbed("count")}`]: "1",
+    [`company|${knowledgeEmbed("input_tokens")}`]: "30",
+    [`company|${knowledgeEmbed("output_tokens")}`]: "0",
+    [`company|${knowledgeEmbed("cost_usd")}`]: "0.000000",
+    [`company|${embedModel("count")}`]: "2",
+    [`company|${embedModel("input_tokens")}`]: "40",
     [`company|${embedModel("output_tokens")}`]: "0",
     [`company|${embedModel("cost_usd")}`]: "0.000000",
   };
@@ -475,7 +512,8 @@ describe("ActivityRollupsRepo.rebuildDay", () => {
     const rows = await readRollups(companyA, DAY);
     expect(rows).not.toHaveProperty(`${chatbot1}|stale.metric`);
     expect(Object.keys(rows).some((key) => key.includes("search.embed"))).toBe(false);
-    expect(Object.keys(rows).some((key) => key.includes("workers_ai"))).toBe(false);
+    expect(Object.keys(rows).some((key) => key.startsWith(`${chatbot2}|model_calls`))).toBe(false);
+    expect(rows[`company|${embedModel("count")}`]).toBe("1");
     expect(rows[`${chatbot1}|${qa("cost_usd")}`]).toBe("0.001500");
 
     // Put the source row back for the other tests, then rebuild
@@ -568,6 +606,86 @@ describe("ActivityRollupsRepo.rebuildDays and rebuildRecent", () => {
       failedCount: 0,
     });
     expect(rebuildDay).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActivityRollupsCron", () => {
+  it("logs a failed run as an error, even when nothing was attempted", async () => {
+    vi.spyOn(ActivityRollupsRepo.prototype, "rebuildRecent").mockResolvedValue({
+      isSuccess: false,
+      message: "Unknown error in platform transaction",
+      rebuiltCount: 0,
+      failedCount: 0,
+    });
+    vi.mocked(AppLogger.error).mockClear();
+    await runActivityRollups(env);
+    expect(AppLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: Schemas.LogCategory.Rollup,
+        action: Schemas.LogAction.RebuildRecentActivityRollups,
+        metadata: { rebuiltCount: 0, failedCount: 0 },
+      }),
+    );
+  });
+
+  it("logs a clean run as info", async () => {
+    vi.spyOn(ActivityRollupsRepo.prototype, "rebuildRecent").mockResolvedValue({
+      isSuccess: true,
+      message: "Activity rollups rebuilt",
+      rebuiltCount: 2,
+      failedCount: 0,
+    });
+    vi.mocked(AppLogger.error).mockClear();
+    vi.mocked(AppLogger.info).mockClear();
+    await runActivityRollups(env);
+    expect(AppLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ action: Schemas.LogAction.RebuildRecentActivityRollups }),
+    );
+    expect(AppLogger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("CompaniesDAL.getCompanyIdsByStatus (the hourly run's company list)", () => {
+  it("lists Active and Paused companies and leaves Churned ones out, as diletta_app in withPlatform", async () => {
+    const created = await withOwnerDb(async (ownerDb) => {
+      return await ownerDb
+        .insert(companies)
+        .values([
+          {
+            publicId: Utility.generatePublicId(),
+            name: `Rollups paused ${crypto.randomUUID()}`,
+            status: Schemas.CompanyStatusIntEnum.Paused,
+          },
+          {
+            publicId: Utility.generatePublicId(),
+            name: `Rollups churned ${crypto.randomUUID()}`,
+            status: Schemas.CompanyStatusIntEnum.Churned,
+          },
+        ])
+        .returning({ id: companies.id });
+    });
+    const [paused, churned] = created.map((row) => row.id);
+
+    try {
+      const listed = await withPlatform(getDbClient(env), async (tx) => {
+        return await new CompaniesDAL().getCompanyIdsByStatus(tx, {
+          statuses: [Schemas.CompanyStatusIntEnum.Active, Schemas.CompanyStatusIntEnum.Paused],
+        });
+      });
+      expect(listed.isSuccess).toBe(true);
+      const companyIds = "companyIds" in listed ? (listed.companyIds ?? []) : [];
+      expect(companyIds).toEqual(expect.arrayContaining([companyA, paused]));
+      expect(companyIds).not.toContain(churned);
+    } finally {
+      await withOwnerDb(async (ownerDb) => {
+        await ownerDb.delete(companies).where(
+          inArray(
+            companies.id,
+            created.map((row) => row.id),
+          ),
+        );
+      });
+    }
   });
 });
 

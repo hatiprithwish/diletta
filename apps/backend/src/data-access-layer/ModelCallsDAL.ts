@@ -318,10 +318,10 @@ export default class ModelCallsDAL {
     return sql<boolean>`exists (select 1 from ${table} where ${idColumn} = ${id} and ${companyIdColumn} = ${companyId})`;
   }
 
-  // DEV_NOTE: Activity rollups (M4-2): model calls made in [start, end), per chatbot (null = eval or background),
-  // task type, provider and model. Every row counts, failed and Unknown ones too (cost as it stands, 0 until a Pending
-  // row is backfilled; the hourly run rebuilds yesterday as well, so a backfill reaches the rollup). Sums are cast to
-  // text so a cost stays exact.
+  // DEV_NOTE: Activity rollups (M4-2): model calls made in [start, end), per chatbot (null = background job), eval or
+  // not (eval_run_id set; an eval call may carry the chatbot under test), task type, provider and model. Every row
+  // counts, failed and Unknown ones too (cost as it stands, 0 until a Pending row is backfilled; the hourly run rebuilds
+  // yesterday as well, so a backfill reaches the rollup). Sums are cast to text so a cost stays exact.
   async getModelCallRollupGroups(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.ActivityRollupWindowDALRequest,
@@ -334,9 +334,11 @@ export default class ModelCallsDAL {
         gte(modelCalls.createdAt, params.start),
         lt(modelCalls.createdAt, params.end),
       ];
+      const isEval = sql<boolean>`${modelCalls.evalRunId} is not null`;
       const groups = await tx
         .select({
           chatbotId: modelCalls.chatbotId,
+          isEval,
           taskType: modelCalls.taskType,
           provider: modelCalls.provider,
           model: modelCalls.model,
@@ -347,7 +349,13 @@ export default class ModelCallsDAL {
         })
         .from(modelCalls)
         .where(and(...conditions))
-        .groupBy(modelCalls.chatbotId, modelCalls.taskType, modelCalls.provider, modelCalls.model);
+        .groupBy(
+          modelCalls.chatbotId,
+          isEval,
+          modelCalls.taskType,
+          modelCalls.provider,
+          modelCalls.model,
+        );
 
       response.isSuccess = true;
       response.message = "Model call rollup groups fetched successfully";

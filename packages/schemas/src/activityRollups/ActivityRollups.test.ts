@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   ACTIVITY_ROLLUPS_MAX_REBUILD_DAYS,
+  activityRollupDayCount,
   activityRollupDayKey,
   activityRollupDayRange,
   activityRollupDays,
+  activityRollupRecentDays,
   conversationOutcomeMetric,
 } from "./ActivityRollupsCommon";
 import { ZRebuildActivityRollupsApiRequest } from "./ActivityRollupsApiRequest";
@@ -32,6 +34,20 @@ describe("activity rollup days", () => {
     expect(activityRollupDays("2026-10-12", "2026-10-12")).toEqual(["2026-10-12"]);
   });
 
+  it("counts the days of a range arithmetically", () => {
+    expect(activityRollupDayCount("2026-10-12", "2026-10-12")).toBe(1);
+    expect(activityRollupDayCount("2026-09-01", "2026-10-01")).toBe(31);
+    expect(activityRollupDayCount("2026-10-13", "2026-10-12")).toBe(0);
+    expect(activityRollupDayCount("0001-01-01", "2026-10-12")).toBeGreaterThan(700_000);
+  });
+
+  it("names yesterday and today (UTC) as the recent days", () => {
+    expect(activityRollupRecentDays(Date.parse("2026-11-01T00:30:00Z"))).toEqual([
+      "2026-10-31",
+      "2026-11-01",
+    ]);
+  });
+
   it("names outcomes with stable keys", () => {
     expect(conversationOutcomeMetric(ConversationOutcomeIntEnum.ActionDone)).toBe(
       "conversations.outcome.action_done",
@@ -57,6 +73,7 @@ describe("ZRebuildActivityRollupsApiRequest", () => {
       { fromDay: "2026-10-13", toDay: "2026-10-12" },
       { fromDay: "2026-09-01", toDay: "2026-10-02" },
       { fromDay: "2026-10-01", toDay: "2999-01-01" },
+      { fromDay: "0001-01-01", toDay: "2026-10-12" },
       { fromDay: "2026-02-30", toDay: "2026-03-01" },
       { fromDay: "12/10/2026", toDay: "2026-10-12" },
     ]) {

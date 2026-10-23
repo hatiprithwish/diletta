@@ -23,8 +23,11 @@ A day is the UTC calendar day, `[00:00, 24:00)` on each source row's own timesta
 | `change_requests.<verified\|undone\|needs_human\|failed\|rejected\|expired>.tool.<name>` | `activity_log` `change_request.*` events → change request → tool call → tool definition name | the event's `created_at`                                                  |
 | `model_calls.<count\|input_tokens\|output_tokens\|cost_usd>.task.<task_type>`            | `model_calls`, every row (failed, Pending and Unknown too, cost as it stands)                | `created_at`                                                              |
 | `model_calls.<…>.model.<provider>/<model>`                                               | the same rows, by provider and model                                                         | `created_at`                                                              |
+| `model_calls.eval.<…>.task.<task_type>`, `model_calls.eval.<…>.model.<provider>/<model>` | the same, for calls made for an eval run (`eval_run_id` set)                                 | `created_at`                                                              |
 
-Model calls with no chatbot (eval runs, background jobs) appear only in the company-wide row. Costs are summed exactly, in millionths of a dollar. A day with no activity has no rows.
+Eval calls go under the `model_calls.eval.*` keys, never the live `model_calls.*` ones, even when they carry the chatbot under test. A chatbot's live usage therefore leaves out its test runs; total spend is live + eval. Background jobs (no chatbot, e.g. knowledge embeddings) appear only in the company-wide row. Costs are summed exactly, in millionths of a dollar. A day with no activity has no rows.
+
+Every source read is a range on `(company_id, created_at)`, served by the `IDX_<table>_company_id_created_at` indexes on `conversations`, `feedback`, `model_calls` and `activity_log` (per partition), so a rebuild reads one day's rows, not the company's history.
 
 ## When it runs
 
@@ -50,11 +53,10 @@ Content-Type: application/json
 
 ## Alerts
 
-| Log (category `Rollup`)                                                 | Meaning                                     | Do                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RebuildActivityRollupDay` error, `metadata.companyId` / `metadata.day` | One (company, day) failed in the hourly run | Find the DAL error logged just before it (`Get…RollupGroups`, `DeleteActivityRollupDay`, `CreateActivityRollups`). The next hour retries; if the day is already older than yesterday, rebuild it by hand. |
-| `RebuildRecentActivityRollups` info with `failedCount > 0`              | Summary of a run with failures              | As above, for each failed day.                                                                                                                                                                            |
-| `ListCompanyIdsByStatus` error (category `DAL`)                         | The company list failed: nothing rebuilt    | Check the database connection. The next hour retries.                                                                                                                                                     |
+| Log (category `Rollup`)                                                 | Meaning                                                                                                                            | Do                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RebuildRecentActivityRollups` error                                    | The hourly run failed: some days failed (`failedCount > 0`), or the company list failed and nothing was rebuilt (`failedCount: 0`) | Look at the errors logged just before it: `RebuildActivityRollupDay` (below), `ListCompanyIdsByStatus` (category `DAL`) or `WithPlatform` (category `DB`, the transaction never opened). The next hour retries; rebuild any day older than yesterday by hand. |
+| `RebuildActivityRollupDay` error, `metadata.companyId` / `metadata.day` | One (company, day) failed in the hourly run                                                                                        | Find the DAL error logged just before it (`Get…RollupGroups`, `DeleteActivityRollupDay`, `CreateActivityRollups`). The next hour retries; if the day is already older than yesterday, rebuild it by hand.                                                     |
 
 ## Known gaps
 

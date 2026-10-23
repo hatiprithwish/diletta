@@ -68,19 +68,34 @@ export enum ActivityRollupModelCallMeasureEnum {
   CostUsd = "cost_usd",
 }
 
+// DEV_NOTE: Which calls a model call metric counts. Live = the chatbot answering its users (and background jobs, which
+// have no chatbot). Eval = calls made for an eval run (eval_run_id set), kept under their own keys even when they carry
+// the chatbot under test, so a chatbot's live usage never includes its test runs. Spend in total = live + eval.
+export enum ActivityRollupModelCallScopeEnum {
+  Live = "live",
+  Eval = "eval",
+}
+
+const MODEL_CALL_SCOPE_PREFIX: Record<ActivityRollupModelCallScopeEnum, string> = {
+  [ActivityRollupModelCallScopeEnum.Live]: "model_calls",
+  [ActivityRollupModelCallScopeEnum.Eval]: "model_calls.eval",
+};
+
 export function modelCallTaskRollupMetric(
+  scope: ActivityRollupModelCallScopeEnum,
   measure: ActivityRollupModelCallMeasureEnum,
   taskType: string,
 ): string {
-  return `model_calls.${measure}.task.${taskType}`;
+  return `${MODEL_CALL_SCOPE_PREFIX[scope]}.${measure}.task.${taskType}`;
 }
 
 export function modelCallModelRollupMetric(
+  scope: ActivityRollupModelCallScopeEnum,
   measure: ActivityRollupModelCallMeasureEnum,
   provider: ModelCallProvider,
   model: string,
 ): string {
-  return `model_calls.${measure}.model.${provider}/${model}`;
+  return `${MODEL_CALL_SCOPE_PREFIX[scope]}.${measure}.model.${provider}/${model}`;
 }
 
 // DEV_NOTE: The UTC day an instant falls on, and the half-open range [start, end) a day covers
@@ -93,7 +108,18 @@ export function activityRollupDayRange(day: ActivityRollupDay): { start: Date; e
   return { start, end: new Date(start.getTime() + DAY_MS) };
 }
 
-// Every day from fromDay to toDay, both included, oldest first
+// How many days fromDay to toDay covers, both included (0 or less when reversed). Arithmetic, so checking a range
+// against the rebuild cap costs nothing however far apart the days are.
+export function activityRollupDayCount(
+  fromDay: ActivityRollupDay,
+  toDay: ActivityRollupDay,
+): number {
+  const span =
+    activityRollupDayRange(toDay).start.getTime() - activityRollupDayRange(fromDay).start.getTime();
+  return span / DAY_MS + 1;
+}
+
+// Every day from fromDay to toDay, both included, oldest first. Callers bound the range first (the rebuild cap).
 export function activityRollupDays(
   fromDay: ActivityRollupDay,
   toDay: ActivityRollupDay,
@@ -104,6 +130,11 @@ export function activityRollupDays(
     days.push(activityRollupDayKey(at));
   }
   return days;
+}
+
+// DEV_NOTE: The days the hourly run rebuilds at an instant: yesterday and today (UTC), oldest first
+export function activityRollupRecentDays(now: number): ActivityRollupDay[] {
+  return [activityRollupDayKey(now - DAY_MS), activityRollupDayKey(now)];
 }
 
 // One metric of one day, before it is stored. value is a decimal string (numeric column, exact)

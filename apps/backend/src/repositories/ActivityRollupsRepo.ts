@@ -112,21 +112,17 @@ export default class ActivityRollupsRepo {
   async rebuildRecent(
     params: { now?: number } = {},
   ): Promise<Schemas.RebuildRecentActivityRollupsResponse> {
-    const now = params.now ?? Date.now();
-    const days = Schemas.activityRollupDays(
-      Schemas.activityRollupDayKey(now - 24 * 60 * 60 * 1000),
-      Schemas.activityRollupDayKey(now),
-    );
+    const days = Schemas.activityRollupRecentDays(params.now ?? Date.now());
 
     const listed = await withPlatform(this.db, async (tx) => {
       return await this.companiesDal.getCompanyIdsByStatus(tx, {
         statuses: [Schemas.CompanyStatusIntEnum.Active, Schemas.CompanyStatusIntEnum.Paused],
       });
     });
-    const companyIds = "companyIds" in listed ? (listed.companyIds ?? []) : [];
-    if (!listed.isSuccess) {
+    if (!listed.isSuccess || !("companyIds" in listed)) {
       return { isSuccess: false, message: listed.message, rebuiltCount: 0, failedCount: 0 };
     }
+    const companyIds = listed.companyIds ?? [];
 
     let rebuiltCount = 0;
     let failedCount = 0;
