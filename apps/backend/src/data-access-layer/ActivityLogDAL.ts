@@ -1,7 +1,14 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lt } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { activityLog, companies } from "@/db/tables";
+import {
+  activityLog,
+  changeRequests,
+  companies,
+  conversations,
+  toolCalls,
+  toolDefinitions,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 
@@ -125,6 +132,69 @@ export default class ActivityLogDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetActivityLogsByEntity,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Activity rollups (M4-2): change_request events written in [start, end) for the actions the rollup counts,
+  // per chatbot (the change request's conversation), action and tool name. activity_log is partitioned by created_at,
+  // so the range reads one or two partitions.
+  async getChangeRequestRollupGroups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivityRollupWindowDALRequest,
+  ) {
+    const response: Schemas.ChangeRequestRollupGroupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.companyId, params.companyId),
+        eq(changeRequests.companyId, params.companyId),
+        eq(toolCalls.companyId, params.companyId),
+        eq(toolDefinitions.companyId, params.companyId),
+        eq(conversations.companyId, params.companyId),
+        eq(activityLog.entityType, Schemas.CHANGE_REQUEST_ENTITY_TYPE),
+        inArray(activityLog.entityAction, [...Schemas.ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS]),
+        gte(activityLog.createdAt, params.start),
+        lt(activityLog.createdAt, params.end),
+      ];
+      const rows = await tx
+        .select({
+          chatbotId: conversations.chatbotId,
+          action: activityLog.entityAction,
+          toolName: toolDefinitions.name,
+          count: count(),
+        })
+        .from(activityLog)
+        .innerJoin(changeRequests, eq(changeRequests.id, activityLog.entityId))
+        .innerJoin(toolCalls, eq(toolCalls.id, changeRequests.toolCallId))
+        .innerJoin(toolDefinitions, eq(toolDefinitions.id, toolCalls.toolId))
+        .innerJoin(conversations, eq(conversations.id, changeRequests.conversationId))
+        .where(and(...conditions))
+        .groupBy(conversations.chatbotId, activityLog.entityAction, toolDefinitions.name);
+
+      // DEV_NOTE: entity_action is text; the query matched only counted actions, so find() narrows every row
+      const groups: Schemas.ChangeRequestRollupGroup[] = [];
+      for (const row of rows) {
+        const action = Schemas.ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS.find(
+          (item) => item === row.action,
+        );
+        if (action) groups.push({ ...row, action });
+      }
+
+      response.isSuccess = true;
+      response.message = "Change request rollup groups fetched successfully";
+      response.groups = groups;
+    } catch (error) {
+      const message = "Unknown error in fetching change request rollup groups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetChangeRequestRollupGroups,
         message,
         error,
         metadata: params,

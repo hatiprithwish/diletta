@@ -5,6 +5,7 @@ import { requestId } from "hono/request-id";
 import AppLogger, { configureLogger, disposeLogger, withRequestContext } from "@/providers/logger";
 import AuthRoutes from "@/routes/AuthRoutes";
 import AdminsRoutes from "@/routes/AdminsRoutes";
+import ActivityRollupsRoutes from "@/routes/ActivityRollupsRoutes";
 import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
 import CompaniesRoutes from "@/routes/CompaniesRoutes";
 import KnowledgeSourcesRoutes from "@/routes/KnowledgeSourcesRoutes";
@@ -13,6 +14,7 @@ import WidgetRoutes from "@/routes/WidgetRoutes";
 import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
+import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
@@ -32,6 +34,7 @@ const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.ModelCallUsageBackfill]: runModelCallUsageBackfill,
   [Schemas.CronJobEnum.ChangeRequestPurge]: runChangeRequestPurge,
   [Schemas.CronJobEnum.KnowledgeResync]: runKnowledgeResync,
+  [Schemas.CronJobEnum.ActivityRollups]: runActivityRollups,
   [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
 };
 
@@ -76,6 +79,7 @@ app.route("/dashboard/chatbots", ChatbotsRoutes);
 app.route("/dashboard/knowledge-sources", KnowledgeSourcesRoutes);
 app.route("/operator/companies", CompaniesRoutes);
 app.route("/operator/companies/:companyPublicId/tool-definitions", ToolDefinitionsRoutes);
+app.route("/operator/companies/:companyPublicId/rollups", ActivityRollupsRoutes);
 app.route("/widget", WidgetRoutes);
 
 export default {

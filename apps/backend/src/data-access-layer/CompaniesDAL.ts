@@ -1,4 +1,4 @@
-import { asc, count, desc, eq } from "drizzle-orm";
+import { asc, count, desc, eq, inArray } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies } from "@/db/tables";
@@ -184,6 +184,39 @@ export default class CompaniesDAL {
         action: Schemas.LogAction.CountCompanies,
         message,
         error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Cross-company sweep (withPlatform): the internal id of every company in one of the statuses, oldest
+  // first. Server-side only (the hourly activity rollup)
+  async getCompanyIdsByStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompanyIdsByStatusDALRequest,
+  ) {
+    const response: Schemas.CompanyIdsDALResponse = { isSuccess: false };
+
+    try {
+      const rows = await tx
+        .select({ id: companies.id })
+        .from(companies)
+        .where(inArray(companies.status, params.statuses))
+        .orderBy(asc(companies.id));
+
+      response.isSuccess = true;
+      response.message = "Company ids fetched successfully";
+      response.companyIds = rows.map((row) => row.id);
+    } catch (error) {
+      const message = "Unknown error in listing company ids";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListCompanyIdsByStatus,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

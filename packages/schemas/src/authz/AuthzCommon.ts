@@ -21,6 +21,9 @@ export enum AuthzActionEnum {
   ToolDefinitionCreate = "tool_definition.create",
   ToolDefinitionUpdate = "tool_definition.update",
   ToolDefinitionDelete = "tool_definition.delete",
+
+  // Activity rollups (operator only, on one company named by the route): rebuild a range of days by hand
+  ActivityRollupRebuild = "activity_rollup.rebuild",
 }
 
 // DEV_NOTE: Actions only an operator may perform. Everything else is company-scoped: an operator may perform it
@@ -32,6 +35,7 @@ export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.ToolDefinitionCreate,
   AuthzActionEnum.ToolDefinitionUpdate,
   AuthzActionEnum.ToolDefinitionDelete,
+  AuthzActionEnum.ActivityRollupRebuild,
 ]);
 
 // DEV_NOTE: The company a resource belongs to (internal companies.id, resolved server-side). null = no single

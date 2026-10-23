@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -316,5 +316,54 @@ export default class ModelCallsDAL {
       return sql<boolean>`true`;
     }
     return sql<boolean>`exists (select 1 from ${table} where ${idColumn} = ${id} and ${companyIdColumn} = ${companyId})`;
+  }
+
+  // DEV_NOTE: Activity rollups (M4-2): model calls made in [start, end), per chatbot (null = eval or background),
+  // task type, provider and model. Every row counts, failed and Unknown ones too (cost as it stands, 0 until a Pending
+  // row is backfilled; the hourly run rebuilds yesterday as well, so a backfill reaches the rollup). Sums are cast to
+  // text so a cost stays exact.
+  async getModelCallRollupGroups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivityRollupWindowDALRequest,
+  ) {
+    const response: Schemas.ModelCallRollupGroupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.companyId, params.companyId),
+        gte(modelCalls.createdAt, params.start),
+        lt(modelCalls.createdAt, params.end),
+      ];
+      const groups = await tx
+        .select({
+          chatbotId: modelCalls.chatbotId,
+          taskType: modelCalls.taskType,
+          provider: modelCalls.provider,
+          model: modelCalls.model,
+          count: count(),
+          inputTokens: sql<string>`coalesce(sum(${modelCalls.inputTokens}), 0)::text`,
+          outputTokens: sql<string>`coalesce(sum(${modelCalls.outputTokens}), 0)::text`,
+          costUsd: sql<string>`coalesce(sum(${modelCalls.costUsd}), 0)::numeric(18, 6)::text`,
+        })
+        .from(modelCalls)
+        .where(and(...conditions))
+        .groupBy(modelCalls.chatbotId, modelCalls.taskType, modelCalls.provider, modelCalls.model);
+
+      response.isSuccess = true;
+      response.message = "Model call rollup groups fetched successfully";
+      response.groups = groups;
+    } catch (error) {
+      const message = "Unknown error in fetching model call rollup groups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetModelCallRollupGroups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
   }
 }

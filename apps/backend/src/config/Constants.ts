@@ -36,7 +36,7 @@ export default class Constants {
   // Workers Free plan allows 5 cron triggers in total, so jobs that run less often are picked by time in
   // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
   //   every minute: outbox sweep + model_calls usage backfill + change request values purge
-  //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync
+  //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync + activity rollups (today and yesterday)
   //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
   static readonly CRON_TRIGGER = "* * * * *";
   static readonly CRON_HOURLY_MINUTE = 0;

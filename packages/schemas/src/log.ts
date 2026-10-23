@@ -17,6 +17,7 @@ export enum LogCategory {
   Knowledge = "Knowledge",
   Feedback = "Feedback",
   Action = "Action",
+  Rollup = "Rollup",
 }
 
 export enum LogAction {
@@ -42,6 +43,7 @@ export enum LogAction {
   GetCompanyByPublicId = "GetCompanyByPublicId",
   ListCompanies = "ListCompanies",
   CountCompanies = "CountCompanies",
+  ListCompanyIdsByStatus = "ListCompanyIdsByStatus",
   UpdateCompany = "UpdateCompany",
 
   // Chatbot users
@@ -274,6 +276,17 @@ export enum LogAction {
   CreateActivityLogPartition = "CreateActivityLogPartition",
   GetActivityLogDefaultHasRows = "GetActivityLogDefaultHasRows",
   EnsureActivityLogPartitions = "EnsureActivityLogPartitions",
+
+  // Activity rollups
+  LockActivityRollupDay = "LockActivityRollupDay",
+  DeleteActivityRollupDay = "DeleteActivityRollupDay",
+  CreateActivityRollups = "CreateActivityRollups",
+  GetConversationRollupGroups = "GetConversationRollupGroups",
+  GetFeedbackRollupGroups = "GetFeedbackRollupGroups",
+  GetChangeRequestRollupGroups = "GetChangeRequestRollupGroups",
+  GetModelCallRollupGroups = "GetModelCallRollupGroups",
+  RebuildActivityRollupDay = "RebuildActivityRollupDay",
+  RebuildRecentActivityRollups = "RebuildRecentActivityRollups",
 
   // Cron
   DispatchCron = "DispatchCron",
