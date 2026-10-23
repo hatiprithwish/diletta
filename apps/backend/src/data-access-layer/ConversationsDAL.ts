@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, count, eq, gte, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -304,6 +304,48 @@ export default class ConversationsDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Activity rollups (M4-2): the conversations started in [start, end), per chatbot and outcome (null while
+  // open). The rollup counts each by its start day, the one day a conversation keeps.
+  async getConversationRollupGroups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivityRollupWindowDALRequest,
+  ) {
+    const response: Schemas.ConversationRollupGroupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        gte(conversations.createdAt, params.start),
+        lt(conversations.createdAt, params.end),
+      ];
+      const groups = await tx
+        .select({
+          chatbotId: conversations.chatbotId,
+          outcome: conversations.outcome,
+          count: count(),
+        })
+        .from(conversations)
+        .where(and(...conditions))
+        .groupBy(conversations.chatbotId, conversations.outcome);
+
+      response.isSuccess = true;
+      response.message = "Conversation rollup groups fetched successfully";
+      response.groups = groups;
+    } catch (error) {
+      const message = "Unknown error in fetching conversation rollup groups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetConversationRollupGroups,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

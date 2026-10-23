@@ -14,3 +14,6 @@ export type UpdateCompanyDALRequest = FindCompanyDALRequest &
   NullableDALFields<CompanyBase & Pick<Company, "status" | "isReadOnly">>;
 
 export type GetCompaniesDALRequest = PageDALRequest & { sortColumn: CompanySortColumn };
+
+// DEV_NOTE: Cross-company sweep (withPlatform): every company whose status is one of these
+export type GetCompanyIdsByStatusDALRequest = { statuses: Company["status"][] };
