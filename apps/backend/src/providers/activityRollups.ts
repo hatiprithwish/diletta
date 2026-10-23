@@ -68,6 +68,15 @@ export default class ActivityRollupsProvider {
         group.count,
         COUNT_SCALE,
       );
+      // DEV_NOTE: The user's own undo of a verified change, apart from auto-undos (never verified)
+      if (group.action === Schemas.ChangeRequestEntityActionEnum.Undone && group.isByChatbotUser) {
+        add(
+          group.chatbotId,
+          Schemas.changeRequestUserUndoRollupMetric(group.toolName),
+          group.count,
+          COUNT_SCALE,
+        );
+      }
     }
 
     const Measure = Schemas.ActivityRollupModelCallMeasureEnum;

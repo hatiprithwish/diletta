@@ -497,6 +497,8 @@ export default class KnowledgeSourcesDAL {
     return response;
   }
 
+  // DEV_NOTE: A failed source's sync_heartbeat_at is when its sync set it Failed (setKnowledgeSourceSyncState); an
+  // admin's edit moves updated_at, never the heartbeat, so a rename doesn't read as a fresh failure
   async getFailedKnowledgeSourcesSummary(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetFailedKnowledgeSourcesSummaryDALRequest,
@@ -509,7 +511,7 @@ export default class KnowledgeSourcesDAL {
         eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Failed),
       ];
       const [result] = await tx
-        .select({ count: count(), lastFailedAt: max(knowledgeSources.updatedAt) })
+        .select({ count: count(), lastFailedAt: max(knowledgeSources.syncHeartbeatAt) })
         .from(knowledgeSources)
         .where(and(...conditions));
 

@@ -22,10 +22,12 @@ export type FeedbackRollupGroup = {
   count: number;
 };
 
+// DEV_NOTE: isByChatbotUser = the event's actor is the chatbot user (an Undone by the user's own undo, M3-7)
 export type ChangeRequestRollupGroup = {
   chatbotId: string;
   action: ActivityRollupChangeRequestAction;
   toolName: string;
+  isByChatbotUser: boolean;
   count: number;
 };
 

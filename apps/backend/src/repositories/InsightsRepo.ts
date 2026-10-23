@@ -24,7 +24,8 @@ type ResolvedChatbot =
 // DEV_NOTE: Tenant Repo — the Insights pages (M4-3): Overview, Usage, Impact. One read-only withTenant per page.
 // Numbers come from activity_rollups (rebuilt hourly, M4-2), read for one owner: the botId's chatbot, else the
 // company-wide rows; the math is pure in InsightsProvider. botId is a chatbot public id, resolved in the company
-// (unknown → 404). The current state (needs attention, live config) is read from its own tables.
+// (unknown → 404). The current state (needs attention, live config) is read from its own tables. Overview's spend card
+// is the company's billing month against the company's budget, so it reads the company-wide rows whatever the botId.
 export default class InsightsRepo {
   private db: NodePgDatabase;
   private rollupsDal: ActivityRollupsDAL;
@@ -71,8 +72,12 @@ export default class InsightsRepo {
         if (!bot.isSuccess) return bot;
         const chatbotId = bot.chatbot?.id ?? null;
 
+        // DEV_NOTE: The company-wide rows hold the billing month too, so one read covers both unless a bot is asked
+        // for: the budget is the company's, so its spend card always reads the company-wide month.
         const fromDay =
-          periods.previous.fromDay < month.fromDay ? periods.previous.fromDay : month.fromDay;
+          chatbotId === null && month.fromDay < periods.previous.fromDay
+            ? month.fromDay
+            : periods.previous.fromDay;
         const rollups = await this.rollupsDal.getActivityRollups(tx, {
           companyId,
           chatbotId,
@@ -80,6 +85,18 @@ export default class InsightsRepo {
           toDay: periods.current.toDay,
         });
         if (!rollups.isSuccess) return { isSuccess: false, message: rollups.message };
+        const index = InsightsProvider.indexReadings(rollups.readings ?? []);
+        let monthIndex = index;
+        if (chatbotId !== null) {
+          const monthRollups = await this.rollupsDal.getActivityRollups(tx, {
+            companyId,
+            chatbotId: null,
+            fromDay: month.fromDay,
+            toDay: month.toDay,
+          });
+          if (!monthRollups.isSuccess) return { isSuccess: false, message: monthRollups.message };
+          monthIndex = InsightsProvider.indexReadings(monthRollups.readings ?? []);
+        }
 
         const company = await this.companiesDal.getCompanyDetails(tx, { companyId });
         if (!company.isSuccess || !company.company) {
@@ -110,7 +127,8 @@ export default class InsightsRepo {
           message: "Overview fetched successfully",
           overview: InsightsProvider.buildOverview({
             periods,
-            readings: InsightsProvider.parseReadings(rollups.readings ?? []),
+            index,
+            monthIndex,
             month,
             budgetUsd: company.company.spendingBudget ?? Schemas.DEFAULT_SPENDING_BUDGET_USD,
             attention: {
@@ -156,7 +174,7 @@ export default class InsightsRepo {
           message: "Usage fetched successfully",
           usage: InsightsProvider.buildUsage({
             periods,
-            readings: InsightsProvider.parseReadings(rollups.readings ?? []),
+            index: InsightsProvider.indexReadings(rollups.readings ?? []),
           }),
         };
       },
@@ -194,7 +212,7 @@ export default class InsightsRepo {
           message: "Impact fetched successfully",
           impact: InsightsProvider.buildImpact({
             periods,
-            readings: InsightsProvider.parseReadings(rollups.readings ?? []),
+            index: InsightsProvider.indexReadings(rollups.readings ?? []),
             roiAssumptions: assumptions.roiAssumptions ?? [],
             writeTools: tools.tools ?? [],
             now,

@@ -6,11 +6,26 @@ import * as Schemas from "@app/schemas";
 const COST_SCALE = 6;
 const MINUTES_PER_HOUR = 60;
 
-type Reading = {
-  day: Schemas.ActivityRollupDay;
-  metric: Schemas.ParsedActivityRollupMetric;
-  value: string;
+type UseTotal = { calls: number; tokens: number; units: bigint };
+type ModelTotal = { provider: string; model: string; calls: number; units: bigint };
+
+// DEV_NOTE: One day's readings, added up once by what the pages ask of them
+type DayTotals = {
+  started: number;
+  outcomes: Map<Schemas.ConversationOutcomeIntEnum, number>;
+  ratings: Map<Schemas.FeedbackRatingIntEnum, number>;
+  changeEvents: Map<Schemas.ActivityRollupChangeRequestAction, number>;
+  // Cost the company pays on its own key (platform-paid providers left out), by scope
+  paidLiveUnits: bigint;
+  paidEvalUnits: bigint;
+  calls: number;
+  uses: Map<Schemas.InsightsUsageUseEnum, UseTotal>;
+  models: Map<string, ModelTotal>;
+  // Impact's net work per task type: answers, or a tool's verified − its user's undos
+  taskNet: Map<string, number>;
 };
+
+type DayIndex = Map<Schemas.ActivityRollupDay, DayTotals>;
 
 type MonthWindow = { fromDay: Schemas.ActivityRollupDay; toDay: Schemas.ActivityRollupDay };
 
@@ -19,45 +34,50 @@ const Measure = Schemas.ActivityRollupModelCallMeasureEnum;
 const Scope = Schemas.ActivityRollupModelCallScopeEnum;
 
 // DEV_NOTE: The Insights pages' numbers (M4-3), from one owner's activity_rollups readings (a chatbot's or the company
-// row). Pure, so every rule is unit-tested without a database:
+// row). Pure, so every rule is unit-tested without a database. The readings are indexed by day once (indexReadings),
+// then every total and day series is a sum over the days of its period, so a request stays linear in its readings.
 //   - spend = cost of the model keys whose provider the company pays (its own key); platform-paid calls (Workers AI
 //     embeddings and rerank) are shown as Included and left out, like the budget leaves them out. Live + eval.
 //   - a model call's use comes from its task type; a platform task (search) is Search in either scope, any other eval
 //     call is a test run, so the non-included rows of By use add up to the spend.
-//   - an Impact task's count is its net work: a tool's verified minus undone changes, or the conversations answered;
-//     its time = Σ per day of count × the minutes in force that day (roiMinutesOnDay). Never below 0.
+//   - an Impact task's count is its net work: a tool's verified changes minus the ones its users undid (never the
+//     auto-undos, which were never verified), or the conversations answered; its time = Σ per day of count × the
+//     minutes in force that day (roiMinutesOnDay). A task never goes below 0 over the range, and the weekly bars add up
+//     to the range's total (spreadWeeks).
 export default class InsightsProvider {
-  static parseReadings(readings: Schemas.ActivityRollupReading[]): Reading[] {
-    const parsed: Reading[] = [];
+  static indexReadings(readings: Schemas.ActivityRollupReading[]): DayIndex {
+    const index: DayIndex = new Map();
     for (const reading of readings) {
       const metric = Schemas.parseActivityRollupMetric(reading.metric);
-      if (metric) parsed.push({ day: reading.day, metric, value: reading.value });
+      if (!metric) continue;
+      const day = index.get(reading.day) ?? InsightsProvider.emptyDay();
+      index.set(reading.day, day);
+      InsightsProvider.addReading(day, metric, reading.value);
     }
-    return parsed;
+    return index;
   }
 
   static buildOverview(params: {
     periods: Schemas.InsightsPeriods;
-    readings: Reading[];
+    index: DayIndex;
+    // DEV_NOTE: The company-wide rows for the billing month: the budget is the company's, whatever bot the page shows
+    monthIndex: DayIndex;
     month: MonthWindow & { resetsOnDay: Schemas.ActivityRollupDay };
     budgetUsd: string;
     attention: Schemas.InsightsOverviewAttention;
     liveConfig: Schemas.InsightsLiveConfig | null;
   }): Schemas.InsightsOverview {
-    const { periods, readings, month } = params;
+    const { periods, index, month } = params;
     const { current, previous } = periods;
     const Outcome = Schemas.ConversationOutcomeIntEnum;
+    const Action = Schemas.ChangeRequestEntityActionEnum;
 
-    const started = (period: Schemas.InsightsPeriod) =>
-      InsightsProvider.sumCount(readings, period, (m) => m.kind === Kind.ConversationsStarted);
     const outcomes = (
       period: Schemas.InsightsPeriod,
       wanted: Schemas.ConversationOutcomeIntEnum[],
     ) =>
-      InsightsProvider.sumCount(
-        readings,
-        period,
-        (m) => m.kind === Kind.ConversationOutcome && wanted.includes(m.outcome),
+      InsightsProvider.sum(index, period, (day) =>
+        wanted.reduce((total, outcome) => total + (day.outcomes.get(outcome) ?? 0), 0),
       );
     const answeredRate = (period: Schemas.InsightsPeriod) =>
       InsightsProvider.rate(
@@ -65,21 +85,14 @@ export default class InsightsProvider {
         outcomes(period, [Outcome.Answered, Outcome.ActionDone, Outcome.Idk, Outcome.Handoff]),
       );
     const rated = (rating: Schemas.FeedbackRatingIntEnum) =>
-      InsightsProvider.sumCount(
-        readings,
-        current,
-        (m) => m.kind === Kind.Feedback && m.rating === rating,
-      );
+      InsightsProvider.sum(index, current, (day) => day.ratings.get(rating) ?? 0);
     const changeEvents = (action: Schemas.ActivityRollupChangeRequestAction) =>
-      InsightsProvider.sumCount(
-        readings,
-        current,
-        (m) => m.kind === Kind.ChangeRequest && m.action === action,
-      );
+      InsightsProvider.sum(index, current, (day) => day.changeEvents.get(action) ?? 0);
+    const started = (period: Schemas.InsightsPeriod) =>
+      InsightsProvider.sum(index, period, (day) => day.started);
 
     const up = rated(Schemas.FeedbackRatingIntEnum.Up);
     const ratedCount = up + rated(Schemas.FeedbackRatingIntEnum.Down);
-    const Action = Schemas.ChangeRequestEntityActionEnum;
 
     return {
       current,
@@ -94,17 +107,13 @@ export default class InsightsProvider {
       },
       conversationsPerDay: InsightsProvider.days(current).map((day) => ({
         day,
-        value: InsightsProvider.sumCount(
-          readings,
-          { fromDay: day, toDay: day },
-          (m) => m.kind === Kind.ConversationsStarted,
-        ),
+        value: index.get(day)?.started ?? 0,
       })),
       monthSpend: {
         fromDay: month.fromDay,
         resetsOnDay: month.resetsOnDay,
-        spentUsd: InsightsProvider.spendUsd(readings, month),
-        testRunsUsd: InsightsProvider.spendUsd(readings, month, Scope.Eval),
+        spentUsd: InsightsProvider.spendUsd(params.monthIndex, month),
+        testRunsUsd: InsightsProvider.spendUsd(params.monthIndex, month, Scope.Eval),
         budgetUsd: params.budgetUsd,
       },
       attention: params.attention,
@@ -114,25 +123,17 @@ export default class InsightsProvider {
 
   static buildUsage(params: {
     periods: Schemas.InsightsPeriods;
-    readings: Reading[];
+    index: DayIndex;
   }): Schemas.InsightsUsage {
-    const { readings } = params;
+    const { index } = params;
     const { current, previous } = params.periods;
 
     const calls = (period: Schemas.InsightsPeriod) =>
-      InsightsProvider.sumCount(
-        readings,
-        period,
-        (m) => m.kind === Kind.ModelCallModel && m.measure === Measure.Count,
-      );
+      InsightsProvider.sum(index, period, (day) => day.calls);
     const costPerConversation = (period: Schemas.InsightsPeriod) => {
-      const conversations = InsightsProvider.sumCount(
-        readings,
-        period,
-        (m) => m.kind === Kind.ConversationsStarted,
-      );
+      const conversations = InsightsProvider.sum(index, period, (day) => day.started);
       if (conversations === 0) return null;
-      const live = InsightsProvider.spendUnits(readings, period, Scope.Live);
+      const live = InsightsProvider.sumUnits(index, period, (day) => day.paidLiveUnits);
       // DEV_NOTE: Rounded half up to the micro-dollar
       const units = (live * 2n + BigInt(conversations)) / (BigInt(conversations) * 2n);
       return ActivityRollupsProvider.fromUnits(units, COST_SCALE);
@@ -142,9 +143,9 @@ export default class InsightsProvider {
       current,
       previous,
       spend: {
-        valueUsd: InsightsProvider.spendUsd(readings, current),
-        previousValueUsd: InsightsProvider.spendUsd(readings, previous),
-        testRunsUsd: InsightsProvider.spendUsd(readings, current, Scope.Eval),
+        valueUsd: InsightsProvider.spendUsd(index, current),
+        previousValueUsd: InsightsProvider.spendUsd(index, previous),
+        testRunsUsd: InsightsProvider.spendUsd(index, current, Scope.Eval),
       },
       modelCalls: { value: calls(current), previousValue: calls(previous) },
       costPerConversation: {
@@ -153,16 +154,16 @@ export default class InsightsProvider {
       },
       spendPerDay: InsightsProvider.days(current).map((day) => ({
         day,
-        costUsd: InsightsProvider.spendUsd(readings, { fromDay: day, toDay: day }),
+        costUsd: InsightsProvider.spendUsd(index, { fromDay: day, toDay: day }),
       })),
-      byUse: InsightsProvider.byUse(readings, current),
-      byModel: InsightsProvider.byModel(readings, current),
+      byUse: InsightsProvider.byUse(index, current),
+      byModel: InsightsProvider.byModel(index, current),
     };
   }
 
   static buildImpact(params: {
     periods: Schemas.InsightsPeriods;
-    readings: Reading[];
+    index: DayIndex;
     roiAssumptions: Pick<
       Schemas.RoiAssumption,
       "taskType" | "manualMinutes" | "effectiveFrom" | "createdAt"
@@ -170,15 +171,18 @@ export default class InsightsProvider {
     writeTools: Pick<Schemas.ToolDefinition, "name" | "description">[];
     now: number;
   }): Schemas.InsightsImpact {
-    const { readings, periods, now } = params;
+    const { index, periods, now } = params;
     const { current, previous } = periods;
     const today = Schemas.activityRollupDayKey(now);
 
-    // Every task: answers, every write tool, and any tool whose changes show in the readings (renamed or retired since)
+    // Every task: answers, every write tool, and any tool whose work shows in the readings (renamed or retired since)
     const descriptions = new Map(params.writeTools.map((tool) => [tool.name, tool.description]));
     const toolNames = new Set(descriptions.keys());
-    for (const reading of readings) {
-      if (reading.metric.kind === Kind.ChangeRequest) toolNames.add(reading.metric.toolName);
+    for (const day of index.values()) {
+      for (const taskType of day.taskNet.keys()) {
+        const toolName = Schemas.roiTaskToolName(taskType);
+        if (toolName !== null) toolNames.add(toolName);
+      }
     }
     const tasks: { taskType: string; toolName: string | null }[] = [
       { taskType: Schemas.ROI_ANSWERS_TASK_TYPE, toolName: null },
@@ -187,53 +191,27 @@ export default class InsightsProvider {
         .map((name) => ({ taskType: Schemas.roiToolTaskType(name), toolName: name })),
     ];
 
-    // Net count per (task, day)
-    const net = new Map<string, Map<Schemas.ActivityRollupDay, number>>();
-    const addNet = (taskType: string, day: Schemas.ActivityRollupDay, count: number) => {
-      const byDay = net.get(taskType) ?? new Map<Schemas.ActivityRollupDay, number>();
-      byDay.set(day, (byDay.get(day) ?? 0) + count);
-      net.set(taskType, byDay);
-    };
-    for (const { day, metric, value } of readings) {
-      if (
-        metric.kind === Kind.ConversationOutcome &&
-        metric.outcome === Schemas.ConversationOutcomeIntEnum.Answered
-      ) {
-        addNet(Schemas.ROI_ANSWERS_TASK_TYPE, day, Number(value));
-      }
-      if (metric.kind === Kind.ChangeRequest) {
-        const sign =
-          metric.action === Schemas.ChangeRequestEntityActionEnum.Verified
-            ? 1
-            : metric.action === Schemas.ChangeRequestEntityActionEnum.Undone
-              ? -1
-              : 0;
-        addNet(Schemas.roiToolTaskType(metric.toolName), day, sign * Number(value));
-      }
-    }
-
     const rowsByTask = new Map<string, typeof params.roiAssumptions>();
     for (const row of params.roiAssumptions) {
       rowsByTask.set(row.taskType, [...(rowsByTask.get(row.taskType) ?? []), row]);
     }
-    // Hours a task saved on the days of a period, before the floor at 0
-    const rawHours = (taskType: string, period: Schemas.InsightsPeriod) => {
-      const rows = rowsByTask.get(taskType) ?? [];
-      let hours = 0;
-      for (const [day, count] of net.get(taskType) ?? []) {
-        if (day < period.fromDay || day > period.toDay) continue;
-        const minutes = Schemas.roiMinutesOnDay(rows, day);
-        if (minutes !== null) hours += (count * Number(minutes)) / MINUTES_PER_HOUR;
-      }
-      return hours;
+    // Hours a task saved on one day (negative when its users undid more than it did that day)
+    const dayHours = (taskType: string, day: Schemas.ActivityRollupDay) => {
+      const count = index.get(day)?.taskNet.get(taskType) ?? 0;
+      if (count === 0) return 0;
+      const minutes = Schemas.roiMinutesOnDay(rowsByTask.get(taskType) ?? [], day);
+      return minutes === null ? 0 : (count * Number(minutes)) / MINUTES_PER_HOUR;
     };
-    const netCount = (taskType: string, period: Schemas.InsightsPeriod) => {
-      let total = 0;
-      for (const [day, count] of net.get(taskType) ?? []) {
-        if (day >= period.fromDay && day <= period.toDay) total += count;
-      }
-      return Math.max(0, total);
-    };
+    const taskHours = (taskType: string, period: Schemas.InsightsPeriod) =>
+      Math.max(
+        0,
+        InsightsProvider.days(period).reduce((total, day) => total + dayHours(taskType, day), 0),
+      );
+    const netCount = (taskType: string, period: Schemas.InsightsPeriod) =>
+      Math.max(
+        0,
+        InsightsProvider.sum(index, period, (day) => day.taskNet.get(taskType) ?? 0),
+      );
 
     const impactTasks: Schemas.InsightsImpactTask[] = tasks
       .map(({ taskType, toolName }) => ({
@@ -247,95 +225,213 @@ export default class InsightsProvider {
             : (descriptions.get(toolName) ?? toolName),
         count: netCount(taskType, current),
         manualMinutes: Schemas.roiMinutesOnDay(rowsByTask.get(taskType) ?? [], today),
-        hoursSaved: InsightsProvider.roundHours(Math.max(0, rawHours(taskType, current))),
+        hoursSaved: InsightsProvider.roundHours(taskHours(taskType, current)),
       }))
       .sort((a, b) => b.hoursSaved - a.hoursSaved || b.count - a.count);
 
     const totalHours = (period: Schemas.InsightsPeriod) =>
-      InsightsProvider.roundHours(
-        tasks.reduce((total, task) => total + Math.max(0, rawHours(task.taskType, period)), 0),
-      );
-    const hoursSaved = totalHours(current);
+      tasks.reduce((total, task) => total + taskHours(task.taskType, period), 0);
+    const hoursSaved = InsightsProvider.roundHours(totalHours(current));
     const workingDays = Schemas.insightsWorkingDays(current, now);
 
-    const weekStarts = [...new Set(InsightsProvider.days(current).map(Schemas.insightsWeekStart))];
-    const hoursPerWeek = weekStarts.map((weekStartDay) => {
-      const weekEnd = Schemas.activityRollupAddDays(weekStartDay, 6);
-      // DEV_NOTE: The week cut to the range, so a week the range starts or ends in counts only its days in range
-      const week = {
-        fromDay: weekStartDay < current.fromDay ? current.fromDay : weekStartDay,
-        toDay: weekEnd > current.toDay ? current.toDay : weekEnd,
-      };
-      return { weekStartDay, hours: totalHours(week) };
-    });
+    // DEV_NOTE: Weeks cut to the range. Each task's weeks are spread so they add up to its range total, then summed.
+    const weeks = InsightsProvider.weeks(current);
+    const weekHours = weeks.map(() => 0);
+    for (const task of tasks) {
+      const raw = weeks.map((week) =>
+        InsightsProvider.days(week).reduce((total, day) => total + dayHours(task.taskType, day), 0),
+      );
+      InsightsProvider.spreadWeeks(raw).forEach((hours, at) => {
+        weekHours[at] = (weekHours[at] ?? 0) + hours;
+      });
+    }
 
     return {
       current,
       previous,
-      hoursSaved: { value: hoursSaved, previousValue: totalHours(previous) },
+      hoursSaved: {
+        value: hoursSaved,
+        previousValue: InsightsProvider.roundHours(totalHours(previous)),
+      },
       tasksDone: impactTasks.reduce((total, task) => total + task.count, 0),
       workingDays,
       hoursPerWorkingDay:
         workingDays === 0 ? null : InsightsProvider.roundHours(hoursSaved / workingDays),
-      hoursPerWeek,
+      hoursPerWeek: weeks.map((week, at) => ({
+        weekStartDay: Schemas.insightsWeekStart(week.fromDay),
+        hours: InsightsProvider.roundHours(weekHours[at] ?? 0),
+      })),
       tasks: impactTasks,
     };
   }
 
-  // ─── Helpers ────────────────────────────────────────────────────────────────
-
-  private static inPeriod(day: Schemas.ActivityRollupDay, period: Schemas.InsightsPeriod) {
-    return day >= period.fromDay && day <= period.toDay;
+  // DEV_NOTE: One task's hours per week, made non-negative with the same total as the range (never below 0). A week
+  // that lost hours (users undid work done the week before) takes them from the weeks before it; what is left over at
+  // the start (undos of work from before the range) comes off the weeks after. Σ result = max(0, Σ hours).
+  static spreadWeeks(hours: number[]): number[] {
+    const spread = [...hours];
+    for (let at = spread.length - 1; at > 0; at -= 1) {
+      if (spread[at]! < 0) {
+        spread[at - 1]! += spread[at]!;
+        spread[at] = 0;
+      }
+    }
+    for (let at = 0; at < spread.length - 1; at += 1) {
+      if (spread[at]! < 0) {
+        spread[at + 1]! += spread[at]!;
+        spread[at] = 0;
+      }
+    }
+    if (spread.length > 0 && spread[spread.length - 1]! < 0) spread[spread.length - 1] = 0;
+    return spread;
   }
+
+  // ─── Index ──────────────────────────────────────────────────────────────────
+
+  private static emptyDay(): DayTotals {
+    return {
+      started: 0,
+      outcomes: new Map(),
+      ratings: new Map(),
+      changeEvents: new Map(),
+      paidLiveUnits: 0n,
+      paidEvalUnits: 0n,
+      calls: 0,
+      uses: new Map(),
+      models: new Map(),
+      taskNet: new Map(),
+    };
+  }
+
+  private static addReading(
+    day: DayTotals,
+    metric: Schemas.ParsedActivityRollupMetric,
+    value: string,
+  ): void {
+    const addTo = <K>(map: Map<K, number>, key: K, count: number) =>
+      map.set(key, (map.get(key) ?? 0) + count);
+
+    switch (metric.kind) {
+      case Kind.ConversationsStarted:
+        day.started += Number(value);
+        return;
+      case Kind.ConversationOutcome:
+        addTo(day.outcomes, metric.outcome, Number(value));
+        if (metric.outcome === Schemas.ConversationOutcomeIntEnum.Answered) {
+          addTo(day.taskNet, Schemas.ROI_ANSWERS_TASK_TYPE, Number(value));
+        }
+        return;
+      case Kind.Feedback:
+        addTo(day.ratings, metric.rating, Number(value));
+        return;
+      case Kind.ChangeRequest:
+        addTo(day.changeEvents, metric.action, Number(value));
+        if (metric.action === Schemas.ChangeRequestEntityActionEnum.Verified) {
+          addTo(day.taskNet, Schemas.roiToolTaskType(metric.toolName), Number(value));
+        }
+        return;
+      case Kind.ChangeRequestUserUndone:
+        addTo(day.taskNet, Schemas.roiToolTaskType(metric.toolName), -Number(value));
+        return;
+      case Kind.ModelCallTask: {
+        const use = InsightsProvider.useOf(metric.scope, metric.taskType);
+        if (use === null) return;
+        const total = day.uses.get(use) ?? { calls: 0, tokens: 0, units: 0n };
+        day.uses.set(use, total);
+        if (metric.measure === Measure.Count) total.calls += Number(value);
+        if (metric.measure === Measure.InputTokens || metric.measure === Measure.OutputTokens) {
+          total.tokens += Number(value);
+        }
+        if (metric.measure === Measure.CostUsd) {
+          total.units += ActivityRollupsProvider.toUnits(value, COST_SCALE);
+        }
+        return;
+      }
+      case Kind.ModelCallModel: {
+        const key = `${metric.provider}/${metric.model}`;
+        const total = day.models.get(key) ?? {
+          provider: metric.provider,
+          model: metric.model,
+          calls: 0,
+          units: 0n,
+        };
+        day.models.set(key, total);
+        if (metric.measure === Measure.Count) {
+          total.calls += Number(value);
+          day.calls += Number(value);
+        }
+        if (metric.measure === Measure.CostUsd) {
+          const units = ActivityRollupsProvider.toUnits(value, COST_SCALE);
+          total.units += units;
+          if (!Schemas.isPlatformPaidProvider(metric.provider)) {
+            if (metric.scope === Scope.Eval) day.paidEvalUnits += units;
+            else day.paidLiveUnits += units;
+          }
+        }
+        return;
+      }
+    }
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
 
   private static days(period: Schemas.InsightsPeriod): Schemas.ActivityRollupDay[] {
     return Schemas.activityRollupDays(period.fromDay, period.toDay);
   }
 
-  private static sumCount(
-    readings: Reading[],
+  // The weeks (Monday start) a period covers, each cut to the period
+  private static weeks(period: Schemas.InsightsPeriod): Schemas.InsightsPeriod[] {
+    const weeks: Schemas.InsightsPeriod[] = [];
+    let fromDay = period.fromDay;
+    while (fromDay <= period.toDay) {
+      const weekEnd = Schemas.activityRollupAddDays(Schemas.insightsWeekStart(fromDay), 6);
+      const toDay = weekEnd < period.toDay ? weekEnd : period.toDay;
+      weeks.push({ fromDay, toDay });
+      fromDay = Schemas.activityRollupAddDays(toDay, 1);
+    }
+    return weeks;
+  }
+
+  private static sum(
+    index: DayIndex,
     period: Schemas.InsightsPeriod,
-    match: (metric: Schemas.ParsedActivityRollupMetric) => boolean,
+    pick: (day: DayTotals) => number,
   ): number {
     let total = 0;
-    for (const reading of readings) {
-      if (InsightsProvider.inPeriod(reading.day, period) && match(reading.metric)) {
-        total += Number(reading.value);
-      }
+    for (const day of InsightsProvider.days(period)) {
+      const totals = index.get(day);
+      if (totals) total += pick(totals);
     }
     return total;
   }
 
-  // Cost the company pays (its own key), in micros; scope = one scope only, else live + eval
-  private static spendUnits(
-    readings: Reading[],
+  private static sumUnits(
+    index: DayIndex,
     period: Schemas.InsightsPeriod,
-    scope?: Schemas.ActivityRollupModelCallScopeEnum,
+    pick: (day: DayTotals) => bigint,
   ): bigint {
-    let units = 0n;
-    for (const { day, metric, value } of readings) {
-      if (
-        metric.kind === Kind.ModelCallModel &&
-        metric.measure === Measure.CostUsd &&
-        !Schemas.isPlatformPaidProvider(metric.provider) &&
-        (scope === undefined || metric.scope === scope) &&
-        InsightsProvider.inPeriod(day, period)
-      ) {
-        units += ActivityRollupsProvider.toUnits(value, COST_SCALE);
-      }
+    let total = 0n;
+    for (const day of InsightsProvider.days(period)) {
+      const totals = index.get(day);
+      if (totals) total += pick(totals);
     }
-    return units;
+    return total;
   }
 
+  // Cost the company pays (its own key); scope = one scope only, else live + eval
   private static spendUsd(
-    readings: Reading[],
+    index: DayIndex,
     period: Schemas.InsightsPeriod,
     scope?: Schemas.ActivityRollupModelCallScopeEnum,
   ): string {
-    return ActivityRollupsProvider.fromUnits(
-      InsightsProvider.spendUnits(readings, period, scope),
-      COST_SCALE,
+    const units = InsightsProvider.sumUnits(index, period, (day) =>
+      scope === Scope.Eval
+        ? day.paidEvalUnits
+        : scope === Scope.Live
+          ? day.paidLiveUnits
+          : day.paidLiveUnits + day.paidEvalUnits,
     );
+    return ActivityRollupsProvider.fromUnits(units, COST_SCALE);
   }
 
   private static useOf(
@@ -349,26 +445,18 @@ export default class InsightsProvider {
   }
 
   private static byUse(
-    readings: Reading[],
+    index: DayIndex,
     period: Schemas.InsightsPeriod,
   ): Schemas.InsightsUsageRow[] {
-    const totals = new Map<
-      Schemas.InsightsUsageUseEnum,
-      { calls: number; tokens: number; units: bigint }
-    >();
-    for (const { day, metric, value } of readings) {
-      if (metric.kind !== Kind.ModelCallTask || !InsightsProvider.inPeriod(day, period)) continue;
-      const use = InsightsProvider.useOf(metric.scope, metric.taskType);
-      if (use === null) continue;
-      const total = totals.get(use) ?? { calls: 0, tokens: 0, units: 0n };
-      if (metric.measure === Measure.Count) total.calls += Number(value);
-      if (metric.measure === Measure.InputTokens || metric.measure === Measure.OutputTokens) {
-        total.tokens += Number(value);
+    const totals = new Map<Schemas.InsightsUsageUseEnum, UseTotal>();
+    for (const day of InsightsProvider.days(period)) {
+      for (const [use, dayTotal] of index.get(day)?.uses ?? []) {
+        const total = totals.get(use) ?? { calls: 0, tokens: 0, units: 0n };
+        total.calls += dayTotal.calls;
+        total.tokens += dayTotal.tokens;
+        total.units += dayTotal.units;
+        totals.set(use, total);
       }
-      if (metric.measure === Measure.CostUsd) {
-        total.units += ActivityRollupsProvider.toUnits(value, COST_SCALE);
-      }
-      totals.set(use, total);
     }
 
     return Object.values(Schemas.InsightsUsageUseEnum)
@@ -387,27 +475,17 @@ export default class InsightsProvider {
   }
 
   private static byModel(
-    readings: Reading[],
+    index: DayIndex,
     period: Schemas.InsightsPeriod,
   ): Schemas.InsightsModelRow[] {
-    const totals = new Map<
-      string,
-      { provider: string; model: string; calls: number; units: bigint }
-    >();
-    for (const { day, metric, value } of readings) {
-      if (metric.kind !== Kind.ModelCallModel || !InsightsProvider.inPeriod(day, period)) continue;
-      const key = `${metric.provider}/${metric.model}`;
-      const total = totals.get(key) ?? {
-        provider: metric.provider,
-        model: metric.model,
-        calls: 0,
-        units: 0n,
-      };
-      if (metric.measure === Measure.Count) total.calls += Number(value);
-      if (metric.measure === Measure.CostUsd) {
-        total.units += ActivityRollupsProvider.toUnits(value, COST_SCALE);
+    const totals = new Map<string, ModelTotal>();
+    for (const day of InsightsProvider.days(period)) {
+      for (const [key, dayTotal] of index.get(day)?.models ?? []) {
+        const total = totals.get(key) ?? { ...dayTotal, calls: 0, units: 0n };
+        total.calls += dayTotal.calls;
+        total.units += dayTotal.units;
+        totals.set(key, total);
       }
-      totals.set(key, total);
     }
 
     return [...totals.values()]

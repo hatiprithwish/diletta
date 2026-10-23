@@ -61,6 +61,13 @@ export function changeRequestRollupMetric(
   return `change_requests.${action}.tool.${toolName}`;
 }
 
+// DEV_NOTE: The undos of verified changes only (M4-3, Impact). A user's undo (M3-7) takes a Verified change back and its
+// Undone event is the chatbot user's; an auto-undo (M3-6) ends a Mismatch that was never verified and its event is the
+// system's. changeRequestRollupMetric(Undone) counts both; this one only the first, so verified − this = work kept.
+export function changeRequestUserUndoRollupMetric(toolName: string): string {
+  return `change_requests.user_undone.tool.${toolName}`;
+}
+
 export enum ActivityRollupModelCallMeasureEnum {
   Count = "count",
   InputTokens = "input_tokens",
@@ -167,6 +174,7 @@ export enum ActivityRollupMetricKindEnum {
   ConversationOutcome = "conversation_outcome",
   Feedback = "feedback",
   ChangeRequest = "change_request",
+  ChangeRequestUserUndone = "change_request_user_undone",
   ModelCallTask = "model_call_task",
   ModelCallModel = "model_call_model",
 }
@@ -180,6 +188,7 @@ export type ParsedActivityRollupMetric =
       action: ActivityRollupChangeRequestAction;
       toolName: string;
     }
+  | { kind: ActivityRollupMetricKindEnum.ChangeRequestUserUndone; toolName: string }
   | {
       kind: ActivityRollupMetricKindEnum.ModelCallTask;
       scope: ActivityRollupModelCallScopeEnum;
@@ -257,6 +266,14 @@ export function parseActivityRollupMetric(metric: string): ParsedActivityRollupM
   }
   const rating = RATING_BY_KEY.get(metric);
   if (rating !== undefined) return { kind: ActivityRollupMetricKindEnum.Feedback, rating };
+
+  const userUndonePrefix = changeRequestUserUndoRollupMetric("");
+  if (metric.startsWith(userUndonePrefix)) {
+    const toolName = metric.slice(userUndonePrefix.length);
+    return toolName
+      ? { kind: ActivityRollupMetricKindEnum.ChangeRequestUserUndone, toolName }
+      : null;
+  }
 
   if (metric.startsWith("change_requests.")) {
     const rest = metric.slice("change_requests.".length);

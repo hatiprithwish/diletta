@@ -11,6 +11,7 @@ import {
   ActivityRollupModelCallMeasureEnum,
   ActivityRollupModelCallScopeEnum,
   changeRequestRollupMetric,
+  changeRequestUserUndoRollupMetric,
   conversationOutcomeMetric,
   modelCallModelRollupMetric,
   modelCallTaskRollupMetric,
@@ -121,6 +122,10 @@ describe("activity rollup metric keys, read back", () => {
       action: ChangeRequestEntityActionEnum.NeedsHuman,
       toolName: "update_record",
     });
+    expect(parseActivityRollupMetric(changeRequestUserUndoRollupMetric("update_record"))).toEqual({
+      kind: ActivityRollupMetricKindEnum.ChangeRequestUserUndone,
+      toolName: "update_record",
+    });
     expect(parseActivityRollupMetric(modelCallTaskRollupMetric(Eval, Count, "eval.judge"))).toEqual(
       {
         kind: ActivityRollupMetricKindEnum.ModelCallTask,
@@ -152,6 +157,7 @@ describe("activity rollup metric keys, read back", () => {
       "conversations.outcome.unknown",
       "change_requests.proposed.tool.update_record",
       "change_requests.verified.tool.",
+      "change_requests.user_undone.tool.",
       "model_calls.latency.task.qa.answer",
       "model_calls.count.model.anthropic",
       "model_calls.count.other.x",

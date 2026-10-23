@@ -208,6 +208,7 @@ describe("Overview", () => {
     expect(screen.getByText("$412.80")).toBeInTheDocument();
     expect(screen.getByText("of $1,000.00")).toBeInTheDocument();
     expect(screen.getByText("Resets 1 Nov")).toBeInTheDocument();
+    expect(screen.getByText("Spend this month")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /1 change needs a person/ })).toHaveAttribute(
       "href",
       "/changes",
@@ -284,6 +285,11 @@ describe("Impact", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("reschedule_inspection")).toHaveClass("font-mono");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit time per task for Answer how-to questions" }),
+    );
+    expect(screen.getByText(/earlier days keep the time they had/)).toBeInTheDocument();
   });
 
   it("saves a task's minutes and refreshes the page", async () => {
@@ -301,6 +307,10 @@ describe("Impact", () => {
     renderPage("/impact");
 
     await userEvent.click(await screen.findByRole("button", { name: "Set time" }));
+    // DEV_NOTE: A first value also covers earlier days
+    expect(
+      screen.getByText(/This time also counts for earlier days, until you change it\./),
+    ).toBeInTheDocument();
     const input = screen.getByLabelText("Minutes");
     await userEvent.type(input, "2.25");
     expect(await screen.findByText(/at most one decimal/)).toBeInTheDocument();

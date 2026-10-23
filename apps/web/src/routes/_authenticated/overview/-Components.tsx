@@ -80,7 +80,7 @@ export function MonthSpend({ overview }: Schemas.DashboardOverviewSectionProps) 
 
   return (
     <section className="flex min-w-0 flex-col gap-3">
-      <SectionHeader title="Spend this period">
+      <SectionHeader title="Spend this month">
         <Link to="/usage" className="text-caption text-brand-text hover:text-foreground">
           Usage
         </Link>

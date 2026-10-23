@@ -150,7 +150,8 @@ function minutesIssue(value: string): string | undefined {
     : `Enter 0 to ${Schemas.ROI_MANUAL_MINUTES_MAX} minutes, with at most one decimal.`;
 }
 
-// DEV_NOTE: A task's minutes per task. A save adds a new value in force from today: earlier days keep their minutes.
+// DEV_NOTE: A task's minutes per task. A save adds a new value in force from today: earlier days keep their minutes,
+// except on a task's first save, whose value also covers the days before it (roiMinutesOnDay)
 function RoiEditDialog({ task }: Schemas.DashboardRoiEditProps) {
   const [isOpen, setIsOpen] = useState(false);
   const createRoiAssumption = useCreateRoiAssumption();
@@ -203,8 +204,10 @@ function RoiEditDialog({ task }: Schemas.DashboardRoiEditProps) {
           <DialogHeader>
             <DialogTitle>Time per task</DialogTitle>
             <DialogDescription>
-              How long “{task.label}” takes a person by hand. The new time counts from today;
-              earlier days keep the time they had.
+              How long “{task.label}” takes a person by hand.{" "}
+              {task.manualMinutes === null
+                ? "This time also counts for earlier days, until you change it."
+                : "The new time counts from today; earlier days keep the time they had."}
             </DialogDescription>
           </DialogHeader>
           <form.Field

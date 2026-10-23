@@ -560,6 +560,8 @@ describe("ActivityRollupsRepo.rebuildDays and rebuildRecent", () => {
     expect(await readRollups(companyA, NEXT_DAY)).toMatchObject({
       [`${chatbot1}|conversations.started`]: "1",
       [`${chatbot1}|change_requests.undone.tool.${toolName}`]: "1",
+      // DEV_NOTE: The chatbot user's own undo of a verified change (M4-3), apart from auto-undos
+      [`${chatbot1}|change_requests.user_undone.tool.${toolName}`]: "1",
       [`${chatbot1}|${qa("cost_usd")}`]: "9.000000",
     });
   });

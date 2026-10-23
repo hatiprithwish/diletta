@@ -287,24 +287,25 @@ beforeAll(async () => {
       entityId: string,
       entityAction: Schemas.ChangeRequestEntityActionEnum,
       createdAt: Date,
+      actorType = Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
     ) => ({
       companyId: companyA,
-      actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+      actorType,
       actorId: user!.id,
       entityType: Schemas.CHANGE_REQUEST_ENTITY_TYPE,
       entityId,
       entityAction,
       createdAt,
     });
-    const { Verified, NeedsHuman, Proposed } = Schemas.ChangeRequestEntityActionEnum;
-    await ownerDb
-      .insert(activityLog)
-      .values([
-        event(changes[0]!.id, Proposed, at("09:01:00")),
-        event(changes[0]!.id, Verified, at("09:02:00")),
-        event(changes[1]!.id, Verified, at("10:02:00")),
-        event(changes[2]!.id, NeedsHuman, at("11:02:00")),
-      ]);
+    const { Verified, NeedsHuman, Proposed, Undone } = Schemas.ChangeRequestEntityActionEnum;
+    await ownerDb.insert(activityLog).values([
+      event(changes[0]!.id, Proposed, at("09:01:00")),
+      event(changes[0]!.id, Verified, at("09:02:00")),
+      event(changes[1]!.id, Verified, at("10:02:00")),
+      // DEV_NOTE: An auto-undo (the system's): counted as undone, never taken off Impact's verified work
+      event(changes[2]!.id, Undone, at("11:01:00"), Schemas.ActivityLogActorTypeIntEnum.System),
+      event(changes[2]!.id, NeedsHuman, at("11:02:00")),
+    ]);
 
     await ownerDb.insert(qualityIssues).values({
       publicId: Utility.generatePublicId(),
@@ -320,6 +321,9 @@ beforeAll(async () => {
       url: "https://help.example.com/a",
       syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily,
       status: Schemas.KnowledgeSourceStatusIntEnum.Failed,
+      // DEV_NOTE: The sync set it Failed an hour ago; an admin's edit since moved only updated_at
+      syncHeartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
+      updatedAt: new Date(),
     });
 
     const modelCall = (values: {
@@ -496,6 +500,7 @@ describe("GET /dashboard/insights/overview", () => {
   it("matches the sample day's conversations and change events, and the state now", async () => {
     const verified = await rawChangeEvents(Schemas.ChangeRequestEntityActionEnum.Verified);
     const needsHuman = await rawChangeEvents(Schemas.ChangeRequestEntityActionEnum.NeedsHuman);
+    const undone = await rawChangeEvents(Schemas.ChangeRequestEntityActionEnum.Undone);
     const { status, body } = await call<Schemas.GetInsightsOverviewApiResponse>(
       "GET",
       "/dashboard/insights/overview?range=7d",
@@ -504,7 +509,8 @@ describe("GET /dashboard/insights/overview", () => {
     expect(status).toBe(200);
     const overview = body.overview!;
     expect(overview.conversationsPerDay.find((day) => day.day === DAY)?.value).toBe(3);
-    expect(overview.changes).toEqual({ verified, undone: 0, needsHuman });
+    expect(overview.changes).toEqual({ verified, undone, needsHuman });
+    expect(undone).toBe(1);
     expect(verified).toBe(2);
     expect(overview.answeredRate.value).toBeCloseTo(2 / 3);
     expect(overview.monthSpend.budgetUsd).toBe("25.000000");
@@ -514,7 +520,10 @@ describe("GET /dashboard/insights/overview", () => {
       openUserIssueCount: 0,
       failedSourceCount: 1,
     });
-    expect(overview.attention.lastSourceFailedAt).not.toBeNull();
+    // DEV_NOTE: When the sync failed, not when the source was last edited
+    expect(Date.now() - Date.parse(overview.attention.lastSourceFailedAt!)).toBeGreaterThan(
+      59 * 60 * 1000,
+    );
     expect(overview.liveConfig).toEqual({
       chatbotName: "Support",
       published: {
@@ -525,13 +534,20 @@ describe("GET /dashboard/insights/overview", () => {
     });
   });
 
-  it("scopes the state now to the botId's conversations", async () => {
+  it("scopes the state now to the botId's conversations, and keeps the spend card company-wide", async () => {
+    const company = await call<Schemas.GetInsightsOverviewApiResponse>(
+      "GET",
+      "/dashboard/insights/overview",
+      { as: adminA },
+    );
     const { body } = await call<Schemas.GetInsightsOverviewApiResponse>(
       "GET",
       `/dashboard/insights/overview?botId=${chatbot1PublicId}`,
       { as: adminA },
     );
     expect(body.overview!.attention).toMatchObject({ needsHumanCount: 0, openIssueCount: 0 });
+    // DEV_NOTE: The budget is the company's, so its card shows the company's month, not one bot's
+    expect(body.overview!.monthSpend).toEqual(company.body.overview!.monthSpend);
   });
 
   it("has no live config for a company without a default bot", async () => {

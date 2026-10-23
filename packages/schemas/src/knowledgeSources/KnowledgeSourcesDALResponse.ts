@@ -14,8 +14,8 @@ export interface KnowledgeSourceIdsDALResponse extends ApiResponse {
   knowledgeSourceIds?: string[];
 }
 
-// DEV_NOTE: lastFailedAt = the newest updated_at of a failed source (a sync's failure is its last write); null when
-// none failed
+// DEV_NOTE: lastFailedAt = the newest sync_heartbeat_at of a failed source (set when its sync failed, never by an
+// admin's edit); null when none failed
 export interface FailedKnowledgeSourcesSummaryDALResponse extends ApiResponse {
   failedCount?: number;
   lastFailedAt?: Date | null;

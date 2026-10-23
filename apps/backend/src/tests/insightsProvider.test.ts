@@ -57,7 +57,7 @@ const attention: Schemas.InsightsOverviewAttention = {
 };
 
 describe("InsightsProvider.buildOverview", () => {
-  const readings = InsightsProvider.parseReadings(
+  const readings = InsightsProvider.indexReadings(
     readingsOf({
       "2026-10-18": {
         conversations: [{ chatbotId: "1", outcome: Outcome.Answered, count: 1 }],
@@ -73,9 +73,27 @@ describe("InsightsProvider.buildOverview", () => {
           { chatbotId: "1", rating: Schemas.FeedbackRatingIntEnum.Down, count: 1 },
         ],
         changeRequests: [
-          { chatbotId: "1", action: Action.Verified, toolName: "update_record", count: 4 },
-          { chatbotId: "1", action: Action.Undone, toolName: "update_record", count: 1 },
-          { chatbotId: "1", action: Action.NeedsHuman, toolName: "update_record", count: 1 },
+          {
+            chatbotId: "1",
+            action: Action.Verified,
+            toolName: "update_record",
+            isByChatbotUser: false,
+            count: 4,
+          },
+          {
+            chatbotId: "1",
+            action: Action.Undone,
+            toolName: "update_record",
+            isByChatbotUser: true,
+            count: 1,
+          },
+          {
+            chatbotId: "1",
+            action: Action.NeedsHuman,
+            toolName: "update_record",
+            isByChatbotUser: false,
+            count: 1,
+          },
         ],
       },
       "2026-10-22": {
@@ -95,7 +113,8 @@ describe("InsightsProvider.buildOverview", () => {
   );
   const overview = InsightsProvider.buildOverview({
     periods,
-    readings,
+    index: readings,
+    monthIndex: readings,
     month: { fromDay: "2026-10-01", toDay: "2026-10-22", resetsOnDay: "2026-11-01" },
     budgetUsd: "10.000000",
     attention,
@@ -133,7 +152,8 @@ describe("InsightsProvider.buildOverview", () => {
   it("has no rate with nothing to divide by", () => {
     const empty = InsightsProvider.buildOverview({
       periods,
-      readings: [],
+      index: new Map(),
+      monthIndex: new Map(),
       month: { fromDay: "2026-10-01", toDay: "2026-10-22", resetsOnDay: "2026-11-01" },
       budgetUsd: "10.000000",
       attention,
@@ -145,7 +165,7 @@ describe("InsightsProvider.buildOverview", () => {
 });
 
 describe("InsightsProvider.buildUsage", () => {
-  const readings = InsightsProvider.parseReadings(
+  const readings = InsightsProvider.indexReadings(
     readingsOf({
       "2026-10-19": { modelCalls: [modelCall({ costUsd: "1.000000" })] },
       "2026-10-20": {
@@ -181,7 +201,7 @@ describe("InsightsProvider.buildUsage", () => {
       },
     }),
   );
-  const usage = InsightsProvider.buildUsage({ periods, readings });
+  const usage = InsightsProvider.buildUsage({ periods, index: readings });
 
   it("totals spend exactly, without platform-paid calls", () => {
     expect(usage.spend).toEqual({
@@ -266,7 +286,7 @@ describe("InsightsProvider.buildImpact", () => {
     current: { fromDay: "2026-10-01", toDay: "2026-10-22" },
     previous: { fromDay: "2026-09-01", toDay: "2026-09-22" },
   };
-  const readings = InsightsProvider.parseReadings(
+  const readings = InsightsProvider.indexReadings(
     readingsOf({
       "2026-09-10": {
         conversations: [{ chatbotId: "1", outcome: Outcome.Answered, count: 6 }],
@@ -274,16 +294,54 @@ describe("InsightsProvider.buildImpact", () => {
       "2026-10-05": {
         conversations: [{ chatbotId: "1", outcome: Outcome.Answered, count: 12 }],
         changeRequests: [
-          { chatbotId: "1", action: Action.Verified, toolName: "update_record", count: 10 },
+          {
+            chatbotId: "1",
+            action: Action.Verified,
+            toolName: "update_record",
+            isByChatbotUser: false,
+            count: 10,
+          },
           // DEV_NOTE: Undone within its hour, so on the same day
-          { chatbotId: "1", action: Action.Verified, toolName: "old_tool", count: 2 },
-          { chatbotId: "1", action: Action.Undone, toolName: "old_tool", count: 4 },
+          {
+            chatbotId: "1",
+            action: Action.Verified,
+            toolName: "old_tool",
+            isByChatbotUser: false,
+            count: 2,
+          },
+          {
+            chatbotId: "1",
+            action: Action.Undone,
+            toolName: "old_tool",
+            isByChatbotUser: true,
+            count: 4,
+          },
         ],
       },
       "2026-10-20": {
         changeRequests: [
-          { chatbotId: "1", action: Action.Verified, toolName: "update_record", count: 5 },
-          { chatbotId: "1", action: Action.Undone, toolName: "update_record", count: 3 },
+          {
+            chatbotId: "1",
+            action: Action.Verified,
+            toolName: "update_record",
+            isByChatbotUser: false,
+            count: 5,
+          },
+          {
+            chatbotId: "1",
+            action: Action.Undone,
+            toolName: "update_record",
+            isByChatbotUser: true,
+            count: 3,
+          },
+          // DEV_NOTE: Auto-undos of mismatches: never verified, so they take nothing off
+          {
+            chatbotId: "1",
+            action: Action.Undone,
+            toolName: "update_record",
+            isByChatbotUser: false,
+            count: 7,
+          },
         ],
       },
     }),
@@ -291,7 +349,7 @@ describe("InsightsProvider.buildImpact", () => {
   const created = new Date("2026-10-01T00:00:00Z");
   const impact = InsightsProvider.buildImpact({
     periods: impactPeriods,
-    readings,
+    index: readings,
     roiAssumptions: [
       {
         taskType: "answers",
@@ -329,7 +387,7 @@ describe("InsightsProvider.buildImpact", () => {
   it("values each day's net work at the minutes in force that day", () => {
     const byType = Object.fromEntries(impact.tasks.map((task) => [task.taskType, task]));
     expect(byType["answers"]).toMatchObject({ count: 12, manualMinutes: "5.0", hoursSaved: 1 });
-    // 10 × 6 min + (5 − 3) × 3 min = 66 min
+    // 10 × 6 min + (5 − 3 user undos) × 3 min = 66 min; the 7 auto-undos take nothing off
     expect(byType["tool:update_record"]).toMatchObject({
       kind: Schemas.ImpactTaskKindEnum.Tool,
       label: "Update a record",
@@ -359,6 +417,69 @@ describe("InsightsProvider.buildImpact", () => {
       { weekStartDay: "2026-10-05", hours: 2 },
       { weekStartDay: "2026-10-12", hours: 0 },
       { weekStartDay: "2026-10-19", hours: 0.1 },
+    ]);
+  });
+});
+
+describe("InsightsProvider weekly hours", () => {
+  it("spreads a week's undos onto earlier weeks, keeping the range total", () => {
+    expect(InsightsProvider.spreadWeeks([10, -5])).toEqual([5, 0]);
+    expect(InsightsProvider.spreadWeeks([-5, 10])).toEqual([0, 5]);
+    expect(InsightsProvider.spreadWeeks([3, -1, 2, -4])).toEqual([0, 0, 0, 0]);
+    expect(InsightsProvider.spreadWeeks([3, -1, 4, -2])).toEqual([2, 0, 2, 0]);
+    expect(InsightsProvider.spreadWeeks([-2, 1])).toEqual([0, 0]);
+    expect(InsightsProvider.spreadWeeks([])).toEqual([]);
+  });
+
+  it("adds the weekly bars up to the range's time saved when an undo lands a week later", () => {
+    const impact = InsightsProvider.buildImpact({
+      periods: {
+        current: { fromDay: "2026-10-05", toDay: "2026-10-18" },
+        previous: { fromDay: "2026-09-21", toDay: "2026-10-04" },
+      },
+      // Sunday 23:30 verified, undone by the user in the next hour: Monday, the next week
+      index: InsightsProvider.indexReadings(
+        readingsOf({
+          "2026-10-11": {
+            changeRequests: [
+              {
+                chatbotId: "1",
+                action: Action.Verified,
+                toolName: "update_record",
+                isByChatbotUser: false,
+                count: 10,
+              },
+            ],
+          },
+          "2026-10-12": {
+            changeRequests: [
+              {
+                chatbotId: "1",
+                action: Action.Undone,
+                toolName: "update_record",
+                isByChatbotUser: true,
+                count: 5,
+              },
+            ],
+          },
+        }),
+      ),
+      roiAssumptions: [
+        {
+          taskType: "tool:update_record",
+          manualMinutes: "6.0",
+          effectiveFrom: "2026-10-01",
+          createdAt: new Date("2026-10-01T00:00:00Z"),
+        },
+      ],
+      writeTools: [{ name: "update_record", description: "Update a record" }],
+      now: Date.parse("2026-10-20T12:00:00Z"),
+    });
+
+    expect(impact.hoursSaved.value).toBe(0.5);
+    expect(impact.hoursPerWeek).toEqual([
+      { weekStartDay: "2026-10-05", hours: 0.5 },
+      { weekStartDay: "2026-10-12", hours: 0 },
     ]);
   });
 });
