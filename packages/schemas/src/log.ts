@@ -18,6 +18,7 @@ export enum LogCategory {
   Feedback = "Feedback",
   Action = "Action",
   Rollup = "Rollup",
+  Insights = "Insights",
 }
 
 export enum LogAction {
@@ -287,6 +288,21 @@ export enum LogAction {
   GetModelCallRollupGroups = "GetModelCallRollupGroups",
   RebuildActivityRollupDay = "RebuildActivityRollupDay",
   RebuildRecentActivityRollups = "RebuildRecentActivityRollups",
+  GetActivityRollups = "GetActivityRollups",
+
+  // Insights (M4-3)
+  GetInsightsOverview = "GetInsightsOverview",
+  GetInsightsUsage = "GetInsightsUsage",
+  GetInsightsImpact = "GetInsightsImpact",
+  CountChangeRequestsByStatus = "CountChangeRequestsByStatus",
+  CountOpenQualityIssues = "CountOpenQualityIssues",
+  GetFailedKnowledgeSourcesSummary = "GetFailedKnowledgeSourcesSummary",
+  GetWriteToolSummaries = "GetWriteToolSummaries",
+  GetAdminDetails = "GetAdminDetails",
+
+  // ROI assumptions (M4-3)
+  CreateRoiAssumption = "CreateRoiAssumption",
+  GetRoiAssumptions = "GetRoiAssumptions",
 
   // Cron
   DispatchCron = "DispatchCron",

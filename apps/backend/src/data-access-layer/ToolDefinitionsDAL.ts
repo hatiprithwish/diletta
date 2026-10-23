@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getColumns, inArray, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, getColumns, inArray, max, ne, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections, toolDefinitions } from "@/db/tables";
@@ -664,6 +664,47 @@ export default class ToolDefinitionsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetToolDefinitionById,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every write tool name past Draft, with its newest such version's description (DISTINCT ON name, highest
+  // version first). Read tools change nothing, so they save no time.
+  async getWriteToolSummaries(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetWriteToolSummariesDALRequest,
+  ) {
+    const response: Schemas.WriteToolSummariesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolDefinitions.companyId, params.companyId),
+        ne(toolDefinitions.risk, Schemas.ToolDefinitionRiskIntEnum.Read),
+        ne(toolDefinitions.status, Schemas.ToolDefinitionStatusIntEnum.Draft),
+      ];
+      const tools = await tx
+        .selectDistinctOn([toolDefinitions.name], {
+          name: toolDefinitions.name,
+          description: toolDefinitions.description,
+        })
+        .from(toolDefinitions)
+        .where(and(...conditions))
+        .orderBy(asc(toolDefinitions.name), desc(toolDefinitions.version));
+
+      response.isSuccess = true;
+      response.message = "Write tools fetched successfully";
+      response.tools = tools;
+    } catch (error) {
+      const message = "Unknown error in fetching write tools";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetWriteToolSummaries,
         message,
         error,
         metadata: params,

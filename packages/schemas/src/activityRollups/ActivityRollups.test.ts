@@ -5,9 +5,22 @@ import {
   activityRollupDayKey,
   activityRollupDayRange,
   activityRollupDays,
+  activityRollupAddDays,
   activityRollupRecentDays,
+  ActivityRollupMetricKindEnum,
+  ActivityRollupModelCallMeasureEnum,
+  ActivityRollupModelCallScopeEnum,
+  changeRequestRollupMetric,
   conversationOutcomeMetric,
+  modelCallModelRollupMetric,
+  modelCallTaskRollupMetric,
+  parseActivityRollupMetric,
+  ACTIVITY_ROLLUP_CONVERSATIONS_STARTED,
+  ACTIVITY_ROLLUP_FEEDBACK_KEY_MAP,
 } from "./ActivityRollupsCommon";
+import { ChangeRequestEntityActionEnum } from "../changeRequests";
+import { FeedbackRatingIntEnum } from "../feedback";
+import { PlatformModelProviderEnum } from "../modelCalls";
 import { ZRebuildActivityRollupsApiRequest } from "./ActivityRollupsApiRequest";
 import { ConversationOutcomeIntEnum } from "../conversations";
 
@@ -79,5 +92,77 @@ describe("ZRebuildActivityRollupsApiRequest", () => {
     ]) {
       expect(ZRebuildActivityRollupsApiRequest.safeParse(range).success).toBe(false);
     }
+  });
+});
+
+describe("activity rollup metric keys, read back", () => {
+  const { Live, Eval } = ActivityRollupModelCallScopeEnum;
+  const { CostUsd, Count } = ActivityRollupModelCallMeasureEnum;
+
+  it("parses every key the builders make", () => {
+    expect(parseActivityRollupMetric(ACTIVITY_ROLLUP_CONVERSATIONS_STARTED)).toEqual({
+      kind: ActivityRollupMetricKindEnum.ConversationsStarted,
+    });
+    expect(
+      parseActivityRollupMetric(conversationOutcomeMetric(ConversationOutcomeIntEnum.Handoff)),
+    ).toEqual({
+      kind: ActivityRollupMetricKindEnum.ConversationOutcome,
+      outcome: ConversationOutcomeIntEnum.Handoff,
+    });
+    expect(
+      parseActivityRollupMetric(ACTIVITY_ROLLUP_FEEDBACK_KEY_MAP[FeedbackRatingIntEnum.Down]),
+    ).toEqual({ kind: ActivityRollupMetricKindEnum.Feedback, rating: FeedbackRatingIntEnum.Down });
+    expect(
+      parseActivityRollupMetric(
+        changeRequestRollupMetric(ChangeRequestEntityActionEnum.NeedsHuman, "update_record"),
+      ),
+    ).toEqual({
+      kind: ActivityRollupMetricKindEnum.ChangeRequest,
+      action: ChangeRequestEntityActionEnum.NeedsHuman,
+      toolName: "update_record",
+    });
+    expect(parseActivityRollupMetric(modelCallTaskRollupMetric(Eval, Count, "eval.judge"))).toEqual(
+      {
+        kind: ActivityRollupMetricKindEnum.ModelCallTask,
+        scope: Eval,
+        measure: Count,
+        taskType: "eval.judge",
+      },
+    );
+    expect(
+      parseActivityRollupMetric(
+        modelCallModelRollupMetric(
+          Live,
+          CostUsd,
+          PlatformModelProviderEnum.WorkersAi,
+          "@cf/baai/bge-m3",
+        ),
+      ),
+    ).toEqual({
+      kind: ActivityRollupMetricKindEnum.ModelCallModel,
+      scope: Live,
+      measure: CostUsd,
+      provider: "workers_ai",
+      model: "@cf/baai/bge-m3",
+    });
+  });
+
+  it("returns null for a key no builder makes", () => {
+    for (const metric of [
+      "conversations.outcome.unknown",
+      "change_requests.proposed.tool.update_record",
+      "change_requests.verified.tool.",
+      "model_calls.latency.task.qa.answer",
+      "model_calls.count.model.anthropic",
+      "model_calls.count.other.x",
+      "something.else",
+    ]) {
+      expect(parseActivityRollupMetric(metric)).toBeNull();
+    }
+  });
+
+  it("adds days across a month end", () => {
+    expect(activityRollupAddDays("2026-10-30", 3)).toBe("2026-11-02");
+    expect(activityRollupAddDays("2026-03-01", -1)).toBe("2026-02-28");
   });
 });

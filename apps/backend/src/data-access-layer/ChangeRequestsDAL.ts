@@ -1,4 +1,4 @@
-import { and, asc, eq, getColumns, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, eq, getColumns, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { changeRequests, conversations, toolCalls, toolDefinitions } from "@/db/tables";
@@ -460,6 +460,44 @@ export default class ChangeRequestsDAL {
         message,
         error,
         metadata: { before: params.before.toISOString(), limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Joined to the conversation for the chatbot (a change request has no chatbot of its own)
+  async getChangeRequestsCountByStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountChangeRequestsByStatusDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(changeRequests.companyId, params.companyId),
+        eq(changeRequests.status, params.status),
+        eq(conversations.companyId, params.companyId),
+      ];
+      if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+      const [result] = await tx
+        .select({ count: count() })
+        .from(changeRequests)
+        .innerJoin(conversations, eq(conversations.id, changeRequests.conversationId))
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Change requests counted successfully";
+      response.totalRecords = result?.count ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting change requests";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountChangeRequestsByStatus,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

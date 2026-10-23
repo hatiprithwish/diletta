@@ -14,3 +14,6 @@ export type CreateAdminDALRequest = Pick<Admin, "clerkUserId" | "email" | "name"
 export type UpdateAdminEmailDALRequest = Pick<Admin, "companyId" | "email"> & {
   adminId: Admin["id"];
 };
+
+// A company admin by internal id (who published a config, M4-3)
+export type FindAdminDALRequest = { companyId: string; adminId: Admin["id"] };

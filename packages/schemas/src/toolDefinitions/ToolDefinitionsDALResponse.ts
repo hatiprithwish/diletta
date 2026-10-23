@@ -41,3 +41,8 @@ export interface ToolDefinitionsWithConnectionDALResponse extends ApiResponse {
 export interface ToolDefinitionWithConnectionDALResponse extends ApiResponse {
   toolDefinition?: ToolDefinitionWithConnectionRow;
 }
+
+// DEV_NOTE: One entry per write tool name that has a version past Draft: its newest such version's description
+export interface WriteToolSummariesDALResponse extends ApiResponse {
+  tools?: Pick<ToolDefinition, "name" | "description">[];
+}

@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, count, eq, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, conversations, feedback, messages, qualityIssues } from "@/db/tables";
@@ -305,6 +305,47 @@ export default class QualityIssuesDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Open issues by source, joined to the conversation for the chatbot. userCount = the thumbs-down ones.
+  async getOpenQualityIssueCounts(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountOpenQualityIssuesDALRequest,
+  ) {
+    const response: Schemas.OpenQualityIssueCountsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+        eq(conversations.companyId, params.companyId),
+      ];
+      if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+      const groups = await tx
+        .select({ source: qualityIssues.source, count: count() })
+        .from(qualityIssues)
+        .innerJoin(conversations, eq(conversations.id, qualityIssues.conversationId))
+        .where(and(...conditions))
+        .groupBy(qualityIssues.source);
+
+      response.isSuccess = true;
+      response.message = "Open quality issues counted successfully";
+      response.totalCount = groups.reduce((total, group) => total + group.count, 0);
+      response.userCount =
+        groups.find((group) => group.source === Schemas.QualityIssueSourceIntEnum.User)?.count ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting open quality issues";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountOpenQualityIssues,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

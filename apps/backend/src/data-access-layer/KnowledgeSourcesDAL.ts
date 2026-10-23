@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, max, or, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, knowledgeSources } from "@/db/tables";
@@ -487,6 +487,41 @@ export default class KnowledgeSourcesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetDueKnowledgeSources,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getFailedKnowledgeSourcesSummary(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetFailedKnowledgeSourcesSummaryDALRequest,
+  ) {
+    const response: Schemas.FailedKnowledgeSourcesSummaryDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(knowledgeSources.companyId, params.companyId),
+        eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Failed),
+      ];
+      const [result] = await tx
+        .select({ count: count(), lastFailedAt: max(knowledgeSources.updatedAt) })
+        .from(knowledgeSources)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Failed knowledge sources summarised successfully";
+      response.failedCount = result?.count ?? 0;
+      response.lastFailedAt = result?.lastFailedAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in summarising failed knowledge sources";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetFailedKnowledgeSourcesSummary,
         message,
         error,
         metadata: params,

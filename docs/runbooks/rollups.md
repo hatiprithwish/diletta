@@ -29,6 +29,18 @@ Eval calls go under the `model_calls.eval.*` keys, never the live `model_calls.*
 
 Every source read is a range on `(company_id, created_at)`, served by the `IDX_<table>_company_id_created_at` indexes on `conversations`, `feedback`, `model_calls` and `activity_log` (per partition), so a rebuild reads one day's rows, not the company's history.
 
+## How the pages read it
+
+Overview, Usage and Impact (M4-3) read the rollups through `GET /dashboard/insights/{overview,usage,impact}`, so their numbers are as fresh as the last hourly run (the pages say "Numbers update every hour").
+
+- One owner's rows: a chatbot's when the request names `botId`, else the company-wide rows. Chatbot rows are never added up for the company (the company row already holds every chatbot plus background jobs).
+- Keys are parsed back with `Schemas.parseActivityRollupMetric`. A key it doesn't know (a metric added later) is skipped.
+- Spend = the cost of the `.model.<provider>/<model>` keys whose provider is a company key (live + eval). Workers AI calls (embeddings, rerank) are platform-paid: shown as "Included", never in spend, like the budget.
+- Overview's spend card covers the UTC billing month (the budget's), whatever range the page shows.
+- Impact values each day's work at the minutes per task in force that day (`roi_assumptions`, newest row with `effective_from` on or before the day; the first row also covers earlier days). Saving minutes adds a row from today; it never rewrites past days.
+
+To check a number against the raw tables, compare a day's spend with `SUM(cost_usd)` of that day's `model_calls` rows whose provider isn't `workers_ai`, and a day's verified changes with the `change_request.verified` rows in `activity_log` (`insights.test.ts` does both). A mismatch on today or yesterday clears at the next hourly run; on an older day, rebuild it by hand.
+
 ## When it runs
 
 - **Hourly** (`ActivityRollupsCron`, at `CRON_HOURLY_MINUTE`, picked by `CronScheduleProvider`). Rebuilds yesterday and today for every Active or Paused company. Yesterday is included so that data landing after midnight still reaches its day, such as a Pending cost the gateway backfill fills in or a late change request event. A skipped hour is caught up by the next one.

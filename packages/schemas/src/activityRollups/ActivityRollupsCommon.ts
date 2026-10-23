@@ -153,3 +153,141 @@ export const ZActivityRollup = ZActivityRollupValue.extend({
   day: ZActivityRollupDay,
 });
 export type ActivityRollup = z.infer<typeof ZActivityRollup>;
+
+// DEV_NOTE: The day n days after (or before, n < 0) a day
+export function activityRollupAddDays(day: ActivityRollupDay, days: number): ActivityRollupDay {
+  return activityRollupDayKey(activityRollupDayRange(day).start.getTime() + days * DAY_MS);
+}
+
+// DEV_NOTE: The reading side of the metric keys (M4-3): one stored key back into what it counts. The inverse of the
+// builders above, so the pages never match a key by hand. A key no builder makes (a metric added later) parses to null
+// and the pages skip it.
+export enum ActivityRollupMetricKindEnum {
+  ConversationsStarted = "conversations_started",
+  ConversationOutcome = "conversation_outcome",
+  Feedback = "feedback",
+  ChangeRequest = "change_request",
+  ModelCallTask = "model_call_task",
+  ModelCallModel = "model_call_model",
+}
+
+export type ParsedActivityRollupMetric =
+  | { kind: ActivityRollupMetricKindEnum.ConversationsStarted }
+  | { kind: ActivityRollupMetricKindEnum.ConversationOutcome; outcome: ConversationOutcomeIntEnum }
+  | { kind: ActivityRollupMetricKindEnum.Feedback; rating: FeedbackRatingIntEnum }
+  | {
+      kind: ActivityRollupMetricKindEnum.ChangeRequest;
+      action: ActivityRollupChangeRequestAction;
+      toolName: string;
+    }
+  | {
+      kind: ActivityRollupMetricKindEnum.ModelCallTask;
+      scope: ActivityRollupModelCallScopeEnum;
+      measure: ActivityRollupModelCallMeasureEnum;
+      taskType: string;
+    }
+  | {
+      kind: ActivityRollupMetricKindEnum.ModelCallModel;
+      scope: ActivityRollupModelCallScopeEnum;
+      measure: ActivityRollupModelCallMeasureEnum;
+      provider: string;
+      model: string;
+    };
+
+const OUTCOME_BY_KEY = new Map(
+  Object.entries(ACTIVITY_ROLLUP_CONVERSATION_OUTCOME_KEY_MAP).map(([outcome, key]) => [
+    `conversations.outcome.${key}`,
+    Number(outcome) as ConversationOutcomeIntEnum,
+  ]),
+);
+const RATING_BY_KEY = new Map(
+  Object.entries(ACTIVITY_ROLLUP_FEEDBACK_KEY_MAP).map(([rating, key]) => [
+    key,
+    Number(rating) as FeedbackRatingIntEnum,
+  ]),
+);
+const CHANGE_REQUEST_ACTIONS: ReadonlySet<string> = new Set(ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS);
+const MODEL_CALL_MEASURES: ReadonlySet<string> = new Set(
+  Object.values(ActivityRollupModelCallMeasureEnum),
+);
+
+function parseModelCallMetric(
+  scope: ActivityRollupModelCallScopeEnum,
+  rest: string,
+): ParsedActivityRollupMetric | null {
+  const dot = rest.indexOf(".");
+  const measure = rest.slice(0, dot);
+  if (dot < 0 || !MODEL_CALL_MEASURES.has(measure)) return null;
+  const dimension = rest.slice(dot + 1);
+  const typedMeasure = measure as ActivityRollupModelCallMeasureEnum;
+
+  if (dimension.startsWith("task.")) {
+    const taskType = dimension.slice("task.".length);
+    if (!taskType) return null;
+    return {
+      kind: ActivityRollupMetricKindEnum.ModelCallTask,
+      scope,
+      measure: typedMeasure,
+      taskType,
+    };
+  }
+  if (dimension.startsWith("model.")) {
+    // DEV_NOTE: The provider never holds a "/", the model may (@cf/baai/bge-m3), so the first "/" splits them
+    const providerModel = dimension.slice("model.".length);
+    const slash = providerModel.indexOf("/");
+    if (slash <= 0 || slash === providerModel.length - 1) return null;
+    return {
+      kind: ActivityRollupMetricKindEnum.ModelCallModel,
+      scope,
+      measure: typedMeasure,
+      provider: providerModel.slice(0, slash),
+      model: providerModel.slice(slash + 1),
+    };
+  }
+  return null;
+}
+
+export function parseActivityRollupMetric(metric: string): ParsedActivityRollupMetric | null {
+  if (metric === ACTIVITY_ROLLUP_CONVERSATIONS_STARTED) {
+    return { kind: ActivityRollupMetricKindEnum.ConversationsStarted };
+  }
+  const outcome = OUTCOME_BY_KEY.get(metric);
+  if (outcome !== undefined) {
+    return { kind: ActivityRollupMetricKindEnum.ConversationOutcome, outcome };
+  }
+  const rating = RATING_BY_KEY.get(metric);
+  if (rating !== undefined) return { kind: ActivityRollupMetricKindEnum.Feedback, rating };
+
+  if (metric.startsWith("change_requests.")) {
+    const rest = metric.slice("change_requests.".length);
+    const marker = rest.indexOf(".tool.");
+    const action = rest.slice(0, marker);
+    const toolName = rest.slice(marker + ".tool.".length);
+    if (marker < 0 || !CHANGE_REQUEST_ACTIONS.has(action) || !toolName) return null;
+    return {
+      kind: ActivityRollupMetricKindEnum.ChangeRequest,
+      action: action as ActivityRollupChangeRequestAction,
+      toolName,
+    };
+  }
+
+  // DEV_NOTE: The eval prefix first: model_calls.eval.* also starts with model_calls.
+  const evalPrefix = `${MODEL_CALL_SCOPE_PREFIX[ActivityRollupModelCallScopeEnum.Eval]}.`;
+  if (metric.startsWith(evalPrefix)) {
+    return parseModelCallMetric(
+      ActivityRollupModelCallScopeEnum.Eval,
+      metric.slice(evalPrefix.length),
+    );
+  }
+  const livePrefix = `${MODEL_CALL_SCOPE_PREFIX[ActivityRollupModelCallScopeEnum.Live]}.`;
+  if (metric.startsWith(livePrefix)) {
+    return parseModelCallMetric(
+      ActivityRollupModelCallScopeEnum.Live,
+      metric.slice(livePrefix.length),
+    );
+  }
+  return null;
+}
+
+// One stored rollup row as the pages read it: no ids, the day and the exact decimal value
+export type ActivityRollupReading = { day: ActivityRollupDay; metric: string; value: string };

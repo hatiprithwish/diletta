@@ -76,3 +76,6 @@ export type GetPinnedToolDefinitionsDALRequest = Pick<ToolDefinition, "companyId
 
 // One version by its internal id (a change request's tool call names it), for a commit
 export type FindToolDefinitionByIdDALRequest = Pick<ToolDefinition, "companyId" | "id">;
+
+// The company's write tools by name (Impact's tasks, M4-3)
+export type GetWriteToolSummariesDALRequest = Pick<ToolDefinition, "companyId">;

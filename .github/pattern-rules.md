@@ -1743,6 +1743,43 @@ A hit outside `ActivityRollupsDAL.ts`, `providers/activityRollups.ts`, `packages
 
 ---
 
+### 3.39 Insights Pages Read Rollups Through the Parser, One Owner at a Time [HIGH]
+
+**Rule:** Overview, Usage and Impact (M4-3) get their numbers only from `GET /dashboard/insights/{overview,usage,impact}` (`authorizeCompany(InsightRead)`) → `InsightsRepo` (one read-only `withTenant`) → `ActivityRollupsDAL.getActivityRollups`, for one owner: the `botId`'s chatbot (a public id, resolved in the company, unknown → 404) or the company-wide rows (`chatbot_id` null). Metric keys are read back only through `Schemas.parseActivityRollupMetric`; all math lives in the pure `InsightsProvider`. Spend = the `.model.<provider>/<model>` cost keys of company-key providers (live + eval), summed as bigint micros (`ActivityRollupsProvider.toUnits` / `fromUnits`); platform-paid providers (`Schemas.isPlatformPaidProvider`, Workers AI) are "Included", never spend. Periods come only from `Schemas.insightsRangePeriods` / `impactRangePeriods` / `insightsBillingMonth` (UTC). Impact's minutes per task are written only by `POST /dashboard/roi-assumptions` (`authorizeCompany(RoiAssumptionUpdate)`, `RoiAssumptionsRepo`): a new `roi_assumptions` row effective today, never an update or delete; a tool task must name one of the company's write tools; each day is valued with `Schemas.roiMinutesOnDay`. The pages never compute a total from raw rows in the browser and never write to `activity_rollups`.
+
+**Violations:**
+
+- A page or Repo reading `model_calls`, `conversations` or `activity_log` directly for an Insights total (the rollup is the read model; raw sums are for tests)
+- Adding chatbot rows together for a company total, or reading company and chatbot rows in one query
+- Matching a metric key with `startsWith` / a regex / a literal outside `parseActivityRollupMetric`
+- A spend total that includes `workers_ai`, or sums `cost_usd` with JS numbers
+- A UTC day built with local-time `Date` methods (`getDate`, `setHours`) on the server
+- An `UPDATE` / `DELETE` on `roi_assumptions`, or minutes for a task saved without the write-tool check
+- A component prop type or a page search schema defined in `apps/web` instead of `Schemas.DashboardUi` / `insights/`
+
+**Detection Pattern:**
+
+```regex
+metric\.(startsWith|includes|match)\(
+\.update\(roiAssumptions\)|\.delete\(roiAssumptions\)
+from\(modelCalls\)[\s\S]{0,300}sum\(
+```
+
+A hit outside `packages/schemas/src/activityRollups/`, `ModelCallsDAL.ts` (rollup groups, budget seed) and tests needs a reason.
+
+**Examples:**
+
+```
+- ❌ const spend = rows.filter((r) => r.metric.includes("cost_usd")).reduce((a, r) => a + Number(r.value), 0)
+- ✅ InsightsProvider.buildUsage({ periods, readings: InsightsProvider.parseReadings(rows) })
+- ❌ await tx.update(roiAssumptions).set({ manualMinutes })   // rewrites every past day's hours
+- ✅ await dal.createRoiAssumption(tx, { …, effectiveFrom: Schemas.activityRollupDayKey(now) })
+```
+
+**Fix:** Mirror `InsightsRepo`, `providers/insights.ts`, `RoiAssumptionsRepo` and the `overview/` / `usage/` / `impact/` pages.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1830,5 +1867,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only)
 Maintainer: hatiprithwish
