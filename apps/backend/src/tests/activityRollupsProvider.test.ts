@@ -132,6 +132,7 @@ describe("ActivityRollupsProvider.buildValues", () => {
           chatbotId: "1",
           action: Schemas.ChangeRequestEntityActionEnum.NeedsHuman,
           toolName: "update_record",
+          isByChatbotUser: false,
           count: 1,
         },
       ],
@@ -141,6 +142,24 @@ describe("ActivityRollupsProvider.buildValues", () => {
       { chatbotId: "1", metric: "conversations.outcome.idk", value: "3" },
       { chatbotId: "1", metric: "conversations.started", value: "5" },
       { chatbotId: "1", metric: "feedback.down", value: "4" },
+    ]);
+  });
+
+  it("counts the user's undos of verified changes apart from auto-undos", () => {
+    const undone = (isByChatbotUser: boolean, count: number): Schemas.ChangeRequestRollupGroup => ({
+      chatbotId: "1",
+      action: Schemas.ChangeRequestEntityActionEnum.Undone,
+      toolName: "update_record",
+      isByChatbotUser,
+      count,
+    });
+    const values = ActivityRollupsProvider.buildValues({
+      ...empty,
+      changeRequests: [undone(true, 2), undone(false, 3)],
+    });
+    expect(values.filter((value) => value.chatbotId === "1")).toEqual([
+      { chatbotId: "1", metric: "change_requests.undone.tool.update_record", value: "5" },
+      { chatbotId: "1", metric: "change_requests.user_undone.tool.update_record", value: "2" },
     ]);
   });
 

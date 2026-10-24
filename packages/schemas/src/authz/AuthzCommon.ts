@@ -12,6 +12,10 @@ export enum AuthzActionEnum {
   KnowledgeSourceUpdate = "knowledge_source.update",
   KnowledgeSourceDelete = "knowledge_source.delete",
 
+  // Insights pages (company-scoped, M4-3): Overview, Usage, Impact read the activity rollups; Impact's minutes per task
+  InsightRead = "insight.read",
+  RoiAssumptionUpdate = "roi_assumption.update",
+
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
   CompanyList = "company.list",

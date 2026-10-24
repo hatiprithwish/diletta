@@ -2,7 +2,10 @@ import type { ApiResponse } from "../common";
 import type { ConversationOutcomeIntEnum } from "../conversations";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type { ModelCallProvider } from "../modelCalls";
-import type { ActivityRollupChangeRequestAction } from "./ActivityRollupsCommon";
+import type {
+  ActivityRollupChangeRequestAction,
+  ActivityRollupReading,
+} from "./ActivityRollupsCommon";
 
 // DEV_NOTE: Grouped counts and sums from the source tables, one entry per group. A model call's chatbotId is null for
 // a background job (no chatbot); isEval says it was made for an eval run, whether or not it carries the chatbot under
@@ -19,10 +22,12 @@ export type FeedbackRollupGroup = {
   count: number;
 };
 
+// DEV_NOTE: isByChatbotUser = the event's actor is the chatbot user (an Undone by the user's own undo, M3-7)
 export type ChangeRequestRollupGroup = {
   chatbotId: string;
   action: ActivityRollupChangeRequestAction;
   toolName: string;
+  isByChatbotUser: boolean;
   count: number;
 };
 
@@ -56,4 +61,8 @@ export interface ModelCallRollupGroupsDALResponse extends ApiResponse {
 
 export interface ActivityRollupsWriteDALResponse extends ApiResponse {
   rowCount?: number;
+}
+
+export interface ActivityRollupReadingsDALResponse extends ApiResponse {
+  readings?: ActivityRollupReading[];
 }

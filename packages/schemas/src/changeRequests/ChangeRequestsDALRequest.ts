@@ -79,3 +79,9 @@ export type UpdateChangeRequestPayloadDALRequest = Pick<
   | "summary"
   | "changeCount"
 >;
+
+// DEV_NOTE: How many of the company's change requests are in one status now (Overview's needs attention, M4-3).
+// chatbotId set = only that chatbot's (through the conversation); null = the whole company.
+export type CountChangeRequestsByStatusDALRequest = Pick<ChangeRequest, "companyId" | "status"> & {
+  chatbotId: string | null;
+};

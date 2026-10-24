@@ -57,3 +57,6 @@ export type GetDueKnowledgeSourcesDALRequest = {
   companyIds: string[] | null;
   limit: number;
 };
+
+// Failed sources now (Overview's needs attention, M4-3)
+export type GetFailedKnowledgeSourcesSummaryDALRequest = Pick<KnowledgeSource, "companyId">;

@@ -27,3 +27,9 @@ export type CreateUserQualityIssueDALRequest = Pick<
 > & {
   feedbackId: string;
 };
+
+// DEV_NOTE: Open issues now (Overview's needs attention, M4-3). chatbotId set = only that chatbot's (through the
+// conversation); null = the whole company.
+export type CountOpenQualityIssuesDALRequest = Pick<QualityIssue, "companyId"> & {
+  chatbotId: string | null;
+};

@@ -11,3 +11,9 @@ export interface QualityIssueDALResponse extends ApiResponse {
 export interface UserQualityIssueDALResponse extends QualityIssueDALResponse {
   isCreated?: boolean;
 }
+
+// Open issues, and how many of them came from users (a thumbs-down)
+export interface OpenQualityIssueCountsDALResponse extends ApiResponse {
+  totalCount?: number;
+  userCount?: number;
+}

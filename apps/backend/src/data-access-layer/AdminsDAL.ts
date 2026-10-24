@@ -176,4 +176,44 @@ export default class AdminsDAL {
 
     return response;
   }
+
+  // DEV_NOTE: A company admin by internal id, inside withTenant on their company. Not found is not logged: the admin
+  // may have been removed since (an actor column keeps the id).
+  async getAdminDetails(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindAdminDALRequest,
+  ) {
+    const response: Schemas.AdminDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(admins.id, params.adminId), eq(admins.companyId, params.companyId)];
+      const [admin] = await tx
+        .select()
+        .from(admins)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!admin) {
+        response.message = "Admin not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Admin fetched successfully";
+      response.admin = admin;
+    } catch (error) {
+      const message = "Unknown error in fetching admin";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetAdminDetails,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

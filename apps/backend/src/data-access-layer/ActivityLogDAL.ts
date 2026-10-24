@@ -168,6 +168,7 @@ export default class ActivityLogDAL {
           chatbotId: conversations.chatbotId,
           action: activityLog.entityAction,
           toolName: toolDefinitions.name,
+          actorType: activityLog.actorType,
           count: count(),
         })
         .from(activityLog)
@@ -176,7 +177,12 @@ export default class ActivityLogDAL {
         .innerJoin(toolDefinitions, eq(toolDefinitions.id, toolCalls.toolId))
         .innerJoin(conversations, eq(conversations.id, changeRequests.conversationId))
         .where(and(...conditions))
-        .groupBy(conversations.chatbotId, activityLog.entityAction, toolDefinitions.name);
+        .groupBy(
+          conversations.chatbotId,
+          activityLog.entityAction,
+          toolDefinitions.name,
+          activityLog.actorType,
+        );
 
       // DEV_NOTE: entity_action is text; the query matched only counted actions, so find() narrows every row
       const groups: Schemas.ChangeRequestRollupGroup[] = [];
@@ -184,7 +190,15 @@ export default class ActivityLogDAL {
         const action = Schemas.ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS.find(
           (item) => item === row.action,
         );
-        if (action) groups.push({ ...row, action });
+        if (action) {
+          groups.push({
+            chatbotId: row.chatbotId,
+            action,
+            toolName: row.toolName,
+            isByChatbotUser: row.actorType === Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+            count: row.count,
+          });
+        }
       }
 
       response.isSuccess = true;

@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { activityRollups } from "@/db/tables";
@@ -7,7 +7,8 @@ import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). activity_rollups is derived (M4-2): a
-// (company, day) is replaced as a whole under its advisory lock, never edited row by row.
+// (company, day) is replaced as a whole under its advisory lock, never edited row by row. The Insights pages (M4-3)
+// only read it (getActivityRollups).
 export default class ActivityRollupsDAL {
   // DEV_NOTE: Transaction-scoped advisory lock on (company, day), held until the Repo's transaction ends. The hourly
   // run and an operator rebuild of the same day take turns, so the second deletes the first one's rows instead of
@@ -104,6 +105,51 @@ export default class ActivityRollupsDAL {
         message,
         error,
         metadata: { companyId: params.companyId, day: params.day, rowCount: params.values.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One owner's rows over a range of days (both included): a chatbot's, or the company-wide rows when
+  // chatbotId is null. Served by UNQ_activity_rollups_company_id_chatbot_id_day_metric (company, chatbot, day).
+  async getActivityRollups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActivityRollupsDALRequest,
+  ) {
+    const response: Schemas.ActivityRollupReadingsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityRollups.companyId, params.companyId),
+        params.chatbotId === null
+          ? isNull(activityRollups.chatbotId)
+          : eq(activityRollups.chatbotId, params.chatbotId),
+        gte(activityRollups.day, params.fromDay),
+        lte(activityRollups.day, params.toDay),
+      ];
+      const readings = await tx
+        .select({
+          day: activityRollups.day,
+          metric: activityRollups.metric,
+          value: activityRollups.value,
+        })
+        .from(activityRollups)
+        .where(and(...conditions))
+        .orderBy(asc(activityRollups.day), asc(activityRollups.metric));
+
+      response.isSuccess = true;
+      response.message = "Activity rollups fetched successfully";
+      response.readings = readings;
+    } catch (error) {
+      const message = "Unknown error in fetching activity rollups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActivityRollups,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

@@ -15,19 +15,34 @@ If any step fails, the whole transaction rolls back and the day keeps its previo
 
 A day is the UTC calendar day, `[00:00, 24:00)` on each source row's own timestamp:
 
-| Metric                                                                                   | Counted from                                                                                 | Day by                                                                    |
-| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `conversations.started`                                                                  | `conversations`                                                                              | `created_at`                                                              |
-| `conversations.outcome.<answered\|action_done\|idk\|handoff\|abandoned>`                 | `conversations` with an outcome (closed)                                                     | `created_at`, the start day (closing writes no event, `updated_at` moves) |
-| `feedback.up`, `feedback.down`                                                           | `feedback` → reply → conversation's chatbot, current rating                                  | the rating's `created_at`                                                 |
-| `change_requests.<verified\|undone\|needs_human\|failed\|rejected\|expired>.tool.<name>` | `activity_log` `change_request.*` events → change request → tool call → tool definition name | the event's `created_at`                                                  |
-| `model_calls.<count\|input_tokens\|output_tokens\|cost_usd>.task.<task_type>`            | `model_calls`, every row (failed, Pending and Unknown too, cost as it stands)                | `created_at`                                                              |
-| `model_calls.<…>.model.<provider>/<model>`                                               | the same rows, by provider and model                                                         | `created_at`                                                              |
-| `model_calls.eval.<…>.task.<task_type>`, `model_calls.eval.<…>.model.<provider>/<model>` | the same, for calls made for an eval run (`eval_run_id` set)                                 | `created_at`                                                              |
+| Metric                                                                                   | Counted from                                                                                                                                 | Day by                                                                    |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `conversations.started`                                                                  | `conversations`                                                                                                                              | `created_at`                                                              |
+| `conversations.outcome.<answered\|action_done\|idk\|handoff\|abandoned>`                 | `conversations` with an outcome (closed)                                                                                                     | `created_at`, the start day (closing writes no event, `updated_at` moves) |
+| `feedback.up`, `feedback.down`                                                           | `feedback` → reply → conversation's chatbot, current rating                                                                                  | the rating's `created_at`                                                 |
+| `change_requests.<verified\|undone\|needs_human\|failed\|rejected\|expired>.tool.<name>` | `activity_log` `change_request.*` events → change request → tool call → tool definition name                                                 | the event's `created_at`                                                  |
+| `change_requests.user_undone.tool.<name>`                                                | the same `undone` events whose actor is the chatbot user: a user's undo of a verified change (M3-7), never an auto-undo (M3-6, the system's) | the event's `created_at`                                                  |
+| `model_calls.<count\|input_tokens\|output_tokens\|cost_usd>.task.<task_type>`            | `model_calls`, every row (failed, Pending and Unknown too, cost as it stands)                                                                | `created_at`                                                              |
+| `model_calls.<…>.model.<provider>/<model>`                                               | the same rows, by provider and model                                                                                                         | `created_at`                                                              |
+| `model_calls.eval.<…>.task.<task_type>`, `model_calls.eval.<…>.model.<provider>/<model>` | the same, for calls made for an eval run (`eval_run_id` set)                                                                                 | `created_at`                                                              |
 
 Eval calls go under the `model_calls.eval.*` keys, never the live `model_calls.*` ones, even when they carry the chatbot under test. A chatbot's live usage therefore leaves out its test runs; total spend is live + eval. Background jobs (no chatbot, e.g. knowledge embeddings) appear only in the company-wide row. Costs are summed exactly, in millionths of a dollar. A day with no activity has no rows.
 
 Every source read is a range on `(company_id, created_at)`, served by the `IDX_<table>_company_id_created_at` indexes on `conversations`, `feedback`, `model_calls` and `activity_log` (per partition), so a rebuild reads one day's rows, not the company's history.
+
+## How the pages read it
+
+Overview, Usage and Impact (M4-3) read the rollups through `GET /dashboard/insights/{overview,usage,impact}`, so their numbers are as fresh as the last hourly run (the pages say "Numbers update every hour").
+
+- One owner's rows: a chatbot's when the request names `botId`, else the company-wide rows. Chatbot rows are never added up for the company (the company row already holds every chatbot plus background jobs).
+- Keys are parsed back with `Schemas.parseActivityRollupMetric`. A key it doesn't know (a metric added later) is skipped.
+- Spend = the cost of the `.model.<provider>/<model>` keys whose provider is a company key (live + eval). Workers AI calls (embeddings, rerank) are platform-paid: shown as "Included", never in spend, like the budget.
+- Overview's spend card covers the UTC billing month (the budget's) from the company-wide rows, whatever range or `botId` the page asks for: the budget is the company's.
+- Every reading is added into per-day totals once (`InsightsProvider.indexReadings`), so a request's work grows with its readings, not with readings × days.
+- Impact counts a tool's work as its verified changes minus the ones its users undid (`user_undone`). Auto-undos are left out: they end a Mismatch that was never verified. `user_undone` was added after M4-2 shipped, so days rebuilt before it have no such key and count no user undos; rebuild them by hand (below) to correct older days.
+- Impact values each day's work at the minutes per task in force that day (`roi_assumptions`, newest row with `effective_from` on or before the day; the first row also covers earlier days). Saving minutes adds a row from today; it never rewrites past days.
+
+To check a number against the raw tables, compare a day's spend with `SUM(cost_usd)` of that day's `model_calls` rows whose provider isn't `workers_ai`, and a day's verified changes with the `change_request.verified` rows in `activity_log` (`insights.test.ts` does both). A mismatch on today or yesterday clears at the next hourly run; on an older day, rebuild it by hand.
 
 ## When it runs
 
