@@ -1,5 +1,6 @@
 import type { ApiResponse } from "../common";
 import type { RuntimeTool } from "../toolCalls";
+import type { ResolveChangeRequestApiResponse } from "./ChangeRequestsApiResponse";
 import type {
   ChangeRequestFailureEnum,
   ChangeRequestPayload,
@@ -91,3 +92,9 @@ export interface LoadTurnToolsResponse extends ApiResponse {
 export type ChangeRequestConversationCheck =
   | { isSuccess: true; rootLogId: string | null; isReadOnly: boolean }
   | { isSuccess: false; failure: ChangeRequestFailureEnum; message?: string };
+
+// DEV_NOTE: Mark resolved (M4-5), server-side: the route relays outboxId (internal) after the commit and answers the
+// rest
+export interface ResolveChangeRequestResponse extends ResolveChangeRequestApiResponse {
+  outboxId?: string;
+}

@@ -1,5 +1,12 @@
 import type { AdminProfile } from "../admins";
-import type { ChangeRequestDetail } from "../changeRequests";
+import type {
+  ChangeRequestDetail,
+  ChangeRequestListTabEnum,
+  ChangeRequestListItem,
+  ChangeRequestTimelineEntry,
+  ChangesPageSearch,
+  GetChangeRequestsApiResponse,
+} from "../changeRequests";
 import type {
   ConversationDetail,
   ConversationListItem,
@@ -104,10 +111,12 @@ export interface DashboardImpactMetricsProps extends DashboardImpactSectionProps
 }
 
 // One line of Overview's needs attention: a link to the page that resolves it; its icon comes in as children
+// DEV_NOTE: changesTab (M4-5) opens the Changes page on that tab
 export interface DashboardAttentionRowProps {
   to: "/changes" | "/quality" | "/knowledge";
   label: string;
   detail?: string;
+  changesTab?: ChangeRequestListTabEnum;
 }
 
 // Impact's minutes per task editor (a dialog per task)
@@ -187,7 +196,51 @@ export interface DashboardConversationToolRowProps {
   toolCall: ConversationTurnToolCall;
 }
 
-// DEV_NOTE: One change's detail card (M4-4; M4-5 adds its timeline and resolve)
+// DEV_NOTE: The Changes page (M4-5): the list, and the detail card of selectedId next to it (null = none)
+export interface DashboardChangesPageProps {
+  search: ChangesPageSearch;
+  selectedId: string | null;
+}
+
+// DEV_NOTE: The list under the filters: its rows, an empty state (clearing the filters when some are set) and Previous /
+// Next pages
+export interface DashboardChangeListProps {
+  response: GetChangeRequestsApiResponse;
+  search: ChangesPageSearch;
+  selectedId: string | null;
+  hasFilters: boolean;
+  onClearFilters: () => void;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardChangeRowProps {
+  changeRequest: ChangeRequestListItem;
+  search: ChangesPageSearch;
+  isSelected: boolean;
+}
+
+export interface DashboardChangeDetailCardProps {
+  publicId: string;
+  search: ChangesPageSearch;
+}
+
+// DEV_NOTE: One loaded change's body (M4-4; M4-5 adds its timeline and Mark resolved)
 export interface DashboardChangeDetailProps {
   changeRequest: ChangeRequestDetail;
+}
+
+export interface DashboardChangeTimelineProps {
+  timeline: ChangeRequestTimelineEntry[];
+}
+
+// DEV_NOTE: A sidebar item's count badge (DESIGN.md §4), named in -nav.ts and filled by the sidebar: Changes (needs a
+// person, destructive). Quality's (open issues, warning) comes with M4-6.
+export enum DashboardNavBadgeEnum {
+  ChangesNeedsHuman = "changes_needs_human",
+}
+
+// DEV_NOTE: isRail = the sidebar is the icon rail, where the count becomes a 6px dot
+export interface DashboardNavBadgeProps {
+  badge: DashboardNavBadgeEnum;
+  isRail: boolean;
 }

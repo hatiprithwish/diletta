@@ -1,3 +1,4 @@
+export * from "./ChangeRequestsApiRequest";
 export * from "./ChangeRequestsApiResponse";
 export * from "./ChangeRequestsCommon";
 export * from "./ChangeRequestsDiff";

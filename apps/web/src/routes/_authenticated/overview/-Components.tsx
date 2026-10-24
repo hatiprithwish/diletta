@@ -135,6 +135,7 @@ export function NeedsAttention({ overview }: Schemas.DashboardOverviewSectionPro
         {attention.needsHumanCount > 0 && (
           <AttentionRow
             to="/changes"
+            changesTab={Schemas.ChangeRequestListTabEnum.NeedsHuman}
             label={`${Utilities.plural(attention.needsHumanCount, "change")} ${attention.needsHumanCount === 1 ? "needs" : "need"} a person`}
           >
             <Warning className="text-destructive" />
@@ -171,11 +172,13 @@ function AttentionRow({
   to,
   label,
   detail,
+  changesTab,
   children,
 }: PropsWithChildren<Schemas.DashboardAttentionRowProps>) {
   return (
     <Link
       to={to}
+      search={changesTab ? { tab: changesTab } : {}}
       className="flex items-center gap-3 py-4 text-body text-foreground hover:text-brand-text"
     >
       <span className="flex size-4 items-center justify-center" aria-hidden>

@@ -20,8 +20,9 @@ export enum AuthzActionEnum {
   ConversationRead = "conversation.read",
   QualityIssueCreate = "quality_issue.create",
 
-  // Changes (company-scoped, M4-4 detail; M4-5 adds the list, timeline and resolve)
+  // Changes (company-scoped, M4-4 detail; M4-5 the list and timeline): read; mark one that needs a person resolved
   ChangeRequestRead = "change_request.read",
+  ChangeRequestResolve = "change_request.resolve",
 
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",

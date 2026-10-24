@@ -1967,6 +1967,7 @@ export class ConversationDO extends Think<Env> {
           changeRequestPublicId,
         );
       case Schemas.ChangeRequestStatusIntEnum.NeedsHuman:
+      case Schemas.ChangeRequestStatusIntEnum.Resolved:
         return HostToolsProvider.output(
           Schemas.HostToolStatusEnum.NeedsReview,
           TOOL_TEXT.needsReview,

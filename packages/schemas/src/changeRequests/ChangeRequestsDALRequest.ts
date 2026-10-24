@@ -1,6 +1,9 @@
+import type { PageDALRequest } from "../common";
 import type {
   ChangeRequest,
   ChangeRequestErrorCodeEnum,
+  ChangeRequestListTabEnum,
+  ChangeRequestSortColumn,
   ChangeRequestStatusIntEnum,
 } from "./ChangeRequestsCommon";
 
@@ -86,5 +89,25 @@ export type CountChangeRequestsByStatusDALRequest = Pick<ChangeRequest, "company
   chatbotId: string | null;
 };
 
-// DEV_NOTE: One change request by its public id within the company, for the dashboard (M4-4): no conversation needed
-export type FindDashboardChangeRequestDALRequest = Pick<ChangeRequest, "companyId" | "publicId">;
+// DEV_NOTE: One change request by its public id within the company, for the dashboard (M4-4): no conversation needed.
+// isForUpdate (M4-5: Mark resolved) locks the change request row for the rest of the transaction.
+export type FindDashboardChangeRequestDALRequest = Pick<ChangeRequest, "companyId" | "publicId"> & {
+  isForUpdate?: boolean;
+};
+
+// DEV_NOTE: The Changes list's filters (M4-5), resolved by the Repo: chatbotUserId and chatbotId are internal ids (from
+// the host user id and the chatbot public id the client sent), null = any. Both go through the conversation.
+export type ChangeRequestsFilterDALRequest = Pick<ChangeRequest, "companyId"> & {
+  tab: ChangeRequestListTabEnum;
+  chatbotUserId: string | null;
+  chatbotId: string | null;
+};
+
+// DEV_NOTE: The counts read every tab at once, so they take the filters without one
+export type CountDashboardChangeRequestsDALRequest = Omit<ChangeRequestsFilterDALRequest, "tab">;
+
+export type GetDashboardChangeRequestsDALRequest = ChangeRequestsFilterDALRequest &
+  PageDALRequest & { sortColumn: ChangeRequestSortColumn };
+
+// DEV_NOTE: The company's chatbot users with at least one change request (the Requested by filter's choices)
+export type GetChangeRequestRequestersDALRequest = Pick<ChangeRequest, "companyId">;

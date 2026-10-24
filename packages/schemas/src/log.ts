@@ -317,6 +317,13 @@ export enum LogAction {
   FlagConversation = "FlagConversation",
   GetDashboardChangeRequest = "GetDashboardChangeRequest",
 
+  // Changes page (M4-5)
+  GetDashboardChangeRequests = "GetDashboardChangeRequests",
+  CountDashboardChangeRequests = "CountDashboardChangeRequests",
+  GetChangeRequestRequesters = "GetChangeRequestRequesters",
+  GetActivityLogTimeline = "GetActivityLogTimeline",
+  ResolveChangeRequest = "ResolveChangeRequest",
+
   // Cron
   DispatchCron = "DispatchCron",
 }

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { useClerk } from "@clerk/tanstack-react-start";
 import { CaretRight, CaretUpDown, ChatCircle, SignOut } from "@phosphor-icons/react";
-import type * as Schemas from "@app/schemas";
+import * as Schemas from "@app/schemas";
 import {
   Sidebar,
   SidebarContent,
@@ -11,6 +11,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -34,6 +35,7 @@ import {
 } from "@app/ui/components/dropdown-menu";
 import { Avatar, AvatarFallback } from "@app/ui/components/avatar";
 import Utilities from "@/utils";
+import { useChangesNeedsHumanCount } from "./changes/-data";
 import { NAV_GROUPS, getActiveNestedTo, isPathActive } from "./-nav";
 
 export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
@@ -107,6 +109,7 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {"badge" in item && <NavBadge badge={item.badge} isRail={isRail} />}
                     </SidebarMenuItem>
                   );
                 }
@@ -159,6 +162,35 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
         <AccountMenu admin={admin} />
       </SidebarFooter>
     </Sidebar>
+  );
+}
+
+// DEV_NOTE: A sidebar count (DESIGN.md §4): Changes that need a person, destructive. Nothing while it loads, fails or
+// is 0; a 6px dot in the icon rail (shadcn hides SidebarMenuBadge there).
+function NavBadge({ badge, isRail }: Schemas.DashboardNavBadgeProps) {
+  const changes = useChangesNeedsHumanCount();
+  const count =
+    badge === Schemas.DashboardNavBadgeEnum.ChangesNeedsHuman
+      ? (changes.data?.needsHumanCount ?? 0)
+      : 0;
+  if (count === 0) return null;
+  const label = `${Utilities.formatCount(count)} need a person`;
+  if (isRail) {
+    return (
+      <span
+        className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-destructive"
+        role="img"
+        aria-label={label}
+      />
+    );
+  }
+  return (
+    <SidebarMenuBadge
+      className="bg-destructive-soft text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive"
+      aria-label={label}
+    >
+      {Utilities.formatCount(count)}
+    </SidebarMenuBadge>
   );
 }
 

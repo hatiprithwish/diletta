@@ -14,6 +14,7 @@ export enum ChangeRequestStatusIntEnum {
   Undone = 9,
   Expired = 10,
   NeedsHuman = 11,
+  Resolved = 12,
 }
 
 export enum ChangeRequestStatusLabelEnum {
@@ -28,6 +29,7 @@ export enum ChangeRequestStatusLabelEnum {
   Undone = "Undone",
   Expired = "Expired",
   NeedsHuman = "Needs a person",
+  Resolved = "Resolved",
 }
 
 export const CHANGE_REQUEST_STATUS_LABEL_MAP: Record<
@@ -45,6 +47,7 @@ export const CHANGE_REQUEST_STATUS_LABEL_MAP: Record<
   [ChangeRequestStatusIntEnum.Undone]: ChangeRequestStatusLabelEnum.Undone,
   [ChangeRequestStatusIntEnum.Expired]: ChangeRequestStatusLabelEnum.Expired,
   [ChangeRequestStatusIntEnum.NeedsHuman]: ChangeRequestStatusLabelEnum.NeedsHuman,
+  [ChangeRequestStatusIntEnum.Resolved]: ChangeRequestStatusLabelEnum.Resolved,
 };
 
 // DEV_NOTE: Action engine platform defaults (M3-4). A proposal waits CHANGE_REQUEST_APPROVAL_EXPIRY_MS for the user's
@@ -57,7 +60,8 @@ export const CHANGE_REQUEST_MAX_PENDING = 20;
 // DEV_NOTE: The undo window (M3-7), a platform default. A change request that ends (Verified, Undone, Failed, Rejected,
 // Expired) gets undo_until = its end + CHANGE_REQUEST_UNDO_WINDOW_MS: a Verified one can be undone by the user until
 // then, and every one's values (encrypted_changes) are purged after it. NeedsHuman keeps undo_until null: its values
-// stay until a person resolves it (M4-5). The conversation doesn't auto-close while a Verified one can be undone.
+// stay until a person resolves it (M4-5: an admin's Mark resolved → Resolved, undo_until = now, so the next purge
+// empties them). The conversation doesn't auto-close while a Verified one can be undone.
 export const CHANGE_REQUEST_UNDO_WINDOW_MS = 60 * 60_000;
 
 // DEV_NOTE: A user undo cut short (an eviction, a failed write) resumes only once the widget sends the host token
@@ -380,6 +384,7 @@ export enum ChangeRequestEntityActionEnum {
   Undoing = "undoing",
   UndoNotSent = "undo_not_sent",
   Undone = "undone",
+  Resolved = "resolved",
 }
 
 export const CHANGE_REQUEST_STATUS_ENTITY_ACTION_MAP: Partial<
@@ -396,6 +401,7 @@ export const CHANGE_REQUEST_STATUS_ENTITY_ACTION_MAP: Partial<
   [ChangeRequestStatusIntEnum.Verified]: ChangeRequestEntityActionEnum.Verified,
   [ChangeRequestStatusIntEnum.Mismatch]: ChangeRequestEntityActionEnum.Mismatch,
   [ChangeRequestStatusIntEnum.Undone]: ChangeRequestEntityActionEnum.Undone,
+  [ChangeRequestStatusIntEnum.Resolved]: ChangeRequestEntityActionEnum.Resolved,
 };
 
 export const changeRequestEventType = (action: ChangeRequestEntityActionEnum): string =>
@@ -426,3 +432,71 @@ export const changeRequestUndoIdempotencyKey = (changeRequestPublicId: string): 
 
 export const changeRequestUserUndoIdempotencyKey = (changeRequestPublicId: string): string =>
   `${CHANGE_REQUEST_KEY_PREFIX}${changeRequestPublicId}${CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX}`;
+
+// DEV_NOTE: The Changes page's tabs (M4-5). Waiting = not ended yet (proposed, or on its way through commit and
+// check); Verified, Undone and Needs a person are their own; Rejected, Expired, Failed and Resolved show only under All.
+export enum ChangeRequestListTabEnum {
+  All = "all",
+  Waiting = "waiting",
+  Verified = "verified",
+  Undone = "undone",
+  NeedsHuman = "needs_human",
+}
+
+export const ZChangeRequestListTab = z.enum(ChangeRequestListTabEnum);
+
+// DEV_NOTE: The statuses behind each tab; null = every status (All)
+export const CHANGE_REQUEST_TAB_STATUSES: Record<
+  ChangeRequestListTabEnum,
+  ChangeRequestStatusIntEnum[] | null
+> = {
+  [ChangeRequestListTabEnum.All]: null,
+  [ChangeRequestListTabEnum.Waiting]: [
+    ChangeRequestStatusIntEnum.Proposed,
+    ChangeRequestStatusIntEnum.Approved,
+    ChangeRequestStatusIntEnum.Committing,
+    ChangeRequestStatusIntEnum.Committed,
+    ChangeRequestStatusIntEnum.Mismatch,
+  ],
+  [ChangeRequestListTabEnum.Verified]: [ChangeRequestStatusIntEnum.Verified],
+  [ChangeRequestListTabEnum.Undone]: [ChangeRequestStatusIntEnum.Undone],
+  [ChangeRequestListTabEnum.NeedsHuman]: [ChangeRequestStatusIntEnum.NeedsHuman],
+};
+
+export enum ChangeRequestSortColumn {
+  CreatedAt = "createdAt",
+  UpdatedAt = "updatedAt",
+}
+
+export const ZChangeRequestSortColumn = z.enum(ChangeRequestSortColumn);
+
+// DEV_NOTE: The Changes page's rows per page (the API's own default page size is smaller)
+export const CHANGES_PAGE_SIZE = 25;
+
+// DEV_NOTE: A change request gathers a handful of events (one per status change, an edit or an undo attempt each);
+// the timeline reads at most this many, oldest first
+export const CHANGE_REQUEST_TIMELINE_MAX_EVENTS = 100;
+
+// DEV_NOTE: A timeline step's dot: good news (approved, saved, checked, undone, resolved), bad news (failed, a check
+// that failed, needs a person) or neither
+export enum ChangeRequestTimelineToneEnum {
+  Neutral = "neutral",
+  Success = "success",
+  Destructive = "destructive",
+}
+
+// DEV_NOTE: Why Mark resolved was refused: only a change that needs a person can be resolved (409)
+export enum ChangeRequestResolveFailureEnum {
+  NotNeedsHuman = "NotNeedsHuman",
+}
+
+// DEV_NOTE: The parts of a change_request event's activity_log detail the timeline reads (M4-5), each optional: an
+// approval with no approver (isAutomatic), the user's own undo (isUserUndo), and why it failed or needs a person
+// (errorCode, or reason on the events that record one). Any other key is ignored.
+export const ZChangeRequestEventDetail = z.object({
+  isAutomatic: z.boolean().optional().catch(undefined),
+  isUserUndo: z.boolean().optional().catch(undefined),
+  errorCode: z.string().nullable().optional().catch(undefined),
+  reason: z.string().nullable().optional().catch(undefined),
+});
+export type ChangeRequestEventDetail = z.infer<typeof ZChangeRequestEventDetail>;

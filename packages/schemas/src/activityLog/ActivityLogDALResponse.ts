@@ -19,3 +19,16 @@ export interface ActivityLogPartitionDALResponse extends ApiResponse {
 export interface ActivityLogDefaultPartitionDALResponse extends ApiResponse {
   hasRows?: boolean;
 }
+
+// DEV_NOTE: One event of an entity's timeline (M4-5) with its actor's name: the admin's (actor Admin) or the chatbot
+// user's (actor ChatbotUser, null once erased); null for the system or a name never sent. Internal ids stay server-side.
+export type ActivityLogTimelineRow = Pick<
+  ActivityLog,
+  "id" | "actorType" | "entityAction" | "detail" | "createdAt"
+> & {
+  actorName: string | null;
+};
+
+export interface ActivityLogTimelineDALResponse extends ApiResponse {
+  activityLogs?: ActivityLogTimelineRow[];
+}

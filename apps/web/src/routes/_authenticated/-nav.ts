@@ -10,17 +10,24 @@ import {
   ShieldCheck,
   SquaresFour,
 } from "@phosphor-icons/react";
+import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The dashboard's navigation (DESIGN.md §4), the only place it is defined: the sidebar and the breadcrumb
 // just map it. An item with `items` is a nested group (Settings): a Collapsible whose pages sit under its `to`.
-// Everything is company-level: no chatbot in any path (§6).
+// Everything is company-level: no chatbot in any path (§6). An item with `badge` shows that count (§4: the sidebar
+// fills it).
 export const NAV_GROUPS = [
   {
     label: "Monitor",
     items: [
       { label: "Overview", to: "/overview", icon: SquaresFour },
       { label: "Conversations", to: "/conversations", icon: ChatCircle },
-      { label: "Changes", to: "/changes", icon: GitDiff },
+      {
+        label: "Changes",
+        to: "/changes",
+        icon: GitDiff,
+        badge: Schemas.DashboardNavBadgeEnum.ChangesNeedsHuman,
+      },
       { label: "Quality", to: "/quality", icon: Flag },
     ],
   },
