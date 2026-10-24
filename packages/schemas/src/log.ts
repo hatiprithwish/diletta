@@ -334,6 +334,7 @@ export enum LogAction {
   DraftQualityTest = "DraftQualityTest",
   ConvertQualityIssue = "ConvertQualityIssue",
   CreateEvalCase = "CreateEvalCase",
+  ListRecentChatMessages = "ListRecentChatMessages",
 
   // Cron
   DispatchCron = "DispatchCron",

@@ -362,7 +362,9 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
 
       <div className="mx-[22px] mb-4 flex flex-col gap-2.5 rounded-lg bg-surface-subtle px-3.5 py-3">
         {qualityIssue.excerpt.length === 0 && (
-          <p className="text-body text-muted-foreground">The chat's content was deleted.</p>
+          <p className="text-body text-muted-foreground">
+            {qualityIssue.isContentPurged ? "The chat's content was deleted." : "No messages yet."}
+          </p>
         )}
         {qualityIssue.excerpt.map((message) => (
           // DEV_NOTE: An excerpt holds at most one message per role
@@ -475,7 +477,10 @@ function QualityTriage({ qualityIssue }: Schemas.DashboardQualityDetailProps) {
     defaultValues: { note: qualityIssue.note ?? "" },
     onSubmit: async ({ value }) => {
       const saved = await triage.mutateAsync({ note: value.note });
-      form.reset({ note: saved.qualityIssue?.note ?? "" });
+      // DEV_NOTE: The answer may carry no issue (saved, but the read after it failed): keep what was saved
+      form.reset({
+        note: saved.qualityIssue ? (saved.qualityIssue.note ?? "") : value.note.trim(),
+      });
     },
   });
 
@@ -598,7 +603,13 @@ function QualityTestForm({
   const form = useForm({
     defaultValues: draft,
     onSubmit: async ({ value }) => {
-      await convert.mutateAsync(value);
+      try {
+        await convert.mutateAsync(value);
+      } catch (error) {
+        // DEV_NOTE: A 409 (closed meanwhile, or the chatbot is gone) can't succeed on a retry: the review closes
+        if (error instanceof ApiError && error.status === 409) onClose();
+        throw error;
+      }
       onClose();
     },
   });

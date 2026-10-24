@@ -25,10 +25,10 @@ export interface OpenQualityIssueCountsDALResponse extends ApiResponse {
 // DEV_NOTE: isCreated false = the conversation already had an open admin issue
 export type AdminQualityIssueDALResponse = QualityIssueWriteDALResponse;
 
-// DEV_NOTE: One issue as the Quality page reads it (M4-6), with internal ids (the Repo drops them). The conversation and
-// the issue's change request, test and rated reply are left joins; the conversation an inner join (no DB foreign keys). ratedMessageContent is the
-// rated reply's messages.content (jsonb, null once purged): read it through Schemas.ZMessageContent. rating = the
-// rating as it stands now (the user may have switched it to Up).
+// DEV_NOTE: One issue as the Quality page reads it (M4-6), with internal ids (the Repo drops them). The conversation is
+// an inner join; the issue's change request, test and rated reply are left joins (no DB foreign keys). ratedReplyText
+// is the start of the rated reply's text (QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1 chars, so a longer one can be marked
+// cut; null once purged). rating = the rating as it stands now (the user may have switched it to Up).
 export interface DashboardQualityIssueRow {
   id: string;
   publicId: string;
@@ -50,7 +50,7 @@ export interface DashboardQualityIssueRow {
   evalCasePublicId: string | null;
   evalCaseName: string | null;
   ratedMessageId: string | null;
-  ratedMessageContent: unknown;
+  ratedReplyText: string | null;
   rating: FeedbackRatingIntEnum | null;
 }
 

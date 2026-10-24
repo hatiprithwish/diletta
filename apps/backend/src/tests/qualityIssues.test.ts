@@ -12,24 +12,9 @@ vi.mock("@/providers/logger", () => ({
 const { User, Assistant, Tool } = Schemas.MessageRoleIntEnum;
 let nextId = 0;
 
-const row = (
-  role: Schemas.MessageRoleIntEnum,
-  text: string | null,
-): Schemas.TranscriptMessageRow => {
+const row = (role: Schemas.MessageRoleIntEnum, text: string | null): Schemas.ChatMessageTextRow => {
   nextId += 1;
-  return {
-    id: String(nextId),
-    publicId: `msg_${nextId}`,
-    companyId: "1",
-    conversationId: "1",
-    sessionMessageId: `s_${nextId}`,
-    turnId: "t",
-    role,
-    content: text === null ? null : { text },
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    rating: null,
-  };
+  return { id: String(nextId), role, text };
 };
 
 const noTriage = { issueTypeLabel: null, note: null };
@@ -58,6 +43,11 @@ describe("QualityIssuesProvider.excerpt", () => {
     expect(QualityIssuesProvider.excerpt([row(User, "Only")], null)).toEqual([
       { role: User, text: "Only" },
     ]);
+  });
+
+  it("takes a question nobody answered as what an unrated issue is about", () => {
+    const rows = [row(User, "Q1"), row(Assistant, "A1"), row(User, "Q2")];
+    expect(QualityIssuesProvider.excerpt(rows, null)).toEqual([{ role: User, text: "Q2" }]);
   });
 
   it("never swaps a rated reply that lost its text for another reply", () => {
@@ -106,6 +96,31 @@ describe("QualityIssuesProvider.rewriteSource", () => {
         (message) => message.text.length <= Schemas.EVAL_CASE_MESSAGE_MAX_CHARS,
       ),
     ).toBe(true);
+  });
+
+  it("tests the question nobody answered, with no reply that went wrong", () => {
+    const rows = [row(User, "Q1"), row(Assistant, "A1"), row(User, "Q2")];
+    expect(QualityIssuesProvider.rewriteSource(rows, null, noTriage)).toMatchObject({
+      messages: [
+        { role: Schemas.EvalCaseMessageRoleEnum.User, text: "Q1" },
+        { role: Schemas.EvalCaseMessageRoleEnum.Assistant, text: "A1" },
+        { role: Schemas.EvalCaseMessageRoleEnum.User, text: "Q2" },
+      ],
+      reply: null,
+    });
+  });
+
+  it("keeps the newest messages within QUALITY_TEST_REWRITE_MAX_CHARS, so the answer fits the output cap", () => {
+    const long = (label: string) => `${label}${"y".repeat(2999)}`;
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      row(index % 2 === 0 ? User : Assistant, long(`m${index}`)),
+    );
+    const source = QualityIssuesProvider.rewriteSource(rows, null, noTriage);
+    const total = source?.messages.reduce((sum, message) => sum + message.text.length, 0) ?? 0;
+    expect(total).toBeLessThanOrEqual(Schemas.QUALITY_TEST_REWRITE_MAX_CHARS);
+    // DEV_NOTE: The last line is a reply (m9), so the question is m8; with each message 3,001 chars, three fit
+    expect(source?.messages.map((message) => message.text.slice(0, 2))).toEqual(["m6", "m7", "m8"]);
+    expect(source?.reply?.length).toBeLessThanOrEqual(Schemas.QUALITY_TEST_REWRITE_REPLY_MAX_CHARS);
   });
 
   it("is null when there is no question to test", () => {

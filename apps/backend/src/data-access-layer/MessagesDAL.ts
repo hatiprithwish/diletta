@@ -1,4 +1,4 @@
-import { and, asc, eq, getColumns } from "drizzle-orm";
+import { and, asc, desc, eq, getColumns, inArray, lte, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { conversations, feedback, messages } from "@/db/tables";
@@ -182,6 +182,54 @@ export default class MessagesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.ListConversationMessages,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A quality issue's messages (M4-6): the newest params.limit user and assistant messages of one
+  // conversation, up to and including upToMessageId (null = the whole conversation), text only (content->>'text'),
+  // returned oldest first. Read newest first on IDX_messages_conversation_id, so the cost stays flat as a chat grows.
+  async listRecentChatMessages(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ListRecentChatMessagesDALRequest,
+  ) {
+    const response: Schemas.ChatMessageTextsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(messages.companyId, params.companyId),
+        eq(messages.conversationId, params.conversationId),
+        inArray(messages.role, [
+          Schemas.MessageRoleIntEnum.User,
+          Schemas.MessageRoleIntEnum.Assistant,
+        ]),
+      ];
+      if (params.upToMessageId !== null) conditions.push(lte(messages.id, params.upToMessageId));
+      const rows = await tx
+        .select({
+          id: messages.id,
+          role: messages.role,
+          text: sql<string | null>`${messages.content}->>'text'`,
+        })
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Recent chat messages fetched successfully";
+      response.messages = rows.reverse();
+    } catch (error) {
+      const message = "Unknown error in listing recent chat messages";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListRecentChatMessages,
         message,
         error,
         metadata: params,

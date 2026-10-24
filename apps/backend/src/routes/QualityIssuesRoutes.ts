@@ -13,13 +13,28 @@ import * as Schemas from "@app/schemas";
 // /open-count is declared before /:publicId so it isn't read as an issue id.
 const QualityIssuesRoutes = new Hono<AppContext>();
 
-// DEV_NOTE: A write's status: 200 with the issue as it stands, 404 unknown, 409 no longer Open (failure). The route
-// relays the write's event after the commit; the outbox id never reaches the client.
-function writeStatus(response: Schemas.UpdateQualityIssueApiResponse): 200 | 404 | 409 | 500 {
-  if (response.isSuccess) return 200;
-  if (response.isNotFound) return 404;
-  return response.failure ? 409 : 500;
+// DEV_NOTE: A write's answer: the event relayed after the commit (the outbox id never reaches the client), and its
+// status: 200 with the issue as it stands, 404 unknown, 409 a refusal (failure: no longer Open, or no chatbot)
+function answerWrite(
+  env: Env,
+  ctx: Pick<ExecutionContext, "waitUntil">,
+  companyId: string,
+  result: Schemas.UpdateQualityIssueResponse,
+): { response: Schemas.UpdateQualityIssueApiResponse; status: 200 | 404 | 409 | 500 } {
+  const { outboxId, ...response } = result;
+  if (outboxId) {
+    ctx.waitUntil(new EventOutboxRepo(env).relayEvents({ companyId, outboxIds: [outboxId] }));
+  }
+  if (response.isSuccess) return { response, status: 200 };
+  if (response.isNotFound) return { response, status: 404 };
+  return { response, status: response.failure ? 409 : 500 };
 }
+
+// DEV_NOTE: Mark fixed and Dismiss: the same close, by path
+const CLOSE_ROUTES: [path: string, status: Schemas.QualityIssueCloseStatus][] = [
+  ["fix", Schemas.QualityIssueStatusIntEnum.Fixed],
+  ["dismiss", Schemas.QualityIssueStatusIntEnum.Dismissed],
+];
 
 QualityIssuesRoutes.get(
   "/",
@@ -72,64 +87,36 @@ QualityIssuesRoutes.patch(
   async (c) => {
     const repo = new QualityIssuesRepo(c.env);
     const companyId = c.get("companyId");
-    const { outboxId, ...response } = await repo.triageQualityIssue({
+    const result = await repo.triageQualityIssue({
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
       publicId: c.req.param("publicId"),
     });
-    if (outboxId) {
-      c.executionCtx.waitUntil(
-        new EventOutboxRepo(c.env).relayEvents({ companyId, outboxIds: [outboxId] }),
-      );
-    }
-    return c.json(response, writeStatus(response));
+    const { response, status } = answerWrite(c.env, c.executionCtx, companyId, result);
+    return c.json(response, status);
   },
 );
 
-QualityIssuesRoutes.post(
-  "/:publicId/fix",
-  checkAuth,
-  authorizeCompany(Schemas.AuthzActionEnum.QualityIssueUpdate),
-  async (c) => {
-    const repo = new QualityIssuesRepo(c.env);
-    const companyId = c.get("companyId");
-    const { outboxId, ...response } = await repo.closeQualityIssue({
-      companyId,
-      adminId: c.get("admin").adminId,
-      publicId: c.req.param("publicId"),
-      status: Schemas.QualityIssueStatusIntEnum.Fixed,
-    });
-    if (outboxId) {
-      c.executionCtx.waitUntil(
-        new EventOutboxRepo(c.env).relayEvents({ companyId, outboxIds: [outboxId] }),
-      );
-    }
-    return c.json(response, writeStatus(response));
-  },
-);
-
-QualityIssuesRoutes.post(
-  "/:publicId/dismiss",
-  checkAuth,
-  authorizeCompany(Schemas.AuthzActionEnum.QualityIssueUpdate),
-  async (c) => {
-    const repo = new QualityIssuesRepo(c.env);
-    const companyId = c.get("companyId");
-    const { outboxId, ...response } = await repo.closeQualityIssue({
-      companyId,
-      adminId: c.get("admin").adminId,
-      publicId: c.req.param("publicId"),
-      status: Schemas.QualityIssueStatusIntEnum.Dismissed,
-    });
-    if (outboxId) {
-      c.executionCtx.waitUntil(
-        new EventOutboxRepo(c.env).relayEvents({ companyId, outboxIds: [outboxId] }),
-      );
-    }
-    return c.json(response, writeStatus(response));
-  },
-);
+for (const [path, status] of CLOSE_ROUTES) {
+  QualityIssuesRoutes.post(
+    `/:publicId/${path}`,
+    checkAuth,
+    authorizeCompany(Schemas.AuthzActionEnum.QualityIssueUpdate),
+    async (c) => {
+      const repo = new QualityIssuesRepo(c.env);
+      const companyId = c.get("companyId");
+      const result = await repo.closeQualityIssue({
+        companyId,
+        adminId: c.get("admin").adminId,
+        publicId: c.req.param("publicId"),
+        status,
+      });
+      const answer = answerWrite(c.env, c.executionCtx, companyId, result);
+      return c.json(answer.response, answer.status);
+    },
+  );
+}
 
 // DEV_NOTE: A draft to review, saved nowhere. A refusal answers its failure's status
 // (QUALITY_TEST_DRAFT_FAILURE_HTTP_STATUS_MAP); the model call's row is written in waitUntil.
@@ -161,18 +148,14 @@ QualityIssuesRoutes.post(
   async (c) => {
     const repo = new QualityIssuesRepo(c.env);
     const companyId = c.get("companyId");
-    const { outboxId, ...response } = await repo.convertQualityIssue({
+    const result = await repo.convertQualityIssue({
       companyId,
       adminId: c.get("admin").adminId,
       publicId: c.req.param("publicId"),
       draft: c.req.valid("json"),
     });
-    if (outboxId) {
-      c.executionCtx.waitUntil(
-        new EventOutboxRepo(c.env).relayEvents({ companyId, outboxIds: [outboxId] }),
-      );
-    }
-    return c.json(response, writeStatus(response));
+    const { response, status } = answerWrite(c.env, c.executionCtx, companyId, result);
+    return c.json(response, status);
   },
 );
 

@@ -529,7 +529,10 @@ export default class QualityIssuesDAL {
         evalCasePublicId: evalCases.publicId,
         evalCaseName: evalCases.name,
         ratedMessageId: messages.id,
-        ratedMessageContent: messages.content,
+        // DEV_NOTE: Only the start of the reply's text: the list shows QUALITY_ISSUE_EXCERPT_MAX_CHARS of it
+        ratedReplyText: sql<
+          string | null
+        >`left(${messages.content}->>'text', ${Schemas.QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1})`,
         rating: feedback.rating,
       })
       .from(qualityIssues)

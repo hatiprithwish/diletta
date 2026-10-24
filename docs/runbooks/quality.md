@@ -17,7 +17,7 @@ Each action writes one `quality_issue.<action>` event to `activity_log` and `eve
 
 ## Create test
 
-1. **Draft.** `POST /dashboard/quality-issues/:publicId/test-draft` reads the conversation's messages up to the question before the reply the issue is about (for a user issue, the rated reply). It keeps at most `EVAL_CASE_MAX_MESSAGES` messages, each cut at `EVAL_CASE_MESSAGE_MAX_CHARS`. It then asks the model router for a rewrite with no personal details:
+1. **Draft.** `POST /dashboard/quality-issues/:publicId/test-draft` reads the conversation's newest messages (at most `EVAL_CASE_MAX_MESSAGES + 1`, text only) up to the question before the reply the issue is about: the rated reply for a user issue; otherwise the last reply, or the chat's last question when nobody answered it (then there is no reply that went wrong). It keeps the newest messages that fit `QUALITY_TEST_REWRITE_MAX_CHARS` in total (12,000), each cut at `EVAL_CASE_MESSAGE_MAX_CHARS`, because the model restates them in its answer, which has an output cap of 8,192 tokens. It then asks the model router for a rewrite with no personal details:
    - It uses the chatbot's published routing at tier Mid, with task type `quality.test_rewrite`.
    - It runs on the company's own key, and the budget is held like any other call.
    - The call is recorded as the chatbot's, with no conversation, so it shows under Usage › Test runs and never adds to the conversation's cost.
@@ -30,15 +30,16 @@ Each action writes one `quality_issue.<action>` event to `activity_log` and `eve
 
 The admin's review is the PII check: the server saves what the admin saw, nothing from the model directly.
 
-### When there is no draft
+### When there is no draft or the save is refused
 
-| Answer | `failure`           | Meaning and what to do                                                                                                                                                                           |
-| ------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 409    | `NotOpen`           | The issue was closed meanwhile.                                                                                                                                                                  |
-| 409    | `NoConversation`    | The chat's content was purged, or the user never asked anything. Dismiss or mark it fixed instead.                                                                                               |
-| 409    | `NoPublishedConfig` | The chatbot has no published config, so there is no routing to call. Publish it (Settings › Bots).                                                                                               |
-| 503    | `ModelUnavailable`  | The router refused: no active key for the Mid tier's provider, the budget is used up, or the provider is down. Check Settings › Model keys and Budget; a rejected key also opens a system issue. |
-| 502    | `RewriteFailed`     | The model's answer wasn't a usable draft (not the shape asked for, or over the limits). Try again.                                                                                               |
+| Answer     | `failure`           | Meaning and what to do                                                                                                                                                                           |
+| ---------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 409        | `NotOpen`           | The issue was closed meanwhile.                                                                                                                                                                  |
+| 409        | `NoConversation`    | The chat's content was purged, or the user never asked anything. Dismiss or mark it fixed instead.                                                                                               |
+| 409        | `NoPublishedConfig` | The chatbot has no published config, so there is no routing to call. Publish it (Settings › Bots).                                                                                               |
+| 503        | `ModelUnavailable`  | The router refused: no active key for the Mid tier's provider, the budget is used up, or the provider is down. Check Settings › Model keys and Budget; a rejected key also opens a system issue. |
+| 502        | `RewriteFailed`     | The model's answer wasn't a usable draft (not the shape asked for, or over the limits). Try again.                                                                                               |
+| 409 (save) | `ChatbotNotFound`   | The conversation's chatbot was removed, so no chatbot can own the test. Nothing was written; dismiss the issue or mark it fixed.                                                                 |
 
 ## What M5 adds
 

@@ -43,11 +43,12 @@ export interface QualityIssueExcerptMessage {
 }
 
 // DEV_NOTE: GET /dashboard/quality-issues/:publicId. rating = the user's rating now (they may have switched it to Up);
-// excerpt is empty once the chat is purged. changeRequestPublicId opens the change the issue is about; evalCase = the
+// excerpt is empty once the chat is purged (isContentPurged) or before it has any text. changeRequestPublicId opens the change the issue is about; evalCase = the
 // test it became (Converted).
 export interface QualityIssueDetail extends Omit<QualityIssueListItem, "conversation"> {
   rating: FeedbackRatingIntEnum | null;
   excerpt: QualityIssueExcerptMessage[];
+  isContentPurged: boolean;
   conversation: {
     publicId: string;
     title: string | null;

@@ -32,13 +32,14 @@ export default class EvalCasesDAL {
 
       if (!chatbot) {
         const message = "Chatbot not found";
-        AppLogger.error({
+        AppLogger.warn({
           category: Schemas.LogCategory.DAL,
           action: Schemas.LogAction.CreateEvalCase,
           message,
           metadata,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 

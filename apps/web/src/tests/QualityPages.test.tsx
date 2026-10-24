@@ -76,6 +76,7 @@ const DETAIL: Schemas.QualityIssueDetail = {
     chatbotName: "eRegister Assistant",
     userName: "Tom Baker",
   },
+  isContentPurged: false,
   changeRequestPublicId: "cr_9",
   evalCase: null,
 };
@@ -470,6 +471,72 @@ describe("Quality issue", () => {
     expect(await within(card).findByText("Fire drill frequency")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
     expect(within(card).queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("tells a chat with no messages yet from one whose content was deleted", async () => {
+    const withExcerpt = (isContentPurged: boolean) => (url: string, init?: RequestInit) =>
+      url.includes("/dashboard/quality-issues/qi_1")
+        ? {
+            status: 200,
+            body: { isSuccess: true, qualityIssue: { ...DETAIL, excerpt: [], isContentPurged } },
+          }
+        : defaultApi(url, init);
+    mockApi(withExcerpt(false));
+    renderPage("/quality/qi_1");
+    expect(await within(await detailCard()).findByText("No messages yet.")).toBeInTheDocument();
+  });
+
+  it("keeps a saved note when the answer carries no issue", async () => {
+    // DEV_NOTE: The PATCH saves but its answer has no issue (the read after it failed); the detail's refetch then
+    // shows the saved note
+    let savedNote: string | null = null;
+    mockApi((url, init) => {
+      if (!url.includes("/dashboard/quality-issues/qi_1")) return defaultApi(url, init);
+      if (init?.method === "PATCH") {
+        savedNote =
+          (JSON.parse(String(init.body)) as Schemas.TriageQualityIssueApiRequest).note ?? null;
+        return { status: 200, body: { isSuccess: true } };
+      }
+      return {
+        status: 200,
+        body: { isSuccess: true, qualityIssue: { ...DETAIL, note: savedNote } },
+      };
+    });
+    renderPage("/quality/qi_1");
+    const card = await detailCard();
+    const note = await within(card).findByLabelText("Note");
+    await userEvent.type(note, "Policy changed");
+    await userEvent.click(within(card).getByRole("button", { name: "Save note" }));
+    await waitFor(() =>
+      expect(within(card).queryByRole("button", { name: "Save note" })).not.toBeInTheDocument(),
+    );
+    expect(within(card).getByLabelText("Note")).toHaveValue("Policy changed");
+  });
+
+  it("closes the review when the save is refused (409) and says why", async () => {
+    mockApi((url, init) =>
+      url.endsWith("/convert")
+        ? {
+            status: 409,
+            body: {
+              isSuccess: false,
+              failure: Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound,
+            },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_1");
+    const card = await detailCard();
+    await userEvent.click(await within(card).findByRole("button", { name: "Create test" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review the test" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Review the test" })).not.toBeInTheDocument(),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "This conversation's chatbot was removed, so the test can't be saved. Nothing changed.",
+    );
   });
 
   it("says when the issue is gone (404)", async () => {

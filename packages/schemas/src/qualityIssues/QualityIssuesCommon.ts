@@ -162,6 +162,12 @@ export const QUALITY_PAGE_SIZE = 25;
 export const QUALITY_ISSUE_NOTE_MAX_CHARS = 2000;
 export const QUALITY_ISSUE_EXCERPT_MAX_CHARS = 280;
 
+// DEV_NOTE: The most text a test rewrite is sent (its messages together, newest kept) and the reply that went wrong.
+// The model restates the messages in its answer, which must fit MODEL_CALL_MAX_OUTPUT_TOKENS (8192, ~30k chars) and a
+// budget-shortened hold, so the input stays well under it.
+export const QUALITY_TEST_REWRITE_MAX_CHARS = 12_000;
+export const QUALITY_TEST_REWRITE_REPLY_MAX_CHARS = 2_000;
+
 // DEV_NOTE: The ways out of Open that an admin picks on the detail card (Create test has its own request)
 export type QualityIssueCloseStatus =
   | QualityIssueStatusIntEnum.Fixed
@@ -176,9 +182,11 @@ export const QUALITY_ISSUE_CLOSE_ENTITY_ACTION_MAP: Record<
 };
 
 // DEV_NOTE: Why a triage, close or convert changed nothing (409): the issue is no longer Open (someone closed or
-// converted it first)
+// converted it first), or (convert) its chatbot is gone
 export enum QualityIssueUpdateFailureEnum {
   NotOpen = "NotOpen",
+  // DEV_NOTE: Convert only: the conversation's chatbot was removed, so there is no chatbot to own the test
+  ChatbotNotFound = "ChatbotNotFound",
 }
 
 // DEV_NOTE: Why Create test produced no draft. NotOpen: the issue was closed meanwhile. NoConversation: the chat has

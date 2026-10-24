@@ -73,7 +73,7 @@ export default class QualityIssuesRepo {
       issueTypeLabel:
         row.issueType === null ? null : Schemas.QUALITY_ISSUE_TYPE_LABEL_MAP[row.issueType],
       note: row.note,
-      ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedMessageContent),
+      ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedReplyText),
       conversation: {
         publicId: row.conversationPublicId,
         title: isPurged ? null : row.conversationTitle,
@@ -92,6 +92,7 @@ export default class QualityIssuesRepo {
       ...item,
       rating: row.rating,
       excerpt,
+      isContentPurged: row.conversationContentPurgedAt !== null,
       conversation: {
         ...item.conversation,
         chatbotName: row.chatbotName,
@@ -285,9 +286,11 @@ export default class QualityIssuesRepo {
         );
       }
 
-      const listed = await this.messagesDal.listConversationMessages(tx, {
+      const listed = await this.messagesDal.listRecentChatMessages(tx, {
         companyId,
         conversationId: row.conversationId,
+        upToMessageId: row.ratedMessageId,
+        limit: QualityIssuesProvider.MESSAGES_READ_LIMIT,
       });
       if (!listed.isSuccess) return { isSuccess: false, message: listed.message };
       const source = QualityIssuesProvider.rewriteSource(
@@ -376,8 +379,8 @@ export default class QualityIssuesRepo {
   }
 
   // DEV_NOTE: Create test, step 2: the reviewed draft saved as the conversation's chatbot's eval case (input and
-  // expectations v1), and the issue Open → Converted with its eval_case_id, in one withTenant. Else failure NotOpen
-  // (409, nothing written).
+  // expectations v1), and the issue Open → Converted with its eval_case_id, in one withTenant. Else failure NotOpen,
+  // or ChatbotNotFound when the conversation's chatbot was removed (409, nothing written).
   async convertQualityIssue(
     params: Schemas.ConvertQualityIssueRequest,
   ): Promise<Schemas.UpdateQualityIssueResponse> {
@@ -400,6 +403,14 @@ export default class QualityIssuesRepo {
           rubric: draft.rubric,
         },
       });
+      // DEV_NOTE: The chatbot was removed: nothing was written yet, so this is a refusal, not a rollback
+      if (created.isNotFound) {
+        return {
+          isSuccess: false,
+          message: "The conversation's chatbot no longer exists",
+          failure: Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound,
+        };
+      }
       if (!created.isSuccess || !created.evalCase) {
         throw new TenantRollbackError(created.message ?? "Eval case not created");
       }
@@ -585,7 +596,7 @@ export default class QualityIssuesRepo {
         AppLogger.warn({
           category: Schemas.LogCategory.Repo,
           action,
-          message: "Quality issue not changed: it is no longer open",
+          message: "Quality issue not changed",
           metadata: { companyId, publicId, failure: written.failure },
         });
       }
@@ -604,8 +615,8 @@ export default class QualityIssuesRepo {
     return { ...written, qualityIssue: detail.qualityIssue };
   }
 
-  // DEV_NOTE: The detail with its excerpt (QualityIssuesProvider), read in the caller's transaction. A purged chat has
-  // none (no messages are read for it).
+  // DEV_NOTE: The detail with its excerpt (QualityIssuesProvider), read in the caller's transaction from the newest
+  // messages up to the rated reply (MESSAGES_READ_LIMIT, text only). A purged chat has none (no messages are read).
   private async withExcerpt(
     tx: Tx,
     companyId: string,
@@ -618,9 +629,11 @@ export default class QualityIssuesRepo {
         qualityIssue: this.toDetail(row, []),
       };
     }
-    const listed = await this.messagesDal.listConversationMessages(tx, {
+    const listed = await this.messagesDal.listRecentChatMessages(tx, {
       companyId,
       conversationId: row.conversationId,
+      upToMessageId: row.ratedMessageId,
+      limit: QualityIssuesProvider.MESSAGES_READ_LIMIT,
     });
     if (!listed.isSuccess) return { isSuccess: false, message: listed.message };
     return {

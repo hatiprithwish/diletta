@@ -10,15 +10,14 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
-import { ConversationsQueries } from "../conversations/-data";
-import { OverviewQueries } from "../overview/-data";
+import { QUERY_KEY_ROOTS, invalidateOpenIssueViews } from "../-invalidation";
 
 // DEV_NOTE: The Quality page (M4-6): the inbox list, one issue, the sidebar's open count, and the admin's work on an
 // issue (triage, Mark fixed, Dismiss, Create test). One list query per tab + page, one detail per issue; keys.all()
 // covers them all. A write changes the detail (setQueryData) and the lists' rows and counts (invalidated).
 export class QualityQueries {
   static keys = {
-    all: () => ["quality"] as const,
+    all: () => QUERY_KEY_ROOTS.quality,
     lists: () => [...QualityQueries.keys.all(), "list"] as const,
     list: (search: Schemas.QualityPageSearch) => [...QualityQueries.keys.lists(), search] as const,
     details: () => [...QualityQueries.keys.all(), "detail"] as const,
@@ -103,23 +102,25 @@ function applyWrite(
     void queryClient.invalidateQueries({ queryKey: QualityQueries.keys.detail(publicId) });
   }
   void queryClient.invalidateQueries({ queryKey: QualityQueries.keys.lists() });
-  if (isClosing) refreshOpenCounts(queryClient);
+  if (isClosing) invalidateOpenIssueViews(queryClient);
 }
 
-function refreshOpenCounts(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: QualityQueries.keys.openCount() });
-  void queryClient.invalidateQueries({ queryKey: OverviewQueries.keys.all() });
-  void queryClient.invalidateQueries({ queryKey: ConversationsQueries.keys.all() });
-}
+// DEV_NOTE: Why a write was refused (409), in the dashboard's words (DESIGN.md §8)
+const UPDATE_FAILURE_TEXT: Record<Schemas.QualityIssueUpdateFailureEnum, string> = {
+  [Schemas.QualityIssueUpdateFailureEnum.NotOpen]:
+    "This issue was already closed. Nothing changed.",
+  [Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound]:
+    "This conversation's chatbot was removed, so the test can't be saved. Nothing changed.",
+};
 
-// DEV_NOTE: A 409 means someone else closed or converted the issue first: the detail and lists refetch to show where it
-// stands. true = handled.
-function onNotOpen(queryClient: QueryClient, publicId: string, error: Error): boolean {
+// DEV_NOTE: A 409: someone else closed or converted the issue first (or, on save, its chatbot is gone). The detail and
+// every view counting open issues refetch to show where it stands. true = handled.
+function onRefused(queryClient: QueryClient, publicId: string, error: Error): boolean {
   if (!(error instanceof ApiError) || error.status !== 409) return false;
   void queryClient.invalidateQueries({ queryKey: QualityQueries.keys.detail(publicId) });
-  void queryClient.invalidateQueries({ queryKey: QualityQueries.keys.lists() });
-  refreshOpenCounts(queryClient);
-  toast.error("This issue was already closed. Nothing changed.");
+  invalidateOpenIssueViews(queryClient);
+  const failure = (error.body as Schemas.UpdateQualityIssueApiResponse).failure;
+  toast.error(UPDATE_FAILURE_TEXT[failure ?? Schemas.QualityIssueUpdateFailureEnum.NotOpen]);
   return true;
 }
 
@@ -136,7 +137,7 @@ export function useTriageQualityIssue(publicId: string) {
       ),
     onSuccess: (response) => applyWrite(queryClient, publicId, response, false),
     onError: (error) => {
-      if (onNotOpen(queryClient, publicId, error)) return;
+      if (onRefused(queryClient, publicId, error)) return;
       toast.error("The issue wasn't updated. Nothing changed, try again.");
     },
   });
@@ -168,7 +169,7 @@ export function useCloseQualityIssue(publicId: string) {
       toast.success(CLOSE_TOAST[status]);
     },
     onError: (error) => {
-      if (onNotOpen(queryClient, publicId, error)) return;
+      if (onRefused(queryClient, publicId, error)) return;
       toast.error("The issue wasn't closed. Nothing changed, try again.");
     },
   });
@@ -205,7 +206,7 @@ export function useDraftQualityTest(publicId: string) {
           ? (error.body as Schemas.DraftQualityTestApiResponse).failure
           : undefined;
       if (failure === Schemas.QualityTestDraftFailureEnum.NotOpen) {
-        onNotOpen(queryClient, publicId, error);
+        onRefused(queryClient, publicId, error);
         return;
       }
       toast.error(failure ? DRAFT_FAILURE_TEXT[failure] : "The test draft didn't load. Try again.");
@@ -230,7 +231,7 @@ export function useConvertQualityIssue(publicId: string) {
       toast.success("Test saved.");
     },
     onError: (error) => {
-      if (onNotOpen(queryClient, publicId, error)) return;
+      if (onRefused(queryClient, publicId, error)) return;
       toast.error("The test wasn't saved. Nothing changed, try again.");
     },
   });

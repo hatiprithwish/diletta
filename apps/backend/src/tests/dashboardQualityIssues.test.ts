@@ -579,8 +579,10 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
       { role: Schemas.MessageRoleIntEnum.User, text: FOLLOW_UP },
       { role: Schemas.MessageRoleIntEnum.Assistant, text: LATER_REPLY },
     ]);
+    expect(system.body.qualityIssue?.isContentPurged).toBe(false);
     const purged = await detail(purgedIssue);
     expect(purged.body.qualityIssue?.excerpt).toEqual([]);
+    expect(purged.body.qualityIssue?.isContentPurged).toBe(true);
   });
 
   it("refuses another company's issue and an unknown one with 404, and an operator with 403", async () => {
@@ -742,6 +744,47 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
     expect(events.map((event) => event.entityAction)).toContain(
       Schemas.QualityIssueEntityActionEnum.Converted,
     );
+  });
+
+  it("refuses with 409 ChatbotNotFound when the conversation's chatbot was removed, writing nothing", async () => {
+    const goneIssue = await withOwnerDb(async (ownerDb) => {
+      const [bot] = await ownerDb
+        .insert(chatbots)
+        .values({ publicId: Utility.generatePublicId(), companyId: companyA, name: "Removed" })
+        .returning({ id: chatbots.id });
+      const [user] = await ownerDb
+        .insert(chatbotUsers)
+        .values({ companyId: companyA, hostUserId: `host_${crypto.randomUUID()}` })
+        .returning({ id: chatbotUsers.id });
+      const [conv] = await ownerDb
+        .insert(conversations)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          chatbotUserId: user!.id,
+          chatbotId: bot!.id,
+        })
+        .returning({ id: conversations.id });
+      const [issue] = await ownerDb
+        .insert(qualityIssues)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          conversationId: conv!.id,
+          source: Admin,
+          createdBy: adminAId,
+        })
+        .returning({ publicId: qualityIssues.publicId });
+      await ownerDb.delete(chatbots).where(eq(chatbots.id, bot!.id));
+      return issue!.publicId;
+    });
+
+    const { status, body } = await write(`${goneIssue}/convert`, DRAFT);
+    expect(status).toBe(409);
+    expect(body.failure).toBe(Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound);
+    expect((await issueRow(goneIssue))?.status).toBe(Open);
+    // DEV_NOTE: Closed so the open counts the other tests read stay as they were
+    expect((await write(`${goneIssue}/dismiss`)).status).toBe(200);
   });
 
   it("refuses a second convert with 409 and writes no second test", async () => {
