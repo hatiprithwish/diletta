@@ -190,6 +190,20 @@ export const CHANGE_REQUEST_ERROR_LABEL_MAP: Record<ChangeRequestErrorCodeEnum, 
   [ChangeRequestErrorCodeEnum.UndoInterrupted]: "An undo was cut short",
 };
 
+export const ZChangeRequestErrorCode = z.enum(ChangeRequestErrorCodeEnum);
+
+// DEV_NOTE: change_requests.error_code is text, so a stored code may be one the enum no longer knows (renamed, or
+// written by another build): it keeps reading, as ServerError's code and words. null stays null.
+export function changeRequestErrorOf(code: string | null): {
+  errorCode: ChangeRequestErrorCodeEnum | null;
+  errorLabel: string | null;
+} {
+  if (code === null) return { errorCode: null, errorLabel: null };
+  const parsed = ZChangeRequestErrorCode.safeParse(code);
+  const errorCode = parsed.success ? parsed.data : ChangeRequestErrorCodeEnum.ServerError;
+  return { errorCode, errorLabel: CHANGE_REQUEST_ERROR_LABEL_MAP[errorCode] };
+}
+
 // DEV_NOTE: Who undid an Undone change request (M3-7): the user (their Undo within the window) or the system (the
 // auto-undo of a Mismatch, M3-6). Read from the undo key the row holds, so it outlives the purge.
 export enum ChangeRequestUndoneByEnum {

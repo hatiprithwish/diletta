@@ -1,5 +1,5 @@
-import ActivityRollupsProvider from "@/providers/activityRollups";
 import * as Schemas from "@app/schemas";
+import Utility from "@/utils/Utility";
 
 const COST_SCALE = 6;
 
@@ -65,7 +65,7 @@ export default class ConversationTranscriptProvider {
     let totalPending = 0;
     let totalUnknown = 0;
     for (const cost of params.turnCosts) {
-      const units = ActivityRollupsProvider.toUnits(cost.costUsd, COST_SCALE);
+      const units = Utility.toUnits(cost.costUsd, COST_SCALE);
       totalUnits += units;
       totalPending += cost.pendingCount;
       totalUnknown += cost.unknownCount;
@@ -83,11 +83,11 @@ export default class ConversationTranscriptProvider {
       turns: ordered.map((turn, index) => ({
         number: index + 1,
         startedAt: new Date(turn.firstAt).toISOString(),
-        costUsd: ActivityRollupsProvider.fromUnits(turn.costUnits, COST_SCALE),
+        costUsd: Utility.fromUnits(turn.costUnits, COST_SCALE),
         costNote: ConversationTranscriptProvider.costNote(turn.pendingCount, turn.unknownCount),
         entries: [...turn.userMessages, ...turn.toolCalls, ...turn.replies],
       })),
-      costUsd: ActivityRollupsProvider.fromUnits(totalUnits, COST_SCALE),
+      costUsd: Utility.fromUnits(totalUnits, COST_SCALE),
       costNote: ConversationTranscriptProvider.costNote(totalPending, totalUnknown),
     };
   }
@@ -122,17 +122,10 @@ export default class ConversationTranscriptProvider {
     };
   }
 
-  // DEV_NOTE: An error code the enums no longer know keeps its code and reads as a server error
+  // DEV_NOTE: An error code the enums no longer know reads as a server error (Schemas.*ErrorOf)
   private static toToolEntry(
     toolCall: Schemas.TranscriptToolCallRow,
   ): Schemas.ConversationTurnToolCall {
-    const toolError =
-      toolCall.errorCode === null ? null : Schemas.ZToolCallErrorCode.safeParse(toolCall.errorCode);
-    const toolErrorCode = toolError?.success
-      ? toolError.data
-      : toolError
-        ? Schemas.ToolCallErrorCodeEnum.ServerError
-        : null;
     const { change } = toolCall;
     return {
       kind: Schemas.ConversationTurnEntryKindEnum.Tool,
@@ -141,8 +134,7 @@ export default class ConversationTranscriptProvider {
       toolVersion: toolCall.toolVersion,
       toolCallStatus: toolCall.status,
       toolCallStatusLabel: Schemas.TOOL_CALL_STATUS_LABEL_MAP[toolCall.status],
-      errorCode: toolErrorCode,
-      errorLabel: toolErrorCode === null ? null : Schemas.TOOL_CALL_ERROR_LABEL_MAP[toolErrorCode],
+      ...Schemas.toolCallErrorOf(toolCall.errorCode),
       change: change
         ? {
             publicId: change.publicId,
@@ -150,11 +142,7 @@ export default class ConversationTranscriptProvider {
             changeCount: change.changeCount,
             changeRequestStatus: change.status,
             changeRequestStatusLabel: Schemas.CHANGE_REQUEST_STATUS_LABEL_MAP[change.status],
-            errorCode: change.errorCode,
-            errorLabel:
-              change.errorCode === null
-                ? null
-                : Schemas.CHANGE_REQUEST_ERROR_LABEL_MAP[change.errorCode],
+            ...Schemas.changeRequestErrorOf(change.errorCode),
           }
         : null,
     };

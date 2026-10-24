@@ -12,6 +12,8 @@ const PRECISE_USD_FORMAT = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 3,
   maximumFractionDigits: 3,
 });
+// DEV_NOTE: How long a download's object URL outlives the click that started it
+const DOWNLOAD_REVOKE_DELAY_MS = 1000;
 const TIME_FORMAT = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
 const LOCAL_MONTH_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short" });
 // DEV_NOTE: Month names from en-US ("Sep"), day first: en-GB's short month differs between runtimes ("Sept")
@@ -141,14 +143,17 @@ export default class Utilities {
     return rows.map((row) => row.map(cell).join(",")).join("\r\n");
   }
 
-  // Browser only: hands the viewer a file to save
+  // DEV_NOTE: Browser only: hands the viewer a file to save. The link is attached for the click (older Firefox ignores
+  // a detached one) and the URL revoked a moment later (Safari and Firefox start the download asynchronously)
   static downloadFile(fileName: string, content: string, type: string): void {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const link = document.createElement("a");
     link.href = url;
     link.download = fileName;
+    document.body.append(link);
     link.click();
-    URL.revokeObjectURL(url);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_REVOKE_DELAY_MS);
   }
 
   // DEV_NOTE: A change request's chip tone: verified = success, needs a person or failed = destructive, a mismatch =

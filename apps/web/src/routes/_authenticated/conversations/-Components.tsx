@@ -40,13 +40,6 @@ const TABS: { value: Schemas.ConversationListTabEnum; label: string }[] = [
   { value: Schemas.ConversationListTabEnum.RatedDown, label: "Rated down" },
 ];
 
-const TAB_COUNT_KEY: Record<Schemas.ConversationListTabEnum, keyof Schemas.ConversationTabCounts> =
-  {
-    [Schemas.ConversationListTabEnum.All]: "all",
-    [Schemas.ConversationListTabEnum.NeedsAttention]: "needsAttention",
-    [Schemas.ConversationListTabEnum.RatedDown]: "ratedDown",
-  };
-
 const OUTCOME_OPTIONS = [
   { value: ANY, label: "Any" },
   ...Object.values(Schemas.ConversationOutcomeFilterEnum).map((value) => ({
@@ -104,6 +97,9 @@ export function ConversationsPage({ search, selectedId }: Schemas.DashboardConve
   const query = useConversations(search);
   const exportConversations = useExportConversations();
   const data = query.data;
+  // DEV_NOTE: The previous filter's rows and counts stay up while the next ones load (keepPreviousData): dimmed and
+  // marked busy, so they never read as the new tab's
+  const isStale = query.isPlaceholderData;
   const tab = search.tab ?? Schemas.ConversationListTabEnum.All;
 
   const goTo = (next: Schemas.ConversationsPageSearch) => {
@@ -158,8 +154,8 @@ export function ConversationsPage({ search, selectedId }: Schemas.DashboardConve
             <ToggleGroupItem key={item.value} value={item.value} className="gap-1.5 px-3">
               {item.label}
               {data?.tabCounts && (
-                <span className="text-muted-foreground">
-                  {Utilities.formatCount(data.tabCounts[TAB_COUNT_KEY[item.value]])}
+                <span className={cn("text-muted-foreground", isStale && "opacity-50")}>
+                  {Utilities.formatCount(data.tabCounts[item.value])}
                 </span>
               )}
             </ToggleGroupItem>
@@ -196,14 +192,19 @@ export function ConversationsPage({ search, selectedId }: Schemas.DashboardConve
             <PageError title="Conversations didn't load" onRetry={() => void query.refetch()} />
           )}
           {data && (
-            <ConversationList
-              response={data}
-              search={search}
-              selectedId={selectedId}
-              hasFilters={Boolean(search.tab || search.outcome || search.configId)}
-              onClearFilters={() => goTo({})}
-              onPage={(page) => goTo({ ...search, page: page === 1 ? undefined : page })}
-            />
+            <div
+              aria-busy={isStale}
+              className={cn("transition-opacity", isStale && "pointer-events-none opacity-50")}
+            >
+              <ConversationList
+                response={data}
+                search={search}
+                selectedId={selectedId}
+                hasFilters={Boolean(search.tab || search.outcome || search.configId)}
+                onClearFilters={() => goTo({})}
+                onPage={(page) => goTo({ ...search, page: page === 1 ? undefined : page })}
+              />
+            </div>
           )}
         </div>
         {selectedId && <ConversationDetailCard publicId={selectedId} search={search} />}

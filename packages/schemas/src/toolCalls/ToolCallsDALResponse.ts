@@ -1,8 +1,5 @@
 import type { ApiResponse } from "../common";
-import type {
-  ChangeRequestErrorCodeEnum,
-  ChangeRequestStatusIntEnum,
-} from "../changeRequests/ChangeRequestsCommon";
+import type { ChangeRequestStatusIntEnum } from "../changeRequests/ChangeRequestsCommon";
 import type { ToolCall, ToolCallStatusIntEnum } from "./ToolCallsCommon";
 
 export interface ToolCallDALResponse extends ApiResponse {
@@ -24,7 +21,7 @@ export interface TranscriptToolCallRow {
     summary: string;
     changeCount: number;
     status: ChangeRequestStatusIntEnum;
-    errorCode: ChangeRequestErrorCodeEnum | null;
+    errorCode: string | null;
   } | null;
 }
 

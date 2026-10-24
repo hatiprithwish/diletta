@@ -25,9 +25,7 @@ export default class ChangeRequestsRepo {
       changeCount: row.changeCount,
       changeRequestStatus: row.status,
       changeRequestStatusLabel: Schemas.CHANGE_REQUEST_STATUS_LABEL_MAP[row.status],
-      errorCode: row.errorCode,
-      errorLabel:
-        row.errorCode === null ? null : Schemas.CHANGE_REQUEST_ERROR_LABEL_MAP[row.errorCode],
+      ...Schemas.changeRequestErrorOf(row.errorCode),
       toolName: row.toolName,
       toolVersion: row.toolVersion,
       wasEdited: row.wasEdited,

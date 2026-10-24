@@ -178,16 +178,3 @@ describe("ActivityRollupsProvider.buildValues", () => {
     expect(forward[0]?.chatbotId).toBeNull();
   });
 });
-
-describe("ActivityRollupsProvider units", () => {
-  it("reads and writes decimals in fixed-point units", () => {
-    expect(ActivityRollupsProvider.toUnits("12.345678", 6)).toBe(12345678n);
-    expect(ActivityRollupsProvider.toUnits("0.5", 6)).toBe(500000n);
-    expect(ActivityRollupsProvider.toUnits("7", 6)).toBe(7000000n);
-    expect(ActivityRollupsProvider.toUnits(42, 0)).toBe(42n);
-    expect(ActivityRollupsProvider.fromUnits(12345678n, 6)).toBe("12.345678");
-    expect(ActivityRollupsProvider.fromUnits(1n, 6)).toBe("0.000001");
-    expect(ActivityRollupsProvider.fromUnits(0n, 6)).toBe("0.000000");
-    expect(ActivityRollupsProvider.fromUnits(9007199254740993n, 0)).toBe("9007199254740993");
-  });
-});

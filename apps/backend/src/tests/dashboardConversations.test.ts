@@ -570,7 +570,7 @@ describe("GET /dashboard/conversations", () => {
     expect(status).toBe(200);
     expect(body.conversations!.map((row) => row.publicId)).toEqual([purged, inProgress, answered]);
     expect(body.totalRecords).toBe(3);
-    expect(body.tabCounts).toMatchObject({ all: 3, ratedDown: 1 });
+    expect(body.tabCounts).toMatchObject({ all: 3, rated_down: 1 });
     expect(body.configOptions).toEqual([
       { publicId: configV3PublicId, chatbotName: "Support", configVersion: 3 },
     ]);
@@ -733,6 +733,54 @@ describe("POST /dashboard/conversations/:publicId/flag", () => {
     });
   });
 
+  it("opens one issue and one event when two flags arrive at once (the advisory lock)", async () => {
+    const [first, second] = await Promise.all([
+      call<Schemas.FlagConversationApiResponse>(
+        "POST",
+        `/dashboard/conversations/${answered}/flag`,
+        {
+          as: adminA,
+        },
+      ),
+      call<Schemas.FlagConversationApiResponse>(
+        "POST",
+        `/dashboard/conversations/${answered}/flag`,
+        {
+          as: adminA,
+        },
+      ),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([200, 201]);
+    expect(first.body.qualityIssuePublicId).toBe(second.body.qualityIssuePublicId);
+
+    const [issues, events] = await withOwnerDb(async (ownerDb) => {
+      const issueConditions = [
+        eq(qualityIssues.companyId, companyA),
+        eq(qualityIssues.conversationId, answeredId),
+        eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.Admin),
+      ];
+      const issueRows = await ownerDb
+        .select({ id: qualityIssues.id })
+        .from(qualityIssues)
+        .where(and(...issueConditions));
+      const eventConditions = [
+        eq(activityLog.companyId, companyA),
+        eq(activityLog.entityType, Schemas.QUALITY_ISSUE_ENTITY_TYPE),
+        inArray(
+          activityLog.entityId,
+          issueRows.map((row) => row.id),
+        ),
+      ];
+      const eventRows = await ownerDb
+        .select({ id: activityLog.id })
+        .from(activityLog)
+        .where(and(...eventConditions));
+      return [issueRows, eventRows] as const;
+    });
+    expect(issues).toHaveLength(1);
+    expect(events).toHaveLength(1);
+  });
+
   it("shows a flagged conversation as flagged and under Needs attention", async () => {
     const flagged = await call("POST", `/dashboard/conversations/${inProgress}/flag`, {
       as: adminA,
@@ -752,7 +800,7 @@ describe("POST /dashboard/conversations/:publicId/flag", () => {
     expect(list.body.conversations!.map((row) => row.publicId).sort()).toEqual(
       [answered, inProgress].sort(),
     );
-    expect(list.body.tabCounts!.needsAttention).toBe(2);
+    expect(list.body.tabCounts![Schemas.ConversationListTabEnum.NeedsAttention]).toBe(2);
     expect(list.body.totalRecords).toBe(2);
   });
 

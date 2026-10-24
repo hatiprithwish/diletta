@@ -98,17 +98,12 @@ export default class DashboardConversationsRepo {
           return { isSuccess: false, message: counted.message };
         }
         const { tabCounts } = counted;
-        const tabTotals: Record<Schemas.ConversationListTabEnum, number> = {
-          [Schemas.ConversationListTabEnum.All]: tabCounts.all,
-          [Schemas.ConversationListTabEnum.NeedsAttention]: tabCounts.needsAttention,
-          [Schemas.ConversationListTabEnum.RatedDown]: tabCounts.ratedDown,
-        };
 
         return {
           isSuccess: true,
           message: "Conversations fetched successfully",
           conversations: (page.conversations ?? []).map((row) => this.toListItem(row)),
-          totalRecords: tabTotals[filter.tab],
+          totalRecords: tabCounts[filter.tab],
           tabCounts,
           configOptions: configOptions.map((option) => ({
             publicId: option.publicId,

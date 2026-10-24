@@ -42,8 +42,7 @@ export enum ToolCallErrorCodeEnum {
   ServerError = "server_error",
 }
 
-// DEV_NOTE: The dashboard's words for a tool call's error code (M4-4, DESIGN.md §8 copy). A stored code the enum no
-// longer knows reads as ServerError's.
+// DEV_NOTE: The dashboard's words for a tool call's error code (M4-4, DESIGN.md §8 copy)
 export const TOOL_CALL_ERROR_LABEL_MAP: Record<ToolCallErrorCodeEnum, string> = {
   [ToolCallErrorCodeEnum.InvalidArgs]: "The input didn't fit the tool",
   [ToolCallErrorCodeEnum.LoopGuard]: "Stopped a repeated call",
@@ -59,6 +58,17 @@ export const TOOL_CALL_ERROR_LABEL_MAP: Record<ToolCallErrorCodeEnum, string> = 
 };
 
 export const ZToolCallErrorCode = z.enum(ToolCallErrorCodeEnum);
+
+// DEV_NOTE: tool_calls.error_code is text: a code the enum no longer knows reads as ServerError's. null stays null.
+export function toolCallErrorOf(code: string | null): {
+  errorCode: ToolCallErrorCodeEnum | null;
+  errorLabel: string | null;
+} {
+  if (code === null) return { errorCode: null, errorLabel: null };
+  const parsed = ZToolCallErrorCode.safeParse(code);
+  const errorCode = parsed.success ? parsed.data : ToolCallErrorCodeEnum.ServerError;
+  return { errorCode, errorLabel: TOOL_CALL_ERROR_LABEL_MAP[errorCode] };
+}
 
 // Whole Tool Call Body — DB shape (status stored as integer)
 // DEV_NOTE: id, companyId, conversationId, messageId and toolId are internal — NEVER sent to a client. encryptedArgs

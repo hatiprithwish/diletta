@@ -63,7 +63,7 @@ const LIST: Schemas.GetConversationsApiResponse = {
   isSuccess: true,
   conversations: [ROW_PRIYA, ROW_ANON],
   totalRecords: 1486,
-  tabCounts: { all: 1486, needsAttention: 9, ratedDown: 31 },
+  tabCounts: { all: 1486, needs_attention: 9, rated_down: 31 },
   configOptions: [{ publicId: "cfg_12", chatbotName: "eRegister Assistant", configVersion: 12 }],
 };
 
@@ -288,7 +288,7 @@ describe("Conversations list", () => {
         ...LIST,
         conversations: [],
         totalRecords: 0,
-        tabCounts: { all: 0, needsAttention: 0, ratedDown: 0 },
+        tabCounts: { all: 0, needs_attention: 0, rated_down: 0 },
       },
     }));
     renderPage("/conversations");

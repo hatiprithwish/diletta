@@ -584,9 +584,9 @@ export default class ConversationsDAL {
       response.message = "Conversations counted successfully";
       response.totalRecords = result?.all ?? 0;
       response.tabCounts = {
-        all: result?.all ?? 0,
-        needsAttention: result?.needsAttention ?? 0,
-        ratedDown: result?.ratedDown ?? 0,
+        [Schemas.ConversationListTabEnum.All]: result?.all ?? 0,
+        [Schemas.ConversationListTabEnum.NeedsAttention]: result?.needsAttention ?? 0,
+        [Schemas.ConversationListTabEnum.RatedDown]: result?.ratedDown ?? 0,
       };
     } catch (error) {
       const message = "Unknown error in counting conversations";

@@ -14,6 +14,7 @@ import type {
 } from "../toolCalls/ToolCallsCommon";
 import type {
   ConversationCostNoteEnum,
+  ConversationListTabEnum,
   ConversationOutcomeIntEnum,
   ConversationStatusIntEnum,
   ConversationStatusLabelEnum,
@@ -40,12 +41,8 @@ export interface ConversationListItem {
   lastActivityAt: string;
 }
 
-// The count behind each tab, under the same outcome, config and chatbot filters
-export interface ConversationTabCounts {
-  all: number;
-  needsAttention: number;
-  ratedDown: number;
-}
+// DEV_NOTE: The count behind each tab, keyed by the tab itself, under the same outcome, config and chatbot filters
+export type ConversationTabCounts = Record<ConversationListTabEnum, number>;
 
 // One choice of the Config filter: a published config of one of the company's chatbots
 export interface ConversationConfigOption {

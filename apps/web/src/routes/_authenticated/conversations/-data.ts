@@ -9,6 +9,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { apiClient } from "@/providers/apiClient";
+import { OverviewQueries } from "../overview/-data";
 import Utilities from "@/utils";
 
 // DEV_NOTE: The page's filters as the API reads them (botId stays absent: no bot filter in the UI, DESIGN.md §6)
@@ -72,8 +73,8 @@ export function useConversation(publicId: string) {
   return useQuery(ConversationsQueries.detail(publicId, getToken));
 }
 
-// DEV_NOTE: Flags the conversation into the quality inbox. The detail shows it flagged at once; the lists refetch
-// (Needs attention counts it now).
+// DEV_NOTE: Flags the conversation into the quality inbox. The detail shows it flagged at once; the lists and Overview
+// refetch (their Needs attention counts it now).
 export function useFlagConversation(publicId: string) {
   const { getToken } = useAuth();
   const queryClient = useQueryClient();
@@ -93,6 +94,8 @@ export function useFlagConversation(publicId: string) {
             : previous,
       );
       void queryClient.invalidateQueries({ queryKey: ConversationsQueries.keys.lists() });
+      // DEV_NOTE: Overview's Needs attention counts open issues of every source, the new one too
+      void queryClient.invalidateQueries({ queryKey: OverviewQueries.keys.all() });
       toast.success("Conversation flagged. It's in the Quality inbox.");
     },
     onError: () => {
@@ -138,7 +141,8 @@ export function useExportConversations() {
       ]);
       Utilities.downloadFile(
         `conversations-${new Date().toISOString().slice(0, 10)}.csv`,
-        Utilities.toCsv([CSV_HEADER, ...rows]),
+        // DEV_NOTE: The BOM makes Excel read the file as UTF-8 (titles in any script); other apps ignore it
+        `\uFEFF${Utilities.toCsv([CSV_HEADER, ...rows])}`,
         "text/csv;charset=utf-8",
       );
       return { count: rows.length, isTruncated: response.isTruncated ?? false };

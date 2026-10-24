@@ -23,7 +23,8 @@ export interface DashboardChangeRequestRow {
   summary: string;
   changeCount: number;
   status: ChangeRequest["status"];
-  errorCode: ChangeRequest["errorCode"];
+  // DEV_NOTE: text in the DB, read through Schemas.changeRequestErrorOf
+  errorCode: string | null;
   wasEdited: boolean;
   undoUntil: Date | null;
   createdAt: Date;
