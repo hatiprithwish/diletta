@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, getColumns } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { conversations, messages } from "@/db/tables";
+import { conversations, feedback, messages } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -143,6 +143,48 @@ export default class MessagesDAL {
           conversationId: params.conversationId,
           sessionMessageId: params.sessionMessageId,
         },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The dashboard transcript (M4-4): every message of one conversation, oldest first, each with its user's
+  // thumb (one rating per reply per chatbot user, and a conversation has one user)
+  async listConversationMessages(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ListConversationMessagesDALRequest,
+  ) {
+    const response: Schemas.TranscriptMessagesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(messages.companyId, params.companyId),
+        eq(messages.conversationId, params.conversationId),
+      ];
+      const feedbackJoinConditions = [
+        eq(feedback.messageId, messages.id),
+        eq(feedback.companyId, messages.companyId),
+      ];
+      const rows = await tx
+        .select({ ...getColumns(messages), rating: feedback.rating })
+        .from(messages)
+        .leftJoin(feedback, and(...feedbackJoinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(messages.id));
+
+      response.isSuccess = true;
+      response.message = "Conversation messages fetched successfully";
+      response.messages = rows;
+    } catch (error) {
+      const message = "Unknown error in listing conversation messages";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListConversationMessages,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

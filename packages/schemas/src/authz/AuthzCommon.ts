@@ -16,6 +16,13 @@ export enum AuthzActionEnum {
   InsightRead = "insight.read",
   RoiAssumptionUpdate = "roi_assumption.update",
 
+  // Conversations page (company-scoped, M4-4): list, transcript and export; an admin flags one into the quality inbox
+  ConversationRead = "conversation.read",
+  QualityIssueCreate = "quality_issue.create",
+
+  // Changes (company-scoped, M4-4 detail; M4-5 adds the list, timeline and resolve)
+  ChangeRequestRead = "change_request.read",
+
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
   CompanyList = "company.list",

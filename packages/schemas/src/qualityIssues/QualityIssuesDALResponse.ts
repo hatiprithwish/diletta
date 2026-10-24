@@ -17,3 +17,7 @@ export interface OpenQualityIssueCountsDALResponse extends ApiResponse {
   totalCount?: number;
   userCount?: number;
 }
+
+// DEV_NOTE: On success isCreated is always set: true = opened now, false = the conversation already had an open admin
+// issue, returned as it is
+export type AdminQualityIssueDALResponse = UserQualityIssueDALResponse;

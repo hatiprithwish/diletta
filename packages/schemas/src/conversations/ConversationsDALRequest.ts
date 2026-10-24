@@ -1,4 +1,10 @@
-import type { Conversation } from "./ConversationsCommon";
+import type { PageDALRequest } from "../common";
+import type {
+  Conversation,
+  ConversationListTabEnum,
+  ConversationOutcomeFilterEnum,
+  ConversationSortColumn,
+} from "./ConversationsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // The DAL generates publicId and checks the chatbot and chatbot user exist in the company.
@@ -29,3 +35,18 @@ export type TouchConversationDALRequest = FindConversationDALRequest & {
 export type CloseConversationDALRequest = FindConversationDALRequest & {
   outcome: NonNullable<Conversation["outcome"]>;
 };
+
+// DEV_NOTE: The dashboard list's filters (M4-4), resolved by the Repo: outcome null = any; chatbotConfigId and
+// chatbotId are internal ids (from the public ids the client sent), null = any
+export type ConversationsFilterDALRequest = Pick<Conversation, "companyId"> & {
+  tab: ConversationListTabEnum;
+  outcome: ConversationOutcomeFilterEnum | null;
+  chatbotConfigId: string | null;
+  chatbotId: string | null;
+};
+
+// DEV_NOTE: The counts read every tab at once, so they take the filters without one
+export type CountDashboardConversationsDALRequest = Omit<ConversationsFilterDALRequest, "tab">;
+
+export type GetDashboardConversationsDALRequest = ConversationsFilterDALRequest &
+  PageDALRequest & { sortColumn: ConversationSortColumn };

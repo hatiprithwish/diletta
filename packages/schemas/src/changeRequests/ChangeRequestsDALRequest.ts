@@ -85,3 +85,6 @@ export type UpdateChangeRequestPayloadDALRequest = Pick<
 export type CountChangeRequestsByStatusDALRequest = Pick<ChangeRequest, "companyId" | "status"> & {
   chatbotId: string | null;
 };
+
+// DEV_NOTE: One change request by its public id within the company, for the dashboard (M4-4): no conversation needed
+export type FindDashboardChangeRequestDALRequest = Pick<ChangeRequest, "companyId" | "publicId">;

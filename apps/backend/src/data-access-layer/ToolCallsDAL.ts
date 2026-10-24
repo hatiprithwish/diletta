@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { conversations, toolCalls, toolDefinitions } from "@/db/tables";
+import { changeRequests, conversations, toolCalls, toolDefinitions } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -87,6 +87,91 @@ export default class ToolCallsDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The dashboard transcript (M4-4): every tool call of one conversation, oldest first, with its tool's name
+  // and the change request it proposed. The args are never read (encrypted, never shown). Left joins: a call whose
+  // definition is gone still lists, and only a write that proposed something has a change request.
+  async listConversationToolCalls(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ListConversationToolCallsDALRequest,
+  ) {
+    const response: Schemas.TranscriptToolCallsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolCalls.companyId, params.companyId),
+        eq(toolCalls.conversationId, params.conversationId),
+      ];
+      const toolJoinConditions = [
+        eq(toolDefinitions.id, toolCalls.toolId),
+        eq(toolDefinitions.companyId, toolCalls.companyId),
+      ];
+      const changeJoinConditions = [
+        eq(changeRequests.toolCallId, toolCalls.id),
+        eq(changeRequests.companyId, toolCalls.companyId),
+      ];
+      const rows = await tx
+        .select({
+          publicId: toolCalls.publicId,
+          turnId: toolCalls.turnId,
+          toolName: toolDefinitions.name,
+          toolVersion: toolCalls.toolVersion,
+          status: toolCalls.status,
+          errorCode: toolCalls.errorCode,
+          createdAt: toolCalls.createdAt,
+          changePublicId: changeRequests.publicId,
+          changeSummary: changeRequests.summary,
+          changeCount: changeRequests.changeCount,
+          changeStatus: changeRequests.status,
+          changeErrorCode: changeRequests.errorCode,
+        })
+        .from(toolCalls)
+        .leftJoin(toolDefinitions, and(...toolJoinConditions))
+        .leftJoin(changeRequests, and(...changeJoinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(toolCalls.id));
+
+      response.isSuccess = true;
+      response.message = "Conversation tool calls fetched successfully";
+      response.toolCalls = rows.map(
+        ({
+          changePublicId,
+          changeSummary,
+          changeCount,
+          changeStatus,
+          changeErrorCode,
+          ...row
+        }) => ({
+          ...row,
+          change:
+            changePublicId !== null &&
+            changeSummary !== null &&
+            changeCount !== null &&
+            changeStatus !== null
+              ? {
+                  publicId: changePublicId,
+                  summary: changeSummary,
+                  changeCount,
+                  status: changeStatus,
+                  errorCode: changeErrorCode,
+                }
+              : null,
+        }),
+      );
+    } catch (error) {
+      const message = "Unknown error in listing conversation tool calls";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListConversationToolCalls,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

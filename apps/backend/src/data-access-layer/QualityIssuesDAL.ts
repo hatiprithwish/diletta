@@ -1,14 +1,15 @@
 import { and, asc, count, eq, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { companies, conversations, feedback, messages, qualityIssues } from "@/db/tables";
+import { admins, companies, conversations, feedback, messages, qualityIssues } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). System issues come from the model router's
-// key-failure path (M2-3), user issues from a thumbs-down (M2-8); admin issues add their own methods.
+// key-failure path (M2-3), user issues from a thumbs-down (M2-8), admin issues from a flag on the Conversations
+// page (M4-4).
 export default class QualityIssuesDAL {
   // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type), held until the Repo's transaction ends.
   // Two calls that hit the same failure at once take turns, so the second sees the first one's open issue instead
@@ -343,6 +344,113 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CountOpenQualityIssues,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: An admin's flag on a conversation (M4-4). Transaction-scoped advisory lock on (company, conversation),
+  // held until the Repo's transaction ends, so two flags at once take turns: the second finds the first one's open
+  // issue and returns it (isCreated false) instead of opening another. A flag after that issue was dismissed or fixed
+  // opens a new one.
+  async createAdminQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateAdminQualityIssueDALRequest,
+  ) {
+    const response: Schemas.AdminQualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const lockKey = `quality_issue:admin:${params.companyId}:${params.conversationId}`;
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+      // DEV_NOTE: No DB foreign keys — the DAL checks the references before writing
+      const conversationConditions = [
+        eq(conversations.id, params.conversationId),
+        eq(conversations.companyId, params.companyId),
+      ];
+      const [conversation] = await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(...conversationConditions))
+        .limit(1);
+      if (!conversation) {
+        const message = "Conversation not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateAdminQualityIssue,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const adminConditions = [
+        eq(admins.id, params.createdBy),
+        eq(admins.companyId, params.companyId),
+      ];
+      const [admin] = await tx
+        .select({ id: admins.id })
+        .from(admins)
+        .where(and(...adminConditions))
+        .limit(1);
+      if (!admin) {
+        const message = "Admin not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateAdminQualityIssue,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const openConditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.conversationId, params.conversationId),
+        eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.Admin),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+      ];
+      const [open] = await tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...openConditions))
+        .orderBy(asc(qualityIssues.createdAt), asc(qualityIssues.id))
+        .limit(1);
+      if (open) {
+        response.isSuccess = true;
+        response.message = "Admin quality issue already open";
+        response.qualityIssue = open;
+        response.isCreated = false;
+        return response;
+      }
+
+      const [created] = await tx
+        .insert(qualityIssues)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: params.companyId,
+          conversationId: params.conversationId,
+          source: Schemas.QualityIssueSourceIntEnum.Admin,
+          createdBy: params.createdBy,
+        })
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Admin quality issue created successfully";
+      response.qualityIssue = created;
+      response.isCreated = true;
+    } catch (error) {
+      const message = "Unknown error in creating admin quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateAdminQualityIssue,
         message,
         error,
         metadata: params,

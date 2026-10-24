@@ -1,3 +1,5 @@
+export * from "./ConversationsApiRequest";
+export * from "./ConversationsApiResponse";
 export * from "./ConversationsCommon";
 export * from "./ConversationsDALRequest";
 export * from "./ConversationsDALResponse";

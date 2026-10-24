@@ -1,9 +1,19 @@
+import * as Schemas from "@app/schemas";
+
 const USD_FORMAT = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const COUNT_FORMAT = new Intl.NumberFormat("en-US");
 const ONE_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
 });
+const PRECISE_USD_FORMAT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
+});
+const TIME_FORMAT = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
+const LOCAL_MONTH_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short" });
 // DEV_NOTE: Month names from en-US ("Sep"), day first: en-GB's short month differs between runtimes ("Sept")
 const MONTH_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
 
@@ -91,5 +101,75 @@ export default class Utilities {
   // "1 change", "2 changes"
   static plural(count: number, singular: string, pluralForm = `${singular}s`): string {
     return `${Utilities.formatCount(count)} ${count === 1 ? singular : pluralForm}`;
+  }
+
+  // ─── Conversations page (M4-4)
+
+  // "$0.041": a conversation or a turn costs cents, so three decimals; a non-zero amount under that reads "<$0.001"
+  static formatUsdPrecise(value: string): string {
+    const amount = Number(value);
+    if (amount > 0 && amount < 0.0005) return "<$0.001";
+    return PRECISE_USD_FORMAT.format(amount);
+  }
+
+  // A moment in the viewer's time: "14:12" today, "Yesterday", else "3 Sep"
+  static formatWhen(iso: string, now: number = Date.now()): string {
+    const date = new Date(iso);
+    const today = new Date(now);
+    const dayStart = (value: Date) =>
+      new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+    const days = Math.round((dayStart(today) - dayStart(date)) / 86_400_000);
+    if (days === 0) return TIME_FORMAT.format(date);
+    if (days === 1) return "Yesterday";
+    return `${date.getDate()} ${LOCAL_MONTH_FORMAT.format(date)}`;
+  }
+
+  // "Today 14:10", "Yesterday 09:05", "3 Sep 11:40"
+  static formatWhenWithTime(iso: string, now: number = Date.now()): string {
+    const when = Utilities.formatWhen(iso, now);
+    const time = TIME_FORMAT.format(new Date(iso));
+    return when === time ? `Today ${time}` : `${when} ${time}`;
+  }
+
+  // DEV_NOTE: RFC 4180 CSV: every cell quoted, quotes doubled. A cell a spreadsheet would run as a formula (=, +, -, @,
+  // tab, carriage return first) gets a leading apostrophe: titles are what visitors typed.
+  static toCsv(rows: string[][]): string {
+    const cell = (value: string) => {
+      const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+      return `"${safe.replaceAll('"', '""')}"`;
+    };
+    return rows.map((row) => row.map(cell).join(",")).join("\r\n");
+  }
+
+  // Browser only: hands the viewer a file to save
+  static downloadFile(fileName: string, content: string, type: string): void {
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // DEV_NOTE: A change request's chip tone: verified = success, needs a person or failed = destructive, a mismatch =
+  // warning, ended without a change = neutral, still under way = brand
+  static changeRequestTone(
+    status: Schemas.ChangeRequestStatusIntEnum,
+  ): Schemas.DashboardChipToneEnum {
+    switch (status) {
+      case Schemas.ChangeRequestStatusIntEnum.Verified:
+        return Schemas.DashboardChipToneEnum.Success;
+      case Schemas.ChangeRequestStatusIntEnum.NeedsHuman:
+      case Schemas.ChangeRequestStatusIntEnum.Failed:
+        return Schemas.DashboardChipToneEnum.Destructive;
+      case Schemas.ChangeRequestStatusIntEnum.Mismatch:
+        return Schemas.DashboardChipToneEnum.Warning;
+      case Schemas.ChangeRequestStatusIntEnum.Rejected:
+      case Schemas.ChangeRequestStatusIntEnum.Expired:
+      case Schemas.ChangeRequestStatusIntEnum.Undone:
+        return Schemas.DashboardChipToneEnum.Neutral;
+      default:
+        return Schemas.DashboardChipToneEnum.Brand;
+    }
   }
 }

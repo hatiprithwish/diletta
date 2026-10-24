@@ -15,3 +15,28 @@ export interface ChangeRequestsDALResponse extends ApiResponse {
 export interface ChangeRequestWriteDALResponse extends ApiResponse {
   changeRequest?: ChangeRequest;
 }
+
+// DEV_NOTE: A change request as the dashboard shows it (M4-4): never its values (encrypted_changes is not read), with
+// its tool and the conversation it came from. toolName null = the definition is gone; userName null = no name sent.
+export interface DashboardChangeRequestRow {
+  publicId: string;
+  summary: string;
+  changeCount: number;
+  status: ChangeRequest["status"];
+  errorCode: ChangeRequest["errorCode"];
+  wasEdited: boolean;
+  undoUntil: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  toolName: string | null;
+  toolVersion: number;
+  conversationPublicId: string;
+  conversationTitle: string | null;
+  conversationContentPurgedAt: Date | null;
+  chatbotName: string | null;
+  userName: string | null;
+}
+
+export interface DashboardChangeRequestDALResponse extends ApiResponse {
+  changeRequest?: DashboardChangeRequestRow;
+}

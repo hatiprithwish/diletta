@@ -1,4 +1,15 @@
 import type { AdminProfile } from "../admins";
+import type { ChangeRequestDetail } from "../changeRequests";
+import type {
+  ConversationDetail,
+  ConversationListItem,
+  ConversationTurn,
+  ConversationTurnMessage,
+  ConversationTurnToolCall,
+  ConversationsPageSearch,
+  GetConversationsApiResponse,
+} from "../conversations";
+import type { FeedbackRatingIntEnum } from "../feedback";
 import type {
   ImpactRangeEnum,
   InsightsImpact,
@@ -102,4 +113,81 @@ export interface DashboardAttentionRowProps {
 // Impact's minutes per task editor (a dialog per task)
 export interface DashboardRoiEditProps {
   task: InsightsImpactTask;
+}
+
+// DEV_NOTE: A status chip (DESIGN.md §5): a Badge with a 6px dot in the text colour, one tone per meaning
+export enum DashboardChipToneEnum {
+  Neutral = "neutral",
+  Success = "success",
+  Warning = "warning",
+  Destructive = "destructive",
+  Brand = "brand",
+}
+
+export interface DashboardStatusChipProps {
+  label: string;
+  tone: DashboardChipToneEnum;
+}
+
+// DEV_NOTE: A dropdown filter (DESIGN.md §5): its label muted, the value in foreground
+export interface DashboardFilterSelectProps extends DashboardRangeSelectProps {
+  label: string;
+}
+
+// DEV_NOTE: The Conversations page (M4-4): the list, and the detail card of selectedId next to it (null = none)
+export interface DashboardConversationsPageProps {
+  search: ConversationsPageSearch;
+  selectedId: string | null;
+}
+
+// DEV_NOTE: The list under the filters: its rows, an empty state (clearing the filters when some are set) and Previous /
+// Next pages
+export interface DashboardConversationListProps {
+  response: GetConversationsApiResponse;
+  search: ConversationsPageSearch;
+  selectedId: string | null;
+  hasFilters: boolean;
+  onClearFilters: () => void;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardConversationRowProps {
+  conversation: ConversationListItem;
+  search: ConversationsPageSearch;
+  isSelected: boolean;
+}
+
+export interface DashboardConversationDetailProps {
+  publicId: string;
+  search: ConversationsPageSearch;
+}
+
+// One loaded conversation: the detail card's summary line and body
+export interface DashboardConversationProps {
+  conversation: ConversationDetail;
+}
+
+export interface DashboardConversationTurnProps {
+  conversation: ConversationDetail;
+  turn: ConversationTurn;
+}
+
+// DEV_NOTE: One message of a turn; speaker is the user's first name (or "User") or "Assistant"
+export interface DashboardConversationMessageProps {
+  message: ConversationTurnMessage;
+  speaker: string;
+}
+
+// A thumb (up, down) or a dash when there is none
+export interface DashboardRatingIconProps {
+  rating: FeedbackRatingIntEnum | null;
+}
+
+export interface DashboardConversationToolRowProps {
+  toolCall: ConversationTurnToolCall;
+}
+
+// DEV_NOTE: One change's detail card (M4-4; M4-5 adds its timeline and resolve)
+export interface DashboardChangeDetailProps {
+  changeRequest: ChangeRequestDetail;
 }

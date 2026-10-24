@@ -17,3 +17,6 @@ export type CreateToolCallDALRequest = Pick<
   | "errorCode"
   | "latencyMs"
 >;
+
+// DEV_NOTE: Every tool call of one conversation, oldest first (the dashboard transcript, M4-4)
+export type ListConversationToolCallsDALRequest = Pick<ToolCall, "companyId" | "conversationId">;

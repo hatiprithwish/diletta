@@ -1,8 +1,20 @@
-import { and, count, eq, gte, lt, sql } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gte, isNull, lt, or, sql } from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import { activityLog, chatbotConfigs, chatbotUsers, chatbots, conversations } from "@/db/tables";
+import {
+  activityLog,
+  changeRequests,
+  chatbotConfigs,
+  chatbotUsers,
+  chatbots,
+  conversations,
+  feedback,
+  messages,
+  modelCalls,
+  qualityIssues,
+  toolCalls,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -343,6 +355,290 @@ export default class ConversationsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetConversationRollupGroups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // ─── Dashboard (M4-4): the Conversations page ─────────────────────────────
+
+  // DEV_NOTE: One conversation as the dashboard lists it. The correlated subqueries read only this conversation's rows
+  // (every reference column is indexed) and filter on companyId too:
+  //   turnCount: distinct turn ids across its messages, tool calls and spend model calls (Workers AI rows are left out,
+  //     as in the turn costs), so it matches the turns of the transcript.
+  //   rating: Down if any reply was rated down, else Up if any was rated, else null.
+  //   isFlagged: an admin issue on it is still open.
+  private dashboardSelection(companyId: string) {
+    return {
+      id: conversations.id,
+      publicId: conversations.publicId,
+      status: conversations.status,
+      outcome: conversations.outcome,
+      title: conversations.title,
+      contentPurgedAt: conversations.contentPurgedAt,
+      createdAt: conversations.createdAt,
+      lastActivityAt: conversations.lastActivityAt,
+      rootLogId: conversations.rootLogId,
+      userName: chatbotUsers.displayName,
+      chatbotName: chatbots.name,
+      configVersion: chatbotConfigs.configVersion,
+      turnCount: sql<number>`(
+        select count(*) from (
+          select ${messages.turnId} from ${messages}
+          where ${messages.conversationId} = ${conversations.id} and ${messages.companyId} = ${companyId}
+          union
+          select ${toolCalls.turnId} from ${toolCalls}
+          where ${toolCalls.conversationId} = ${conversations.id} and ${toolCalls.companyId} = ${companyId}
+          union
+          select ${modelCalls.turnId} from ${modelCalls}
+          where ${modelCalls.conversationId} = ${conversations.id} and ${modelCalls.companyId} = ${companyId}
+            and ${modelCalls.turnId} is not null
+            and ${modelCalls.provider} <> ${Schemas.PlatformModelProviderEnum.WorkersAi}
+        ) as turns
+      )`.mapWith(Number),
+      rating: sql<Schemas.FeedbackRatingIntEnum | null>`(
+        select case
+          when bool_or(${feedback.rating} = ${Schemas.FeedbackRatingIntEnum.Down}) then ${Schemas.FeedbackRatingIntEnum.Down}::int
+          when count(*) > 0 then ${Schemas.FeedbackRatingIntEnum.Up}::int
+        end
+        from ${feedback}
+        inner join ${messages} on ${messages.id} = ${feedback.messageId}
+        where ${messages.conversationId} = ${conversations.id} and ${messages.companyId} = ${companyId}
+          and ${feedback.companyId} = ${companyId}
+      )`.mapWith(Number),
+      isFlagged: sql<boolean>`exists (
+        select 1 from ${qualityIssues}
+        where ${qualityIssues.conversationId} = ${conversations.id} and ${qualityIssues.companyId} = ${companyId}
+          and ${qualityIssues.source} = ${Schemas.QualityIssueSourceIntEnum.Admin}
+          and ${qualityIssues.status} = ${Schemas.QualityIssueStatusIntEnum.Open}
+      )`,
+    };
+  }
+
+  // DEV_NOTE: The user, chatbot and config of a conversation, left joined: there are no DB foreign keys, so a row whose
+  // reference is gone still lists
+  private dashboardQuery(tx: NodePgTransaction<EmptyRelations>, companyId: string) {
+    const userJoinConditions = [
+      eq(chatbotUsers.id, conversations.chatbotUserId),
+      eq(chatbotUsers.companyId, conversations.companyId),
+    ];
+    const chatbotJoinConditions = [
+      eq(chatbots.id, conversations.chatbotId),
+      eq(chatbots.companyId, conversations.companyId),
+    ];
+    const configJoinConditions = [
+      eq(chatbotConfigs.id, conversations.chatbotConfigId),
+      eq(chatbotConfigs.companyId, conversations.companyId),
+    ];
+    return tx
+      .select(this.dashboardSelection(companyId))
+      .from(conversations)
+      .leftJoin(chatbotUsers, and(...userJoinConditions))
+      .leftJoin(chatbots, and(...chatbotJoinConditions))
+      .leftJoin(chatbotConfigs, and(...configJoinConditions));
+  }
+
+  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts
+  private dashboardConditions(params: Schemas.CountDashboardConversationsDALRequest): SQL[] {
+    const conditions: SQL[] = [eq(conversations.companyId, params.companyId)];
+    if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+    if (params.chatbotConfigId !== null) {
+      conditions.push(eq(conversations.chatbotConfigId, params.chatbotConfigId));
+    }
+    if (params.outcome !== null) {
+      const outcome = Schemas.CONVERSATION_OUTCOME_FILTER_MAP[params.outcome];
+      conditions.push(
+        outcome === null ? isNull(conversations.outcome) : eq(conversations.outcome, outcome),
+      );
+    }
+    return conditions;
+  }
+
+  // DEV_NOTE: A tab's condition (All has none). NeedsAttention: a change request that needs a person, or an open
+  // quality issue; RatedDown: any reply rated down.
+  private tabCondition(
+    tx: NodePgTransaction<EmptyRelations>,
+    companyId: string,
+    tab: Schemas.ConversationListTabEnum,
+  ): SQL | undefined {
+    if (tab === Schemas.ConversationListTabEnum.NeedsAttention) {
+      const changeConditions = [
+        eq(changeRequests.conversationId, conversations.id),
+        eq(changeRequests.companyId, companyId),
+        eq(changeRequests.status, Schemas.ChangeRequestStatusIntEnum.NeedsHuman),
+      ];
+      const issueConditions = [
+        eq(qualityIssues.conversationId, conversations.id),
+        eq(qualityIssues.companyId, companyId),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+      ];
+      return or(
+        exists(
+          tx
+            .select({ one: sql`1` })
+            .from(changeRequests)
+            .where(and(...changeConditions)),
+        ),
+        exists(
+          tx
+            .select({ one: sql`1` })
+            .from(qualityIssues)
+            .where(and(...issueConditions)),
+        ),
+      );
+    }
+
+    if (tab === Schemas.ConversationListTabEnum.RatedDown) {
+      const ratedDownConditions = [
+        eq(messages.conversationId, conversations.id),
+        eq(messages.companyId, companyId),
+        eq(feedback.companyId, companyId),
+        eq(feedback.rating, Schemas.FeedbackRatingIntEnum.Down),
+      ];
+      return exists(
+        tx
+          .select({ one: sql`1` })
+          .from(feedback)
+          .innerJoin(messages, eq(messages.id, feedback.messageId))
+          .where(and(...ratedDownConditions)),
+      );
+    }
+
+    return undefined;
+  }
+
+  async getDashboardConversations(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetDashboardConversationsDALRequest,
+  ) {
+    const response: Schemas.DashboardConversationsDALResponse = { isSuccess: false };
+
+    try {
+      const sortColumnMap = {
+        [Schemas.ConversationSortColumn.CreatedAt]: conversations.createdAt,
+        [Schemas.ConversationSortColumn.LastActivityAt]: conversations.lastActivityAt,
+      };
+      const sortCol = sortColumnMap[params.sortColumn];
+      const orderExpr =
+        params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
+      const offset = (params.pageNo - 1) * params.pageSize;
+
+      const conditions = this.dashboardConditions(params);
+      const tabCondition = this.tabCondition(tx, params.companyId, params.tab);
+      if (tabCondition) conditions.push(tabCondition);
+      const conversationsResponse = await this.dashboardQuery(tx, params.companyId)
+        .where(and(...conditions))
+        // DEV_NOTE: id breaks ties (same created_at), so rows never repeat or go missing between pages
+        .orderBy(orderExpr, asc(conversations.id))
+        .limit(params.pageSize)
+        .offset(offset);
+
+      response.isSuccess = true;
+      response.message = "Conversations fetched successfully";
+      response.conversations = conversationsResponse;
+    } catch (error) {
+      const message = "Unknown error in listing conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardConversations,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every tab's count in one read, under the same outcome, config and chatbot filters; totalRecords = All's
+  async getDashboardConversationsCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountDashboardConversationsDALRequest,
+  ) {
+    const response: Schemas.ConversationTabCountsDALResponse = { isSuccess: false };
+
+    try {
+      const { NeedsAttention, RatedDown } = Schemas.ConversationListTabEnum;
+      const [result] = await tx
+        .select({
+          all: count(),
+          needsAttention:
+            sql<number>`count(*) filter (where ${this.tabCondition(tx, params.companyId, NeedsAttention)})`.mapWith(
+              Number,
+            ),
+          ratedDown:
+            sql<number>`count(*) filter (where ${this.tabCondition(tx, params.companyId, RatedDown)})`.mapWith(
+              Number,
+            ),
+        })
+        .from(conversations)
+        .where(and(...this.dashboardConditions(params)));
+
+      response.isSuccess = true;
+      response.message = "Conversations counted successfully";
+      response.totalRecords = result?.all ?? 0;
+      response.tabCounts = {
+        all: result?.all ?? 0,
+        needsAttention: result?.needsAttention ?? 0,
+        ratedDown: result?.ratedDown ?? 0,
+      };
+    } catch (error) {
+      const message = "Unknown error in counting conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountDashboardConversations,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getDashboardConversation(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindConversationDALRequest,
+  ) {
+    const response: Schemas.DashboardConversationDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.publicId, params.publicId),
+        eq(conversations.companyId, params.companyId),
+      ];
+      const [conversation] = await this.dashboardQuery(tx, params.companyId)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!conversation) {
+        const message = "Conversation not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetDashboardConversation,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Conversation fetched successfully";
+      response.conversation = conversation;
+    } catch (error) {
+      const message = "Unknown error in fetching conversation";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardConversation,
         message,
         error,
         metadata: params,
