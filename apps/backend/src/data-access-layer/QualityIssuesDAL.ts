@@ -1,7 +1,18 @@
-import { and, asc, count, eq, sql } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import { and, asc, count, desc, eq, sql } from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { admins, companies, conversations, feedback, messages, qualityIssues } from "@/db/tables";
+import {
+  admins,
+  changeRequests,
+  chatbotUsers,
+  chatbots,
+  companies,
+  conversations,
+  evalCases,
+  feedback,
+  messages,
+  qualityIssues,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -9,7 +20,7 @@ import Utility from "@/utils/Utility";
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). System issues come from the model router's
 // key-failure path (M2-3), user issues from a thumbs-down (M2-8), admin issues from a flag on the Conversations
-// page (M4-4).
+// page (M4-4). The Quality page (M4-6) lists, reads, triages and closes them.
 export default class QualityIssuesDAL {
   // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type), held until the Repo's transaction ends.
   // Two calls that hit the same failure at once take turns, so the second sees the first one's open issue instead
@@ -451,6 +462,346 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateAdminQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The Quality page's issues (M4-6): with the conversation each is about (inner join: every issue has one),
+  // its chatbot and user, and left joins on the change request, the test it became and the rated reply with its
+  // rating (no DB foreign keys, so a row whose chatbot, user, change or test is gone still reads)
+  private dashboardQuery(tx: NodePgTransaction<EmptyRelations>) {
+    const conversationJoinConditions = [
+      eq(conversations.id, qualityIssues.conversationId),
+      eq(conversations.companyId, qualityIssues.companyId),
+    ];
+    const chatbotJoinConditions = [
+      eq(chatbots.id, conversations.chatbotId),
+      eq(chatbots.companyId, conversations.companyId),
+    ];
+    const userJoinConditions = [
+      eq(chatbotUsers.id, conversations.chatbotUserId),
+      eq(chatbotUsers.companyId, conversations.companyId),
+    ];
+    const changeRequestJoinConditions = [
+      eq(changeRequests.id, qualityIssues.changeRequestId),
+      eq(changeRequests.companyId, qualityIssues.companyId),
+    ];
+    const evalCaseJoinConditions = [
+      eq(evalCases.id, qualityIssues.evalCaseId),
+      eq(evalCases.companyId, qualityIssues.companyId),
+    ];
+    const feedbackJoinConditions = [
+      eq(feedback.id, qualityIssues.feedbackId),
+      eq(feedback.companyId, qualityIssues.companyId),
+    ];
+    const messageJoinConditions = [
+      eq(messages.id, feedback.messageId),
+      eq(messages.companyId, feedback.companyId),
+    ];
+    return tx
+      .select({
+        id: qualityIssues.id,
+        publicId: qualityIssues.publicId,
+        conversationId: qualityIssues.conversationId,
+        conversationRootLogId: conversations.rootLogId,
+        chatbotId: conversations.chatbotId,
+        source: qualityIssues.source,
+        status: qualityIssues.status,
+        issueType: qualityIssues.issueType,
+        note: qualityIssues.note,
+        createdAt: qualityIssues.createdAt,
+        updatedAt: qualityIssues.updatedAt,
+        conversationPublicId: conversations.publicId,
+        conversationTitle: conversations.title,
+        conversationContentPurgedAt: conversations.contentPurgedAt,
+        chatbotName: chatbots.name,
+        // DEV_NOTE: An erased user keeps its row, not its name
+        userName: sql<
+          string | null
+        >`case when ${chatbotUsers.erasedAt} is null then ${chatbotUsers.displayName} end`,
+        changeRequestPublicId: changeRequests.publicId,
+        evalCasePublicId: evalCases.publicId,
+        evalCaseName: evalCases.name,
+        ratedMessageId: messages.id,
+        ratedMessageContent: messages.content,
+        rating: feedback.rating,
+      })
+      .from(qualityIssues)
+      .innerJoin(conversations, and(...conversationJoinConditions))
+      .leftJoin(chatbots, and(...chatbotJoinConditions))
+      .leftJoin(chatbotUsers, and(...userJoinConditions))
+      .leftJoin(changeRequests, and(...changeRequestJoinConditions))
+      .leftJoin(evalCases, and(...evalCaseJoinConditions))
+      .leftJoin(feedback, and(...feedbackJoinConditions))
+      .leftJoin(messages, and(...messageJoinConditions));
+  }
+
+  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts. The chatbot is the conversation's.
+  private dashboardConditions(params: Schemas.CountDashboardQualityIssuesDALRequest): SQL[] {
+    const conditions: SQL[] = [
+      eq(qualityIssues.companyId, params.companyId),
+      eq(conversations.companyId, params.companyId),
+    ];
+    if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+    return conditions;
+  }
+
+  async getDashboardQualityIssues(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetDashboardQualityIssuesDALRequest,
+  ) {
+    const response: Schemas.DashboardQualityIssuesDALResponse = { isSuccess: false };
+
+    try {
+      const sortColumnMap = {
+        [Schemas.QualityIssueSortColumn.CreatedAt]: qualityIssues.createdAt,
+        [Schemas.QualityIssueSortColumn.UpdatedAt]: qualityIssues.updatedAt,
+      };
+      const sortCol = sortColumnMap[params.sortColumn];
+      const orderExpr =
+        params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
+      const offset = (params.pageNo - 1) * params.pageSize;
+
+      const conditions = this.dashboardConditions(params);
+      conditions.push(eq(qualityIssues.status, Schemas.QUALITY_ISSUE_TAB_STATUS[params.tab]));
+      const selected = await this.dashboardQuery(tx)
+        .where(and(...conditions))
+        // DEV_NOTE: id breaks ties (same created_at), so rows never repeat or go missing between pages
+        .orderBy(orderExpr, asc(qualityIssues.id))
+        .limit(params.pageSize)
+        .offset(offset);
+
+      response.isSuccess = true;
+      response.message = "Quality issues fetched successfully";
+      response.qualityIssues = selected;
+    } catch (error) {
+      const message = "Unknown error in listing quality issues";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardQualityIssues,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every tab's count in one read, under the same chatbot filter; totalRecords = all of them
+  async getDashboardQualityIssuesCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountDashboardQualityIssuesDALRequest,
+  ) {
+    const response: Schemas.QualityIssueTabCountsDALResponse = { isSuccess: false };
+
+    try {
+      const { Open, Converted, Fixed, Dismissed } = Schemas.QualityIssueListTabEnum;
+      const countOf = (tab: Schemas.QualityIssueListTabEnum) =>
+        sql<number>`count(*) filter (where ${qualityIssues.status} = ${Schemas.QUALITY_ISSUE_TAB_STATUS[tab]})`.mapWith(
+          Number,
+        );
+      const conversationJoinConditions = [
+        eq(conversations.id, qualityIssues.conversationId),
+        eq(conversations.companyId, qualityIssues.companyId),
+      ];
+      const [result] = await tx
+        .select({
+          all: count(),
+          open: countOf(Open),
+          converted: countOf(Converted),
+          fixed: countOf(Fixed),
+          dismissed: countOf(Dismissed),
+        })
+        .from(qualityIssues)
+        .innerJoin(conversations, and(...conversationJoinConditions))
+        .where(and(...this.dashboardConditions(params)));
+
+      response.isSuccess = true;
+      response.message = "Quality issues counted successfully";
+      response.totalRecords = result?.all ?? 0;
+      response.tabCounts = {
+        [Open]: result?.open ?? 0,
+        [Converted]: result?.converted ?? 0,
+        [Fixed]: result?.fixed ?? 0,
+        [Dismissed]: result?.dismissed ?? 0,
+      };
+    } catch (error) {
+      const message = "Unknown error in counting quality issues";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountDashboardQualityIssues,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One issue by its public id within the company. isForUpdate locks the issue only: Postgres refuses to lock
+  // the nullable side of an outer join.
+  async getDashboardQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindDashboardQualityIssueDALRequest,
+  ) {
+    const response: Schemas.DashboardQualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.publicId, params.publicId),
+        eq(qualityIssues.companyId, params.companyId),
+      ];
+      const query = this.dashboardQuery(tx)
+        .where(and(...conditions))
+        .limit(1);
+      const [selected] = params.isForUpdate
+        ? await query.for("update", { of: qualityIssues })
+        : await query;
+
+      if (!selected) {
+        const message = "Quality issue not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetDashboardQualityIssue,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Quality issue fetched successfully";
+      response.qualityIssue = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Sets the type and / or note of an Open issue (an absent field keeps its value). isNotFound when no Open
+  // issue has that id: the Repo reads the row under lock first, so that means it closed meanwhile. note is free text,
+  // so it stays out of the log.
+  async triageQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.TriageQualityIssueDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+    const { note: _note, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(qualityIssues.id, params.id),
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+      ];
+      const [updated] = await tx
+        .update(qualityIssues)
+        .set({
+          ...(params.issueType !== undefined && { issueType: params.issueType }),
+          ...(params.note !== undefined && { note: params.note }),
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!updated) {
+        const message = "Open quality issue not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.TriageQualityIssue,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Quality issue triaged successfully";
+      response.qualityIssue = updated;
+    } catch (error) {
+      const message = "Unknown error in triaging quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.TriageQualityIssue,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Open → Fixed, Dismissed or Converted (with the test's id). isNotFound when no Open issue has that id.
+  async updateQualityIssueStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateQualityIssueStatusDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.id, params.id),
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+      ];
+      const [updated] = await tx
+        .update(qualityIssues)
+        .set({
+          status: params.status,
+          evalCaseId: params.evalCaseId,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!updated) {
+        const message = "Open quality issue not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.UpdateQualityIssueStatus,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Quality issue status updated successfully";
+      response.qualityIssue = updated;
+    } catch (error) {
+      const message = "Unknown error in updating quality issue status";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateQualityIssueStatus,
         message,
         error,
         metadata: params,

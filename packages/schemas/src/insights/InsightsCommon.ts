@@ -163,6 +163,7 @@ export const INSIGHTS_TASK_TYPE_USE_MAP: Record<ModelTaskTypeEnum, InsightsUsage
   [ModelTaskTypeEnum.QaAnswer]: InsightsUsageUseEnum.Answers,
   [ModelTaskTypeEnum.RouteIntent]: InsightsUsageUseEnum.Routing,
   [ModelTaskTypeEnum.EvalJudge]: InsightsUsageUseEnum.TestRuns,
+  [ModelTaskTypeEnum.QualityTestRewrite]: InsightsUsageUseEnum.TestRuns,
   [ModelTaskTypeEnum.KnowledgeEmbed]: InsightsUsageUseEnum.Search,
   [ModelTaskTypeEnum.SearchEmbed]: InsightsUsageUseEnum.Search,
   [ModelTaskTypeEnum.SearchRerank]: InsightsUsageUseEnum.Search,

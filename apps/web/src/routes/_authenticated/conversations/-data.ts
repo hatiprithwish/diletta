@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { apiClient } from "@/providers/apiClient";
 import { OverviewQueries } from "../overview/-data";
+import { QualityQueries } from "../quality/-data";
 import Utilities from "@/utils";
 
 // DEV_NOTE: The page's filters as the API reads them (botId stays absent: no bot filter in the UI, DESIGN.md §6)
@@ -94,8 +95,10 @@ export function useFlagConversation(publicId: string) {
             : previous,
       );
       void queryClient.invalidateQueries({ queryKey: ConversationsQueries.keys.lists() });
-      // DEV_NOTE: Overview's Needs attention counts open issues of every source, the new one too
+      // DEV_NOTE: Overview's Needs attention, the Quality list and its badge count open issues of every source, the
+      // new one too
       void queryClient.invalidateQueries({ queryKey: OverviewQueries.keys.all() });
+      void queryClient.invalidateQueries({ queryKey: QualityQueries.keys.all() });
       toast.success("Conversation flagged. It's in the Quality inbox.");
     },
     onError: () => {

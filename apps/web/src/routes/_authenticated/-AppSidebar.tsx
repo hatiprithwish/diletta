@@ -38,6 +38,7 @@ import { Avatar, AvatarFallback } from "@app/ui/components/avatar";
 import { cn } from "@app/ui/lib/utils";
 import Utilities from "@/utils";
 import { useChangesNeedsHumanCount } from "./changes/-data";
+import { useQualityOpenCount } from "./quality/-data";
 import { NAV_GROUPS, getActiveNestedTo, isPathActive } from "./-nav";
 
 export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
@@ -168,7 +169,7 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
 }
 
 // DEV_NOTE: A sidebar count (DESIGN.md §4), by the badge -nav.ts names. Each badge is its own component reading only
-// its own query, so a new badge (Quality, M4-6) is one entry in NAV_BADGES.
+// its own query, so a new badge is one entry in NAV_BADGES.
 function NavBadge({ badge, isRail }: Schemas.DashboardNavBadgeProps) {
   const Badge = NAV_BADGES[badge];
   return <Badge isRail={isRail} />;
@@ -186,11 +187,24 @@ function ChangesNeedsHumanBadge({ isRail }: Schemas.DashboardNavBadgeSourceProps
   );
 }
 
+function QualityOpenBadge({ isRail }: Schemas.DashboardNavBadgeSourceProps) {
+  const count = useQualityOpenCount().data?.openCount ?? 0;
+  return (
+    <NavCount
+      count={count}
+      label={`${Utilities.formatCount(count)} open ${count === 1 ? "issue" : "issues"}`}
+      tone={Schemas.DashboardChipToneEnum.Warning}
+      isRail={isRail}
+    />
+  );
+}
+
 const NAV_BADGES: Record<
   Schemas.DashboardNavBadgeEnum,
   (props: Schemas.DashboardNavBadgeSourceProps) => ReactNode
 > = {
   [Schemas.DashboardNavBadgeEnum.ChangesNeedsHuman]: ChangesNeedsHumanBadge,
+  [Schemas.DashboardNavBadgeEnum.QualityOpen]: QualityOpenBadge,
 };
 
 const NAV_COUNT_CLASS: Record<

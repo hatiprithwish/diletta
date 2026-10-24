@@ -18,6 +18,13 @@ import type {
 } from "../conversations";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type {
+  GetQualityIssuesApiResponse,
+  QualityIssueDetail,
+  QualityIssueListItem,
+  QualityPageSearch,
+  QualityTestDraft,
+} from "../qualityIssues";
+import type {
   ImpactRangeEnum,
   InsightsImpact,
   InsightsImpactTask,
@@ -238,10 +245,48 @@ export interface DashboardChangeTimelineProps {
   timeline: ChangeRequestTimelineEntry[];
 }
 
+// DEV_NOTE: The Quality page (M4-6): the inbox list, and the detail card of selectedId next to it (null = none)
+export interface DashboardQualityPageProps {
+  search: QualityPageSearch;
+  selectedId: string | null;
+}
+
+// DEV_NOTE: The list under the tabs: its rows, an empty state per tab and Previous / Next pages
+export interface DashboardQualityListProps {
+  response: GetQualityIssuesApiResponse;
+  search: QualityPageSearch;
+  selectedId: string | null;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardQualityRowProps {
+  qualityIssue: QualityIssueListItem;
+  search: QualityPageSearch;
+  isSelected: boolean;
+}
+
+export interface DashboardQualityDetailCardProps {
+  publicId: string;
+  search: QualityPageSearch;
+}
+
+// DEV_NOTE: One loaded issue's body, and its triage (type + note, editable while Open)
+export interface DashboardQualityDetailProps {
+  qualityIssue: QualityIssueDetail;
+}
+
+// DEV_NOTE: Create test's review: the draft to edit and save (null = closed)
+export interface DashboardQualityTestDialogProps {
+  publicId: string;
+  draft: QualityTestDraft | null;
+  onClose: () => void;
+}
+
 // DEV_NOTE: A sidebar item's count badge (DESIGN.md §4), named in -nav.ts and filled by the sidebar: Changes (needs a
-// person, destructive). Quality's (open issues, warning) comes with M4-6.
+// person, destructive) and Quality (open issues, warning, M4-6).
 export enum DashboardNavBadgeEnum {
   ChangesNeedsHuman = "changes_needs_human",
+  QualityOpen = "quality_open",
 }
 
 // DEV_NOTE: isRail = the sidebar is the icon rail, where the count becomes a 6px dot

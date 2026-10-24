@@ -28,7 +28,12 @@ export const NAV_GROUPS = [
         icon: GitDiff,
         badge: Schemas.DashboardNavBadgeEnum.ChangesNeedsHuman,
       },
-      { label: "Quality", to: "/quality", icon: Flag },
+      {
+        label: "Quality",
+        to: "/quality",
+        icon: Flag,
+        badge: Schemas.DashboardNavBadgeEnum.QualityOpen,
+      },
     ],
   },
   {
