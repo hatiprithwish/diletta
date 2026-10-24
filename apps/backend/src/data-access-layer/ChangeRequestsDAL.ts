@@ -1,5 +1,17 @@
-import { and, asc, count, eq, getColumns, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  getColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  sql,
+} from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
   changeRequests,
@@ -512,9 +524,232 @@ export default class ChangeRequestsDAL {
     return response;
   }
 
-  // DEV_NOTE: The dashboard's change detail (M4-4): one change request by its public id within the company, with its
-  // tool and the conversation it came from. Never its values: encrypted_changes isn't selected. Left joins on the tool
-  // definition, conversation, chatbot and user (no DB foreign keys); the conversation's public id is required.
+  // DEV_NOTE: The dashboard's change requests (M4-4 detail, M4-5 list): with the tool and the conversation each came
+  // from, its chatbot and user. Never their values: encrypted_changes isn't selected. Inner join on the tool call and
+  // the conversation (every change request has both); left joins on the tool definition, chatbot and user (no DB
+  // foreign keys), so a row whose tool, chatbot or user is gone still reads.
+  private dashboardQuery(tx: NodePgTransaction<EmptyRelations>) {
+    const conversationJoinConditions = [
+      eq(conversations.id, changeRequests.conversationId),
+      eq(conversations.companyId, changeRequests.companyId),
+    ];
+    const chatbotJoinConditions = [
+      eq(chatbots.id, conversations.chatbotId),
+      eq(chatbots.companyId, conversations.companyId),
+    ];
+    const userJoinConditions = [
+      eq(chatbotUsers.id, conversations.chatbotUserId),
+      eq(chatbotUsers.companyId, conversations.companyId),
+    ];
+    return tx
+      .select({
+        id: changeRequests.id,
+        conversationId: changeRequests.conversationId,
+        conversationRootLogId: conversations.rootLogId,
+        publicId: changeRequests.publicId,
+        summary: changeRequests.summary,
+        changeCount: changeRequests.changeCount,
+        status: changeRequests.status,
+        errorCode: changeRequests.errorCode,
+        wasEdited: changeRequests.wasEdited,
+        undoUntil: changeRequests.undoUntil,
+        createdAt: changeRequests.createdAt,
+        updatedAt: changeRequests.updatedAt,
+        toolName: toolDefinitions.name,
+        toolVersion: toolCalls.toolVersion,
+        conversationPublicId: conversations.publicId,
+        conversationTitle: conversations.title,
+        conversationContentPurgedAt: conversations.contentPurgedAt,
+        chatbotName: chatbots.name,
+        // DEV_NOTE: An erased user keeps its row, not its name
+        userName: sql<
+          string | null
+        >`case when ${chatbotUsers.erasedAt} is null then ${chatbotUsers.displayName} end`,
+      })
+      .from(changeRequests)
+      .innerJoin(toolCalls, and(...toolCallJoinConditions))
+      .leftJoin(toolDefinitions, and(...toolDefinitionJoinConditions))
+      .innerJoin(conversations, and(...conversationJoinConditions))
+      .leftJoin(chatbots, and(...chatbotJoinConditions))
+      .leftJoin(chatbotUsers, and(...userJoinConditions));
+  }
+
+  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts (M4-5). The requester and the chatbot
+  // are the conversation's.
+  private dashboardConditions(params: Schemas.CountDashboardChangeRequestsDALRequest): SQL[] {
+    const conditions: SQL[] = [
+      eq(changeRequests.companyId, params.companyId),
+      eq(conversations.companyId, params.companyId),
+    ];
+    if (params.chatbotUserId !== null) {
+      conditions.push(eq(conversations.chatbotUserId, params.chatbotUserId));
+    }
+    if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+    return conditions;
+  }
+
+  // DEV_NOTE: A tab's condition (All has none): its statuses (Schemas.CHANGE_REQUEST_TAB_STATUSES)
+  private tabCondition(tab: Schemas.ChangeRequestListTabEnum): SQL | undefined {
+    const statuses = Schemas.CHANGE_REQUEST_TAB_STATUSES[tab];
+    return statuses === null ? undefined : inArray(changeRequests.status, statuses);
+  }
+
+  async getDashboardChangeRequests(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetDashboardChangeRequestsDALRequest,
+  ) {
+    const response: Schemas.DashboardChangeRequestsDALResponse = { isSuccess: false };
+
+    try {
+      const sortColumnMap = {
+        [Schemas.ChangeRequestSortColumn.CreatedAt]: changeRequests.createdAt,
+        [Schemas.ChangeRequestSortColumn.UpdatedAt]: changeRequests.updatedAt,
+      };
+      const sortCol = sortColumnMap[params.sortColumn];
+      const orderExpr =
+        params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
+      const offset = (params.pageNo - 1) * params.pageSize;
+
+      const conditions = this.dashboardConditions(params);
+      const tabCondition = this.tabCondition(params.tab);
+      if (tabCondition) conditions.push(tabCondition);
+      const selected = await this.dashboardQuery(tx)
+        .where(and(...conditions))
+        // DEV_NOTE: id breaks ties (same created_at), so rows never repeat or go missing between pages
+        .orderBy(orderExpr, asc(changeRequests.id))
+        .limit(params.pageSize)
+        .offset(offset);
+
+      response.isSuccess = true;
+      response.message = "Change requests fetched successfully";
+      response.changeRequests = selected;
+    } catch (error) {
+      const message = "Unknown error in listing change requests";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardChangeRequests,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every tab's count in one read, under the same requester and chatbot filters; totalRecords = All's
+  async getDashboardChangeRequestsCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountDashboardChangeRequestsDALRequest,
+  ) {
+    const response: Schemas.ChangeRequestTabCountsDALResponse = { isSuccess: false };
+
+    try {
+      const { Waiting, Verified, Undone, NeedsHuman } = Schemas.ChangeRequestListTabEnum;
+      const countOf = (tab: Schemas.ChangeRequestListTabEnum) =>
+        sql<number>`count(*) filter (where ${this.tabCondition(tab)})`.mapWith(Number);
+      const [result] = await tx
+        .select({
+          all: count(),
+          waiting: countOf(Waiting),
+          verified: countOf(Verified),
+          undone: countOf(Undone),
+          needsHuman: countOf(NeedsHuman),
+        })
+        .from(changeRequests)
+        .innerJoin(
+          conversations,
+          and(
+            eq(conversations.id, changeRequests.conversationId),
+            eq(conversations.companyId, changeRequests.companyId),
+          ),
+        )
+        .where(and(...this.dashboardConditions(params)));
+
+      response.isSuccess = true;
+      response.message = "Change requests counted successfully";
+      response.totalRecords = result?.all ?? 0;
+      response.tabCounts = {
+        [Schemas.ChangeRequestListTabEnum.All]: result?.all ?? 0,
+        [Waiting]: result?.waiting ?? 0,
+        [Verified]: result?.verified ?? 0,
+        [Undone]: result?.undone ?? 0,
+        [NeedsHuman]: result?.needsHuman ?? 0,
+      };
+    } catch (error) {
+      const message = "Unknown error in counting change requests";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountDashboardChangeRequests,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The company's chatbot users with at least one change request (through their conversations), at most
+  // params.limit, those with the most change requests first (then by name). An erased user is left out (its name is
+  // gone, and nothing new comes from it).
+  async getChangeRequestRequesters(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetChangeRequestRequestersDALRequest,
+  ) {
+    const response: Schemas.ChangeRequestRequestersDALResponse = { isSuccess: false };
+
+    try {
+      const conversationJoinConditions = [
+        eq(conversations.id, changeRequests.conversationId),
+        eq(conversations.companyId, changeRequests.companyId),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      const conditions = [
+        eq(changeRequests.companyId, params.companyId),
+        isNull(chatbotUsers.erasedAt),
+      ];
+      const changeCount = count(changeRequests.id);
+      const requesters = await tx
+        .select({
+          chatbotUserId: chatbotUsers.id,
+          hostUserId: chatbotUsers.hostUserId,
+          name: chatbotUsers.displayName,
+        })
+        .from(changeRequests)
+        .innerJoin(conversations, and(...conversationJoinConditions))
+        .innerJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .groupBy(chatbotUsers.id, chatbotUsers.hostUserId, chatbotUsers.displayName)
+        .orderBy(desc(changeCount), asc(chatbotUsers.displayName), asc(chatbotUsers.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Requesters fetched successfully";
+      response.requesters = requesters;
+    } catch (error) {
+      const message = "Unknown error in fetching requesters";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetChangeRequestRequesters,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The dashboard's change detail (M4-4): one change request by its public id within the company.
+  // isForUpdate (Mark resolved, M4-5) locks the change request only: Postgres refuses to lock the nullable side of an
+  // outer join.
   async getDashboardChangeRequest(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindDashboardChangeRequestDALRequest,
@@ -526,45 +761,12 @@ export default class ChangeRequestsDAL {
         eq(changeRequests.publicId, params.publicId),
         eq(changeRequests.companyId, params.companyId),
       ];
-      const conversationJoinConditions = [
-        eq(conversations.id, changeRequests.conversationId),
-        eq(conversations.companyId, changeRequests.companyId),
-      ];
-      const chatbotJoinConditions = [
-        eq(chatbots.id, conversations.chatbotId),
-        eq(chatbots.companyId, conversations.companyId),
-      ];
-      const userJoinConditions = [
-        eq(chatbotUsers.id, conversations.chatbotUserId),
-        eq(chatbotUsers.companyId, conversations.companyId),
-      ];
-      const [selected] = await tx
-        .select({
-          publicId: changeRequests.publicId,
-          summary: changeRequests.summary,
-          changeCount: changeRequests.changeCount,
-          status: changeRequests.status,
-          errorCode: changeRequests.errorCode,
-          wasEdited: changeRequests.wasEdited,
-          undoUntil: changeRequests.undoUntil,
-          createdAt: changeRequests.createdAt,
-          updatedAt: changeRequests.updatedAt,
-          toolName: toolDefinitions.name,
-          toolVersion: toolCalls.toolVersion,
-          conversationPublicId: conversations.publicId,
-          conversationTitle: conversations.title,
-          conversationContentPurgedAt: conversations.contentPurgedAt,
-          chatbotName: chatbots.name,
-          userName: chatbotUsers.displayName,
-        })
-        .from(changeRequests)
-        .innerJoin(toolCalls, and(...toolCallJoinConditions))
-        .leftJoin(toolDefinitions, and(...toolDefinitionJoinConditions))
-        .innerJoin(conversations, and(...conversationJoinConditions))
-        .leftJoin(chatbots, and(...chatbotJoinConditions))
-        .leftJoin(chatbotUsers, and(...userJoinConditions))
+      const query = this.dashboardQuery(tx)
         .where(and(...conditions))
         .limit(1);
+      const [selected] = params.isForUpdate
+        ? await query.for("update", { of: changeRequests })
+        : await query;
 
       if (!selected) {
         const message = "Change request not found";

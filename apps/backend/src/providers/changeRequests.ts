@@ -27,8 +27,9 @@ export default class ChangeRequestsProvider {
 
   // DEV_NOTE: The undo_until a status change stores (M3-7): a status that ends the change request (CHANGE_REQUEST_
   // PURGED_STATUSES) → now + CHANGE_REQUEST_UNDO_WINDOW_MS (the Verified one's undo window; for all of them, when the
-  // purge empties its values); NeedsHuman → null (its values stay until a person resolves it); any status on the way
-  // (Approved, Committing, Committed, Mismatch) → undefined, left as it is.
+  // purge empties its values); NeedsHuman → null (its values stay until a person resolves it); Resolved (M4-5) → now
+  // (the person is done with them: the next purge empties them); any status on the way (Approved, Committing,
+  // Committed, Mismatch) → undefined, left as it is.
   static undoUntil(
     status: Schemas.ChangeRequestStatusIntEnum,
     now: number,
@@ -37,6 +38,7 @@ export default class ChangeRequestsProvider {
       return new Date(now + Schemas.CHANGE_REQUEST_UNDO_WINDOW_MS);
     }
     if (status === Schemas.ChangeRequestStatusIntEnum.NeedsHuman) return null;
+    if (status === Schemas.ChangeRequestStatusIntEnum.Resolved) return new Date(now);
     return undefined;
   }
 

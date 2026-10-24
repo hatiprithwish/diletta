@@ -22,7 +22,7 @@ Code: `apps/backend/src/durable-objects/ConversationDO.ts` (the flow), `reposito
 
 ## Undo window and purge (M3-7)
 
-Every change request that ends gets `undo_until` = its end + `CHANGE_REQUEST_UNDO_WINDOW_MS` (1 hour): Verified, Undone, Failed, Rejected and Expired. NeedsHuman keeps `undo_until` null, so its values stay until a person resolves it (M4-5 sets it then).
+Every change request that ends gets `undo_until` = its end + `CHANGE_REQUEST_UNDO_WINDOW_MS` (1 hour): Verified, Undone, Failed, Rejected and Expired. NeedsHuman keeps `undo_until` null, so its values stay until a person resolves it (M4-5: Mark resolved sets it to now, so the next purge run empties them).
 
 1. **Undo.** While a Verified change request is inside its window and its tool has an `inverse_op`, the widget's card shows **Undo** and "Undo available until HH:MM". Undo sends one `change_request_undos` frame with every record of the card the user can still undo. Same gate as an answer: the rate limit, no turn running, and the host token (`token_needed` otherwise).
 2. **Re-checked like a commit** (`ActionEngineRepo.startUndo`): the conversation open, the chatbot and company active and not read-only, and then, under the row lock, Verified with no undo under way, the tool has an `inverse_op`, the values not purged, before `undo_until`, and the tool version still loading. A refusal changes nothing; the widget gets a `change_request_undo` answer with a safe message ("The time to undo this change has passed. Nothing changed.", …).
@@ -48,7 +48,7 @@ No approval needed (`Never`, or an `auto` rule in a trusted turn): the change re
 
 ## Statuses and events
 
-Every status change writes `change_request.<action>` to `activity_log` + `event_outbox` in the same transaction, under the conversation's root log. Actor: the chatbot user for approve and reject, the system for everything else.
+Every status change writes `change_request.<action>` to `activity_log` + `event_outbox` in the same transaction, under the conversation's root log. Actor: the chatbot user for approve and reject, the admin for resolve (M4-5), the system for everything else.
 
 `change_request.edited` (M3-5) is the one event that isn't a status change: the user changed a Proposed one's values.
 
@@ -65,6 +65,7 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 | Undone     | an undo (auto, or the user's within the window) put the record back, confirmed by a read    |
 | Failed     | the host refused or failed, and no send may have landed                                     |
 | NeedsHuman | a person must look: the commit or its undo may have landed, or the read-after couldn't tell |
+| Resolved   | an admin checked the record and marked it resolved on the Changes page (M4-5)               |
 
 `change_request.undoing` (M3-6) isn't a status change either: the auto-undo of a Mismatch started (a resumed undo writes another). Since M3-7 it also marks the user's undo of a Verified one (actor: the chatbot user), which stays Verified until the undo ends.
 
@@ -76,7 +77,7 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 - **A user undo stays under way (Verified holding `cr-<publicId>-user-undo`).** An eviction or a failed write cut it short. It resumes like an auto-undo (next `host_token`, the retry, the auto-close's check) with `isResume`. Without a host token by `undo_until` + `CHANGE_REQUEST_UNDO_GRACE_MS`, the DO hands it to a person (NeedsHuman `undo_interrupted`: check the record in the host); the purge stops sparing it then too.
 - **"The time to undo this change has passed".** `undo_until` is in the past. Nothing was sent. The change stands as verified.
 - **Values still there after the window.** Check the cron runs (`ChangeRequestPurge` in the logs, `purgedCount`). A row with `undo_until` null (NeedsHuman, or written before M3-7) is never purged here.
-- **NeedsHuman.** Check the record in the host (the change request's tool call holds the tool and version; the payload is encrypted). M4-5 resolves these from the dashboard.
+- **NeedsHuman.** Check the record in the host (the change request's tool call holds the tool and version; the payload is encrypted; the Changes page shows why it needs a person and its timeline). Once the record is right, an admin marks it resolved: see "Resolving a change that needs a person" below.
 - **"Think holds no pause for this change request"** (warn log). Think's pending-approval row was gone when the user answered (swept, or resolved elsewhere), or Think couldn't resolve it. An approval is still committed; there's no continuation, so the model doesn't mention it until the next message.
 - **`error_code`.** `Schemas.ChangeRequestErrorCodeEnum`: why a change request ended Failed / NeedsHuman (a refused step: `tool_unavailable`, `read_only`, `conversation_closed`, `chatbot_unavailable`, `payload_unreadable`, `server_error`; the host call: `token_needed`, `token_rejected`, `host_refused`, `host_failed`, `host_unknown`; after a commit landed (M3-6): `verify_unknown`, `not_undoable`, `undo_failed`, `undo_unconfirmed`; the user's undo never resumed (M3-7): `undo_interrupted`).
 - **"Continuation not prepared"** (warn log). The answer was applied, but the model couldn't run (no key, budget used up). The chat shows the generic unavailable text after it.
@@ -84,6 +85,16 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 - **NeedsHuman `token_needed`.** A commit, read-after or undo waited `HOST_TOKEN_GRACE_MS` for a host token that never came: the widget was closed (no socket) or its host's `getHostToken` failed. Nothing was sent after the token went missing, but a Committing one may have landed before: check the record in the host. Many of these for one company: check the host's `getHostToken` (see `docs/runbooks/widget.md`).
 - **The model replied twice after a bulk answer.** Think fired a continuation before the last pause was resolved (the resolutions came more than 50 ms apart). Each continuation is prepared like a turn, so a second one with no prepared turn ends with the generic safe text. Look for slow `approveExecution` storage writes.
 - **An edit says "This change can't be edited right now".** The tool version is no longer Active, or its connection can't serve calls (`getEditPlan` → `ToolUnavailable`). The proposal can still be rejected; an approval would end it Failed.
+
+## Resolving a change that needs a person (M4-5)
+
+The dashboard's Changes page (`/changes`, sidebar badge = how many need a person) lists every change request with its timeline, read from its `activity_log` events (`ChangeRequestTimelineProvider`: plain words, names from `admins` / `chatbot_users`, never a record's values; at most `CHANGE_REQUEST_TIMELINE_MAX_EVENTS`, the newest). Requested by offers the `CHANGE_REQUEST_REQUESTERS_MAX` users with the most changes. A NeedsHuman one shows why (its `error_code` in words) and **Mark resolved**:
+
+1. Check the record in the host app and put it right by hand if needed. The dashboard never shows the change's values (they stay encrypted; only the action engine decrypts them).
+2. Mark resolved → `POST /dashboard/change-requests/:publicId/resolve` (`authorizeCompany(ChangeRequestResolve)`, `ChangeRequestsRepo.resolveChangeRequest`, one `withTenant`): the row is locked, NeedsHuman → **Resolved**, `undo_until` = now, and `change_request.resolved` (actor: the admin) is written in the same transaction and relayed after the commit. The answer is read after the commit: if that read fails, the resolve still stands (logged as `ResolveChangeRequest`) and the page refetches the timeline.
+3. The next purge run (every minute) empties its values. It drops out of the badge, the Needs a person tab, Overview's needs attention and the Conversations page's Needs attention.
+
+Only a NeedsHuman change can be resolved: any other (a repeat, or two admins at once: the row lock lets one through) answers 409 and writes nothing. The widget shows a Resolved change like a NeedsHuman one ("needs a person"), and the model hears "needs review". Resolved is final.
 
 ## Defaults
 
@@ -115,6 +126,7 @@ Large commits run in the Conversation DO, not a Workflow: the host token lives i
 - `src/tests/hostTokenAsk.test.ts`: the shared ask, no wait with no socket, the cooldown after a timeout, a late token, an aborted step. Widget `src/tests/hostTokenSender.test.ts`: one `getHostToken` at a time, and a getter that throws, rejects or hangs never blocks the next send.
 - `src/tests/actionEngine.test.ts`: `ActionEngineRepo` as `diletta_app`, including cross-company isolation (and `getEditPlan` / `saveEdit`, M3-6's `finishVerify` / `startFollowUp` / `finishUndo`, an undo resumed from the stored key, M3-7's `startUndo` and the purge, M3-8's `isUnsent` resumes and `handOverForToken`).
 - `src/tests/hostTools.test.ts`: approval decisions, role expiry, the loop guard key, untrusted history, the fence.
+- `src/tests/dashboardChangeRequests.test.ts` (M4-5, the Done-when): the Changes list (tabs, Requested by, pages, RLS), the timeline from `activity_log`, the badge count, and Mark resolved (status, `undo_until`, the admin's event and outbox row, 409 on anything not NeedsHuman, one of two concurrent resolves). `src/tests/changeRequestTimeline.test.ts`: the timeline's words per event.
 - `src/tests/changeRequests.test.ts`: the deadline, how a commit's host call, its read-after and its undo end, error codes, the view.
 - `packages/schemas` `ChangeRequestsVerify.test.ts`: `checkReadAfter` per kind and step, `host_ref`, the payload upgrade.
 - A DO under test reaches the test host through `routeTestHostFetch()` (call it after `mockCloudflare`).

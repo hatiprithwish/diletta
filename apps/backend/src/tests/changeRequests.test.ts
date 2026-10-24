@@ -185,6 +185,10 @@ describe("ChangeRequestsProvider undo window (M3-7)", () => {
       );
     }
     expect(ChangeRequestsProvider.undoUntil(NeedsHuman, now)).toBeNull();
+    // DEV_NOTE: Resolved (M4-5): the person is done with the values, so the next purge empties them
+    expect(
+      ChangeRequestsProvider.undoUntil(Schemas.ChangeRequestStatusIntEnum.Resolved, now),
+    ).toEqual(new Date(now));
     for (const status of [Approved, Committing, Committed, Mismatch]) {
       expect(ChangeRequestsProvider.undoUntil(status, now)).toBeUndefined();
     }

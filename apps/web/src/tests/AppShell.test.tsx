@@ -237,7 +237,11 @@ describe("dashboard shell state", () => {
 
     expect(await screen.findByText("Ben Ito")).toBeInTheDocument();
     expect(screen.queryByText("Ana Ruiz")).not.toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // DEV_NOTE: Only /dashboard/me counts here: the sidebar's badge count (M4-5) refetches on its own
+    const meCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).endsWith("/dashboard/me"));
+    expect(meCalls).toHaveLength(1);
   });
 
   it("starts as the icon rail when the sidebar was collapsed before", async () => {
@@ -264,6 +268,44 @@ describe("dashboard shell state", () => {
 
     expect(await screen.findByText("page /changes")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+// DEV_NOTE: /dashboard/me and the Changes badge's count, each from its own fixture (M4-5)
+function mockMeAndCount(needsHumanCount: number) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const body = url.includes("/needs-human-count")
+        ? { isSuccess: true, needsHumanCount }
+        : { isSuccess: true, admin: COMPANY_ADMIN };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }),
+  );
+}
+
+describe("sidebar badges", () => {
+  it("shows how many changes need a person next to Changes", async () => {
+    mockMeAndCount(3);
+    renderShell("/overview");
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(await sidebar().findByLabelText("3 need a person")).toHaveTextContent("3");
+  });
+
+  it("shows nothing when no change needs a person", async () => {
+    mockMeAndCount(0);
+    renderShell("/overview");
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(sidebar().queryByLabelText(/need a person/)).not.toBeInTheDocument();
+  });
+
+  it("turns the count into a dot in the icon rail", async () => {
+    document.cookie = "sidebar_state=false; path=/";
+    mockMeAndCount(2);
+    renderShell("/overview");
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    const dot = await sidebar().findByRole("img", { name: "2 need a person" });
+    expect(dot).toBeEmptyDOMElement();
   });
 });
 

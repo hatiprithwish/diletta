@@ -211,7 +211,7 @@ describe("Overview", () => {
     expect(screen.getByText("Spend this month")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /1 change needs a person/ })).toHaveAttribute(
       "href",
-      "/changes",
+      "/changes?tab=needs_human",
     );
     expect(screen.getByRole("link", { name: /7 open issues to triage/ })).toBeInTheDocument();
     expect(screen.queryByText(/failed to sync/)).not.toBeInTheDocument();

@@ -1,8 +1,9 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { useClerk } from "@clerk/tanstack-react-start";
 import { CaretRight, CaretUpDown, ChatCircle, SignOut } from "@phosphor-icons/react";
-import type * as Schemas from "@app/schemas";
+import * as Schemas from "@app/schemas";
 import {
   Sidebar,
   SidebarContent,
@@ -11,6 +12,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -33,7 +35,9 @@ import {
   DropdownMenuTrigger,
 } from "@app/ui/components/dropdown-menu";
 import { Avatar, AvatarFallback } from "@app/ui/components/avatar";
+import { cn } from "@app/ui/lib/utils";
 import Utilities from "@/utils";
+import { useChangesNeedsHumanCount } from "./changes/-data";
 import { NAV_GROUPS, getActiveNestedTo, isPathActive } from "./-nav";
 
 export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
@@ -107,6 +111,7 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {"badge" in item && <NavBadge badge={item.badge} isRail={isRail} />}
                     </SidebarMenuItem>
                   );
                 }
@@ -159,6 +164,70 @@ export function AppSidebar({ admin }: Schemas.DashboardSidebarProps) {
         <AccountMenu admin={admin} />
       </SidebarFooter>
     </Sidebar>
+  );
+}
+
+// DEV_NOTE: A sidebar count (DESIGN.md §4), by the badge -nav.ts names. Each badge is its own component reading only
+// its own query, so a new badge (Quality, M4-6) is one entry in NAV_BADGES.
+function NavBadge({ badge, isRail }: Schemas.DashboardNavBadgeProps) {
+  const Badge = NAV_BADGES[badge];
+  return <Badge isRail={isRail} />;
+}
+
+function ChangesNeedsHumanBadge({ isRail }: Schemas.DashboardNavBadgeSourceProps) {
+  const count = useChangesNeedsHumanCount().data?.needsHumanCount ?? 0;
+  return (
+    <NavCount
+      count={count}
+      label={`${Utilities.formatCount(count)} need a person`}
+      tone={Schemas.DashboardChipToneEnum.Destructive}
+      isRail={isRail}
+    />
+  );
+}
+
+const NAV_BADGES: Record<
+  Schemas.DashboardNavBadgeEnum,
+  (props: Schemas.DashboardNavBadgeSourceProps) => ReactNode
+> = {
+  [Schemas.DashboardNavBadgeEnum.ChangesNeedsHuman]: ChangesNeedsHumanBadge,
+};
+
+const NAV_COUNT_CLASS: Record<
+  Schemas.DashboardNavCountProps["tone"],
+  { badge: string; dot: string }
+> = {
+  [Schemas.DashboardChipToneEnum.Destructive]: {
+    badge:
+      "bg-destructive-soft text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive",
+    dot: "bg-destructive",
+  },
+  [Schemas.DashboardChipToneEnum.Warning]: {
+    badge:
+      "bg-warning-soft text-warning peer-hover/menu-button:text-warning peer-data-active/menu-button:text-warning",
+    dot: "bg-warning",
+  },
+};
+
+// DEV_NOTE: Nothing while it loads, fails or is 0; a 6px dot in the icon rail (shadcn hides SidebarMenuBadge there)
+function NavCount({ count, label, tone, isRail }: Schemas.DashboardNavCountProps) {
+  if (count === 0) return null;
+  if (isRail) {
+    return (
+      <span
+        className={cn(
+          "pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full",
+          NAV_COUNT_CLASS[tone].dot,
+        )}
+        role="img"
+        aria-label={label}
+      />
+    );
+  }
+  return (
+    <SidebarMenuBadge className={NAV_COUNT_CLASS[tone].badge} aria-label={label}>
+      {Utilities.formatCount(count)}
+    </SidebarMenuBadge>
   );
 }
 

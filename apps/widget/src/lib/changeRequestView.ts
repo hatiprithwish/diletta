@@ -97,7 +97,9 @@ export function outcomeOf(
       return Schemas.WidgetChangeOutcomeEnum.Expired;
     case Schemas.ChangeRequestStatusIntEnum.Failed:
       return Schemas.WidgetChangeOutcomeEnum.Failed;
+    // DEV_NOTE: Resolved (M4-5) = an admin checked it on the dashboard; the user's card still says a person looked at it
     case Schemas.ChangeRequestStatusIntEnum.NeedsHuman:
+    case Schemas.ChangeRequestStatusIntEnum.Resolved:
       return Schemas.WidgetChangeOutcomeEnum.NeedsPerson;
   }
 }

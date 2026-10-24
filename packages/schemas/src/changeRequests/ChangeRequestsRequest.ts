@@ -154,3 +154,11 @@ export interface SaveEditRequest {
   payload: ChangeRequestPayload;
   editId: string;
 }
+
+// DEV_NOTE: Mark resolved (M4-5), server-side: companyId and adminId (internal) from the signed-in admin, publicId
+// from the route
+export interface ResolveChangeRequestRequest {
+  companyId: string;
+  adminId: string;
+  publicId: string;
+}

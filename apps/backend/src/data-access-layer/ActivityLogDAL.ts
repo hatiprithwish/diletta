@@ -1,9 +1,11 @@
-import { and, asc, count, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
   activityLog,
+  admins,
   changeRequests,
+  chatbotUsers,
   companies,
   conversations,
   toolCalls,
@@ -132,6 +134,68 @@ export default class ActivityLogDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetActivityLogsByEntity,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: An entity's timeline (M4-5: a change request's), oldest first, with each actor's name: left joins on the
+  // admin (actor Admin) and the chatbot user (actor ChatbotUser) of the same company, so a row whose actor is gone
+  // still reads; an erased user's name is left out. Capped at params.limit by keeping the newest events (read newest
+  // first, then put back in order): the latest steps say where the entity stands now.
+  async getActivityLogTimeline(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActivityLogsByEntityDALRequest,
+  ) {
+    const response: Schemas.ActivityLogTimelineDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.companyId, params.companyId),
+        eq(activityLog.entityType, params.entityType),
+        eq(activityLog.entityId, params.entityId),
+      ];
+      const adminJoinConditions = [
+        eq(activityLog.actorType, Schemas.ActivityLogActorTypeIntEnum.Admin),
+        eq(admins.id, activityLog.actorId),
+        eq(admins.companyId, activityLog.companyId),
+      ];
+      const userJoinConditions = [
+        eq(activityLog.actorType, Schemas.ActivityLogActorTypeIntEnum.ChatbotUser),
+        eq(chatbotUsers.id, activityLog.actorId),
+        eq(chatbotUsers.companyId, activityLog.companyId),
+      ];
+      const activityLogs = await tx
+        .select({
+          id: activityLog.id,
+          actorType: activityLog.actorType,
+          entityAction: activityLog.entityAction,
+          detail: activityLog.detail,
+          createdAt: activityLog.createdAt,
+          actorName: sql<
+            string | null
+          >`coalesce(${admins.name}, case when ${chatbotUsers.erasedAt} is null then ${chatbotUsers.displayName} end)`,
+        })
+        .from(activityLog)
+        .leftJoin(admins, and(...adminJoinConditions))
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Activity log timeline fetched successfully";
+      response.activityLogs = activityLogs.reverse();
+    } catch (error) {
+      const message = "Unknown error in fetching activity log timeline";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActivityLogTimeline,
         message,
         error,
         metadata: params,

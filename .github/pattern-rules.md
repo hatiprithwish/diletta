@@ -1816,6 +1816,39 @@ getConversationTurnCosts[\s\S]{0,600}workers_ai
 
 ---
 
+### 3.41 Mark Resolved Only From NeedsHuman, With Its Admin Event; the Changes Page Shows No Values [CRITICAL]
+
+**Rule:** The Changes page (M4-5) reads only through `GET /dashboard/change-requests` (paged; `tab`, `requesterId` = host user id, `botId`, unknown → 404), `/requesters` (capped at `CHANGE_REQUEST_REQUESTERS_MAX`, never in the list's answer), `/needs-human-count` and `/:publicId` (`authorizeCompany(ChangeRequestRead)`) → `ChangeRequestsRepo` (one `withTenant` each). The timeline comes only from the change request's `activity_log` events (`ActivityLogDAL.getActivityLogTimeline`, newest `CHANGE_REQUEST_TIMELINE_MAX_EVENTS` kept, shown oldest first) turned into words by the pure `ChangeRequestTimelineProvider`; event details are read through `Schemas.ZChangeRequestEventDetail`. A change's values (`encrypted_changes`) are never selected or decrypted on these paths. Mark resolved only through `POST /dashboard/change-requests/:publicId/resolve` (`authorizeCompany(ChangeRequestResolve)`) → `ChangeRequestsRepo.resolveChangeRequest`: one `withTenant` that locks the row (`FOR UPDATE OF change_requests`), moves it only from NeedsHuman to Resolved (anything else → `ChangeRequestResolveFailureEnum.NotNeedsHuman`, 409, nothing written), sets `undo_until` through `ChangeRequestsProvider.undoUntil(Resolved)` (now, so the purge empties the values), and records `change_request.resolved` with actor Admin through `CriticalEventProvider.record` (failure → `TenantRollbackError`), relayed after the commit; the answer's detail is read after the commit, so a failed read never rolls the resolve back. Resolved is final: no other code moves a change request out of it.
+
+**Violations:**
+
+- Selecting `encryptedChanges` / `iv` or calling `decryptValue` for a Changes page response
+- Resolving without the row lock, from a status other than NeedsHuman, or without its critical event in the same transaction
+- Building the timeline's words in the browser or the Repo instead of `ChangeRequestTimelineProvider`, or showing a raw `entity_action`
+- Sending an internal id (the change request's, its conversation's, a chatbot user's) or the outbox id to the client
+- An uncapped Requested by list, or one rebuilt on every page of the list
+- Reading the response's timeline inside the resolve's transaction, or capping the timeline by dropping its newest events
+
+**Detection Pattern:**
+
+```regex
+ChangeRequestStatusIntEnum\.Resolved[\s\S]{0,300}fromStatuses:\s*\[(?!Schemas\.ChangeRequestStatusIntEnum\.NeedsHuman\])
+decryptValue[\s\S]{0,400}ChangeRequestsRepo
+```
+
+**Examples:**
+
+```
+- ❌ await dal.updateChangeRequestStatus(tx, { id, status: Resolved, fromStatuses: [row.status] })   // resolves anything
+- ✅ getDashboardChangeRequest(tx, { …, isForUpdate: true }) → NeedsHuman only → update + CriticalEventProvider.record
+- ❌ timeline: logs.map((log) => ({ label: log.entityAction }))   // internal names in the UI
+- ✅ ChangeRequestTimelineProvider.timeline(logs)
+```
+
+**Fix:** Mirror `ChangeRequestsRepo.resolveChangeRequest`, `providers/changeRequestTimeline.ts` and the `changes/` pages.
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1903,5 +1936,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag); 2026-10-24 (M4-5: 3.41 Mark resolved only from NeedsHuman with its admin event, Changes page shows no values)
 Maintainer: hatiprithwish

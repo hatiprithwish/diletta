@@ -1,15 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import * as Schemas from "@app/schemas";
+import { ChangesPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/changes/")({
-  component: ChangesPage,
+  validateSearch: Schemas.ZChangesPageSearch,
+  component: ChangesListPage,
 });
 
-function ChangesPage() {
-  return (
-    <PageHeader
-      title="Changes"
-      description="Writes the assistant proposed, with approvals and checks"
-    />
-  );
+function ChangesListPage() {
+  const search = Route.useSearch();
+  return <ChangesPage search={search} selectedId={null} />;
 }

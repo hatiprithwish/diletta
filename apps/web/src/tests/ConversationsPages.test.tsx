@@ -13,7 +13,6 @@ import {
 import * as Schemas from "@app/schemas";
 import { Route as ConversationsRoute } from "@/routes/_authenticated/conversations/index";
 import { Route as ConversationRoute } from "@/routes/_authenticated/conversations/$id/index";
-import { Route as ChangeRoute } from "@/routes/_authenticated/changes/$id/index";
 import Utilities from "@/utils";
 
 vi.mock("@clerk/tanstack-react-start", () => ({
@@ -134,28 +133,6 @@ const DETAIL: Schemas.ConversationDetail = {
   ],
 };
 
-const CHANGE: Schemas.ChangeRequestDetail = {
-  publicId: "cr_1",
-  summary: "update_record: 3 records",
-  changeCount: 3,
-  changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.NeedsHuman,
-  changeRequestStatusLabel: Schemas.ChangeRequestStatusLabelEnum.NeedsHuman,
-  errorCode: Schemas.ChangeRequestErrorCodeEnum.UndoFailed,
-  errorLabel: Schemas.CHANGE_REQUEST_ERROR_LABEL_MAP.undo_failed,
-  toolName: "update_record",
-  toolVersion: 3,
-  wasEdited: true,
-  undoUntil: null,
-  createdAt: "2026-10-20T14:11:00.000Z",
-  updatedAt: "2026-10-20T14:12:00.000Z",
-  conversation: {
-    publicId: "conv_priya",
-    title: "Close the three Building B inspections",
-    chatbotName: "eRegister Assistant",
-    userName: "Priya Shah",
-  },
-};
-
 type Handler = (url: string, init?: RequestInit) => { status: number; body: unknown };
 
 function mockApi(handler: Handler) {
@@ -167,11 +144,8 @@ function mockApi(handler: Handler) {
   return fetchMock;
 }
 
-// DEV_NOTE: The list, the detail and the one-change detail, each answered from fixtures
+// DEV_NOTE: The list and the detail, each answered from fixtures (the Changes page has its own tests)
 function defaultApi(url: string, init?: RequestInit) {
-  if (url.includes("/change-requests/")) {
-    return { status: 200, body: { isSuccess: true, changeRequest: CHANGE } };
-  }
   if (url.includes("/flag")) {
     expect(init?.method).toBe("POST");
     return {
@@ -196,7 +170,6 @@ function renderPage(path: string) {
   const pages = [
     ["/conversations", ConversationsRoute],
     ["/conversations/$id", ConversationRoute],
-    ["/changes/$id", ChangeRoute],
   ] as const;
   const routes = pages.map(([to, route]) =>
     createRoute({
@@ -392,30 +365,6 @@ describe("Conversation detail", () => {
     );
     renderPage("/conversations/conv_gone");
     expect(await screen.findByText(/This conversation isn't available/)).toBeInTheDocument();
-  });
-});
-
-describe("Change detail", () => {
-  it("shows the change, why it needs a person and links back to its conversation", async () => {
-    mockApi(defaultApi);
-    renderPage("/changes/cr_1");
-
-    expect(await screen.findByText("update_record: 3 records")).toBeInTheDocument();
-    expect(screen.getByText("Needs a person")).toBeInTheDocument();
-    expect(
-      screen.getByText(Schemas.CHANGE_REQUEST_ERROR_LABEL_MAP.undo_failed),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Edited by the user before approval")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: CHANGE.conversation.title! })).toHaveAttribute(
-      "href",
-      "/conversations/conv_priya",
-    );
-  });
-
-  it("says a missing change isn't available", async () => {
-    mockApi(() => ({ status: 404, body: { isSuccess: false, isNotFound: true } }));
-    renderPage("/changes/cr_gone");
-    expect(await screen.findByText(/This change isn't available/)).toBeInTheDocument();
   });
 });
 

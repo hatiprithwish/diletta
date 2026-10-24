@@ -15,6 +15,11 @@ const PRECISE_USD_FORMAT = new Intl.NumberFormat("en-US", {
 // DEV_NOTE: How long a download's object URL outlives the click that started it
 const DOWNLOAD_REVOKE_DELAY_MS = 1000;
 const TIME_FORMAT = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
+const SECONDS_TIME_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
 const LOCAL_MONTH_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short" });
 // DEV_NOTE: Month names from en-US ("Sep"), day first: en-GB's short month differs between runtimes ("Sept")
 const MONTH_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
@@ -133,6 +138,14 @@ export default class Utilities {
     return when === time ? `Today ${time}` : `${when} ${time}`;
   }
 
+  // DEV_NOTE: A timeline step (M4-5), to the second: steps often land in the same minute. "14:12:03" today, else
+  // "Yesterday 14:12:03" / "3 Sep 14:12:03"
+  static formatStepTime(iso: string, now: number = Date.now()): string {
+    const when = Utilities.formatWhen(iso, now);
+    const time = SECONDS_TIME_FORMAT.format(new Date(iso));
+    return when === TIME_FORMAT.format(new Date(iso)) ? time : `${when} ${time}`;
+  }
+
   // DEV_NOTE: RFC 4180 CSV: every cell quoted, quotes doubled. A cell a spreadsheet would run as a formula (=, +, -, @,
   // tab, carriage return first) gets a leading apostrophe: titles are what visitors typed.
   static toCsv(rows: string[][]): string {
@@ -157,7 +170,7 @@ export default class Utilities {
   }
 
   // DEV_NOTE: A change request's chip tone: verified = success, needs a person or failed = destructive, a mismatch =
-  // warning, ended without a change = neutral, still under way = brand
+  // warning, ended without a change or resolved = neutral, still under way = brand
   static changeRequestTone(
     status: Schemas.ChangeRequestStatusIntEnum,
   ): Schemas.DashboardChipToneEnum {
@@ -172,6 +185,7 @@ export default class Utilities {
       case Schemas.ChangeRequestStatusIntEnum.Rejected:
       case Schemas.ChangeRequestStatusIntEnum.Expired:
       case Schemas.ChangeRequestStatusIntEnum.Undone:
+      case Schemas.ChangeRequestStatusIntEnum.Resolved:
         return Schemas.DashboardChipToneEnum.Neutral;
       default:
         return Schemas.DashboardChipToneEnum.Brand;
