@@ -1,10 +1,10 @@
 import Constants from "@/config/Constants";
 import {
   type LogRecord,
-  defaultConsoleFormatter,
   configure,
   dispose,
   getConsoleSink,
+  getJsonLinesFormatter,
   getLogger,
   withContext,
 } from "@logtape/logtape";
@@ -40,25 +40,24 @@ function describeQueryErrorCause(cause: unknown) {
   return cause instanceof Error ? { name: cause.name } : undefined;
 }
 
-function consoleFormatterWithProps(record: LogRecord): readonly unknown[] {
-  const base = defaultConsoleFormatter(record);
-  const { action, metadata, error, category } = record.properties;
-  const props: Record<string, unknown> = {};
-  if (category !== undefined) props.category = category;
-  if (action !== undefined) props.action = action;
-  if (metadata !== undefined) props.metadata = metadata;
-  if (error !== undefined) props.error = error;
-  if (Object.keys(props).length === 0) return base;
-  return [...base, "\n", props];
+// DEV_NOTE: Workers Logs indexes the fields of a logged object, so every record goes out as one JSON object
+// (`@timestamp`, `level`, `message`, `logger`, then category, action, metadata, error and requestId at the top level).
+// The JSON Lines formatter serializes Errors (name, message, stack, cause) and runs before the email redaction, which
+// only sees text; the line is parsed back so the console gets an object, not a string.
+const redactedJsonLinesFormatter = redactByPattern(
+  getJsonLinesFormatter({ categorySeparator: ".", properties: "flatten" }),
+  [EMAIL_ADDRESS_PATTERN],
+);
+
+function jsonConsoleFormatter(record: LogRecord): readonly unknown[] {
+  return [JSON.parse(redactedJsonLinesFormatter(record))];
 }
 
 export async function configureLogger(): Promise<void> {
-  const consoleSink = redactByField(
-    getConsoleSink({
-      formatter: redactByPattern(consoleFormatterWithProps, [EMAIL_ADDRESS_PATTERN]),
-    }),
-    [...Constants.APP_REDACT_FIELDS, ...DEFAULT_REDACT_FIELDS],
-  );
+  const consoleSink = redactByField(getConsoleSink({ formatter: jsonConsoleFormatter }), [
+    ...Constants.APP_REDACT_FIELDS,
+    ...DEFAULT_REDACT_FIELDS,
+  ]);
 
   await configure({
     sinks: { console: consoleSink },
