@@ -59,6 +59,10 @@ const LIST: Schemas.GetChangeRequestsApiResponse = {
   changeRequests: [ROW_NEEDS, ROW_VERIFIED],
   totalRecords: 42,
   tabCounts: { all: 42, waiting: 1, verified: 36, undone: 3, needs_human: 1 },
+};
+
+const REQUESTERS: Schemas.GetChangeRequestRequestersApiResponse = {
+  isSuccess: true,
   requesters: [
     { hostUserId: "host_priya", name: "Priya Shah" },
     { hostUserId: "host_anon", name: null },
@@ -119,8 +123,9 @@ function mockApi(handler: Handler) {
   return fetchMock;
 }
 
-// DEV_NOTE: The list, the detail and Mark resolved, each answered from fixtures
+// DEV_NOTE: The list, the requesters, the detail and Mark resolved, each answered from fixtures
 function defaultApi(url: string, init?: RequestInit) {
+  if (url.includes("/change-requests/requesters")) return { status: 200, body: REQUESTERS };
   if (url.includes("/resolve")) {
     expect(init?.method).toBe("POST");
     return { status: 200, body: { isSuccess: true, changeRequest: RESOLVED } };
@@ -188,8 +193,10 @@ describe("Changes list", () => {
     renderPage("/changes");
 
     expect(await screen.findByText("Close 3 Building B inspections")).toBeInTheDocument();
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
-      `/dashboard/change-requests?pageNo=1&pageSize=${Schemas.CHANGES_PAGE_SIZE}`,
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toContainEqual(
+      expect.stringContaining(
+        `/dashboard/change-requests?pageNo=1&pageSize=${Schemas.CHANGES_PAGE_SIZE}`,
+      ),
     );
     expect(screen.getByRole("radio", { name: /All\s*42/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Waiting\s*1/ })).toBeInTheDocument();
@@ -213,15 +220,37 @@ describe("Changes list", () => {
     expect(router.state.location.search).toEqual({
       tab: Schemas.ChangeRequestListTabEnum.NeedsHuman,
     });
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("tab=needs_human&pageNo=1");
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls).toContainEqual(expect.stringContaining("tab=needs_human&pageNo=1"));
+    // DEV_NOTE: The requesters don't change with the tab: asked for once
+    expect(urls.filter((url) => url.includes("/requesters"))).toHaveLength(1);
   });
 
   it("asks for the requester in the URL and shows them in the filter", async () => {
     const fetchMock = mockApi(defaultApi);
     renderPage("/changes?requesterId=host_priya");
     await screen.findByText("Close 3 Building B inspections");
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("requesterId=host_priya&pageNo=1");
-    expect(screen.getByRole("combobox", { name: "Requested by" })).toHaveTextContent("Priya Shah");
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls).toContainEqual(expect.stringContaining("?requesterId=host_priya&pageNo=1"));
+    expect(urls).toContainEqual(
+      expect.stringContaining("/change-requests/requesters?requesterId=host_priya"),
+    );
+    expect(await screen.findByRole("combobox", { name: "Requested by" })).toHaveTextContent(
+      "Priya Shah",
+    );
+  });
+
+  it("shows no matches, not an outage, for a requester the server doesn't know (404)", async () => {
+    mockApi((url, init) =>
+      url.includes("/change-requests?")
+        ? { status: 404, body: { isSuccess: false, isNotFound: true } }
+        : defaultApi(url, init),
+    );
+    const router = renderPage("/changes?requesterId=host_gone");
+    expect(await screen.findByText("No changes match these filters.")).toBeInTheDocument();
+    expect(screen.queryByText("Changes didn't load")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(router.state.location.search).toEqual({});
   });
 
   it("says when nothing matches and clears the filters", async () => {

@@ -40,6 +40,11 @@ export interface GetChangeRequestsApiResponse extends ApiResponse {
   changeRequests?: ChangeRequestListItem[];
   totalRecords?: number;
   tabCounts?: ChangeRequestTabCounts;
+}
+
+// DEV_NOTE: GET /dashboard/change-requests/requesters: the requesters with the most changes first (at most
+// CHANGE_REQUEST_REQUESTERS_MAX), then the one asked for when it wasn't among them
+export interface GetChangeRequestRequestersApiResponse extends ApiResponse {
   requesters?: ChangeRequestRequester[];
 }
 

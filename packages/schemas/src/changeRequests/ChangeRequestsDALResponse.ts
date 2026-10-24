@@ -57,7 +57,7 @@ export interface ChangeRequestTabCountsDALResponse extends TotalRecordsResponse 
   tabCounts?: ChangeRequestTabCounts;
 }
 
-// DEV_NOTE: A requester with its internal id (the Repo matches the filter's host user id to it, then drops it)
+// DEV_NOTE: A requester with its internal id (the Repo drops it)
 export interface ChangeRequestRequesterRow {
   chatbotUserId: string;
   hostUserId: string;

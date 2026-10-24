@@ -4,7 +4,6 @@ import {
   count,
   desc,
   eq,
-  exists,
   getColumns,
   inArray,
   isNotNull,
@@ -693,8 +692,9 @@ export default class ChangeRequestsDAL {
     return response;
   }
 
-  // DEV_NOTE: The company's chatbot users with at least one change request (through their conversations), by name; an
-  // erased user is left out (its name is gone, and nothing new comes from it)
+  // DEV_NOTE: The company's chatbot users with at least one change request (through their conversations), at most
+  // params.limit, those with the most change requests first (then by name). An erased user is left out (its name is
+  // gone, and nothing new comes from it).
   async getChangeRequestRequesters(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetChangeRequestRequestersDALRequest,
@@ -702,31 +702,32 @@ export default class ChangeRequestsDAL {
     const response: Schemas.ChangeRequestRequestersDALResponse = { isSuccess: false };
 
     try {
-      const changeConditions = [
-        eq(changeRequests.conversationId, conversations.id),
-        eq(changeRequests.companyId, params.companyId),
+      const conversationJoinConditions = [
+        eq(conversations.id, changeRequests.conversationId),
+        eq(conversations.companyId, changeRequests.companyId),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
       ];
       const conditions = [
-        eq(chatbotUsers.companyId, params.companyId),
-        eq(conversations.companyId, params.companyId),
+        eq(changeRequests.companyId, params.companyId),
         isNull(chatbotUsers.erasedAt),
-        exists(
-          tx
-            .select({ one: sql`1` })
-            .from(changeRequests)
-            .where(and(...changeConditions)),
-        ),
       ];
+      const changeCount = count(changeRequests.id);
       const requesters = await tx
-        .selectDistinct({
+        .select({
           chatbotUserId: chatbotUsers.id,
           hostUserId: chatbotUsers.hostUserId,
           name: chatbotUsers.displayName,
         })
-        .from(chatbotUsers)
-        .innerJoin(conversations, eq(conversations.chatbotUserId, chatbotUsers.id))
+        .from(changeRequests)
+        .innerJoin(conversations, and(...conversationJoinConditions))
+        .innerJoin(chatbotUsers, and(...userJoinConditions))
         .where(and(...conditions))
-        .orderBy(asc(chatbotUsers.displayName), asc(chatbotUsers.hostUserId), asc(chatbotUsers.id));
+        .groupBy(chatbotUsers.id, chatbotUsers.hostUserId, chatbotUsers.displayName)
+        .orderBy(desc(changeCount), asc(chatbotUsers.displayName), asc(chatbotUsers.id))
+        .limit(params.limit);
 
       response.isSuccess = true;
       response.message = "Requesters fetched successfully";

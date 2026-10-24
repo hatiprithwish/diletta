@@ -13,6 +13,15 @@ export const ZGetChangeRequestsApiRequest = ZPageApiRequest.extend({
 });
 export type GetChangeRequestsApiRequest = z.infer<typeof ZGetChangeRequestsApiRequest>;
 
+// DEV_NOTE: GET /dashboard/change-requests/requesters: the Requested by choices. requesterId = the one the page's URL
+// picked, added when it isn't among the top CHANGE_REQUEST_REQUESTERS_MAX (unknown or erased = left out)
+export const ZGetChangeRequestRequestersApiRequest = z.object({
+  requesterId: z.string().min(1).optional(),
+});
+export type GetChangeRequestRequestersApiRequest = z.infer<
+  typeof ZGetChangeRequestRequestersApiRequest
+>;
+
 // DEV_NOTE: The Changes pages' URL search (apps/web validateSearch): the filters and the page; an unknown value falls
 // back to the default instead of failing the page
 export const ZChangesPageSearch = z.object({

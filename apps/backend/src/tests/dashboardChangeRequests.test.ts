@@ -18,6 +18,7 @@ import {
   toolDefinitions,
 } from "@/db/tables";
 import worker from "@/index";
+import ActivityLogDAL from "@/data-access-layer/ActivityLogDAL";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -69,6 +70,7 @@ const toolName = `update_record_${crypto.randomUUID().slice(0, 8)}`;
 const VALUE_SECRET = `value-secret-${crypto.randomUUID()}`;
 const PRIYA_HOST_ID = `host_priya_${crypto.randomUUID()}`;
 const MARCUS_HOST_ID = `host_marcus_${crypto.randomUUID()}`;
+const IDLE_HOST_ID = `host_idle_${crypto.randomUUID()}`;
 const START = Date.now() - 3 * 60 * 60 * 1000;
 const at = (minutes: number) => new Date(START + minutes * 60 * 1000);
 const { Proposed, Committing, Verified, Undone, Rejected, NeedsHuman, Resolved } =
@@ -89,8 +91,11 @@ let verified = "";
 let committing = "";
 let rejected = "";
 let undone = "";
+let undoneId = "";
 let raced = "";
 let otherCompanyChange = "";
+let priyaConversationId = "";
+let toolAId = "";
 const listOrder = () => [raced, undone, rejected, committing, verified, proposed, needsHuman];
 
 async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Promise<T> {
@@ -163,7 +168,7 @@ beforeAll(async () => {
         { companyId: companyA, hostUserId: MARCUS_HOST_ID, displayName: "Marcus Lee" },
         { companyId: companyA, hostUserId: `host_${crypto.randomUUID()}` },
         // DEV_NOTE: No change request: never a Requested by choice
-        { companyId: companyA, hostUserId: `host_${crypto.randomUUID()}`, displayName: "Idle" },
+        { companyId: companyA, hostUserId: IDLE_HOST_ID, displayName: "Idle" },
         { companyId: companyB, hostUserId: `host_${crypto.randomUUID()}`, displayName: "Bea" },
       ])
       .returning({ id: chatbotUsers.id });
@@ -188,6 +193,7 @@ beforeAll(async () => {
       ])
       .returning({ id: conversations.id });
     const [priyaConv, marcusConv, unnamedConv, , beaConv] = convs;
+    priyaConversationId = priyaConv!.id;
 
     const [toolA, toolB] = await ownerDb
       .insert(toolDefinitions)
@@ -210,6 +216,7 @@ beforeAll(async () => {
         })),
       )
       .returning({ id: toolDefinitions.id });
+    toolAId = toolA!.id;
 
     // DEV_NOTE: One tool call per change request (UNQ_change_requests_tool_call_id)
     const change = async (values: {
@@ -309,16 +316,16 @@ beforeAll(async () => {
         summary: "Assign 4 incident reports",
       })
     ).publicId;
-    undone = (
-      await change({
-        companyId: companyA,
-        conversationId: unnamedConv!.id,
-        toolId: toolA!.id,
-        status: Undone,
-        minute: 6,
-        summary: "Create permit for Halden Electrical",
-      })
-    ).publicId;
+    const undoneRow = await change({
+      companyId: companyA,
+      conversationId: unnamedConv!.id,
+      toolId: toolA!.id,
+      status: Undone,
+      minute: 6,
+      summary: "Create permit for Halden Electrical",
+    });
+    undone = undoneRow.publicId;
+    undoneId = undoneRow.id;
     raced = (
       await change({
         companyId: companyA,
@@ -395,7 +402,7 @@ afterAll(async () => {
 });
 
 describe("GET /dashboard/change-requests", () => {
-  it("lists the company's changes newest first with every tab's count and the requesters", async () => {
+  it("lists the company's changes newest first with every tab's count", async () => {
     const { status, body, text } = await list();
     expect(status).toBe(200);
     expect(body.changeRequests!.map((row) => row.publicId)).toEqual(listOrder());
@@ -407,11 +414,6 @@ describe("GET /dashboard/change-requests", () => {
       [Tab.Undone]: 1,
       [Tab.NeedsHuman]: 2,
     });
-    expect(body.requesters!.map((requester) => requester.name)).toEqual([
-      "Marcus Lee",
-      "Priya Shah",
-      null,
-    ]);
     const needs = body.changeRequests!.find((row) => row.publicId === needsHuman)!;
     expect(needs).toMatchObject({
       summary: "Close 3 Building B inspections",
@@ -486,7 +488,6 @@ describe("GET /dashboard/change-requests", () => {
     const { status, body } = await list("", adminB);
     expect(status).toBe(200);
     expect(body.changeRequests!.map((row) => row.publicId)).toEqual([otherCompanyChange]);
-    expect(body.requesters!.map((requester) => requester.name)).toEqual(["Bea"]);
     // DEV_NOTE: Company A's requester isn't company B's to filter on
     expect((await list(`requesterId=${encodeURIComponent(PRIYA_HOST_ID)}`, adminB)).status).toBe(
       404,
@@ -496,6 +497,43 @@ describe("GET /dashboard/change-requests", () => {
   it("refuses an operator and a signed-out caller", async () => {
     expect((await list("", operator)).status).toBe(403);
     expect((await call("GET", "/dashboard/change-requests")).status).toBe(401);
+  });
+});
+
+describe("GET /dashboard/change-requests/requesters", () => {
+  const requesters = (query = "", as = adminA) =>
+    call<Schemas.GetChangeRequestRequestersApiResponse>(
+      "GET",
+      `/dashboard/change-requests/requesters${query ? `?${query}` : ""}`,
+      { as },
+    );
+
+  it("lists the users with changes, most changes first, never one without", async () => {
+    const { status, body, text } = await requesters();
+    expect(status).toBe(200);
+    expect(body.requesters).toEqual([
+      { hostUserId: MARCUS_HOST_ID, name: "Marcus Lee" },
+      { hostUserId: PRIYA_HOST_ID, name: "Priya Shah" },
+      { hostUserId: expect.any(String), name: null },
+    ]);
+    expect(text).not.toMatch(/"(id|chatbotUserId|companyId)"/);
+  });
+
+  it("adds the requester the URL picked when it isn't among them, once, and never an unknown one", async () => {
+    const picked = await requesters(`requesterId=${encodeURIComponent(IDLE_HOST_ID)}`);
+    expect(picked.body.requesters!.at(-1)).toEqual({ hostUserId: IDLE_HOST_ID, name: "Idle" });
+    expect(picked.body.requesters).toHaveLength(4);
+    const listed = await requesters(`requesterId=${encodeURIComponent(PRIYA_HOST_ID)}`);
+    expect(listed.body.requesters).toHaveLength(3);
+    const unknown = await requesters("requesterId=host_nobody");
+    expect(unknown.status).toBe(200);
+    expect(unknown.body.requesters).toHaveLength(3);
+  });
+
+  it("shows another company only its own, and refuses an operator", async () => {
+    const other = await requesters(`requesterId=${encodeURIComponent(PRIYA_HOST_ID)}`, adminB);
+    expect(other.body.requesters!.map((requester) => requester.name)).toEqual(["Bea"]);
+    expect((await requesters("", operator)).status).toBe(403);
   });
 });
 
@@ -519,6 +557,43 @@ describe("GET /dashboard/change-requests/:publicId timeline", () => {
       new Date(at(1).getTime() + 41_000).toISOString(),
     );
     expect(text).not.toContain(VALUE_SECRET);
+  });
+
+  it("keeps the newest steps when a change has more events than the timeline shows", async () => {
+    const max = Schemas.CHANGE_REQUEST_TIMELINE_MAX_EVENTS;
+    const base = at(6).getTime();
+    await withOwnerDb((ownerDb) =>
+      ownerDb.insert(activityLog).values([
+        ...Array.from({ length: max + 5 }, (_, index) => ({
+          companyId: companyA,
+          actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+          entityType: Schemas.CHANGE_REQUEST_ENTITY_TYPE,
+          entityId: undoneId,
+          entityAction: Schemas.ChangeRequestEntityActionEnum.Committing,
+          detail: {},
+          createdAt: new Date(base + index * 1000),
+        })),
+        {
+          companyId: companyA,
+          actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+          entityType: Schemas.CHANGE_REQUEST_ENTITY_TYPE,
+          entityId: undoneId,
+          entityAction: Schemas.ChangeRequestEntityActionEnum.Undone,
+          detail: {},
+          createdAt: new Date(base + (max + 10) * 1000),
+        },
+      ]),
+    );
+    const { body } = await call<Schemas.GetChangeRequestApiResponse>(
+      "GET",
+      `/dashboard/change-requests/${undone}`,
+      { as: adminA },
+    );
+    const { timeline } = body.changeRequest!;
+    expect(timeline).toHaveLength(max);
+    expect(timeline.at(-1)!.label).toBe("Changes undone");
+    // DEV_NOTE: Oldest first within what's kept: the first 6 attempts are the ones left out
+    expect(timeline[0]!.createdAt).toBe(new Date(base + 6_000).toISOString());
   });
 
   it("shows a change with no events with an empty timeline", async () => {
@@ -664,5 +739,57 @@ describe("POST /dashboard/change-requests/:publicId/resolve", () => {
     ]);
     expect(answers.map((answer) => answer.status).sort()).toEqual([200, 409]);
     expect(await countNeedsHuman()).toBe(0);
+  });
+
+  it("keeps a resolve that committed when only its answer's timeline fails to load", async () => {
+    const publicId = await withOwnerDb(async (ownerDb) => {
+      const [toolCall] = await ownerDb
+        .insert(toolCalls)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          conversationId: priyaConversationId,
+          turnId: Utility.generateUlid(START + 9 * 60 * 1000),
+          toolId: toolAId,
+          toolVersion: 3,
+          status: Schemas.ToolCallStatusIntEnum.Ok,
+        })
+        .returning({ id: toolCalls.id });
+      const [row] = await ownerDb
+        .insert(changeRequests)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          conversationId: priyaConversationId,
+          toolCallId: toolCall!.id,
+          status: NeedsHuman,
+          summary: "Close EXT-B-021",
+          changeCount: 1,
+          errorCode: Schemas.ChangeRequestErrorCodeEnum.VerifyUnknown,
+        })
+        .returning({ publicId: changeRequests.publicId });
+      return row!.publicId;
+    });
+    const timelineRead = vi
+      .spyOn(ActivityLogDAL.prototype, "getActivityLogTimeline")
+      .mockResolvedValue({ isSuccess: false, message: "Timeline unavailable" });
+    try {
+      const { status, body } = await call<Schemas.ResolveChangeRequestApiResponse>(
+        "POST",
+        `/dashboard/change-requests/${publicId}/resolve`,
+        { as: adminA },
+      );
+      expect(status).toBe(200);
+      expect(body.changeRequest).toMatchObject({ changeRequestStatus: Resolved, timeline: [] });
+    } finally {
+      timelineRead.mockRestore();
+    }
+    const [row] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ status: changeRequests.status })
+        .from(changeRequests)
+        .where(eq(changeRequests.publicId, publicId)),
+    );
+    expect(row!.status).toBe(Resolved);
   });
 });

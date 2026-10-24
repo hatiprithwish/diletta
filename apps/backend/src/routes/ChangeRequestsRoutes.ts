@@ -7,10 +7,10 @@ import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The Changes page (M4-4 detail; M4-5 the list, timeline, needs-a-person count and Mark resolved), mounted at
-// /dashboard/change-requests. Chain: checkAuth → authorizeCompany(action) → zValidator → handler. For the admin's
-// company (c.get("companyId")); a change is addressed by publicId and never answered with its values. /needs-human-count
-// is declared before /:publicId so it isn't read as a change id.
+// DEV_NOTE: The Changes page (M4-4 detail; M4-5 the list, the Requested by choices, timeline, needs-a-person count and
+// Mark resolved), mounted at /dashboard/change-requests. Chain: checkAuth → authorizeCompany(action) → zValidator →
+// handler. For the admin's company (c.get("companyId")); a change is addressed by publicId and never answered with its
+// values. /requesters and /needs-human-count are declared before /:publicId so they aren't read as a change id.
 const ChangeRequestsRoutes = new Hono<AppContext>();
 
 ChangeRequestsRoutes.get(
@@ -26,6 +26,22 @@ ChangeRequestsRoutes.get(
     });
 
     return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
+  },
+);
+
+ChangeRequestsRoutes.get(
+  "/requesters",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChangeRequestRead),
+  zValidator("query", Schemas.ZGetChangeRequestRequestersApiRequest),
+  async (c) => {
+    const repo = new ChangeRequestsRepo(c.env);
+    const response = await repo.getRequesters({
+      ...c.req.valid("query"),
+      companyId: c.get("companyId"),
+    });
+
+    return c.json(response, response.isSuccess ? 200 : 500);
   },
 );
 

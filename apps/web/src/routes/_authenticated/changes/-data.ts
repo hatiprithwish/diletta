@@ -12,6 +12,8 @@ import { ApiError, apiClient } from "@/providers/apiClient";
 import { ConversationsQueries } from "../conversations/-data";
 import { OverviewQueries } from "../overview/-data";
 
+const REQUESTERS_STALE_MS = 5 * 60_000;
+
 // DEV_NOTE: The page's filters as the API reads them (botId stays absent: no bot filter in the UI, DESIGN.md §6)
 function filterParams(search: Schemas.ChangesPageSearch): URLSearchParams {
   const params = new URLSearchParams();
@@ -20,8 +22,9 @@ function filterParams(search: Schemas.ChangesPageSearch): URLSearchParams {
   return params;
 }
 
-// DEV_NOTE: Changes (M4-4 detail; M4-5 the list, the sidebar's needs-a-person count and Mark resolved). One list query
-// per filter + page, one detail per change; keys.all() covers them all. A resolve changes the detail (setQueryData),
+// DEV_NOTE: Changes (M4-4 detail; M4-5 the list, the Requested by choices, the sidebar's needs-a-person count and Mark
+// resolved). One list query per filter + page, one detail per change, the requesters apart (they don't change with the
+// page or tab); keys.all() covers them all. A resolve changes the detail (setQueryData),
 // the lists' rows and counts, and the count (both invalidated).
 export class ChangesQueries {
   static keys = {
@@ -31,6 +34,8 @@ export class ChangesQueries {
     details: () => [...ChangesQueries.keys.all(), "detail"] as const,
     detail: (publicId: string) => [...ChangesQueries.keys.details(), publicId] as const,
     needsHumanCount: () => [...ChangesQueries.keys.all(), "needs-human-count"] as const,
+    requesters: (requesterId: string | null) =>
+      [...ChangesQueries.keys.all(), "requesters", requesterId] as const,
   };
 
   static list(search: Schemas.ChangesPageSearch, getToken: Parameters<typeof apiClient>[1]) {
@@ -62,6 +67,25 @@ export class ChangesQueries {
     });
   }
 
+  // DEV_NOTE: The Requested by choices, with the one the URL picked. They change only when a new user's first change
+  // comes in, so a page or tab click doesn't ask again for a while (REQUESTERS_STALE_MS).
+  static requesters(requesterId: string | null, getToken: Parameters<typeof apiClient>[1]) {
+    const params = new URLSearchParams();
+    if (requesterId) params.set("requesterId", requesterId);
+    const query = params.toString();
+    return queryOptions({
+      queryKey: ChangesQueries.keys.requesters(requesterId),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetChangeRequestRequestersApiResponse>(
+          `/dashboard/change-requests/requesters${query ? `?${query}` : ""}`,
+          getToken,
+          { signal },
+        ),
+      staleTime: REQUESTERS_STALE_MS,
+      placeholderData: keepPreviousData,
+    });
+  }
+
   static needsHumanCount(getToken: Parameters<typeof apiClient>[1]) {
     return queryOptions({
       queryKey: ChangesQueries.keys.needsHumanCount(),
@@ -78,6 +102,11 @@ export class ChangesQueries {
 export function useChanges(search: Schemas.ChangesPageSearch) {
   const { getToken } = useAuth();
   return useQuery(ChangesQueries.list(search, getToken));
+}
+
+export function useChangeRequesters(requesterId: string | null) {
+  const { getToken } = useAuth();
+  return useQuery(ChangesQueries.requesters(requesterId, getToken));
 }
 
 export function useChange(publicId: string) {

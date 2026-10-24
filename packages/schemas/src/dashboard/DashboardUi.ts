@@ -213,6 +213,11 @@ export interface DashboardChangeListProps {
   onPage: (page: number) => void;
 }
 
+// DEV_NOTE: The filtered-empty state, with Clear filters
+export interface DashboardNoMatchesProps {
+  onClearFilters: () => void;
+}
+
 export interface DashboardChangeRowProps {
   changeRequest: ChangeRequestListItem;
   search: ChangesPageSearch;
@@ -242,5 +247,19 @@ export enum DashboardNavBadgeEnum {
 // DEV_NOTE: isRail = the sidebar is the icon rail, where the count becomes a 6px dot
 export interface DashboardNavBadgeProps {
   badge: DashboardNavBadgeEnum;
+  isRail: boolean;
+}
+
+// DEV_NOTE: One badge's own count (each badge reads only its own query)
+export interface DashboardNavBadgeSourceProps {
+  isRail: boolean;
+}
+
+// DEV_NOTE: How a count badge looks: its count, what it counts (aria label) and its tone (DESIGN.md §4: destructive for
+// Changes, warning for Quality)
+export interface DashboardNavCountProps {
+  count: number;
+  label: string;
+  tone: DashboardChipToneEnum.Destructive | DashboardChipToneEnum.Warning;
   isRail: boolean;
 }

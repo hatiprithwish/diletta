@@ -474,8 +474,12 @@ export const ZChangeRequestSortColumn = z.enum(ChangeRequestSortColumn);
 export const CHANGES_PAGE_SIZE = 25;
 
 // DEV_NOTE: A change request gathers a handful of events (one per status change, an edit or an undo attempt each);
-// the timeline reads at most this many, oldest first
+// the timeline shows at most this many, the newest ones (where it stands now), oldest first
 export const CHANGE_REQUEST_TIMELINE_MAX_EVENTS = 100;
+
+// DEV_NOTE: The Requested by filter offers at most this many requesters, those with the most changes (plus the one
+// the URL picked, when it isn't among them)
+export const CHANGE_REQUEST_REQUESTERS_MAX = 50;
 
 // DEV_NOTE: A timeline step's dot: good news (approved, saved, checked, undone, resolved), bad news (failed, a check
 // that failed, needs a person) or neither

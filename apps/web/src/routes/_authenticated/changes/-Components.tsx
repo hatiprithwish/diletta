@@ -20,7 +20,7 @@ import { PageError } from "@/components/page-state";
 import { StatusChip } from "@/components/status-chip";
 import { ApiError } from "@/providers/apiClient";
 import Utilities from "@/utils";
-import { useChange, useChanges, useResolveChange } from "./-data";
+import { useChange, useChangeRequesters, useChanges, useResolveChange } from "./-data";
 
 const HEAD_CLASS = "h-auto px-4 py-3 text-caption font-normal text-muted-foreground";
 const CELL_CLASS = "px-4 py-[13px] text-body";
@@ -58,7 +58,11 @@ function ToolName({
 export function ChangesPage({ search, selectedId }: Schemas.DashboardChangesPageProps) {
   const navigate = useNavigate();
   const query = useChanges(search);
+  const requesters = useChangeRequesters(search.requesterId ?? null);
   const data = query.data;
+  // DEV_NOTE: An unknown requester in the URL (a stale link) answers 404: nothing matches, not an outage
+  const isUnknownFilter =
+    Boolean(search.requesterId) && query.error instanceof ApiError && query.error.status === 404;
   // DEV_NOTE: The previous filter's rows and counts stay up while the next ones load (keepPreviousData): dimmed and
   // marked busy, so they never read as the new tab's
   const isStale = query.isPlaceholderData;
@@ -77,7 +81,7 @@ export function ChangesPage({ search, selectedId }: Schemas.DashboardChangesPage
 
   const requesterOptions = [
     { value: ANYONE, label: "Anyone" },
-    ...(data?.requesters ?? []).map((requester) => ({
+    ...(requesters.data?.requesters ?? []).map((requester) => ({
       value: requester.hostUserId,
       label: requester.name ?? UNNAMED_USER,
     })),
@@ -136,7 +140,10 @@ export function ChangesPage({ search, selectedId }: Schemas.DashboardChangesPage
           )}
         >
           {query.isPending && <ListLoading />}
-          {!query.isPending && !data && (
+          {!query.isPending && !data && isUnknownFilter && (
+            <NoMatches onClearFilters={() => goTo({})} />
+          )}
+          {!query.isPending && !data && !isUnknownFilter && (
             <PageError title="Changes didn't load" onRetry={() => void query.refetch()} />
           )}
           {data && (
@@ -186,21 +193,11 @@ function ChangeList({
   const pageCount = Math.max(1, Math.ceil(totalRecords / pageSize));
 
   if (changeRequests.length === 0) {
+    if (hasFilters || page > 1) return <NoMatches onClearFilters={onClearFilters} />;
     return (
-      <div className="flex flex-col items-start gap-3 rounded-xl border px-[22px] py-5">
-        {hasFilters || page > 1 ? (
-          <>
-            <p className="text-body text-muted-foreground">No changes match these filters.</p>
-            <Button variant="outline" onClick={onClearFilters}>
-              Clear filters
-            </Button>
-          </>
-        ) : (
-          <p className="text-body text-muted-foreground">
-            No changes yet. They show up here once your chatbot proposes a change to your data.
-          </p>
-        )}
-      </div>
+      <p className="rounded-xl border px-[22px] py-5 text-body text-muted-foreground">
+        No changes yet. They show up here once your chatbot proposes a change to your data.
+      </p>
     );
   }
 
@@ -247,6 +244,17 @@ function ChangeList({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function NoMatches({ onClearFilters }: Schemas.DashboardNoMatchesProps) {
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-xl border px-[22px] py-5">
+      <p className="text-body text-muted-foreground">No changes match these filters.</p>
+      <Button variant="outline" onClick={onClearFilters}>
+        Clear filters
+      </Button>
     </div>
   );
 }

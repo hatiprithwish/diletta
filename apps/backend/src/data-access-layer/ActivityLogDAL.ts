@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
@@ -144,9 +144,10 @@ export default class ActivityLogDAL {
     return response;
   }
 
-  // DEV_NOTE: An entity's timeline (M4-5: a change request's), oldest first, at most params.limit, with each actor's
-  // name: left joins on the admin (actor Admin) and the chatbot user (actor ChatbotUser) of the same company, so a
-  // row whose actor is gone still reads; an erased user's name is left out
+  // DEV_NOTE: An entity's timeline (M4-5: a change request's), oldest first, with each actor's name: left joins on the
+  // admin (actor Admin) and the chatbot user (actor ChatbotUser) of the same company, so a row whose actor is gone
+  // still reads; an erased user's name is left out. Capped at params.limit by keeping the newest events (read newest
+  // first, then put back in order): the latest steps say where the entity stands now.
   async getActivityLogTimeline(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetActivityLogsByEntityDALRequest,
@@ -184,12 +185,12 @@ export default class ActivityLogDAL {
         .leftJoin(admins, and(...adminJoinConditions))
         .leftJoin(chatbotUsers, and(...userJoinConditions))
         .where(and(...conditions))
-        .orderBy(asc(activityLog.createdAt), asc(activityLog.id))
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
         .limit(params.limit);
 
       response.isSuccess = true;
       response.message = "Activity log timeline fetched successfully";
-      response.activityLogs = activityLogs;
+      response.activityLogs = activityLogs.reverse();
     } catch (error) {
       const message = "Unknown error in fetching activity log timeline";
       AppLogger.error({

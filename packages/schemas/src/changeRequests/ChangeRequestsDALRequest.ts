@@ -109,5 +109,8 @@ export type CountDashboardChangeRequestsDALRequest = Omit<ChangeRequestsFilterDA
 export type GetDashboardChangeRequestsDALRequest = ChangeRequestsFilterDALRequest &
   PageDALRequest & { sortColumn: ChangeRequestSortColumn };
 
-// DEV_NOTE: The company's chatbot users with at least one change request (the Requested by filter's choices)
-export type GetChangeRequestRequestersDALRequest = Pick<ChangeRequest, "companyId">;
+// DEV_NOTE: The company's chatbot users with at least one change request (the Requested by filter's choices), the
+// limit with the most change requests
+export type GetChangeRequestRequestersDALRequest = Pick<ChangeRequest, "companyId"> & {
+  limit: number;
+};

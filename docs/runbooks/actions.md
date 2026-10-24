@@ -88,10 +88,10 @@ Every status change writes `change_request.<action>` to `activity_log` + `event_
 
 ## Resolving a change that needs a person (M4-5)
 
-The dashboard's Changes page (`/changes`, sidebar badge = how many need a person) lists every change request with its timeline, read from its `activity_log` events (`ChangeRequestTimelineProvider`: plain words, names from `admins` / `chatbot_users`, never a record's values). A NeedsHuman one shows why (its `error_code` in words) and **Mark resolved**:
+The dashboard's Changes page (`/changes`, sidebar badge = how many need a person) lists every change request with its timeline, read from its `activity_log` events (`ChangeRequestTimelineProvider`: plain words, names from `admins` / `chatbot_users`, never a record's values; at most `CHANGE_REQUEST_TIMELINE_MAX_EVENTS`, the newest). Requested by offers the `CHANGE_REQUEST_REQUESTERS_MAX` users with the most changes. A NeedsHuman one shows why (its `error_code` in words) and **Mark resolved**:
 
 1. Check the record in the host app and put it right by hand if needed. The dashboard never shows the change's values (they stay encrypted; only the action engine decrypts them).
-2. Mark resolved → `POST /dashboard/change-requests/:publicId/resolve` (`authorizeCompany(ChangeRequestResolve)`, `ChangeRequestsRepo.resolveChangeRequest`, one `withTenant`): the row is locked, NeedsHuman → **Resolved**, `undo_until` = now, and `change_request.resolved` (actor: the admin) is written in the same transaction and relayed after the commit.
+2. Mark resolved → `POST /dashboard/change-requests/:publicId/resolve` (`authorizeCompany(ChangeRequestResolve)`, `ChangeRequestsRepo.resolveChangeRequest`, one `withTenant`): the row is locked, NeedsHuman → **Resolved**, `undo_until` = now, and `change_request.resolved` (actor: the admin) is written in the same transaction and relayed after the commit. The answer is read after the commit: if that read fails, the resolve still stands (logged as `ResolveChangeRequest`) and the page refetches the timeline.
 3. The next purge run (every minute) empties its values. It drops out of the badge, the Needs a person tab, Overview's needs attention and the Conversations page's Needs attention.
 
 Only a NeedsHuman change can be resolved: any other (a repeat, or two admins at once: the row lock lets one through) answers 409 and writes nothing. The widget shows a Resolved change like a NeedsHuman one ("needs a person"), and the model hears "needs review". Resolved is final.
