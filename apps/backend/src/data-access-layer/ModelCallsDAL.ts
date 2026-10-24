@@ -374,4 +374,56 @@ export default class ModelCallsDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The dashboard transcript's costs (M4-4): one conversation's model spend per turn (turnId null = calls
+  // with no turn). Spend = the company key's calls: Workers AI rows (embeddings, the search's embed and rerank) are
+  // platform-paid and left out, as on the Usage page. Every other row counts, failed ones too, at its cost as it stands
+  // (0 until a Pending row is backfilled); pendingCount and unknownCount say when that is. Sums are text, so exact.
+  async getConversationTurnCosts(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetConversationTurnCostsDALRequest,
+  ) {
+    const response: Schemas.ConversationTurnCostsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.companyId, params.companyId),
+        eq(modelCalls.conversationId, params.conversationId),
+        ne(modelCalls.provider, Schemas.PlatformModelProviderEnum.WorkersAi),
+      ];
+      const turnCosts = await tx
+        .select({
+          turnId: modelCalls.turnId,
+          costUsd: sql<string>`coalesce(sum(${modelCalls.costUsd}), 0)::numeric(14, 6)::text`,
+          pendingCount:
+            sql<number>`count(*) filter (where ${modelCalls.usageStatus} = ${Schemas.ModelCallUsageStatusIntEnum.Pending})`.mapWith(
+              Number,
+            ),
+          unknownCount:
+            sql<number>`count(*) filter (where ${modelCalls.usageStatus} = ${Schemas.ModelCallUsageStatusIntEnum.Unknown})`.mapWith(
+              Number,
+            ),
+          firstAt: sql<Date>`min(${modelCalls.createdAt})`.mapWith(modelCalls.createdAt),
+        })
+        .from(modelCalls)
+        .where(and(...conditions))
+        .groupBy(modelCalls.turnId);
+
+      response.isSuccess = true;
+      response.message = "Conversation turn costs fetched successfully";
+      response.turnCosts = turnCosts;
+    } catch (error) {
+      const message = "Unknown error in fetching conversation turn costs";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetConversationTurnCosts,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

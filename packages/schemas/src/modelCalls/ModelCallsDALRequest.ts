@@ -33,3 +33,9 @@ export type TouchPendingModelCallDALRequest = Pick<ModelCall, "companyId" | "pub
 
 // DEV_NOTE: BudgetDO's seed (M2-4): the spend already recorded for a company since `from` (its billing period start)
 export type GetModelCallCostSumDALRequest = Pick<ModelCall, "companyId"> & { from: Date };
+
+// DEV_NOTE: The dashboard transcript's costs (M4-4): one conversation's spend model calls (the company key's, never
+// Workers AI), per turn
+export type GetConversationTurnCostsDALRequest = Pick<ModelCall, "companyId"> & {
+  conversationId: string;
+};

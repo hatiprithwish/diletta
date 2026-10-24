@@ -304,6 +304,19 @@ export enum LogAction {
   CreateRoiAssumption = "CreateRoiAssumption",
   GetRoiAssumptions = "GetRoiAssumptions",
 
+  // Conversations page (M4-4)
+  GetDashboardConversations = "GetDashboardConversations",
+  CountDashboardConversations = "CountDashboardConversations",
+  GetDashboardConversation = "GetDashboardConversation",
+  ExportConversations = "ExportConversations",
+  ListConversationMessages = "ListConversationMessages",
+  ListConversationToolCalls = "ListConversationToolCalls",
+  GetConversationTurnCosts = "GetConversationTurnCosts",
+  GetChatbotConfigOptions = "GetChatbotConfigOptions",
+  CreateAdminQualityIssue = "CreateAdminQualityIssue",
+  FlagConversation = "FlagConversation",
+  GetDashboardChangeRequest = "GetDashboardChangeRequest",
+
   // Cron
   DispatchCron = "DispatchCron",
 }

@@ -12,3 +12,6 @@ export type FindAssistantMessageDALRequest = Pick<
   Message,
   "companyId" | "conversationId" | "sessionMessageId"
 >;
+
+// DEV_NOTE: Every message of one conversation, oldest first (the dashboard transcript, M4-4)
+export type ListConversationMessagesDALRequest = Pick<Message, "companyId" | "conversationId">;

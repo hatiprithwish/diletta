@@ -168,4 +168,18 @@ export default class Utility {
       },
     });
   }
+
+  // DEV_NOTE: Fixed-point maths for exact sums (costs, rollup values). A non-negative decimal (a count, or a sum the database cast to text) as bigint units of 10^-scale.
+  // Digits past the scale can't occur (cost_usd is numeric(12, 6)) and are dropped.
+  static toUnits(value: string | number, scale: number): bigint {
+    const text = typeof value === "number" ? String(value) : value.trim();
+    const [whole = "0", fraction = ""] = text.split(".");
+    return BigInt(`${whole || "0"}${fraction.padEnd(scale, "0").slice(0, scale)}`);
+  }
+
+  static fromUnits(units: bigint, scale: number): string {
+    if (scale === 0) return units.toString();
+    const digits = units.toString().padStart(scale + 1, "0");
+    return `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+  }
 }

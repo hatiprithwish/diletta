@@ -42,6 +42,34 @@ export enum ToolCallErrorCodeEnum {
   ServerError = "server_error",
 }
 
+// DEV_NOTE: The dashboard's words for a tool call's error code (M4-4, DESIGN.md §8 copy)
+export const TOOL_CALL_ERROR_LABEL_MAP: Record<ToolCallErrorCodeEnum, string> = {
+  [ToolCallErrorCodeEnum.InvalidArgs]: "The input didn't fit the tool",
+  [ToolCallErrorCodeEnum.LoopGuard]: "Stopped a repeated call",
+  [ToolCallErrorCodeEnum.BlockedByPolicy]: "Blocked by an approval rule",
+  [ToolCallErrorCodeEnum.PendingLimit]: "Too many changes waiting",
+  [ToolCallErrorCodeEnum.TokenNeeded]: "The user wasn't signed in",
+  [ToolCallErrorCodeEnum.TokenRejected]: "Your app refused the sign-in",
+  [ToolCallErrorCodeEnum.HostRefused]: "Your app refused it",
+  [ToolCallErrorCodeEnum.HostFailed]: "Your app failed",
+  [ToolCallErrorCodeEnum.HostUnknown]: "Your app's answer is unknown",
+  [ToolCallErrorCodeEnum.NoChange]: "Nothing to change",
+  [ToolCallErrorCodeEnum.ServerError]: "Something went wrong on our side",
+};
+
+export const ZToolCallErrorCode = z.enum(ToolCallErrorCodeEnum);
+
+// DEV_NOTE: tool_calls.error_code is text: a code the enum no longer knows reads as ServerError's. null stays null.
+export function toolCallErrorOf(code: string | null): {
+  errorCode: ToolCallErrorCodeEnum | null;
+  errorLabel: string | null;
+} {
+  if (code === null) return { errorCode: null, errorLabel: null };
+  const parsed = ZToolCallErrorCode.safeParse(code);
+  const errorCode = parsed.success ? parsed.data : ToolCallErrorCodeEnum.ServerError;
+  return { errorCode, errorLabel: TOOL_CALL_ERROR_LABEL_MAP[errorCode] };
+}
+
 // Whole Tool Call Body — DB shape (status stored as integer)
 // DEV_NOTE: id, companyId, conversationId, messageId and toolId are internal — NEVER sent to a client. encryptedArgs
 // (+ iv, key version) hold the validated args (CompanyKeyProvider); null when the call never got valid args, and

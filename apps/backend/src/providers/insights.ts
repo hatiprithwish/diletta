@@ -1,5 +1,5 @@
-import ActivityRollupsProvider from "@/providers/activityRollups";
 import * as Schemas from "@app/schemas";
+import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Fixed-point scale of a cost (model_calls.cost_usd keeps 6 decimals). Costs are summed as bigint micros, so
 // a page's total equals the raw SUM(cost_usd) exactly; counts and tokens are whole numbers.
@@ -136,7 +136,7 @@ export default class InsightsProvider {
       const live = InsightsProvider.sumUnits(index, period, (day) => day.paidLiveUnits);
       // DEV_NOTE: Rounded half up to the micro-dollar
       const units = (live * 2n + BigInt(conversations)) / (BigInt(conversations) * 2n);
-      return ActivityRollupsProvider.fromUnits(units, COST_SCALE);
+      return Utility.fromUnits(units, COST_SCALE);
     };
 
     return {
@@ -343,7 +343,7 @@ export default class InsightsProvider {
           total.tokens += Number(value);
         }
         if (metric.measure === Measure.CostUsd) {
-          total.units += ActivityRollupsProvider.toUnits(value, COST_SCALE);
+          total.units += Utility.toUnits(value, COST_SCALE);
         }
         return;
       }
@@ -361,7 +361,7 @@ export default class InsightsProvider {
           day.calls += Number(value);
         }
         if (metric.measure === Measure.CostUsd) {
-          const units = ActivityRollupsProvider.toUnits(value, COST_SCALE);
+          const units = Utility.toUnits(value, COST_SCALE);
           total.units += units;
           if (!Schemas.isPlatformPaidProvider(metric.provider)) {
             if (metric.scope === Scope.Eval) day.paidEvalUnits += units;
@@ -431,7 +431,7 @@ export default class InsightsProvider {
           ? day.paidLiveUnits
           : day.paidLiveUnits + day.paidEvalUnits,
     );
-    return ActivityRollupsProvider.fromUnits(units, COST_SCALE);
+    return Utility.fromUnits(units, COST_SCALE);
   }
 
   private static useOf(
@@ -468,7 +468,7 @@ export default class InsightsProvider {
           useLabel: Schemas.INSIGHTS_USAGE_USE_LABEL_MAP[use],
           calls: total.calls,
           tokens: total.tokens,
-          costUsd: ActivityRollupsProvider.fromUnits(total.units, COST_SCALE),
+          costUsd: Utility.fromUnits(total.units, COST_SCALE),
           isIncluded: use === Schemas.InsightsUsageUseEnum.Search,
         };
       });
@@ -505,7 +505,7 @@ export default class InsightsProvider {
           ] ?? total.provider,
         model: total.model,
         calls: total.calls,
-        costUsd: ActivityRollupsProvider.fromUnits(total.units, COST_SCALE),
+        costUsd: Utility.fromUnits(total.units, COST_SCALE),
         isIncluded: Schemas.isPlatformPaidProvider(total.provider),
       }));
   }

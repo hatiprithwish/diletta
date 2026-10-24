@@ -1,7 +1,14 @@
 import { and, asc, count, eq, getColumns, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { changeRequests, conversations, toolCalls, toolDefinitions } from "@/db/tables";
+import {
+  changeRequests,
+  chatbotUsers,
+  chatbots,
+  conversations,
+  toolCalls,
+  toolDefinitions,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -495,6 +502,91 @@ export default class ChangeRequestsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CountChangeRequestsByStatus,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The dashboard's change detail (M4-4): one change request by its public id within the company, with its
+  // tool and the conversation it came from. Never its values: encrypted_changes isn't selected. Left joins on the tool
+  // definition, conversation, chatbot and user (no DB foreign keys); the conversation's public id is required.
+  async getDashboardChangeRequest(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindDashboardChangeRequestDALRequest,
+  ) {
+    const response: Schemas.DashboardChangeRequestDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(changeRequests.publicId, params.publicId),
+        eq(changeRequests.companyId, params.companyId),
+      ];
+      const conversationJoinConditions = [
+        eq(conversations.id, changeRequests.conversationId),
+        eq(conversations.companyId, changeRequests.companyId),
+      ];
+      const chatbotJoinConditions = [
+        eq(chatbots.id, conversations.chatbotId),
+        eq(chatbots.companyId, conversations.companyId),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      const [selected] = await tx
+        .select({
+          publicId: changeRequests.publicId,
+          summary: changeRequests.summary,
+          changeCount: changeRequests.changeCount,
+          status: changeRequests.status,
+          errorCode: changeRequests.errorCode,
+          wasEdited: changeRequests.wasEdited,
+          undoUntil: changeRequests.undoUntil,
+          createdAt: changeRequests.createdAt,
+          updatedAt: changeRequests.updatedAt,
+          toolName: toolDefinitions.name,
+          toolVersion: toolCalls.toolVersion,
+          conversationPublicId: conversations.publicId,
+          conversationTitle: conversations.title,
+          conversationContentPurgedAt: conversations.contentPurgedAt,
+          chatbotName: chatbots.name,
+          userName: chatbotUsers.displayName,
+        })
+        .from(changeRequests)
+        .innerJoin(toolCalls, and(...toolCallJoinConditions))
+        .leftJoin(toolDefinitions, and(...toolDefinitionJoinConditions))
+        .innerJoin(conversations, and(...conversationJoinConditions))
+        .leftJoin(chatbots, and(...chatbotJoinConditions))
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!selected) {
+        const message = "Change request not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetDashboardChangeRequest,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Change request fetched successfully";
+      response.changeRequest = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching change request";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardChangeRequest,
         message,
         error,
         metadata: params,

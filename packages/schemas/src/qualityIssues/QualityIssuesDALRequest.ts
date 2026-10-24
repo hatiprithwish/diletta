@@ -33,3 +33,13 @@ export type CreateUserQualityIssueDALRequest = Pick<
 export type CountOpenQualityIssuesDALRequest = Pick<QualityIssue, "companyId"> & {
   chatbotId: string | null;
 };
+
+// DEV_NOTE: An admin's flag on a conversation (M4-4, source = Admin): status Open, issueType null until triage, no
+// note. At most one open admin issue per conversation: the DAL locks (company, conversation) and returns the open one
+// instead of opening another. It checks the conversation and the admin exist in the company.
+export type CreateAdminQualityIssueDALRequest = Pick<
+  QualityIssue,
+  "companyId" | "conversationId"
+> & {
+  createdBy: string;
+};

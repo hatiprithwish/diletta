@@ -9,3 +9,11 @@ export interface OpenUserQualityIssueRequest {
   messageId: string;
   feedbackId: string;
 }
+
+// DEV_NOTE: Server-side only (route → QualityIssuesRepo.flagConversation, M4-4). companyId and adminId come from the
+// signed-in admin; conversationPublicId from the path.
+export interface FlagConversationRequest {
+  companyId: string;
+  adminId: string;
+  conversationPublicId: string;
+}

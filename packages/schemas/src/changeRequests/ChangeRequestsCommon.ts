@@ -27,7 +27,7 @@ export enum ChangeRequestStatusLabelEnum {
   Failed = "Failed",
   Undone = "Undone",
   Expired = "Expired",
-  NeedsHuman = "Needs review",
+  NeedsHuman = "Needs a person",
 }
 
 export const CHANGE_REQUEST_STATUS_LABEL_MAP: Record<
@@ -167,6 +167,41 @@ export enum ChangeRequestErrorCodeEnum {
   UndoFailed = "undo_failed",
   UndoUnconfirmed = "undo_unconfirmed",
   UndoInterrupted = "undo_interrupted",
+}
+
+// DEV_NOTE: The dashboard's words for why a change request failed or needs a person (M4-4, DESIGN.md §8 copy)
+export const CHANGE_REQUEST_ERROR_LABEL_MAP: Record<ChangeRequestErrorCodeEnum, string> = {
+  [ChangeRequestErrorCodeEnum.ConversationClosed]: "The conversation had closed",
+  [ChangeRequestErrorCodeEnum.ChatbotUnavailable]: "The chatbot was paused",
+  [ChangeRequestErrorCodeEnum.ReadOnly]: "Read-only mode was on",
+  [ChangeRequestErrorCodeEnum.ToolUnavailable]: "The tool was no longer available",
+  [ChangeRequestErrorCodeEnum.PayloadUnreadable]: "The saved change couldn't be read",
+  [ChangeRequestErrorCodeEnum.ServerError]: "Something went wrong on our side",
+  [ChangeRequestErrorCodeEnum.TokenNeeded]: "The user's sign-in ran out before it was saved",
+  [ChangeRequestErrorCodeEnum.TokenRejected]: "Your app refused the sign-in",
+  [ChangeRequestErrorCodeEnum.HostRefused]: "Your app refused the change",
+  [ChangeRequestErrorCodeEnum.HostFailed]: "Your app failed to save it",
+  [ChangeRequestErrorCodeEnum.HostUnknown]: "Unknown whether your app saved it",
+  [ChangeRequestErrorCodeEnum.VerifyUnknown]: "The saved values couldn't be checked",
+  [ChangeRequestErrorCodeEnum.NotUndoable]: "The check failed and the tool can't undo",
+  [ChangeRequestErrorCodeEnum.UndoFailed]: "The check failed and the undo didn't work",
+  [ChangeRequestErrorCodeEnum.UndoUnconfirmed]:
+    "The check failed and the undo couldn't be confirmed",
+  [ChangeRequestErrorCodeEnum.UndoInterrupted]: "An undo was cut short",
+};
+
+export const ZChangeRequestErrorCode = z.enum(ChangeRequestErrorCodeEnum);
+
+// DEV_NOTE: change_requests.error_code is text, so a stored code may be one the enum no longer knows (renamed, or
+// written by another build): it keeps reading, as ServerError's code and words. null stays null.
+export function changeRequestErrorOf(code: string | null): {
+  errorCode: ChangeRequestErrorCodeEnum | null;
+  errorLabel: string | null;
+} {
+  if (code === null) return { errorCode: null, errorLabel: null };
+  const parsed = ZChangeRequestErrorCode.safeParse(code);
+  const errorCode = parsed.success ? parsed.data : ChangeRequestErrorCodeEnum.ServerError;
+  return { errorCode, errorLabel: CHANGE_REQUEST_ERROR_LABEL_MAP[errorCode] };
 }
 
 // DEV_NOTE: Who undid an Undone change request (M3-7): the user (their Undo within the window) or the system (the

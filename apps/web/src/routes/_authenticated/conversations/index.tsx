@@ -1,10 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import * as Schemas from "@app/schemas";
+import { ConversationsPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/conversations/")({
-  component: ConversationsPage,
+  validateSearch: Schemas.ZConversationsPageSearch,
+  component: ConversationsListPage,
 });
 
-function ConversationsPage() {
-  return <PageHeader title="Conversations" description="Every chat with your bots" />;
+function ConversationsListPage() {
+  const search = Route.useSearch();
+  return <ConversationsPage search={search} selectedId={null} />;
 }
