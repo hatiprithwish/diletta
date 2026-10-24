@@ -1,15 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import * as Schemas from "@app/schemas";
+import { QualityPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/quality/")({
-  component: QualityPage,
+  validateSearch: Schemas.ZQualityPageSearch,
+  component: QualityListPage,
 });
 
-function QualityPage() {
-  return (
-    <PageHeader
-      title="Quality"
-      description="Problems found in real conversations, from users, admins and automatic checks"
-    />
-  );
+function QualityListPage() {
+  const search = Route.useSearch();
+  return <QualityPage search={search} selectedId={null} />;
 }

@@ -15,6 +15,7 @@ export * from "./configSpec";
 export * from "./toolDefinitions";
 export * from "./hostAdapter";
 export * from "./evalRuns";
+export * from "./evalCases";
 export * from "./qualityIssues";
 export * from "./conversations";
 export * from "./messages";

@@ -1,4 +1,11 @@
-import type { QualityIssue } from "./QualityIssuesCommon";
+import type { PageDALRequest } from "../common";
+import type {
+  QualityIssue,
+  QualityIssueCloseStatus,
+  QualityIssueListTabEnum,
+  QualityIssueSortColumn,
+  QualityIssueStatusIntEnum,
+} from "./QualityIssuesCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // A system issue (source = System) opens with no feedbackId, createdBy or evalCaseId: the CHECKs on the table
@@ -43,3 +50,39 @@ export type CreateAdminQualityIssueDALRequest = Pick<
 > & {
   createdBy: string;
 };
+
+// DEV_NOTE: The Quality list's filters (M4-6), resolved by the Repo: chatbotId is the internal id of the chatbot public
+// id the client sent (through the conversation), null = the whole company
+export type QualityIssuesFilterDALRequest = Pick<QualityIssue, "companyId"> & {
+  tab: QualityIssueListTabEnum;
+  chatbotId: string | null;
+};
+
+// DEV_NOTE: Every tab's count is read at once, so the count takes the filters but the tab
+export type CountDashboardQualityIssuesDALRequest = Omit<QualityIssuesFilterDALRequest, "tab">;
+
+export type GetDashboardQualityIssuesDALRequest = QualityIssuesFilterDALRequest &
+  PageDALRequest & { sortColumn: QualityIssueSortColumn };
+
+// DEV_NOTE: One issue by its public id within the company. isForUpdate (every write, M4-6) locks the issue row only.
+export type FindDashboardQualityIssueDALRequest = Pick<QualityIssue, "companyId" | "publicId"> & {
+  isForUpdate?: boolean;
+};
+
+// DEV_NOTE: Triage (M4-6): an absent field keeps its value, null clears it. Only an Open issue changes (the DAL matches
+// status Open); updatedBy = the admin. note is free text, never logged.
+export type TriageQualityIssueDALRequest = Pick<QualityIssue, "companyId" | "id"> & {
+  issueType?: QualityIssue["issueType"];
+  note?: QualityIssue["note"];
+  updatedBy: string;
+};
+
+// DEV_NOTE: Open → Fixed / Dismissed (evalCaseId null) or Converted (evalCaseId = the test made from it): the DAL matches
+// status Open, and CHK_quality_issues_converted_eval_case_id ties evalCaseId to Converted
+export type UpdateQualityIssueStatusDALRequest = Pick<QualityIssue, "companyId" | "id"> &
+  (
+    | { status: QualityIssueCloseStatus; evalCaseId: null }
+    | { status: QualityIssueStatusIntEnum.Converted; evalCaseId: string }
+  ) & {
+    updatedBy: string;
+  };

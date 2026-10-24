@@ -324,6 +324,18 @@ export enum LogAction {
   GetActivityLogTimeline = "GetActivityLogTimeline",
   ResolveChangeRequest = "ResolveChangeRequest",
 
+  // Quality page (M4-6)
+  GetDashboardQualityIssues = "GetDashboardQualityIssues",
+  CountDashboardQualityIssues = "CountDashboardQualityIssues",
+  GetDashboardQualityIssue = "GetDashboardQualityIssue",
+  TriageQualityIssue = "TriageQualityIssue",
+  UpdateQualityIssueStatus = "UpdateQualityIssueStatus",
+  CloseQualityIssue = "CloseQualityIssue",
+  DraftQualityTest = "DraftQualityTest",
+  ConvertQualityIssue = "ConvertQualityIssue",
+  CreateEvalCase = "CreateEvalCase",
+  ListRecentChatMessages = "ListRecentChatMessages",
+
   // Cron
   DispatchCron = "DispatchCron",
 }

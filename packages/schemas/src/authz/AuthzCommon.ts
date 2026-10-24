@@ -20,6 +20,11 @@ export enum AuthzActionEnum {
   ConversationRead = "conversation.read",
   QualityIssueCreate = "quality_issue.create",
 
+  // Quality page (company-scoped, M4-6): read the inbox; triage, mark fixed or dismiss an issue; turn one into a test
+  QualityIssueRead = "quality_issue.read",
+  QualityIssueUpdate = "quality_issue.update",
+  EvalCaseCreate = "eval_case.create",
+
   // Changes (company-scoped, M4-4 detail; M4-5 the list and timeline): read; mark one that needs a person resolved
   ChangeRequestRead = "change_request.read",
   ChangeRequestResolve = "change_request.resolve",

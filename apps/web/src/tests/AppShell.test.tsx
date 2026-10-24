@@ -271,14 +271,16 @@ describe("dashboard shell state", () => {
   });
 });
 
-// DEV_NOTE: /dashboard/me and the Changes badge's count, each from its own fixture (M4-5)
-function mockMeAndCount(needsHumanCount: number) {
+// DEV_NOTE: /dashboard/me and the badges' counts (Changes M4-5, Quality M4-6), each from its own fixture
+function mockMeAndCount(needsHumanCount: number, openCount = 0) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       const body = url.includes("/needs-human-count")
         ? { isSuccess: true, needsHumanCount }
-        : { isSuccess: true, admin: COMPANY_ADMIN };
+        : url.includes("/quality-issues/open-count")
+          ? { isSuccess: true, openCount }
+          : { isSuccess: true, admin: COMPANY_ADMIN };
       return new Response(JSON.stringify(body), { status: 200 });
     }),
   );
@@ -290,6 +292,14 @@ describe("sidebar badges", () => {
     renderShell("/overview");
     expect(await screen.findByText("page /overview")).toBeInTheDocument();
     expect(await sidebar().findByLabelText("3 need a person")).toHaveTextContent("3");
+  });
+
+  it("shows how many issues are open next to Quality", async () => {
+    mockMeAndCount(0, 7);
+    renderShell("/overview");
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(await sidebar().findByLabelText("7 open issues")).toHaveTextContent("7");
+    expect(sidebar().queryByLabelText(/need a person/)).not.toBeInTheDocument();
   });
 
   it("shows nothing when no change needs a person", async () => {

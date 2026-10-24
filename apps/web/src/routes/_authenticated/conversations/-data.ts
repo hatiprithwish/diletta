@@ -9,7 +9,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { apiClient } from "@/providers/apiClient";
-import { OverviewQueries } from "../overview/-data";
+import { QUERY_KEY_ROOTS, invalidateOpenIssueViews } from "../-invalidation";
 import Utilities from "@/utils";
 
 // DEV_NOTE: The page's filters as the API reads them (botId stays absent: no bot filter in the UI, DESIGN.md §6)
@@ -25,7 +25,7 @@ function filterParams(search: Schemas.ConversationsPageSearch): URLSearchParams 
 // covers both. A flag changes the detail (setQueryData) and the Needs attention counts (lists invalidated).
 export class ConversationsQueries {
   static keys = {
-    all: () => ["conversations"] as const,
+    all: () => QUERY_KEY_ROOTS.conversations,
     lists: () => [...ConversationsQueries.keys.all(), "list"] as const,
     list: (search: Schemas.ConversationsPageSearch) =>
       [...ConversationsQueries.keys.lists(), search] as const,
@@ -93,9 +93,8 @@ export function useFlagConversation(publicId: string) {
             ? { ...previous, conversation: { ...previous.conversation, isFlagged: true } }
             : previous,
       );
-      void queryClient.invalidateQueries({ queryKey: ConversationsQueries.keys.lists() });
-      // DEV_NOTE: Overview's Needs attention counts open issues of every source, the new one too
-      void queryClient.invalidateQueries({ queryKey: OverviewQueries.keys.all() });
+      // DEV_NOTE: A new open issue: the lists, Overview's Needs attention and the Quality page count it
+      invalidateOpenIssueViews(queryClient);
       toast.success("Conversation flagged. It's in the Quality inbox.");
     },
     onError: () => {

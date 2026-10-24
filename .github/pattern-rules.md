@@ -87,6 +87,8 @@ File: apps/web/src/**/*.tsx
 
 **Fix:** Replace all console methods with `AppLogger` from `@app/schemas`.
 
+**How a record goes out** (`providers/logger.ts`): one JSON object per record for Workers Logs. Every `Error` (and each `cause`) is reduced by `toLoggableError` to its name, message, stack and a short allowlist (`statusCode`, `failure`, `code`, `isRetryable`): an `APICallError`'s `requestBodyValues` / `responseBody` (the prompt, chat text included) or a `NoObjectGeneratedError`'s `text` never reach the log. Strings are redacted (`EMAIL_ADDRESS_PATTERN`) in the record before it is serialized, never on the serialized line (that breaks JSON escapes and drops the record). Don't add a payload field to the allowlist, and don't pass an error's payload as metadata.
+
 ---
 
 ### 1.4 TypeScript Type Safety [CRITICAL]
@@ -1847,6 +1849,38 @@ decryptValue[\s\S]{0,400}ChangeRequestsRepo
 
 **Fix:** Mirror `ChangeRequestsRepo.resolveChangeRequest`, `providers/changeRequestTimeline.ts` and the `changes/` pages.
 
+### 3.42 Quality Issues Leave Open Once, With Their Admin Event; a Test Is a Reviewed Rewrite [CRITICAL]
+
+**Rule:** The Quality page (M4-6) reads only through `GET /dashboard/quality-issues` (paged; `tab` open / converted / fixed / dismissed, absent = Open; `botId`, unknown → 404), `/open-count` and `/:publicId` (`authorizeCompany(QualityIssueRead)`) → `QualityIssuesRepo` (one `withTenant` each); the excerpt and the rewrite's input come only from the pure `QualityIssuesProvider` (the rated reply for a user issue, never another reply in its place; nothing once the chat is purged). Every write locks the issue (`getDashboardQualityIssue` with `isForUpdate`), starts only from Open (else `QualityIssueUpdateFailureEnum.NotOpen`, 409, nothing written; a convert whose chatbot is gone: `ChatbotNotFound`, 409) and records its `quality_issue.<triaged|fixed|dismissed|converted>` event with actor Admin through `CriticalEventProvider.record` in the same `withTenant` (failure → `TenantRollbackError`), relayed after the commit; the answer is read after the commit. Triage (`PATCH`, `QualityIssueUpdate`) sets the type and / or note; Mark fixed / Dismiss (`QualityIssueUpdate`) end the issue for good: no code moves an issue back to Open. Create test (`EvalCaseCreate`) is two steps: `POST …/test-draft` reads the chat in one read-only `withTenant`, then calls the model router outside it (the conversation chatbot's published routing, tier Mid, `ModelTaskTypeEnum.QualityTestRewrite`, `conversationId` null so it never adds to the conversation's cost) through `QualityTestRewriteProvider` (chat and note fenced as data, the answer held to `Schemas.ZQualityTestDraft`) and saves nothing; `POST …/convert` takes the admin's reviewed draft and, in one `withTenant`, creates the chatbot's `eval_cases` row (`input` / `expectations` at their own `schemaVersion` 1, never a safety case) and moves the issue to Converted with its `eval_case_id`. Neither the chat, the note nor the draft is logged.
+
+**Violations:**
+
+- A write that skips the row lock or the Open check, or moves an issue back to Open
+- A status change or triage without its critical event in the same transaction
+- Saving an eval case straight from the model's answer, without the admin's reviewed draft
+- Calling a model provider for the rewrite outside the router, or passing the conversation's id to the router for it
+- Building the excerpt or the rewrite input in the Repo or the browser instead of `QualityIssuesProvider`, or reading the whole conversation for it (`listConversationMessages`) instead of the bounded `listRecentChatMessages`
+- A rewrite input not bounded by `QUALITY_TEST_REWRITE_MAX_CHARS` (the answer restates it under the output cap)
+- Logging a note, a message, a draft or an eval case's name / input / expectations
+
+**Detection Pattern:**
+
+```regex
+updateQualityIssueStatus\(tx,[\s\S]{0,200}status:\s*Schemas\.QualityIssueStatusIntEnum\.Open
+taskType:\s*Schemas\.ModelTaskTypeEnum\.QualityTestRewrite[\s\S]{0,200}conversationId:\s*(?!null)
+```
+
+**Examples:**
+
+```
+- ❌ const draft = await rewrite(model, source); await evalCasesDal.createEvalCase(tx, { …draft })   // never reviewed
+- ✅ POST …/test-draft (draft only) → admin edits → POST …/convert (case + Converted + event, one withTenant)
+- ❌ await dal.updateQualityIssueStatus(tx, { id, status: Fixed, … })   // without lockOpenIssue first
+- ✅ lockOpenIssue → updateQualityIssueStatus (matches Open) → recordEvent
+```
+
+**Fix:** Mirror `QualityIssuesRepo` (`closeQualityIssue`, `draftQualityTest`, `convertQualityIssue`), `providers/qualityIssues.ts`, `providers/qualityTestRewrite.ts` and the `quality/` pages.
+
 ---
 
 ## 4. ADDING NEW RULES
@@ -1936,5 +1970,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag); 2026-10-24 (M4-5: 3.41 Mark resolved only from NeedsHuman with its admin event, Changes page shows no values)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag); 2026-10-24 (M4-5: 3.41 Mark resolved only from NeedsHuman with its admin event, Changes page shows no values); 2026-10-24 (M4-6: 3.42 quality issues leave Open once with their admin event, a test is a reviewed rewrite)
 Maintainer: hatiprithwish
