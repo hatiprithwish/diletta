@@ -5,8 +5,8 @@ import DocGapClustersDAL from "@/data-access-layer/DocGapClustersDAL";
 import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import AuditEventProvider from "@/providers/auditEvent";
 import AppLogger from "@/providers/logger";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
@@ -201,21 +201,16 @@ export default class DocGapClustersRepo {
     tx: Tx,
     params: { companyId: string; adminId: string },
     row: Schemas.DocGapClusterRow,
-    entityAction: Schemas.AuditEntityActionEnum,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.DocGapCluster>,
   ): Promise<string> {
-    const audited = await AuditEventProvider.record(tx, {
+    return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+      actor: adminAuditActor(params.adminId),
       entityType: Schemas.AuditEntityTypeEnum.DocGapCluster,
       entityAction,
-      entityId: row.id,
-      entityPublicId: row.publicId,
+      entity: row,
       label: row.label,
     });
-    if (!audited.isSuccess || !audited.outboxId) {
-      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
-    }
-    return audited.outboxId;
   }
 
   // DEV_NOTE: The group locked (unknown → 404) and checked Open (else failure NotOpen)

@@ -35,6 +35,52 @@ export enum AuditEntityActionEnum {
   Disabled = "disabled",
 }
 
+// DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
+// recordAuditOrRollback call takes only an action of its entity type, and the audit log's words map
+// (AuditLogProvider) must word every pair, so a new pair fails to compile until it reads as a sentence.
+export const AUDIT_ENTITY_ACTIONS = {
+  [AuditEntityTypeEnum.Chatbot]: [
+    AuditEntityActionEnum.Created,
+    AuditEntityActionEnum.Updated,
+    AuditEntityActionEnum.Paused,
+    AuditEntityActionEnum.Resumed,
+  ],
+  [AuditEntityTypeEnum.KnowledgeSource]: [
+    AuditEntityActionEnum.Created,
+    AuditEntityActionEnum.Updated,
+    AuditEntityActionEnum.Deleted,
+    AuditEntityActionEnum.Paused,
+    AuditEntityActionEnum.Resumed,
+    AuditEntityActionEnum.SyncStarted,
+  ],
+  [AuditEntityTypeEnum.KnowledgeDocument]: [
+    AuditEntityActionEnum.Uploaded,
+    AuditEntityActionEnum.Deleted,
+  ],
+  [AuditEntityTypeEnum.DocGapCluster]: [
+    AuditEntityActionEnum.Answered,
+    AuditEntityActionEnum.Dismissed,
+  ],
+  [AuditEntityTypeEnum.EvalCase]: [
+    AuditEntityActionEnum.Created,
+    AuditEntityActionEnum.Updated,
+    AuditEntityActionEnum.TurnedOn,
+    AuditEntityActionEnum.TurnedOff,
+  ],
+  [AuditEntityTypeEnum.RoiAssumption]: [AuditEntityActionEnum.Updated],
+  [AuditEntityTypeEnum.ToolDefinition]: [
+    AuditEntityActionEnum.Created,
+    AuditEntityActionEnum.Updated,
+    AuditEntityActionEnum.VersionCreated,
+    AuditEntityActionEnum.Activated,
+    AuditEntityActionEnum.Disabled,
+    AuditEntityActionEnum.Deleted,
+  ],
+} as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;
+
+export type AuditEntityActionFor<T extends AuditEntityTypeEnum> =
+  (typeof AUDIT_ENTITY_ACTIONS)[T][number];
+
 // DEV_NOTE: The person behind a write, by internal admins.id: the signed-in company admin for a dashboard Repo (actor
 // Admin), the operator for an operator-only Repo (actor Operator, ToolDefinitionsRepo). Server-side only.
 export const AUDIT_ACTOR_TYPES = [
@@ -64,14 +110,15 @@ export const auditEventType = (
   action: AuditEntityActionEnum,
 ): string => `${entityType}.${action}`;
 
-// DEV_NOTE: <event type>:<entity publicId>:<request ULID>. Every admin write is its own event (two saves of the same
-// name are two rows), so the key carries a ULID made once per write; it dedupes only a retry of the same write.
+// DEV_NOTE: <event type>:<entity publicId>:<ULID>. Every admin write is its own event (two saves of the same name are
+// two rows, and a retried request is a new write), so the key carries a fresh ULID per call: it never dedupes, it only
+// gives event_outbox the unique key every critical event needs.
 export const auditEventDedupeKey = (
   entityType: AuditEntityTypeEnum,
   action: AuditEntityActionEnum,
   entityPublicId: string,
-  requestUlid: string,
-): string => [auditEventType(entityType, action), entityPublicId, requestUlid].join(":");
+  ulid: string,
+): string => [auditEventType(entityType, action), entityPublicId, ulid].join(":");
 
 export enum AuditLogSortColumn {
   CreatedAt = "createdAt",

@@ -7,8 +7,10 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The one writer of audit rows (M4-9, pattern rule 3.45): an admin's or operator's write on a company records
 // what it did, by whom and on what, as a critical event (activity_log + event_outbox, pattern rule 3.5) in the Repo's
-// own withTenant, next to the write. The Repo throws TenantRollbackError when it fails, so a write never commits
-// without its row; it returns the outboxId, which the route relays after the commit. The detail is the label only
+// own withTenant, next to the write. Repos call it only through recordAuditOrRollback (repositories/audit.ts), which
+// throws TenantRollbackError when it fails, so a write never commits without its row; it returns the outboxId, which
+// the route relays after the commit. The dedupe key's ULID is fresh per call (auditEventDedupeKey: unique, never a
+// dedupe). The detail is the label only
 // (ZAuditEventDetail): never chat text, values or secrets. Like every provider it takes the Repo's tx and never throws.
 export default class AuditEventProvider {
   static async record(

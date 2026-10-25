@@ -1027,6 +1027,22 @@ describe("PATCH /dashboard/eval-cases/:publicId", () => {
     ).toEqual([Schemas.AuditEntityActionEnum.Updated, Schemas.AuditEntityActionEnum.TurnedOff]);
   });
 
+  it("records nothing for an Edit saved unchanged (the form sends the whole case)", async () => {
+    const before = (await auditEvents(companyA, Schemas.AuditEntityTypeEnum.EvalCase)).length;
+    const same = await patch(salesCase, {
+      name: "Scheduled exports",
+      messages: FIRE_BODY.messages,
+      rubric: "Says no.",
+      isActive: false,
+    });
+    expect(same.status).toBe(200);
+    expect(same.body.evalCase).toMatchObject({
+      name: "Scheduled exports",
+      body: { messages: FIRE_BODY.messages, rubric: "Says no." },
+    });
+    expect((await auditEvents(companyA, Schemas.AuditEntityTypeEnum.EvalCase)).length).toBe(before);
+  });
+
   it("refuses to rewrite a shape it can't read, but still turns it on or off", async () => {
     const refused = await patch(v2Case, { rubric: "Anything" });
     expect(refused.status).toBe(409);

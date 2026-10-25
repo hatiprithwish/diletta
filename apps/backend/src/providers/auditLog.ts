@@ -4,7 +4,12 @@ import * as Schemas from "@app/schemas";
 // sentence here: the audit rows (Schemas.AuditEntityTypeEnum × AuditEntityActionEnum) and the admin events other pages
 // already recorded (flag, Quality page, Mark resolved). A row this map doesn't know reads as a generic "Changed …"
 // rather than an internal name. On = the label stored with the row (ZAuditEventDetail), with the version for a tool.
-const ACTION_WORDS: Record<string, Record<string, string>> = {
+// The audit rows' words are typed by Schemas.AUDIT_ENTITY_ACTIONS, so every pair a Repo can record must be worded here.
+type AuditActionWords = {
+  [T in Schemas.AuditEntityTypeEnum]: Record<Schemas.AuditEntityActionFor<T>, string>;
+};
+
+const AUDIT_ACTION_WORDS: AuditActionWords = {
   [Schemas.AuditEntityTypeEnum.Chatbot]: {
     [Schemas.AuditEntityActionEnum.Created]: "Created chatbot",
     [Schemas.AuditEntityActionEnum.Updated]: "Renamed chatbot",
@@ -44,6 +49,10 @@ const ACTION_WORDS: Record<string, Record<string, string>> = {
     [Schemas.AuditEntityActionEnum.Disabled]: "Disabled tool",
     [Schemas.AuditEntityActionEnum.Deleted]: "Deleted tool draft",
   },
+};
+
+// DEV_NOTE: The admin events other pages record with their own entity types
+const EVENT_ACTION_WORDS: Record<string, Record<string, string>> = {
   [Schemas.QUALITY_ISSUE_ENTITY_TYPE]: {
     [Schemas.QualityIssueEntityActionEnum.Opened]: "Flagged conversation",
     [Schemas.QualityIssueEntityActionEnum.Triaged]: "Triaged quality issue",
@@ -54,6 +63,11 @@ const ACTION_WORDS: Record<string, Record<string, string>> = {
   [Schemas.CHANGE_REQUEST_ENTITY_TYPE]: {
     [Schemas.ChangeRequestEntityActionEnum.Resolved]: "Marked change resolved",
   },
+};
+
+const ACTION_WORDS: Record<string, Record<string, string>> = {
+  ...AUDIT_ACTION_WORDS,
+  ...EVENT_ACTION_WORDS,
 };
 
 const UNKNOWN_ACTION_WORDS = "Changed a setting";

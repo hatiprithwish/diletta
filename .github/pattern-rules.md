@@ -1958,11 +1958,11 @@ FILES_BUCKET\.get\(
 
 ### 3.45 An Admin Write Records Its Audit Row in Its Own Transaction [CRITICAL]
 
-**Rule:** Every dashboard and operator write (M4-9) records who did what on what through `AuditEventProvider.record(tx, …)` inside the write's own `withTenant`, after the write succeeded, and throws `TenantRollbackError` when it fails, so a write never commits without its row. It is a critical event (`activity_log` + `event_outbox`, rule 3.5): never a bare `activity_log` insert. The actor is the Repo's: Admin with the signed-in company admin's `adminId` on a dashboard Repo, Operator on an operator-only Repo (`ToolDefinitionsRepo`). Entity types and actions come only from `Schemas.AuditEntityTypeEnum` / `AuditEntityActionEnum`; the provider builds the event type and dedupe key (`auditEventType` / `auditEventDedupeKey`, one ULID per write). The detail is `ZAuditEventDetail` (`label` only: a name, title or task, never chat text, values or secrets). One row per thing that happened (a status change is its own action), none for a save that changes nothing or a refusal. The Repo returns `outboxIds` (`Schemas.WithOutboxIds`); the route takes them off the answer and relays them with `EventOutboxRepo.relayInBackground` after the commit. The log is read only through `/dashboard/audit-log` (`authorizeCompany(AuditLogRead)`) → `AuditLogRepo` → `ActivityLogDAL.getAuditLog` / `getAuditLogCount` (actor Admin or Operator, inlined for the partial index) → `AuditLogProvider` (words and On; no internal id or detail in the answer).
+**Rule:** Every dashboard and operator write (M4-9) records who did what on what through `recordAuditOrRollback(tx, …)` (`repositories/audit.ts`, the one wrapper of `AuditEventProvider.record`) inside the write's own `withTenant`, after the write succeeded; it throws `TenantRollbackError` when the row fails, so a write never commits without its row. It is a critical event (`activity_log` + `event_outbox`, rule 3.5): never a bare `activity_log` insert. The actor is the Repo's: Admin with the signed-in company admin's `adminId` on a dashboard Repo, Operator on an operator-only Repo (`ToolDefinitionsRepo`). Entity types and actions come only from `Schemas.AuditEntityTypeEnum` / `AuditEntityActionEnum`; the provider builds the event type and dedupe key (`auditEventType` / `auditEventDedupeKey`, a fresh ULID per call: the key is unique, it never dedupes). The detail is `ZAuditEventDetail` (`label` only: a name, title or task, never chat text, values or secrets). One row per thing that happened (a status change is its own action), none for a save that changes nothing or a refusal. The Repo returns `outboxIds` (`Schemas.WithOutboxIds`); the route takes them off the answer and relays them with `EventOutboxRepo.relayInBackground` after the commit. The log is read only through `/dashboard/audit-log` (`authorizeCompany(AuditLogRead)`) → `AuditLogRepo` → `ActivityLogDAL.getAuditLog` / `getAuditLogCount` (actor Admin or Operator, inlined for the partial index) → `AuditLogProvider` (words and On; no internal id or detail in the answer).
 
 **Violations:**
 
-- A new `/dashboard/*` or `/operator/*` write whose Repo doesn't call `AuditEventProvider.record` in the write's transaction (or records it after the commit, or ignores its failure)
+- A new `/dashboard/*` or `/operator/*` write whose Repo doesn't call `recordAuditOrRollback` in the write's transaction (or records it after the commit), or a Repo calling `AuditEventProvider.record` with its own rollback copy
 - Sending `outboxIds` to the client, or not relaying them
 - Putting anything but `label` in an audit row's detail, or a label holding chat text, values or secrets
 - Recording a row for a refused or no-op write, or for a sync the platform started
@@ -1984,11 +1984,11 @@ entityType:\s*"(chatbot|knowledge_source|knowledge_document|doc_gap_cluster|eval
 - ✅ const { outboxIds, ...response } = await repo.createChatbot(params);
      EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 - ❌ await activityLogDal.createActivityLog(tx, { entityType: "chatbot", entityAction: "created", … })   // no outbox row
-- ✅ const audited = await AuditEventProvider.record(tx, { …, entityType: Schemas.AuditEntityTypeEnum.Chatbot });
-     if (!audited.isSuccess || !audited.outboxId) throw new TenantRollbackError(audited.message);
+- ❌ const audited = await AuditEventProvider.record(tx, …); if (!audited.isSuccess) throw new TenantRollbackError(…)   // a copy of the rollback
+- ✅ const outboxId = await recordAuditOrRollback(tx, { …, entityType: Schemas.AuditEntityTypeEnum.Chatbot });
 ```
 
-**Fix:** Mirror `ChatbotsRepo` (`audit`, `updateChatbot`), `providers/auditEvent.ts`, `AuditLogRepo` and `providers/auditLog.ts` (`docs/runbooks/security.md`).
+**Fix:** Mirror `ChatbotsRepo` (`audit`, `updateChatbot`), `repositories/audit.ts`, `providers/auditEvent.ts`, `AuditLogRepo` and `providers/auditLog.ts` (`docs/runbooks/security.md`).
 
 ---
 

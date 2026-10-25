@@ -5,8 +5,9 @@ import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import AuditEventProvider from "@/providers/auditEvent";
 import AppLogger from "@/providers/logger";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
@@ -220,10 +221,13 @@ export default class EvalCasesRepo {
               failure: Schemas.EvalCaseUpdateFailureEnum.NotEditable,
             };
           }
-          body = {
+          const merged: Schemas.EvalCaseBody = {
             messages: params.messages ?? stored.messages,
             rubric: params.rubric ?? stored.rubric,
           };
+          // DEV_NOTE: The Edit form sends the whole case, so a body equal to the stored one is no change: not written,
+          // not audited
+          if (Utility.stableStringify(merged) !== Utility.stableStringify(stored)) body = merged;
         }
 
         const updated = await this.evalCasesDal.updateEvalCase(tx, {
@@ -247,7 +251,7 @@ export default class EvalCasesRepo {
         const after = reread.evalCase;
 
         // DEV_NOTE: Audited by what changed: a new name, conversation or rubric is Updated, on / off its own row
-        const actions: Schemas.AuditEntityActionEnum[] = [];
+        const actions: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.EvalCase>[] = [];
         if (after.name !== row.name || body !== undefined) {
           actions.push(Schemas.AuditEntityActionEnum.Updated);
         }
@@ -282,21 +286,16 @@ export default class EvalCasesRepo {
     tx: Tx,
     params: { companyId: string; adminId: string },
     row: Schemas.DashboardEvalCaseRow,
-    entityAction: Schemas.AuditEntityActionEnum,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.EvalCase>,
   ): Promise<string> {
-    const audited = await AuditEventProvider.record(tx, {
+    return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+      actor: adminAuditActor(params.adminId),
       entityType: Schemas.AuditEntityTypeEnum.EvalCase,
       entityAction,
-      entityId: row.id,
-      entityPublicId: row.publicId,
+      entity: row,
       label: row.name,
     });
-    if (!audited.isSuccess || !audited.outboxId) {
-      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
-    }
-    return audited.outboxId;
   }
 
   // DEV_NOTE: A write's answer, read in its own transaction: a failed read rolls the write back, so the client never

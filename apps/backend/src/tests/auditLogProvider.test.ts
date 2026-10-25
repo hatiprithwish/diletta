@@ -7,33 +7,10 @@ import AuditLogProvider from "@/providers/auditLog";
 describe("AuditLogProvider", () => {
   it("words every audit action of every audit entity", () => {
     const unknown = AuditLogProvider.actionWords("nothing", "nothing");
-    const pairs: [Schemas.AuditEntityTypeEnum, Schemas.AuditEntityActionEnum][] = [
-      [Schemas.AuditEntityTypeEnum.Chatbot, Schemas.AuditEntityActionEnum.Created],
-      [Schemas.AuditEntityTypeEnum.Chatbot, Schemas.AuditEntityActionEnum.Updated],
-      [Schemas.AuditEntityTypeEnum.Chatbot, Schemas.AuditEntityActionEnum.Paused],
-      [Schemas.AuditEntityTypeEnum.Chatbot, Schemas.AuditEntityActionEnum.Resumed],
-      [Schemas.AuditEntityTypeEnum.KnowledgeSource, Schemas.AuditEntityActionEnum.Created],
-      [Schemas.AuditEntityTypeEnum.KnowledgeSource, Schemas.AuditEntityActionEnum.Updated],
-      [Schemas.AuditEntityTypeEnum.KnowledgeSource, Schemas.AuditEntityActionEnum.Deleted],
-      [Schemas.AuditEntityTypeEnum.KnowledgeSource, Schemas.AuditEntityActionEnum.Paused],
-      [Schemas.AuditEntityTypeEnum.KnowledgeSource, Schemas.AuditEntityActionEnum.Resumed],
-      [Schemas.AuditEntityTypeEnum.KnowledgeSource, Schemas.AuditEntityActionEnum.SyncStarted],
-      [Schemas.AuditEntityTypeEnum.KnowledgeDocument, Schemas.AuditEntityActionEnum.Uploaded],
-      [Schemas.AuditEntityTypeEnum.KnowledgeDocument, Schemas.AuditEntityActionEnum.Deleted],
-      [Schemas.AuditEntityTypeEnum.DocGapCluster, Schemas.AuditEntityActionEnum.Answered],
-      [Schemas.AuditEntityTypeEnum.DocGapCluster, Schemas.AuditEntityActionEnum.Dismissed],
-      [Schemas.AuditEntityTypeEnum.EvalCase, Schemas.AuditEntityActionEnum.Created],
-      [Schemas.AuditEntityTypeEnum.EvalCase, Schemas.AuditEntityActionEnum.Updated],
-      [Schemas.AuditEntityTypeEnum.EvalCase, Schemas.AuditEntityActionEnum.TurnedOn],
-      [Schemas.AuditEntityTypeEnum.EvalCase, Schemas.AuditEntityActionEnum.TurnedOff],
-      [Schemas.AuditEntityTypeEnum.RoiAssumption, Schemas.AuditEntityActionEnum.Updated],
-      [Schemas.AuditEntityTypeEnum.ToolDefinition, Schemas.AuditEntityActionEnum.Created],
-      [Schemas.AuditEntityTypeEnum.ToolDefinition, Schemas.AuditEntityActionEnum.Updated],
-      [Schemas.AuditEntityTypeEnum.ToolDefinition, Schemas.AuditEntityActionEnum.VersionCreated],
-      [Schemas.AuditEntityTypeEnum.ToolDefinition, Schemas.AuditEntityActionEnum.Activated],
-      [Schemas.AuditEntityTypeEnum.ToolDefinition, Schemas.AuditEntityActionEnum.Disabled],
-      [Schemas.AuditEntityTypeEnum.ToolDefinition, Schemas.AuditEntityActionEnum.Deleted],
-    ];
+    const pairs = Object.entries(Schemas.AUDIT_ENTITY_ACTIONS).flatMap(([entityType, actions]) =>
+      actions.map((action): [string, string] => [entityType, action]),
+    );
+    expect(pairs.length).toBeGreaterThan(0);
     for (const [entityType, action] of pairs) {
       expect(AuditLogProvider.actionWords(entityType, action)).not.toBe(unknown);
     }

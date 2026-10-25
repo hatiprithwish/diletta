@@ -2,8 +2,8 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import RoiAssumptionsDAL from "@/data-access-layer/RoiAssumptionsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
-import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import AuditEventProvider from "@/providers/auditEvent";
+import withTenant from "@/db/withTenant";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — Impact's minutes per task (M4-3). A save is a new row in force from today (UTC), never an
@@ -58,23 +58,15 @@ export default class RoiAssumptionsRepo {
         const { roiAssumption, ...rest } = created;
         if (!created.isSuccess || !roiAssumption) return { ...rest, roiAssumption: undefined };
 
-        const audited = await AuditEventProvider.record(tx, {
+        const outboxId = await recordAuditOrRollback(tx, {
           companyId,
-          actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+          actor: adminAuditActor(params.adminId),
           entityType: Schemas.AuditEntityTypeEnum.RoiAssumption,
           entityAction: Schemas.AuditEntityActionEnum.Updated,
-          entityId: roiAssumption.id,
-          entityPublicId: roiAssumption.publicId,
+          entity: roiAssumption,
           label: toolName ?? Schemas.ROI_ANSWERS_TASK_LABEL,
         });
-        if (!audited.isSuccess || !audited.outboxId) {
-          throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
-        }
-        return {
-          ...rest,
-          roiAssumption: this.toView(roiAssumption),
-          outboxIds: [audited.outboxId],
-        };
+        return { ...rest, roiAssumption: this.toView(roiAssumption), outboxIds: [outboxId] };
       },
     );
   }

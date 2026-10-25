@@ -276,6 +276,32 @@ describe(
       ]);
     });
 
+    it("records a draft edit only when it changed something", async () => {
+      const name = uniqueName();
+      const created = await call("POST", base(), { as: operator, body: readTool(name) });
+      expect(created.status).toBe(201);
+      const tool = created.body.toolDefinition as Schemas.ToolDefinitionWithStatus;
+      const { name: _name, ...unchanged } = readTool(name).toolDefinition;
+
+      const same = await call("PATCH", `${base()}/${tool.publicId}`, {
+        as: operator,
+        body: { toolDefinition: unchanged },
+      });
+      expect(same.status).toBe(200);
+      const changed = await call("PATCH", `${base()}/${tool.publicId}`, {
+        as: operator,
+        body: { toolDefinition: { description: "List open records" } },
+      });
+      expect(changed.status).toBe(200);
+
+      const events = await auditEvents(companyA, Schemas.AuditEntityTypeEnum.ToolDefinition);
+      expect(
+        events
+          .filter((event) => (event.detail as { label: string }).label === name)
+          .map((event) => event.entityAction),
+      ).toEqual([Schemas.AuditEntityActionEnum.Created, Schemas.AuditEntityActionEnum.Updated]);
+    });
+
     it("answers 400 for invalid ops, a reserved name or an unknown connection, 409 for a taken name", async () => {
       const badRef = readTool(uniqueName());
       badRef.toolDefinition.ops.callOp.path = "/records/{args.recordId}";

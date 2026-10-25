@@ -9,13 +9,13 @@ import FilesDAL from "@/data-access-layer/FilesDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import AuditEventProvider from "@/providers/auditEvent";
 import FileStorageProvider from "@/providers/fileStorage";
 import KnowledgeChunkerProvider from "@/providers/knowledgeChunker";
 import KnowledgeDocumentFilesProvider from "@/providers/knowledgeDocumentFiles";
 import KnowledgeExtractProvider from "@/providers/knowledgeExtract";
 import KnowledgeSyncWorkflowProvider from "@/providers/knowledgeSyncWorkflow";
 import AppLogger from "@/providers/logger";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -90,30 +90,23 @@ export default class KnowledgeSourcesRepo {
   }
 
   // DEV_NOTE: An admin's audit row in the write's transaction; a failure rolls the write back
-  private async audit(
+  private async audit<
+    T extends
+      | Schemas.AuditEntityTypeEnum.KnowledgeSource
+      | Schemas.AuditEntityTypeEnum.KnowledgeDocument,
+  >(
     tx: NodePgTransaction<EmptyRelations>,
     params: {
       companyId: string;
       adminId: string;
-      entityType: Schemas.AuditEntityTypeEnum;
-      entityAction: Schemas.AuditEntityActionEnum;
+      entityType: T;
+      entityAction: Schemas.AuditEntityActionFor<T>;
       entity: { id: string; publicId: string };
       label: string | null;
     },
   ): Promise<string> {
-    const audited = await AuditEventProvider.record(tx, {
-      companyId: params.companyId,
-      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
-      entityType: params.entityType,
-      entityAction: params.entityAction,
-      entityId: params.entity.id,
-      entityPublicId: params.entity.publicId,
-      label: params.label,
-    });
-    if (!audited.isSuccess || !audited.outboxId) {
-      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
-    }
-    return audited.outboxId;
+    const { adminId, ...rest } = params;
+    return await recordAuditOrRollback(tx, { ...rest, actor: adminAuditActor(adminId) });
   }
 
   private withSourceResponse(
@@ -137,7 +130,7 @@ export default class KnowledgeSourcesRepo {
     const created = await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.KnowledgeSourceDALResponse & { outboxId?: string }> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.GetKnowledgeSourceApiResponse>> => {
         const result = await this.dal.createKnowledgeSource(tx, {
           companyId: params.companyId,
           name: body.name,
@@ -146,7 +139,7 @@ export default class KnowledgeSourcesRepo {
           syncFrequency: isWeb ? body.syncFrequency : null,
           createdBy: params.adminId,
         });
-        if (!result.isSuccess || !result.knowledgeSource) return result;
+        if (!result.isSuccess || !result.knowledgeSource) return this.withSourceResponse(result);
         const outboxId = await this.audit(tx, {
           companyId: params.companyId,
           adminId: params.adminId,
@@ -155,17 +148,13 @@ export default class KnowledgeSourcesRepo {
           entity: result.knowledgeSource,
           label: result.knowledgeSource.name,
         });
-        return { ...result, outboxId };
+        return { ...this.withSourceResponse(result), outboxIds: [outboxId] };
       },
     );
     if (!created.isSuccess || !("knowledgeSource" in created) || !created.knowledgeSource) {
       return { isSuccess: false, message: created.message };
     }
-    const outboxIds = created.outboxId ? [created.outboxId] : [];
-    const { outboxId: _outboxId, ...createdSource } = created;
-    if (!isWeb) {
-      return { ...this.withSourceResponse(createdSource), outboxIds };
-    }
+    if (!isWeb) return created;
 
     const synced = await this.startSync({
       companyId: params.companyId,
@@ -176,10 +165,10 @@ export default class KnowledgeSourcesRepo {
         isSuccess: true,
         message: "Knowledge source created successfully",
         knowledgeSource: synced.knowledgeSource,
-        outboxIds,
+        outboxIds: created.outboxIds,
       };
     }
-    return { ...this.withSourceResponse(createdSource), outboxIds };
+    return created;
   }
 
   async getKnowledgeSourceDetails(params: {
@@ -303,7 +292,8 @@ export default class KnowledgeSourcesRepo {
           isResumingPaused && source.type === Schemas.KnowledgeSourceTypeIntEnum.Upload;
 
         // DEV_NOTE: Audited by what changed: a new name or frequency is Updated, a pause or resume its own row
-        const actions: Schemas.AuditEntityActionEnum[] = [];
+        const actions: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.KnowledgeSource>[] =
+          [];
         if (after.name !== source.name || after.syncFrequency !== source.syncFrequency) {
           actions.push(Schemas.AuditEntityActionEnum.Updated);
         }

@@ -4,8 +4,9 @@ import Constants from "@/config/Constants";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import AuditEventProvider from "@/providers/auditEvent";
 import AppLogger from "@/providers/logger";
+import { operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 const STORED_OPS_INVALID_MESSAGE = "Stored tool ops are invalid";
@@ -126,22 +127,40 @@ export default class ToolDefinitionsRepo {
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string; adminId: string },
     row: Schemas.ToolDefinitionRow,
-    entityAction: Schemas.AuditEntityActionEnum,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ToolDefinition>,
   ): Promise<string> {
-    const audited = await AuditEventProvider.record(tx, {
+    return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Operator, actorId: params.adminId },
+      actor: operatorAuditActor(params.adminId),
       entityType: Schemas.AuditEntityTypeEnum.ToolDefinition,
       entityAction,
-      entityId: row.id,
-      entityPublicId: row.publicId,
+      entity: row,
       entityVersion: row.version,
       label: row.name,
     });
-    if (!audited.isSuccess || !audited.outboxId) {
-      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
-    }
-    return audited.outboxId;
+  }
+
+  // DEV_NOTE: Whether a draft edit changed what the tool is (connection, description, risk, modes, source, ops), so a
+  // save that changes nothing records no audit row
+  private isDraftChanged(
+    before: Schemas.ToolDefinitionRow,
+    after: Schemas.ToolDefinitionRow,
+  ): boolean {
+    const content = (row: Schemas.ToolDefinitionRow) =>
+      Utility.stableStringify({
+        connectionId: row.connectionId,
+        description: row.description,
+        risk: row.risk,
+        idempotencyMode: row.idempotencyMode,
+        approval: row.approval,
+        source: row.source,
+        schemaVersion: row.schemaVersion,
+        inputSchema: row.inputSchema,
+        callOp: row.callOp,
+        readbackOp: row.readbackOp,
+        inverseOp: row.inverseOp,
+      });
+    return content(before) !== content(after);
   }
 
   // DEV_NOTE: A written row's answer (withWrittenToolResponse) with its audit row
@@ -149,7 +168,7 @@ export default class ToolDefinitionsRepo {
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string; adminId: string },
     result: Schemas.ToolDefinitionDALResponse,
-    entityAction: Schemas.AuditEntityActionEnum,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ToolDefinition>,
   ): Promise<Schemas.WithOutboxIds<Schemas.ToolDefinitionMutationResponse>> {
     const response = this.withWrittenToolResponse(result);
     if (!response.isSuccess || !result.toolDefinition) return response;
@@ -433,6 +452,9 @@ export default class ToolDefinitionsRepo {
           ops: edit.opsColumns,
           updatedBy: params.adminId,
         });
+        if (updated.toolDefinition && !this.isDraftChanged(row, updated.toolDefinition)) {
+          return this.withWrittenToolResponse(updated);
+        }
         return await this.withAuditedToolResponse(
           tx,
           params,

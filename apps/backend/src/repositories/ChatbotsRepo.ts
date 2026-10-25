@@ -3,7 +3,7 @@ import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgre
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import AuditEventProvider from "@/providers/auditEvent";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
@@ -42,21 +42,16 @@ export default class ChatbotsRepo {
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string; adminId: string },
     chatbot: Schemas.Chatbot,
-    entityAction: Schemas.AuditEntityActionEnum,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.Chatbot>,
   ): Promise<string> {
-    const audited = await AuditEventProvider.record(tx, {
+    return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+      actor: adminAuditActor(params.adminId),
       entityType: Schemas.AuditEntityTypeEnum.Chatbot,
       entityAction,
-      entityId: chatbot.id,
-      entityPublicId: chatbot.publicId,
+      entity: chatbot,
       label: chatbot.name,
     });
-    if (!audited.isSuccess || !audited.outboxId) {
-      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
-    }
-    return audited.outboxId;
   }
 
   async createChatbot(
@@ -115,6 +110,7 @@ export default class ChatbotsRepo {
         const before = await this.dal.getChatbotDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
+          isForUpdate: true,
         });
         if (!before.isSuccess || !before.chatbot) return this.withChatbotResponse(before);
 
@@ -127,7 +123,7 @@ export default class ChatbotsRepo {
         if (!result.isSuccess || !result.chatbot) return this.withChatbotResponse(result);
         const after = result.chatbot;
 
-        const actions: Schemas.AuditEntityActionEnum[] = [];
+        const actions: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.Chatbot>[] = [];
         if (after.name !== before.chatbot.name) actions.push(Schemas.AuditEntityActionEnum.Updated);
         if (after.status !== before.chatbot.status) {
           actions.push(

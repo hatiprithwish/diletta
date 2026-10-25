@@ -8,7 +8,7 @@ The audit log is not its own table. It is the company's `activity_log` rows writ
 
 ### What writes a row
 
-Every dashboard and operator write records one row, in the write's own transaction, through `AuditEventProvider.record`. It is a critical event (`activity_log` + `event_outbox`), so a write never commits without its row, and the row is relayed to the events queue after the commit like any other event (the queue consumer logs and acks it).
+Every dashboard and operator write records one row, in the write's own transaction, through `recordAuditOrRollback` (`repositories/audit.ts`, over `AuditEventProvider.record`). It is a critical event (`activity_log` + `event_outbox`), so a write never commits without its row, and the row is relayed to the events queue after the commit like any other event (the queue consumer logs and acks it).
 
 | Where                       | Actions                                                                                | On                        |
 | --------------------------- | -------------------------------------------------------------------------------------- | ------------------------- |
@@ -32,6 +32,8 @@ Rules:
 ### Reading it
 
 `GET /dashboard/audit-log` (paged, newest first), `/count` and `/export` (at most 5,000 rows, `isTruncated` beyond) for the signed-in admin's company (`AuditLogRead`). A partial index, `IDX_activity_log_company_id_created_at_audit` (company, created_at) where the actor is an admin or operator, serves all three without reading the company's other events.
+
+The migration that adds it (`20261025115726_diletta`) is a plain `CREATE INDEX` on the partitioned parent: it builds the index on every partition while holding a SHARE lock, so `activity_log` inserts (every critical event) wait until it finishes. That is accepted while the table is small. If a deploy ever has to add an index to a large `activity_log`, build it without blocking instead: `CREATE INDEX … ON ONLY activity_log …`, then `CREATE INDEX CONCURRENTLY` on each partition (outside a transaction), then `ALTER INDEX … ATTACH PARTITION` for each.
 
 ### Checking a company's rows by hand
 
