@@ -16,7 +16,21 @@ import type {
   ConversationsPageSearch,
   GetConversationsApiResponse,
 } from "../conversations";
+import type {
+  DocGapClusterListItem,
+  DocGapClusterListTabEnum,
+  KnowledgePageSearch,
+} from "../docGapClusters";
 import type { FeedbackRatingIntEnum } from "../feedback";
+import type {
+  GetKnowledgeDocumentsApiResponse,
+  KnowledgeDocumentWithStatus,
+} from "../knowledgeDocuments";
+import type {
+  KnowledgeSourcePageSearch,
+  KnowledgeSourceTypeIntEnum,
+  KnowledgeSourceWithStatus,
+} from "../knowledgeSources";
 import type {
   GetQualityIssuesApiResponse,
   QualityIssueDetail,
@@ -280,6 +294,134 @@ export interface DashboardQualityTestDialogProps {
   publicId: string;
   draft: QualityTestDraft | null;
   onClose: () => void;
+}
+
+// DEV_NOTE: The Knowledge page (M4-7): the sources table, a banner per failed source, and the groups of questions the
+// assistant couldn't answer. Tab and pages live in the URL.
+export interface DashboardKnowledgePageProps {
+  search: KnowledgePageSearch;
+}
+
+// DEV_NOTE: onAddSource opens Add source, with the type picked when given (the groups' "Add an upload source")
+export interface DashboardKnowledgeSourcesProps {
+  page: number;
+  onPage: (page: number) => void;
+  onAddSource: (type?: KnowledgeSourceTypeIntEnum) => void;
+}
+
+// DEV_NOTE: A source's actions: the row menu on the Sources table, the buttons on the source's page (isOnSourcePage;
+// a deleted source then leaves to /knowledge)
+export interface DashboardKnowledgeSourceActionsProps {
+  source: KnowledgeSourceWithStatus;
+  isOnSourcePage: boolean;
+}
+
+export interface DashboardKnowledgeSourceProps {
+  source: KnowledgeSourceWithStatus;
+}
+
+// DEV_NOTE: Add source; initialType preselects the type (null = closed)
+export interface DashboardKnowledgeAddSourceDialogProps {
+  initialType: KnowledgeSourceTypeIntEnum | null;
+  onClose: () => void;
+}
+
+export interface DashboardKnowledgeEditSourceDialogProps {
+  source: KnowledgeSourceWithStatus;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+// DEV_NOTE: The groups under their tabs; onSearch keeps the rest of the URL search
+export interface DashboardDocGapClustersProps {
+  tab: DocGapClusterListTabEnum;
+  page: number;
+  onSearch: (next: Pick<KnowledgePageSearch, "tab" | "page">) => void;
+  onAddUploadSource: () => void;
+}
+
+// DEV_NOTE: isDismissing = this row's Dismiss is running (the list holds the one mutation)
+export interface DashboardDocGapClusterRowProps {
+  cluster: DocGapClusterListItem;
+  isDismissing: boolean;
+  onAddDocument: (cluster: DocGapClusterListItem) => void;
+  onDismiss: (cluster: DocGapClusterListItem) => void;
+}
+
+// DEV_NOTE: "Add a document" for one group: upload a file or pick a document, then the group is answered by it (null =
+// closed). onAddUploadSource closes it and opens Add source on Upload.
+export interface DashboardDocGapAnswerDialogProps {
+  cluster: DocGapClusterListItem | null;
+  onClose: () => void;
+  onAddUploadSource: () => void;
+}
+
+// DEV_NOTE: One source's page (/knowledge/$id): its state, actions and documents
+export interface DashboardKnowledgeSourcePageProps {
+  publicId: string;
+  search: KnowledgeSourcePageSearch;
+}
+
+// DEV_NOTE: The source's documents: page and title filter from the URL (onSearch keeps the rest of it); documentId =
+// the row to highlight
+export interface DashboardKnowledgeDocumentsProps {
+  source: KnowledgeSourceWithStatus;
+  search: KnowledgeSourcePageSearch;
+  onSearch: (next: KnowledgeSourcePageSearch) => void;
+}
+
+export interface DashboardKnowledgeDocumentRowProps {
+  source: KnowledgeSourceWithStatus;
+  document: KnowledgeDocumentWithStatus;
+  isHighlighted: boolean;
+}
+
+// DEV_NOTE: How "Add a document" brings the document: a new upload, or one picked from a source
+export enum DashboardDocGapAnswerModeEnum {
+  Upload = "upload",
+  Pick = "pick",
+}
+
+// DEV_NOTE: The file "Add a document" already uploaded (and the document it became), reused when the answer is retried
+export interface DashboardUploadedAnswerDocument {
+  file: File;
+  sourcePublicId: string;
+  documentPublicId: string;
+}
+
+// DEV_NOTE: The picker's matching documents as a radio list (selectedId "" = none yet). The query asks for one more
+// than it shows, so hasMore says whether to ask for a longer title.
+export interface DashboardDocumentChoicesProps {
+  response: GetKnowledgeDocumentsApiResponse | undefined;
+  isPending: boolean;
+  isError: boolean;
+  selectedId: string;
+  onSelect: (documentPublicId: string) => void;
+}
+
+// DEV_NOTE: A source's name input in Add source and Edit (errors from the form field's validator)
+export interface DashboardKnowledgeNameFieldProps {
+  id: string;
+  name: string;
+  value: string;
+  errors: string[];
+  onBlur: () => void;
+  onChange: (value: string) => void;
+}
+
+// DEV_NOTE: A website's re-sync choice, the frequency's int as a string (the Select's value)
+export interface DashboardKnowledgeFrequencySelectProps {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}
+
+// DEV_NOTE: Previous / Next under a paged list, with "1–25 of 214"
+export interface DashboardPagerProps {
+  page: number;
+  pageSize: number;
+  totalRecords: number;
+  onPage: (page: number) => void;
 }
 
 // DEV_NOTE: A sidebar item's count badge (DESIGN.md §4), named in -nav.ts and filled by the sidebar: Changes (needs a

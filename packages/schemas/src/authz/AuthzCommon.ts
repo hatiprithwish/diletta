@@ -12,6 +12,11 @@ export enum AuthzActionEnum {
   KnowledgeSourceUpdate = "knowledge_source.update",
   KnowledgeSourceDelete = "knowledge_source.delete",
 
+  // Knowledge page (company-scoped, M4-7): read the questions the assistant couldn't answer, grouped; close a group with
+  // the document that answers it, or dismiss it
+  DocGapClusterRead = "doc_gap_cluster.read",
+  DocGapClusterUpdate = "doc_gap_cluster.update",
+
   // Insights pages (company-scoped, M4-3): Overview, Usage, Impact read the activity rollups; Impact's minutes per task
   InsightRead = "insight.read",
   RoiAssumptionUpdate = "roi_assumption.update",

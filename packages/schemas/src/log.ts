@@ -336,6 +336,17 @@ export enum LogAction {
   CreateEvalCase = "CreateEvalCase",
   ListRecentChatMessages = "ListRecentChatMessages",
 
+  // Knowledge page (M4-7)
+  CountKnowledgeDocumentsBySource = "CountKnowledgeDocumentsBySource",
+  GetCompanyKnowledgeDocument = "GetCompanyKnowledgeDocument",
+  GetDocGapClusters = "GetDocGapClusters",
+  CountDocGapClusters = "CountDocGapClusters",
+  GetDocGapCluster = "GetDocGapCluster",
+  GetDocGapSampleQuestions = "GetDocGapSampleQuestions",
+  AnswerDocGapCluster = "AnswerDocGapCluster",
+  DismissDocGapCluster = "DismissDocGapCluster",
+  ReopenDocGapClusters = "ReopenDocGapClusters",
+
   // Cron
   DispatchCron = "DispatchCron",
 }

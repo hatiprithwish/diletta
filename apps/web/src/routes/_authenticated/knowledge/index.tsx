@@ -1,15 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import * as Schemas from "@app/schemas";
+import { KnowledgePage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/knowledge/")({
-  component: KnowledgePage,
+  validateSearch: Schemas.ZKnowledgePageSearch,
+  component: KnowledgeIndexPage,
 });
 
-function KnowledgePage() {
-  return (
-    <PageHeader
-      title="Knowledge"
-      description="What the assistant can read, and the gaps it ran into"
-    />
-  );
+function KnowledgeIndexPage() {
+  const search = Route.useSearch();
+  return <KnowledgePage search={search} />;
 }

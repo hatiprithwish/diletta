@@ -41,6 +41,7 @@ export default class KnowledgeSourcesDAL {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
+          name: params.name,
           type: params.type,
           url: params.url,
           syncFrequency: params.syncFrequency,
@@ -131,11 +132,13 @@ export default class KnowledgeSourcesDAL {
       const orderExpr =
         params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
       const offset = (params.pageNo - 1) * params.pageSize;
+      const conditions = [eq(knowledgeSources.companyId, params.companyId)];
+      if (params.status !== null) conditions.push(eq(knowledgeSources.status, params.status));
 
       const knowledgeSourcesResponse = await tx
         .select()
         .from(knowledgeSources)
-        .where(eq(knowledgeSources.companyId, params.companyId))
+        .where(and(...conditions))
         // DEV_NOTE: id breaks ties (same created_at, never-synced sources), so rows never repeat or go missing
         // between pages
         .orderBy(orderExpr, asc(knowledgeSources.id))
@@ -246,6 +249,7 @@ export default class KnowledgeSourcesDAL {
         .update(knowledgeSources)
         .set({
           // DEV_NOTE: When a param is null, it's ignored
+          name: params.name ?? undefined,
           syncFrequency: params.syncFrequency ?? undefined,
           status: params.status ?? undefined,
           updatedBy: params.updatedBy,

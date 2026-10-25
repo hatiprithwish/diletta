@@ -9,3 +9,8 @@ export interface KnowledgeDocumentDALResponse extends ApiResponse {
 export interface KnowledgeDocumentsDALResponse extends ApiResponse {
   knowledgeDocuments?: KnowledgeDocument[];
 }
+
+// DEV_NOTE: Documents per source, keyed by the source's internal id (a source with none has no key)
+export interface KnowledgeDocumentCountsDALResponse extends ApiResponse {
+  documentCounts?: Record<string, number>;
+}

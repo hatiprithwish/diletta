@@ -1,5 +1,6 @@
 import type {
   KnowledgeSourceFailureEnum,
+  KnowledgeSourceListItem,
   KnowledgeSourceWithStatus,
 } from "./KnowledgeSourcesCommon";
 import type { ApiResponse, TotalRecordsResponse } from "../common";
@@ -18,7 +19,7 @@ export interface GetKnowledgeSourceApiResponse extends ApiResponse {
 }
 
 export interface GetKnowledgeSourcesApiResponse extends ApiResponse {
-  knowledgeSources?: KnowledgeSourceWithStatus[];
+  knowledgeSources?: KnowledgeSourceListItem[];
 }
 
 export type GetKnowledgeSourcesCountApiResponse = TotalRecordsResponse;

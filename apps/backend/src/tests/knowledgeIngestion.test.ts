@@ -187,6 +187,7 @@ async function createSitemapSource(
     adminId,
     knowledgeSource: {
       type: Schemas.KnowledgeSourceTypeIntEnum.Sitemap,
+      name: "Help center",
       url: `https://${host}/sitemap.xml`,
       syncFrequency,
     },
@@ -201,7 +202,7 @@ async function createUploadSource(companyId: string, adminId: string) {
   const created = await new KnowledgeSourcesRepo(env).createKnowledgeSource({
     companyId,
     adminId,
-    knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload },
+    knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload, name: "Uploads" },
   });
   const publicId = created.knowledgeSource?.publicId ?? "";
   return { publicId, id: (await sourceRow(publicId))!.id, created };
@@ -561,6 +562,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       adminId: adminA,
       knowledgeSource: {
         type: Schemas.KnowledgeSourceTypeIntEnum.Sitemap,
+        name: "Missing",
         url: `https://${host}/missing-sitemap.xml`,
         syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Manual,
       },
