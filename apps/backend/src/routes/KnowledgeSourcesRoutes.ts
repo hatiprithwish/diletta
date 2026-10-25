@@ -151,9 +151,11 @@ KnowledgeSourcesRoutes.get(
   "/:publicId/documents/count",
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceRead),
+  zValidator("query", Schemas.ZGetKnowledgeDocumentsCountApiRequest),
   async (c) => {
     const repo = new KnowledgeSourcesRepo(c.env);
     const response = await repo.getKnowledgeDocumentsCount({
+      ...c.req.valid("query"),
       companyId: c.get("companyId"),
       publicId: c.req.param("publicId"),
     });

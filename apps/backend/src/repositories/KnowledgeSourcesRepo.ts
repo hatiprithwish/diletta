@@ -105,6 +105,7 @@ export default class KnowledgeSourcesRepo {
     const created = await withTenant(this.db, params.companyId, async (tx) => {
       return await this.dal.createKnowledgeSource(tx, {
         companyId: params.companyId,
+        name: body.name,
         type: body.type,
         url: isWeb ? body.url : null,
         syncFrequency: isWeb ? body.syncFrequency : null,
@@ -145,22 +146,45 @@ export default class KnowledgeSourcesRepo {
     });
   }
 
+  // DEV_NOTE: The page of sources with each one's document count (M4-7's Documents column), in one withTenant
   async getKnowledgeSources(
     params: Schemas.GetKnowledgeSourcesApiRequest & { companyId: string },
   ): Promise<Schemas.GetKnowledgeSourcesApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const { knowledgeSources, ...rest } = await this.dal.getKnowledgeSources(tx, {
-        companyId: params.companyId,
-        pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
-        pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
-        sortColumn: params.sortColumn ?? Schemas.KnowledgeSourceSortColumn.CreatedAt,
-        sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
-      });
-      return {
-        ...rest,
-        knowledgeSources: knowledgeSources?.map((source) => this.withStatusLabel(source)),
-      };
-    });
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetKnowledgeSourcesApiResponse> => {
+        const page = await this.dal.getKnowledgeSources(tx, {
+          companyId: params.companyId,
+          pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
+          pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
+          sortColumn: params.sortColumn ?? Schemas.KnowledgeSourceSortColumn.CreatedAt,
+          sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
+        });
+        if (!page.isSuccess || !page.knowledgeSources) {
+          return { isSuccess: false, message: page.message };
+        }
+        const sources = page.knowledgeSources;
+
+        const counted = await this.documentsDal.getKnowledgeDocumentCountsBySource(tx, {
+          companyId: params.companyId,
+          knowledgeSourceIds: sources.map((source) => source.id),
+        });
+        if (!counted.isSuccess || !counted.documentCounts) {
+          return { isSuccess: false, message: counted.message };
+        }
+        const documentCounts = counted.documentCounts;
+
+        return {
+          isSuccess: true,
+          message: page.message,
+          knowledgeSources: sources.map((source) => ({
+            ...this.withStatusLabel(source),
+            documentCount: documentCounts[source.id] ?? 0,
+          })),
+        };
+      },
+    );
   }
 
   async getKnowledgeSourcesCount(params: {
@@ -218,6 +242,7 @@ export default class KnowledgeSourcesRepo {
         const result = await this.dal.updateKnowledgeSource(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
+          name: body.name ?? null,
           syncFrequency: body.syncFrequency ?? null,
           status: status ?? null,
           updatedBy: params.adminId,
@@ -544,6 +569,7 @@ export default class KnowledgeSourcesRepo {
         const { knowledgeDocuments, ...rest } = await this.documentsDal.getKnowledgeDocuments(tx, {
           companyId: params.companyId,
           knowledgeSourceId: found.knowledgeSource.id,
+          search: params.search ?? null,
           pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
           pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
           sortColumn: params.sortColumn ?? Schemas.KnowledgeDocumentSortColumn.CreatedAt,
@@ -559,16 +585,16 @@ export default class KnowledgeSourcesRepo {
     );
   }
 
-  async getKnowledgeDocumentsCount(params: {
-    companyId: string;
-    publicId: string;
-  }): Promise<Schemas.GetKnowledgeDocumentsCountApiResponse> {
+  async getKnowledgeDocumentsCount(
+    params: Schemas.GetKnowledgeDocumentsCountApiRequest & { companyId: string; publicId: string },
+  ): Promise<Schemas.GetKnowledgeDocumentsCountApiResponse> {
     return await withTenant(
       this.db,
       params.companyId,
       async (tx): Promise<Schemas.GetKnowledgeDocumentsCountApiResponse> => {
         const found = await this.dal.getKnowledgeSourceDetails(tx, {
-          ...params,
+          companyId: params.companyId,
+          publicId: params.publicId,
           isForUpdate: false,
         });
         if (!found.isSuccess || !found.knowledgeSource) {
@@ -577,6 +603,7 @@ export default class KnowledgeSourcesRepo {
         return await this.documentsDal.getKnowledgeDocumentsCount(tx, {
           companyId: params.companyId,
           knowledgeSourceId: found.knowledgeSource.id,
+          search: params.search ?? null,
         });
       },
     );

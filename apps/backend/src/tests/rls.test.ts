@@ -367,7 +367,12 @@ const FIXTURES: Fixture[] = [
     insert: (client, companyId) =>
       client
         .insert(knowledgeSources)
-        .values({ publicId: pid(), companyId, type: Schemas.KnowledgeSourceTypeIntEnum.Upload })
+        .values({
+          publicId: pid(),
+          companyId,
+          name: "RLS test",
+          type: Schemas.KnowledgeSourceTypeIntEnum.Upload,
+        })
         .returning({ id: knowledgeSources.id }),
   },
   {

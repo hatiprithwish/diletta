@@ -114,6 +114,7 @@ async function createSource(tenant: Tenant, status = Schemas.KnowledgeSourceStat
       .values({
         publicId: Utility.generatePublicId(),
         companyId: tenant.companyId,
+        name: "Search test",
         type: Schemas.KnowledgeSourceTypeIntEnum.Upload,
         status,
       })

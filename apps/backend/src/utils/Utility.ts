@@ -128,6 +128,12 @@ export default class Utility {
     return false;
   }
 
+  // DEV_NOTE: A LIKE / ILIKE pattern that matches text anywhere, the text taken literally: its \, % and _ are escaped
+  // (backslash is Postgres's default LIKE escape)
+  static containsPattern(text: string): string {
+    return `%${text.replace(/[\\%_]/g, "\\$&")}%`;
+  }
+
   // DEV_NOTE: Passes a stream through chunk by chunk. onChunk sees each chunk and returns the one to pass on (the same,
   // or a replacement); mapError replaces the error a failing source raises before the reader gets it. onEnd runs
   // exactly once: when the stream finishes, fails (error set) or is cancelled by the reader (wasCancelled).

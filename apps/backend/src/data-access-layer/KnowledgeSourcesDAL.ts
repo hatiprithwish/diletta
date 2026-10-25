@@ -41,6 +41,7 @@ export default class KnowledgeSourcesDAL {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
+          name: params.name,
           type: params.type,
           url: params.url,
           syncFrequency: params.syncFrequency,
@@ -246,6 +247,7 @@ export default class KnowledgeSourcesDAL {
         .update(knowledgeSources)
         .set({
           // DEV_NOTE: When a param is null, it's ignored
+          name: params.name ?? undefined,
           syncFrequency: params.syncFrequency ?? undefined,
           status: params.status ?? undefined,
           updatedBy: params.updatedBy,

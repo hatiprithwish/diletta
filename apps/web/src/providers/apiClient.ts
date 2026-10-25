@@ -24,8 +24,9 @@ export async function apiClient<T>(
     ...options,
     // DEV_NOTE:signal is provided by TanStack Query — it aborts the fetch automatically when the component unmounts or the query is cancelled/re-triggered.
     signal: options?.signal,
+    // DEV_NOTE: A FormData body (a file upload) gets no Content-Type: fetch sets multipart/form-data with its boundary
     headers: {
-      "Content-Type": "application/json",
+      ...(options?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },

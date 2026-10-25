@@ -1,6 +1,7 @@
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import * as Schemas from "@app/schemas";
+import DocGapClustersDAL from "@/data-access-layer/DocGapClustersDAL";
 import FilesDAL from "@/data-access-layer/FilesDAL";
 import KnowledgeChunksDAL from "@/data-access-layer/KnowledgeChunksDAL";
 import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
@@ -14,12 +15,14 @@ const PENDING_OWNER_ID = "0";
 // DAL). The Repo writes a new file's R2 object before the transaction (named by a publicId it generates, so no source
 // lock is held while bytes upload) and deletes it if the transaction doesn't commit; objects of replaced or removed
 // files are deleted after the commit. A file's bytes never change: new bytes are a new file. So a failure leaves at
-// worst an object with no row, never a row whose object is missing or holds other bytes.
+// worst an object with no row, never a row whose object is missing or holds other bytes. A removed document that
+// answered a gap cluster (M4-7) reopens it in the same transaction, so a cluster never points at a missing document.
 // Returns { isSuccess, message } and never throws.
 export default class KnowledgeDocumentFilesProvider {
   private static filesDal = new FilesDAL();
   private static documentsDal = new KnowledgeDocumentsDAL();
   private static chunksDal = new KnowledgeChunksDAL();
+  private static docGapClustersDal = new DocGapClustersDAL();
 
   static async create(
     tx: NodePgTransaction<EmptyRelations>,
@@ -192,10 +195,20 @@ export default class KnowledgeDocumentFilesProvider {
     });
   }
 
+  // DEV_NOTE: After the documents are deleted (both paths): the gap clusters they answered reopen, then their file rows
   private static async removeFiles(
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string; companyPublicId: string; documents: Schemas.KnowledgeDocument[] },
   ): Promise<Schemas.RemoveKnowledgeDocumentsResponse> {
+    const reopened =
+      await KnowledgeDocumentFilesProvider.docGapClustersDal.reopenDocGapClustersByDocuments(tx, {
+        companyId: params.companyId,
+        knowledgeDocumentIds: params.documents.map((document) => document.id),
+      });
+    if (!reopened.isSuccess) {
+      return { isSuccess: false, message: reopened.message };
+    }
+
     const files = await KnowledgeDocumentFilesProvider.filesDal.deleteFiles(tx, {
       companyId: params.companyId,
       ids: params.documents.map((document) => document.fileId),

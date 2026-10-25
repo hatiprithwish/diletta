@@ -317,6 +317,7 @@ beforeAll(async () => {
     await ownerDb.insert(knowledgeSources).values({
       publicId: Utility.generatePublicId(),
       companyId: companyA,
+      name: "Help center",
       type: Schemas.KnowledgeSourceTypeIntEnum.Url,
       url: "https://help.example.com/a",
       syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily,

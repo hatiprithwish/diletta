@@ -758,6 +758,7 @@ export const knowledgeSources = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    name: t.text().notNull(), // what the admin calls it (M4-7)
     type: t.smallint().$type<Schemas.KnowledgeSourceTypeIntEnum>().notNull(),
     url: t.text(),
     syncFrequency: t

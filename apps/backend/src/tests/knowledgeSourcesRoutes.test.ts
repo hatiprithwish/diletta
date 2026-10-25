@@ -135,7 +135,9 @@ describe("/dashboard/knowledge-sources", () => {
     expect((await call("GET", "/dashboard/knowledge-sources", { as: operator })).status).toBe(403);
     const created = await call("POST", "/dashboard/knowledge-sources", {
       as: operator,
-      body: { knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload } },
+      body: {
+        knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload, name: "Uploads" },
+      },
     });
     expect(created.status).toBe(403);
   });
@@ -152,6 +154,7 @@ describe("/dashboard/knowledge-sources", () => {
         body: {
           knowledgeSource: {
             type: Schemas.KnowledgeSourceTypeIntEnum.Url,
+            name: "Policy",
             url,
             syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily,
           },
@@ -172,7 +175,9 @@ describe("/dashboard/knowledge-sources", () => {
     async () => {
       const created = await call("POST", "/dashboard/knowledge-sources", {
         as: adminA,
-        body: { knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload } },
+        body: {
+          knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload, name: "Uploads" },
+        },
       });
       expect(created.status).toBe(201);
       const source = created.body.knowledgeSource as Schemas.KnowledgeSourceWithStatus;
@@ -280,6 +285,7 @@ describe("/dashboard/knowledge-sources", () => {
       body: {
         knowledgeSource: {
           type: Schemas.KnowledgeSourceTypeIntEnum.Url,
+          name: "Policy",
           url: "https://docs.example.com/faq",
           syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Manual,
         },
