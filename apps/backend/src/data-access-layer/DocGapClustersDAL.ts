@@ -264,8 +264,9 @@ export default class DocGapClustersDAL {
     return response;
   }
 
-  // DEV_NOTE: Open → Answered by the document. isNotFound when the document isn't in the company (checked here: no DB
-  // foreign keys) or no Open group has that id (the Repo reads it under lock first, so that means it closed meanwhile).
+  // DEV_NOTE: Open → Answered by the document. The Repo has found the document in the company and locked it (no DB
+  // foreign keys), so this only writes. isNotFound when no Open group has that id (the Repo reads it under lock first,
+  // so that means it closed meanwhile).
   async answerDocGapCluster(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.AnswerDocGapClusterDALRequest,
@@ -273,28 +274,6 @@ export default class DocGapClustersDAL {
     const response: Schemas.DocGapClusterDALResponse = { isSuccess: false };
 
     try {
-      const documentConditions = [
-        eq(knowledgeDocuments.id, params.answeredByDocumentId),
-        eq(knowledgeDocuments.companyId, params.companyId),
-      ];
-      const [document] = await tx
-        .select({ id: knowledgeDocuments.id })
-        .from(knowledgeDocuments)
-        .where(and(...documentConditions))
-        .limit(1);
-      if (!document) {
-        const message = "Knowledge document not found";
-        AppLogger.warn({
-          category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.AnswerDocGapCluster,
-          message,
-          metadata: params,
-        });
-        response.message = message;
-        response.isNotFound = true;
-        return response;
-      }
-
       const conditions = [
         eq(docGapClusters.id, params.id),
         eq(docGapClusters.companyId, params.companyId),

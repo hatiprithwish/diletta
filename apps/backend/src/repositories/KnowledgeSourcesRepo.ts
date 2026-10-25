@@ -160,6 +160,7 @@ export default class KnowledgeSourcesRepo {
           pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
           sortColumn: params.sortColumn ?? Schemas.KnowledgeSourceSortColumn.CreatedAt,
           sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
+          status: params.status ?? null,
         });
         if (!page.isSuccess || !page.knowledgeSources) {
           return { isSuccess: false, message: page.message };

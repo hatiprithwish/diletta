@@ -7,6 +7,7 @@ import {
   ZKnowledgeSourceSortColumn,
 } from "./KnowledgeSourcesCommon";
 import { ZPageApiRequest } from "../common";
+import { ZKnowledgeDocumentSearch } from "../knowledgeDocuments/KnowledgeDocumentsApiRequest";
 
 export const ZCreateKnowledgeSourceApiRequest = z.object({
   knowledgeSource: ZKnowledgeSourceBase,
@@ -37,9 +38,11 @@ export const ZUpdateKnowledgeSourceApiRequest = z.object({
 });
 export type UpdateKnowledgeSourceApiRequest = z.infer<typeof ZUpdateKnowledgeSourceApiRequest>;
 
-// DEV_NOTE: A company can have any number of sources, so the list is paged
+// DEV_NOTE: A company can have any number of sources, so the list is paged. status narrows it to one state (the
+// Knowledge page's failed-sync banners read every Failed source, whatever page of the table is shown).
 export const ZGetKnowledgeSourcesApiRequest = ZPageApiRequest.extend({
   sortColumn: ZKnowledgeSourceSortColumn.nullable().optional(),
+  status: z.coerce.number().pipe(z.enum(KnowledgeSourceStatusIntEnum)).optional(),
 });
 export type GetKnowledgeSourcesApiRequest = z.infer<typeof ZGetKnowledgeSourcesApiRequest>;
 
@@ -47,8 +50,12 @@ export type GetKnowledgeSourcesApiRequest = z.infer<typeof ZGetKnowledgeSourcesA
 export const KNOWLEDGE_SOURCES_PAGE_SIZE = 25;
 export const KNOWLEDGE_DOCUMENTS_PAGE_SIZE = 25;
 
-// DEV_NOTE: A source's page (/knowledge/$id) URL search: its documents' page; an unknown value falls back to the first
+// DEV_NOTE: A source's page (/knowledge/$id) URL search: its documents' page, a title filter, and documentId = the
+// document to show highlighted (a gap cluster's "Answered by" link sets both). An unknown value falls back to the
+// default.
 export const ZKnowledgeSourcePageSearch = z.object({
   page: z.coerce.number().int().min(1).optional().catch(undefined),
+  search: ZKnowledgeDocumentSearch.catch(undefined),
+  documentId: z.string().min(1).optional().catch(undefined),
 });
 export type KnowledgeSourcePageSearch = z.infer<typeof ZKnowledgeSourcePageSearch>;

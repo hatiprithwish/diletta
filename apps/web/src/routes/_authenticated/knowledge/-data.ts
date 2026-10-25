@@ -25,7 +25,11 @@ export class KnowledgeQueries {
     sourcesPage: (page: number) => [...KnowledgeQueries.keys.sources(), "page", page] as const,
     sourcesCount: () => [...KnowledgeQueries.keys.sources(), "count"] as const,
     sourceChoices: () => [...KnowledgeQueries.keys.sources(), "choices"] as const,
-    source: (publicId: string) => [...KnowledgeQueries.keys.sources(), "detail", publicId] as const,
+    failedSources: () => [...KnowledgeQueries.keys.sources(), "failed"] as const,
+    // DEV_NOTE: Details sit under their own root, so refetching the lists (keys.sources()) never touches them: a write
+    // sets the detail it changed (setQueryData)
+    sourceDetails: () => [...KnowledgeQueries.keys.all(), "source"] as const,
+    source: (publicId: string) => [...KnowledgeQueries.keys.sourceDetails(), publicId] as const,
     documents: (publicId: string) =>
       [...KnowledgeQueries.keys.all(), "documents", publicId] as const,
     documentsPage: (publicId: string, page: number, search: string) =>
@@ -67,7 +71,9 @@ export class KnowledgeQueries {
     });
   }
 
-  // DEV_NOTE: The source choices of "Add a document": the company's first MAX_PAGE_SIZE sources, oldest first
+  // DEV_NOTE: The source choices of "Add a document": the company's first MAX_PAGE_SIZE sources, oldest first. A
+  // company with more sources can't pick from the rest here (v1: a company has a handful); the source's own page still
+  // takes its uploads.
   static sourceChoices(getToken: GetToken) {
     const params = new URLSearchParams({
       pageNo: "1",
@@ -76,6 +82,25 @@ export class KnowledgeQueries {
     });
     return queryOptions({
       queryKey: KnowledgeQueries.keys.sourceChoices(),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetKnowledgeSourcesApiResponse>(
+          `/dashboard/knowledge-sources?${params.toString()}`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  // DEV_NOTE: Every Failed source, whatever page of the table is shown (one banner each). Up to MAX_PAGE_SIZE.
+  static failedSources(getToken: GetToken) {
+    const params = new URLSearchParams({
+      pageNo: "1",
+      pageSize: String(Schemas.MAX_PAGE_SIZE),
+      sortDirection: Schemas.SortDirection.Asc,
+      status: String(Schemas.KnowledgeSourceStatusIntEnum.Failed),
+    });
+    return queryOptions({
+      queryKey: KnowledgeQueries.keys.failedSources(),
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetKnowledgeSourcesApiResponse>(
           `/dashboard/knowledge-sources?${params.toString()}`,
@@ -171,6 +196,11 @@ export function useKnowledgeSourceChoices(isEnabled: boolean) {
   return useQuery({ ...KnowledgeQueries.sourceChoices(getToken), enabled: isEnabled });
 }
 
+export function useFailedKnowledgeSources() {
+  const { getToken } = useAuth();
+  return useQuery(KnowledgeQueries.failedSources(getToken));
+}
+
 export function useKnowledgeSource(publicId: string) {
   const { getToken } = useAuth();
   return useQuery(KnowledgeQueries.source(publicId, getToken));
@@ -207,8 +237,8 @@ export function useDocGapClusters(tab: Schemas.DocGapClusterListTabEnum, page: n
   return useQuery(KnowledgeQueries.clusterList(tab, page, getToken));
 }
 
-// DEV_NOTE: A source changed: its detail shows the answer at once; the tables, Overview's failed-source count and (a
-// removed source took its documents) the groups refetch
+// DEV_NOTE: A source changed: its detail shows the answer at once; the lists, the groups (an Answered one names its
+// document's source, and a removed source took its documents) and Overview's failed-source count refetch
 function applySourceWrite(
   queryClient: QueryClient,
   source: Schemas.KnowledgeSourceWithStatus | undefined,
@@ -219,11 +249,15 @@ function applySourceWrite(
       (previous) => ({ ...previous, isSuccess: true, knowledgeSource: source }),
     );
   }
-  void queryClient.invalidateQueries({
-    queryKey: KnowledgeQueries.keys.sources(),
-    predicate: (query) => !source || query.queryKey[2] !== "detail",
-  });
+  void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.sources() });
+  void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.clusters() });
   void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.overview });
+}
+
+// DEV_NOTE: A refused or failed source write: the lists and that source's detail refetch to show where it stands
+function refetchSource(queryClient: QueryClient, publicId: string) {
+  void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.sources() });
+  void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.source(publicId) });
 }
 
 // DEV_NOTE: Why a source request was refused (409 / 400), in the dashboard's words (DESIGN.md §8)
@@ -283,7 +317,7 @@ export function useUpdateKnowledgeSource(publicId: string) {
       toast.error(
         sourceFailureText(error, "The source wasn't updated. Nothing changed, try again."),
       );
-      void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.sources() });
+      refetchSource(queryClient, publicId);
     },
   });
 }
@@ -304,7 +338,7 @@ export function useSyncKnowledgeSource(publicId: string) {
     },
     onError: (error) => {
       toast.error(sourceFailureText(error, "The sync didn't start. Try again."));
-      void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.sources() });
+      refetchSource(queryClient, publicId);
     },
   });
 }
@@ -324,7 +358,6 @@ export function useDeleteKnowledgeSource(publicId: string) {
       queryClient.removeQueries({ queryKey: KnowledgeQueries.keys.source(publicId) });
       queryClient.removeQueries({ queryKey: KnowledgeQueries.keys.documents(publicId) });
       applySourceWrite(queryClient, undefined);
-      void queryClient.invalidateQueries({ queryKey: KnowledgeQueries.keys.clusters() });
       toast.success("Source deleted.");
     },
     onError: (error) =>

@@ -1885,21 +1885,26 @@ taskType:\s*Schemas\.ModelTaskTypeEnum\.QualityTestRewrite[\s\S]{0,200}conversat
 
 ### 3.43 Gap Clusters Close Once, on a Document of the Company; Removing That Document Reopens Them [CRITICAL]
 
-**Rule:** The Knowledge page (M4-7) reads groups of unanswered questions only through `GET /dashboard/doc-gap-clusters` (paged; `tab` open / answered / dismissed, absent = Open; every tab's count in the same answer; `authorizeCompany(DocGapClusterRead)`) → `DocGapClustersRepo` → `DocGapClustersDAL` (one `withTenant`). Sample questions are only `doc_gaps.question_generic` (already rewritten without personal details), at most `DOC_GAP_SAMPLE_QUESTIONS_MAX` per group, newest first, and never logged. Answer (`POST …/:publicId/answer {documentPublicId}`) and Dismiss (`POST …/dismiss`) (`DocGapClusterUpdate`) lock the group (`getDocGapCluster` with `isForUpdate`), start only from Open (else `DocGapClusterUpdateFailureEnum.NotOpen`, 409, nothing written), and Answer sets `answered_by_document_id` only to a document of the same company (checked in the DAL, unknown → 404); the group is read back in the same transaction. No code moves a group back to Open by hand. The only reopen is `DocGapClustersDAL.reopenDocGapClustersByDocuments`, called by `KnowledgeDocumentFilesProvider` in the transaction that removes the documents (document delete, source delete, sync prune), so a group never points at a missing document. A source carries an admin-given `name` (`ZKnowledgeSourceName`), set on create and editable by PATCH.
+**Rule:** The Knowledge page (M4-7) reads groups of unanswered questions only through `GET /dashboard/doc-gap-clusters` (paged; `tab` open / answered / dismissed, absent = Open; every tab's count in the same answer; `authorizeCompany(DocGapClusterRead)`) → `DocGapClustersRepo` → `DocGapClustersDAL` (one `withTenant`). Sample questions are only `doc_gaps.question_generic` (already rewritten without personal details), at most `DOC_GAP_SAMPLE_QUESTIONS_MAX` per group, newest first, and never logged. Answer (`POST …/:publicId/answer {documentPublicId}`) and Dismiss (`POST …/dismiss`) (`DocGapClusterUpdate`) lock the group (`getDocGapCluster` with `isForUpdate`), start only from Open (else `DocGapClusterUpdateFailureEnum.NotOpen`, 409, nothing written), and Answer sets `answered_by_document_id` only to a document of the same company, which the Repo reads with `getCompanyKnowledgeDocument({ isForKeyShare: true })` (unknown → 404). That lock holds the document until the commit, so a delete of it can't commit in between and leave the group pointing at a missing document. The group is read back in the same transaction. No code moves a group back to Open by hand. The only reopen is `DocGapClustersDAL.reopenDocGapClustersByDocuments`, called by `KnowledgeDocumentFilesProvider` in the transaction that removes the documents (document delete, source delete, sync prune), so a group never points at a missing document. A source carries an admin-given `name` (`ZKnowledgeSourceName`), set on create and editable by PATCH.
 
 **Violations:**
 
-- Setting `answered_by_document_id` without checking the document is in the company, or from a non-Open group
+- Setting `answered_by_document_id` without reading the document in the company under `isForKeyShare`, or from a non-Open group
 - Deleting knowledge documents anywhere but `KnowledgeDocumentFilesProvider` (their groups would keep a dangling document)
 - Reopening a group from a route or Repo (Open again only when its document is removed)
 - Sending `doc_gaps` text other than `question_generic`, or logging it
 
 **Detection Pattern:**
 
+Run these on file content. Each is a violation outside the one file named after it, which the enforcer checks by path (a content regex can't see the file name):
+
 ```regex
-update\(docGapClusters\)(?![\s\S]{0,400}DocGapClusterStatusIntEnum\.Open)
-delete\(knowledgeDocuments\)(?!.*KnowledgeDocumentsDAL\.ts)
+set\(\{[^}]*status:\s*Schemas\.DocGapClusterStatusIntEnum\.Open
+deleteKnowledgeDocuments(BySource)?\(
 ```
+
+- The first may match only inside `DocGapClustersDAL.reopenDocGapClustersByDocuments` (`data-access-layer/DocGapClustersDAL.ts`).
+- The second may be called only from `providers/knowledgeDocumentFiles.ts` (declared in `data-access-layer/KnowledgeDocumentsDAL.ts`).
 
 **Examples:**
 

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import {
@@ -67,6 +67,7 @@ import { SectionHeader } from "@/components/section-header";
 import { StatusChip } from "@/components/status-chip";
 import { ApiError } from "@/providers/apiClient";
 import Utilities from "@/utils";
+import { useDebouncedValue } from "@/utils/useDebouncedValue";
 import {
   useAnswerDocGapCluster,
   useCreateKnowledgeSource,
@@ -74,6 +75,7 @@ import {
   useDeleteKnowledgeSource,
   useDismissDocGapCluster,
   useDocGapClusters,
+  useFailedKnowledgeSources,
   useKnowledgeDocuments,
   useKnowledgeDocumentsCount,
   useKnowledgeSource,
@@ -92,8 +94,11 @@ const UNTITLED_DOCUMENT = "Untitled document";
 const UPLOAD_ACCEPT = Object.keys(Schemas.KNOWLEDGE_UPLOAD_MIME_BY_EXTENSION)
   .map((extension) => `.${extension}`)
   .join(",");
-// DEV_NOTE: The document picker shows this many matches; more means "type more of the title"
+// DEV_NOTE: The document picker shows this many matches (it asks for one more, to know if there are others); more
+// means "type more of the title"
 const PICKER_PAGE_SIZE = 8;
+// DEV_NOTE: How long a title search waits after the last keystroke before it asks the server
+const SEARCH_DEBOUNCE_MS = 250;
 
 const SOURCE_STATUS_TONE: Record<
   Schemas.KnowledgeSourceStatusIntEnum,
@@ -260,7 +265,8 @@ function KnowledgeSources({ page, onPage, onAddSource }: Schemas.DashboardKnowle
   const query = useKnowledgeSources(page);
   const counted = useKnowledgeSourcesCount();
   const sources = query.data?.knowledgeSources;
-  const failedSources = (sources ?? []).filter((source) => source.knowledgeSourceStatus === Failed);
+  // DEV_NOTE: Every Failed source has its banner, whatever page of the table is shown
+  const failedSources = useFailedKnowledgeSources().data?.knowledgeSources ?? [];
 
   return (
     <section className="flex flex-col gap-4" aria-label="Sources">
@@ -936,12 +942,18 @@ function DocGapClusters({
           aria-busy={isStale}
           className={cn(
             "flex flex-col gap-3 transition-opacity",
-            (isStale || dismiss.isPending) && "pointer-events-none opacity-50",
+            isStale && "pointer-events-none opacity-50",
           )}
         >
           <ul className="divide-y overflow-hidden rounded-xl border" aria-label="Question groups">
             {clusters.map((cluster) => (
-              <ClusterRow key={cluster.publicId} cluster={cluster} onAddDocument={setAnswering} />
+              <ClusterRow
+                key={cluster.publicId}
+                cluster={cluster}
+                isDismissing={dismiss.isPending && dismiss.variables === cluster.publicId}
+                onAddDocument={setAnswering}
+                onDismiss={(row) => dismiss.mutate(row.publicId)}
+              />
             ))}
           </ul>
           <Pager
@@ -966,8 +978,12 @@ function DocGapClusters({
 
 // DEV_NOTE: One group: its topic, how many asked and when last, its newest questions (opened on demand), and while
 // Open "Add a document" and Dismiss; an Answered one links to the document that closed it
-function ClusterRow({ cluster, onAddDocument }: Schemas.DashboardDocGapClusterRowProps) {
-  const dismiss = useDismissDocGapCluster();
+function ClusterRow({
+  cluster,
+  isDismissing,
+  onAddDocument,
+  onDismiss,
+}: Schemas.DashboardDocGapClusterRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const isOpen = cluster.docGapClusterStatus === Schemas.DocGapClusterStatusIntEnum.Open;
   const latest = latestText(cluster.latestQuestionAt);
@@ -1004,8 +1020,8 @@ function ClusterRow({ cluster, onAddDocument }: Schemas.DashboardDocGapClusterRo
             <Button
               variant="ghost"
               className="text-subtle-foreground"
-              disabled={dismiss.isPending}
-              onClick={() => dismiss.mutate(cluster.publicId)}
+              disabled={isDismissing}
+              onClick={() => onDismiss(cluster)}
             >
               Dismiss
             </Button>
@@ -1026,6 +1042,11 @@ function ClusterRow({ cluster, onAddDocument }: Schemas.DashboardDocGapClusterRo
           <Link
             to="/knowledge/$id"
             params={{ id: cluster.answeredBy.knowledgeSource.publicId }}
+            // DEV_NOTE: Opens the source's documents filtered to this one's title, with its row highlighted
+            search={{
+              search: cluster.answeredBy.title ?? undefined,
+              documentId: cluster.answeredBy.documentPublicId,
+            }}
             className="font-medium text-brand-text hover:text-foreground"
           >
             {cluster.answeredBy.title ?? UNTITLED_DOCUMENT}
@@ -1102,13 +1123,17 @@ function AnswerForm({
   const [pickSourceId, setPickSourceId] = useState("");
   const [search, setSearch] = useState("");
   const [documentId, setDocumentId] = useState("");
+  // DEV_NOTE: The file already uploaded for this answer: a retry after a failed answer reuses it instead of uploading
+  // the same file again (uploads have no unique key, so each would be another document)
+  const [uploaded, setUploaded] = useState<Schemas.DashboardUploadedAnswerDocument | null>(null);
   const chosenUploadSource = uploadSourceId || (uploadSources[0]?.publicId ?? "");
   const chosenPickSource = pickSourceId || (sources[0]?.publicId ?? "");
+  const debouncedSearch = useDebouncedValue(search.trim(), SEARCH_DEBOUNCE_MS);
   const matches = useKnowledgeDocuments({
     publicId: chosenPickSource,
     page: 1,
-    search: search.trim(),
-    pageSize: PICKER_PAGE_SIZE,
+    search: debouncedSearch,
+    pageSize: PICKER_PAGE_SIZE + 1,
     isEnabled: mode === Schemas.DashboardDocGapAnswerModeEnum.Pick,
   });
   const isBusy = upload.isPending || answer.isPending;
@@ -1121,11 +1146,22 @@ function AnswerForm({
     let documentPublicId = documentId;
     if (mode === Schemas.DashboardDocGapAnswerModeEnum.Upload) {
       if (!file) return;
-      const uploaded = await upload.mutateAsync({ sourcePublicId: chosenUploadSource, file });
-      documentPublicId = uploaded.knowledgeDocument?.publicId ?? "";
-      if (!documentPublicId) return;
+      if (uploaded?.file === file && uploaded.sourcePublicId === chosenUploadSource) {
+        documentPublicId = uploaded.documentPublicId;
+      } else {
+        const response = await upload.mutateAsync({ sourcePublicId: chosenUploadSource, file });
+        documentPublicId = response.knowledgeDocument?.publicId ?? "";
+        if (!documentPublicId) return;
+        setUploaded({ file, sourcePublicId: chosenUploadSource, documentPublicId });
+      }
     }
-    await answer.mutateAsync({ clusterPublicId: cluster.publicId, documentPublicId });
+    try {
+      await answer.mutateAsync({ clusterPublicId: cluster.publicId, documentPublicId });
+    } catch (error) {
+      // DEV_NOTE: The group was closed meanwhile: a retry can't succeed (the mutation already said so)
+      if (error instanceof ApiError && error.status === 409) onClose();
+      throw error;
+    }
     onClose();
   };
 
@@ -1297,7 +1333,9 @@ function DocumentChoices({
   if (isError || !response) {
     return <p className="text-body text-destructive">Documents didn't load. Try again.</p>;
   }
-  const documents = response.knowledgeDocuments ?? [];
+  const matches = response.knowledgeDocuments ?? [];
+  const documents = matches.slice(0, PICKER_PAGE_SIZE);
+  const hasMore = matches.length > PICKER_PAGE_SIZE;
   if (documents.length === 0) {
     return <p className="text-body text-muted-foreground">No document matches.</p>;
   }
@@ -1326,7 +1364,7 @@ function DocumentChoices({
           </button>
         );
       })}
-      {documents.length === PICKER_PAGE_SIZE && (
+      {hasMore && (
         <p className="px-3 py-2 text-caption text-muted-foreground">
           Showing the first {PICKER_PAGE_SIZE}. Type more of the title to narrow it down.
         </p>
@@ -1416,12 +1454,12 @@ export function KnowledgeSourcePage({
 
       <KnowledgeDocuments
         source={source}
-        page={search.page ?? 1}
-        onPage={(page) =>
+        search={search}
+        onSearch={(next) =>
           void navigate({
             to: "/knowledge/$id",
             params: { id: publicId },
-            search: { page: page === 1 ? undefined : page },
+            search: Schemas.ZKnowledgeSourcePageSearch.parse(next),
           })
         }
       />
@@ -1429,16 +1467,32 @@ export function KnowledgeSourcePage({
   );
 }
 
-function KnowledgeDocuments({ source, page, onPage }: Schemas.DashboardKnowledgeDocumentsProps) {
+// DEV_NOTE: The documents table with a title filter. The filter and page live in the URL; the box's text reaches it
+// once typing pauses. documentId (a gap cluster's "Answered by" link) is highlighted.
+function KnowledgeDocuments({
+  source,
+  search,
+  onSearch,
+}: Schemas.DashboardKnowledgeDocumentsProps) {
+  const page = search.page ?? 1;
+  const filter = search.search ?? "";
+  const [text, setText] = useState(filter);
+  const debouncedText = useDebouncedValue(text.trim(), SEARCH_DEBOUNCE_MS);
+  useEffect(() => {
+    if (debouncedText !== filter) {
+      onSearch({ ...search, search: debouncedText || undefined, page: undefined });
+    }
+  }, [debouncedText, filter, onSearch, search]);
   const query = useKnowledgeDocuments({
     publicId: source.publicId,
     page,
-    search: "",
+    search: filter,
     pageSize: Schemas.KNOWLEDGE_DOCUMENTS_PAGE_SIZE,
   });
-  const counted = useKnowledgeDocumentsCount(source.publicId, "");
+  const counted = useKnowledgeDocumentsCount(source.publicId, filter);
   const documents = query.data?.knowledgeDocuments;
   const isUpload = source.type === Upload;
+  const onPage = (next: number) => onSearch({ ...search, page: next === 1 ? undefined : next });
 
   return (
     <section className="flex flex-col gap-4" aria-label="Documents">
@@ -1449,7 +1503,17 @@ function KnowledgeDocuments({ source, page, onPage }: Schemas.DashboardKnowledge
             ? "The files in this source. Remove one and the assistant stops answering from it."
             : "The pages found at the last sync. A page that leaves the site leaves here too."
         }
-      />
+      >
+        <Input
+          type="search"
+          className="w-56"
+          placeholder="Search titles"
+          aria-label="Search titles"
+          maxLength={Schemas.KNOWLEDGE_DOCUMENT_SEARCH_MAX_CHARS}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </SectionHeader>
       {query.isPending && <Skeleton className="h-48 rounded-xl" aria-label="Loading" />}
       {!query.isPending && !documents && (
         <PageError title="Documents didn't load" onRetry={() => void query.refetch()} />
@@ -1459,9 +1523,11 @@ function KnowledgeDocuments({ source, page, onPage }: Schemas.DashboardKnowledge
           <p className="text-body text-muted-foreground">
             {page > 1
               ? "Nothing on this page."
-              : isUpload
-                ? "No files yet. Upload some from Actions."
-                : "No pages yet. They show up after the first sync."}
+              : filter
+                ? "No document matches."
+                : isUpload
+                  ? "No files yet. Upload some from Actions."
+                  : "No pages yet. They show up after the first sync."}
           </p>
         </div>
       )}
@@ -1489,7 +1555,12 @@ function KnowledgeDocuments({ source, page, onPage }: Schemas.DashboardKnowledge
               </TableHeader>
               <TableBody>
                 {documents.map((document) => (
-                  <DocumentRow key={document.publicId} source={source} document={document} />
+                  <DocumentRow
+                    key={document.publicId}
+                    source={source}
+                    document={document}
+                    isHighlighted={document.publicId === search.documentId}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -1506,13 +1577,20 @@ function KnowledgeDocuments({ source, page, onPage }: Schemas.DashboardKnowledge
   );
 }
 
-function DocumentRow({ source, document }: Schemas.DashboardKnowledgeDocumentRowProps) {
+function DocumentRow({
+  source,
+  document,
+  isHighlighted,
+}: Schemas.DashboardKnowledgeDocumentRowProps) {
   const remove = useDeleteKnowledgeDocument(source.publicId);
   const [isConfirming, setIsConfirming] = useState(false);
   const title = document.title ?? UNTITLED_DOCUMENT;
 
   return (
-    <TableRow>
+    <TableRow
+      className={cn(isHighlighted && "bg-brand-soft hover:bg-brand-soft")}
+      aria-current={isHighlighted ? "true" : undefined}
+    >
       <TableCell className="max-w-96 px-4 py-3">
         {document.sourceUrl ? (
           <a

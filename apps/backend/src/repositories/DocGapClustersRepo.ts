@@ -26,17 +26,32 @@ export default class DocGapClustersRepo {
     this.documentsDal = new KnowledgeDocumentsDAL();
   }
 
-  // DEV_NOTE: Status Enum Pattern — status as int + label; internal ids dropped. answeredBy only while Answered with
-  // its document found.
+  // DEV_NOTE: Status Enum Pattern — status as int + label; internal ids dropped. answeredBy is set while Answered.
+  // An Answered group whose document didn't join should never happen (removing a document reopens its groups, and
+  // Answer locks the document), so it is logged rather than hidden silently.
   private toListItem(
     row: Schemas.DocGapClusterRow,
     sampleQuestions: string[],
   ): Schemas.DocGapClusterListItem {
-    const isAnswered =
-      row.status === Schemas.DocGapClusterStatusIntEnum.Answered &&
-      row.documentPublicId !== null &&
-      row.sourcePublicId !== null &&
-      row.sourceName !== null;
+    const { documentPublicId, sourcePublicId, sourceName } = row;
+    const isAnswered = row.status === Schemas.DocGapClusterStatusIntEnum.Answered;
+    const answeredBy =
+      isAnswered && documentPublicId !== null && sourcePublicId !== null && sourceName !== null
+        ? {
+            documentPublicId,
+            title: row.documentTitle,
+            sourceUrl: row.documentSourceUrl,
+            knowledgeSource: { publicId: sourcePublicId, name: sourceName },
+          }
+        : null;
+    if (isAnswered && answeredBy === null) {
+      AppLogger.warn({
+        category: Schemas.LogCategory.Repo,
+        action: Schemas.LogAction.GetDocGapClusters,
+        message: "Answered doc gap cluster has no answering document",
+        metadata: { publicId: row.publicId },
+      });
+    }
     return {
       publicId: row.publicId,
       label: row.label,
@@ -45,14 +60,7 @@ export default class DocGapClustersRepo {
       docGapClusterStatusLabel: Schemas.DOC_GAP_CLUSTER_STATUS_LABEL_MAP[row.status],
       latestQuestionAt: row.latestQuestionAt?.toISOString() ?? null,
       sampleQuestions,
-      answeredBy: isAnswered
-        ? {
-            documentPublicId: row.documentPublicId ?? "",
-            title: row.documentTitle,
-            sourceUrl: row.documentSourceUrl,
-            knowledgeSource: { publicId: row.sourcePublicId ?? "", name: row.sourceName ?? "" },
-          }
-        : null,
+      answeredBy,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -120,9 +128,13 @@ export default class DocGapClustersRepo {
         const open = await this.lockOpenCluster(tx, params);
         if (!open.isSuccess) return open.response;
 
+        // DEV_NOTE: Locked until the commit (FOR KEY SHARE). Otherwise a delete of the document committing meanwhile
+        // would reopen nothing (its snapshot still shows this group unanswered) and leave the group pointing at a
+        // missing document; a delete already under way makes this wait, then answer 404
         const document = await this.documentsDal.getCompanyKnowledgeDocument(tx, {
           companyId,
           publicId: params.documentPublicId,
+          isForKeyShare: true,
         });
         if (!document.isSuccess || !document.knowledgeDocument) {
           return { isSuccess: false, message: document.message, isNotFound: document.isNotFound };

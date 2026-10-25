@@ -59,11 +59,12 @@ export type GetKnowledgeDocumentCountsBySourceDALRequest = Pick<KnowledgeDocumen
   knowledgeSourceIds: string[];
 };
 
-// DEV_NOTE: One document by its public id anywhere in the company (a gap cluster's answer, M4-7)
+// DEV_NOTE: One document by its public id anywhere in the company (a gap cluster's answer, M4-7). isForKeyShare locks
+// it (FOR KEY SHARE) until the transaction ends, so it can't be deleted under a group being answered by it.
 export type FindCompanyKnowledgeDocumentDALRequest = Pick<
   KnowledgeDocument,
   "companyId" | "publicId"
->;
+> & { isForKeyShare: boolean };
 
 // DEV_NOTE: The documents a sync works through (upload sources), oldest first. indexStatuses null = any.
 export type GetKnowledgeDocumentsBySourceDALRequest = GetKnowledgeDocumentsCountDALRequest & {

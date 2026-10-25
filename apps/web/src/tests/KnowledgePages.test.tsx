@@ -152,6 +152,9 @@ function defaultApi(url: string, init?: RequestInit): { status: number; body: un
   if (url.includes("/knowledge-sources/ks_up")) {
     return { status: 200, body: { isSuccess: true, knowledgeSource: UPLOADS } };
   }
+  if (url.includes(`status=${Schemas.KnowledgeSourceStatusIntEnum.Failed}`)) {
+    return { status: 200, body: { isSuccess: true, knowledgeSources: [HELP_CENTER] } };
+  }
   if (method === "POST" && url.endsWith("/knowledge-sources")) {
     return { status: 201, body: { isSuccess: true, knowledgeSource: UPLOADS } };
   }
@@ -241,6 +244,18 @@ describe("Knowledge sources", () => {
     expect(toast.success).toHaveBeenCalledWith("Sync started.");
   });
 
+  it("shows a failed source's banner even when it isn't on the table's page", async () => {
+    mockApi((url) =>
+      url.includes("/knowledge-sources?") && !url.includes("status=")
+        ? { status: 200, body: { isSuccess: true, knowledgeSources: [UPLOADS] } }
+        : null,
+    );
+    renderPage("/knowledge");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^Help center sync failed\./);
+    expect(screen.queryByRole("link", { name: "Help center" })).toBeNull();
+  });
+
   it("adds a sitemap source with its name, address and re-sync", async () => {
     const fetchMock = mockApi();
     renderPage("/knowledge");
@@ -308,7 +323,10 @@ describe("Questions it couldn't answer", () => {
     renderPage("/knowledge?tab=answered");
 
     const link = await screen.findByRole("link", { name: "Archiving a register" });
-    expect(link).toHaveAttribute("href", "/knowledge/ks_help");
+    expect(link).toHaveAttribute(
+      "href",
+      "/knowledge/ks_help?search=Archiving+a+register&documentId=doc_archive",
+    );
     const row = link.closest("li")!;
     expect(within(row).getByText("in Help center")).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "Open the page" })).toHaveAttribute(
@@ -340,6 +358,36 @@ describe("Questions it couldn't answer", () => {
     );
   });
 
+  it("reuses the uploaded file when the answer is retried", async () => {
+    let answerCount = 0;
+    const fetchMock = mockApi((url) => {
+      if (!url.includes("/answer")) return null;
+      answerCount++;
+      return answerCount === 1
+        ? { status: 500, body: { isSuccess: false } }
+        : { status: 200, body: { isSuccess: true, docGapCluster: ANSWERED_CLUSTER } };
+    });
+    renderPage("/knowledge");
+
+    const row = (await screen.findByText(OPEN_CLUSTER.label)).closest("li")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Add a document" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a document" });
+    const file = new File(["# Certificates"], "certificates.md", { type: "text/markdown" });
+    await userEvent.upload(await within(dialog).findByLabelText("File"), file);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark answered" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "The group wasn't closed. Nothing changed, try again.",
+      ),
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark answered" }));
+    await waitFor(() => expect(calls(fetchMock, "POST", "/gap_1/answer")).toHaveLength(2));
+    expect(calls(fetchMock, "POST", "/ks_up/documents")).toHaveLength(1);
+    const [, retryInit] = calls(fetchMock, "POST", "/gap_1/answer")[1]!;
+    expect(JSON.parse(String(retryInit?.body))).toEqual({ documentPublicId: "doc_new" });
+  });
+
   it("answers a group with a document picked from a source", async () => {
     const fetchMock = mockApi();
     renderPage("/knowledge");
@@ -349,6 +397,12 @@ describe("Questions it couldn't answer", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add a document" });
     await userEvent.click(within(dialog).getByRole("radio", { name: "Pick a document" }));
     await userEvent.type(within(dialog).getByLabelText("Title"), "insurance");
+    // DEV_NOTE: Typing is debounced: one search request for the whole word, none per letter
+    const searches = () =>
+      calls(fetchMock, "GET", "/ks_help/documents?")
+        .map(([url]) => new URL(String(url), "http://x").searchParams.get("search"))
+        .filter((search) => search !== null);
+    await waitFor(() => expect(searches()).toEqual(["insurance"]));
     await userEvent.click(
       await within(dialog).findByRole("radio", { name: "Insurance certificates.pdf" }),
     );
@@ -357,33 +411,44 @@ describe("Questions it couldn't answer", () => {
     await waitFor(() => expect(calls(fetchMock, "POST", "/gap_1/answer")).toHaveLength(1));
     const [, answerInit] = calls(fetchMock, "POST", "/gap_1/answer")[0]!;
     expect(JSON.parse(String(answerInit?.body))).toEqual({ documentPublicId: "doc_cert" });
-    expect(
-      calls(fetchMock, "GET", "/ks_help/documents?").some(([url]) =>
-        String(url).includes("search=insurance"),
-      ),
-    ).toBe(true);
+
     expect(calls(fetchMock, "POST", "/documents")).toHaveLength(0);
   });
 
-  it("offers an upload source when there is none, and says a closed group changed nothing", async () => {
-    mockApi((url, init) => {
-      if (url.includes("/answer")) {
-        return { status: 409, body: { isSuccess: false, failure: "NotOpen" } };
-      }
-      if ((init?.method ?? "GET") === "GET" && url.includes("/knowledge-sources?")) {
-        return { status: 200, body: { isSuccess: true, knowledgeSources: [HELP_CENTER] } };
-      }
-      return null;
-    });
+  it("offers an upload source when there is none", async () => {
+    mockApi((url, init) =>
+      (init?.method ?? "GET") === "GET" && url.includes("/knowledge-sources?")
+        ? { status: 200, body: { isSuccess: true, knowledgeSources: [HELP_CENTER] } }
+        : null,
+    );
     renderPage("/knowledge");
 
     const row = (await screen.findByText(OPEN_CLUSTER.label)).closest("li")!;
     await userEvent.click(within(row).getByRole("button", { name: "Add a document" }));
-    let dialog = await screen.findByRole("dialog", { name: "Add a document" });
+    const answerDialog = await screen.findByRole("dialog", { name: "Add a document" });
     expect(
-      await within(dialog).findByText("Files go into an upload source, and there isn't one yet."),
+      await within(answerDialog).findByText(
+        "Files go into an upload source, and there isn't one yet.",
+      ),
     ).toBeInTheDocument();
+    await userEvent.click(
+      within(answerDialog).getByRole("button", { name: "Add an upload source" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add source" });
+    expect(within(dialog).getByRole("combobox", { name: "Type" })).toHaveTextContent("Upload");
+  });
 
+  it("closes Add a document when the group was already closed, saying nothing changed", async () => {
+    mockApi((url) =>
+      url.includes("/answer")
+        ? { status: 409, body: { isSuccess: false, failure: "NotOpen" } }
+        : null,
+    );
+    renderPage("/knowledge");
+
+    const row = (await screen.findByText(OPEN_CLUSTER.label)).closest("li")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Add a document" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a document" });
     await userEvent.click(within(dialog).getByRole("radio", { name: "Pick a document" }));
     await userEvent.click(
       await within(dialog).findByRole("radio", { name: "Insurance certificates.pdf" }),
@@ -392,11 +457,9 @@ describe("Questions it couldn't answer", () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("This group was already closed. Nothing changed."),
     );
-
-    await userEvent.click(within(dialog).getByRole("radio", { name: "Upload a file" }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add an upload source" }));
-    dialog = await screen.findByRole("dialog", { name: "Add source" });
-    expect(within(dialog).getByRole("combobox", { name: "Type" })).toHaveTextContent("Upload");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add a document" })).toBeNull(),
+    );
   });
 });
 
@@ -420,6 +483,20 @@ describe("Knowledge source page", () => {
       expect(calls(fetchMock, "DELETE", "/ks_up/documents/doc_cert")).toHaveLength(1),
     );
     expect(toast.success).toHaveBeenCalledWith("Document removed.");
+  });
+
+  it("opens filtered to the answering document's title, with its row highlighted", async () => {
+    const fetchMock = mockApi();
+    renderPage("/knowledge/ks_up?search=Insurance&documentId=doc_cert");
+
+    const documentRow = (await screen.findByText("Insurance certificates.pdf")).closest("tr")!;
+    expect(documentRow).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("searchbox", { name: "Search titles" })).toHaveValue("Insurance");
+    expect(
+      calls(fetchMock, "GET", "/ks_up/documents?").some(([url]) =>
+        String(url).includes("search=Insurance"),
+      ),
+    ).toBe(true);
   });
 
   it("says when the source is gone", async () => {

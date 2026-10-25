@@ -340,9 +340,12 @@ export interface DashboardDocGapClustersProps {
   onAddUploadSource: () => void;
 }
 
+// DEV_NOTE: isDismissing = this row's Dismiss is running (the list holds the one mutation)
 export interface DashboardDocGapClusterRowProps {
   cluster: DocGapClusterListItem;
+  isDismissing: boolean;
   onAddDocument: (cluster: DocGapClusterListItem) => void;
+  onDismiss: (cluster: DocGapClusterListItem) => void;
 }
 
 // DEV_NOTE: "Add a document" for one group: upload a file or pick a document, then the group is answered by it (null =
@@ -359,15 +362,18 @@ export interface DashboardKnowledgeSourcePageProps {
   search: KnowledgeSourcePageSearch;
 }
 
+// DEV_NOTE: The source's documents: page and title filter from the URL (onSearch keeps the rest of it); documentId =
+// the row to highlight
 export interface DashboardKnowledgeDocumentsProps {
   source: KnowledgeSourceWithStatus;
-  page: number;
-  onPage: (page: number) => void;
+  search: KnowledgeSourcePageSearch;
+  onSearch: (next: KnowledgeSourcePageSearch) => void;
 }
 
 export interface DashboardKnowledgeDocumentRowProps {
   source: KnowledgeSourceWithStatus;
   document: KnowledgeDocumentWithStatus;
+  isHighlighted: boolean;
 }
 
 // DEV_NOTE: How "Add a document" brings the document: a new upload, or one picked from a source
@@ -376,7 +382,15 @@ export enum DashboardDocGapAnswerModeEnum {
   Pick = "pick",
 }
 
-// DEV_NOTE: The picker's matching documents as a radio list (selectedId "" = none yet)
+// DEV_NOTE: The file "Add a document" already uploaded (and the document it became), reused when the answer is retried
+export interface DashboardUploadedAnswerDocument {
+  file: File;
+  sourcePublicId: string;
+  documentPublicId: string;
+}
+
+// DEV_NOTE: The picker's matching documents as a radio list (selectedId "" = none yet). The query asks for one more
+// than it shows, so hasMore says whether to ask for a longer title.
 export interface DashboardDocumentChoicesProps {
   response: GetKnowledgeDocumentsApiResponse | undefined;
   isPending: boolean;

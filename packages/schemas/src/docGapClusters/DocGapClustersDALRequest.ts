@@ -22,8 +22,8 @@ export type GetDocGapSampleQuestionsDALRequest = Pick<DocGapCluster, "companyId"
   perCluster: number;
 };
 
-// DEV_NOTE: Open → Answered with the document that answers it; the DAL matches status Open and checks the document
-// exists in the company (no DB foreign keys)
+// DEV_NOTE: Open → Answered with the document that answers it; the DAL matches status Open. The Repo resolves the
+// document in the company and locks it first (no DB foreign keys), so the DAL doesn't check it again.
 export type AnswerDocGapClusterDALRequest = Pick<DocGapCluster, "companyId" | "id"> & {
   answeredByDocumentId: string;
 };

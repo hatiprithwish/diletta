@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import {
   admins,
@@ -361,6 +361,19 @@ describe("Knowledge page sources", () => {
     ]);
   });
 
+  it("lists only the sources in one state when asked (the failed-sync banners)", async () => {
+    const failed = await call<Schemas.GetKnowledgeSourcesApiResponse>(
+      "GET",
+      `/dashboard/knowledge-sources?status=${Schemas.KnowledgeSourceStatusIntEnum.Failed}`,
+      { as: adminA },
+    );
+    expect(failed.status).toBe(200);
+    expect(failed.body.knowledgeSources?.map((source) => source.publicId)).toEqual([helpCenter]);
+    expect(
+      (await call("GET", "/dashboard/knowledge-sources?status=9", { as: adminA })).status,
+    ).toBe(400);
+  });
+
   it("needs a name to create a source, and renames one", async () => {
     const unnamed = await call("POST", "/dashboard/knowledge-sources", {
       as: adminA,
@@ -520,6 +533,72 @@ describe("/dashboard/doc-gap-clusters", () => {
     expect(await clusterRow(smallCluster)).toEqual({ status: Open, answeredByDocumentId: null });
     // DEV_NOTE: Another document's group stays as it is
     expect((await clusterRow(mediumCluster))?.status).toBe(Answered);
+  });
+
+  // DEV_NOTE: Two connections. A delete of the document is under way (not committed) when Answer runs: Answer must wait
+  // for it (FOR KEY SHARE on the document) and then find nothing, never commit a group pointing at a deleted document
+  it("waits for a delete of the document under way, then answers 404", async () => {
+    const { clusterPublicId, documentId, documentPublicId } = await withOwnerDb(async (ownerDb) => {
+      const [upload] = await ownerDb
+        .select({ id: knowledgeSources.id })
+        .from(knowledgeSources)
+        .where(eq(knowledgeSources.publicId, uploadSource));
+      const document = await createDocument(ownerDb, {
+        companyId: companyA,
+        knowledgeSourceId: upload!.id,
+        title: "Race document.pdf",
+        sourceUrl: null,
+      });
+      const [group] = await ownerDb
+        .insert(docGapClusters)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          label: "Race group",
+          centroid: vector(),
+          questionCount: 1,
+        })
+        .returning({ publicId: docGapClusters.publicId });
+      return {
+        clusterPublicId: group!.publicId,
+        documentId: document.id,
+        documentPublicId: document.publicId,
+      };
+    });
+
+    const deleter = new Client({ connectionString: ownerDatabaseUrl });
+    const observer = new Client({ connectionString: ownerDatabaseUrl });
+    await deleter.connect();
+    await observer.connect();
+    try {
+      await deleter.query("BEGIN");
+      const deleterPid = (
+        (await deleter.query("SELECT pg_backend_pid() AS pid")).rows[0] as {
+          pid: number;
+        }
+      ).pid;
+      await deleter.query("DELETE FROM knowledge_documents WHERE id = $1", [documentId]);
+      const answered = answer(clusterPublicId, documentPublicId);
+      // DEV_NOTE: Answer must end up blocked by the uncommitted delete (its FOR KEY SHARE read). Without the lock it
+      // would read the still-committed document, answer the group and never wait.
+      let isBlocked = false;
+      for (let attempt = 0; attempt < 100 && !isBlocked; attempt++) {
+        const blocked = await observer.query(
+          "SELECT count(*)::int AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+          [deleterPid],
+        );
+        isBlocked = (blocked.rows[0] as { count: number }).count > 0;
+        if (!isBlocked) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(isBlocked).toBe(true);
+      await deleter.query("COMMIT");
+      expect((await answered).status).toBe(404);
+    } finally {
+      await deleter.query("ROLLBACK").catch(() => undefined);
+      await deleter.end();
+      await observer.end();
+    }
+    expect(await clusterRow(clusterPublicId)).toEqual({ status: Open, answeredByDocumentId: null });
   });
 
   it("reopens the groups of every document of a deleted source", async () => {

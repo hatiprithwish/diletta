@@ -22,8 +22,12 @@ export type GetKnowledgeSourceIdsDALRequest = Pick<KnowledgeSource, "companyId">
 
 export type GetKnowledgeSourcesCountDALRequest = Pick<KnowledgeSource, "companyId">;
 
+// DEV_NOTE: status null = every state
 export type GetKnowledgeSourcesDALRequest = GetKnowledgeSourcesCountDALRequest &
-  PageDALRequest & { sortColumn: KnowledgeSourceSortColumn };
+  PageDALRequest & {
+    sortColumn: KnowledgeSourceSortColumn;
+    status: KnowledgeSource["status"] | null;
+  };
 
 // DEV_NOTE: Admin-editable fields; a null param is left as it is. updatedAt is set by the DAL.
 export type UpdateKnowledgeSourceDALRequest = Pick<KnowledgeSource, "publicId" | "companyId"> &

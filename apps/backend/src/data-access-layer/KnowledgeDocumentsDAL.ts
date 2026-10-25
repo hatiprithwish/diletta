@@ -364,7 +364,8 @@ export default class KnowledgeDocumentsDAL {
   }
 
   // DEV_NOTE: One document by its public id in any source of the company (the document that answers a gap cluster,
-  // M4-7)
+  // M4-7). isForKeyShare holds the row until the transaction ends: a delete of it waits for the commit, and a delete
+  // already under way makes this wait, then find nothing.
   async getCompanyKnowledgeDocument(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindCompanyKnowledgeDocumentDALRequest,
@@ -376,11 +377,12 @@ export default class KnowledgeDocumentsDAL {
         eq(knowledgeDocuments.publicId, params.publicId),
         eq(knowledgeDocuments.companyId, params.companyId),
       ];
-      const [knowledgeDocument] = await tx
+      const query = tx
         .select()
         .from(knowledgeDocuments)
         .where(and(...conditions))
         .limit(1);
+      const [knowledgeDocument] = params.isForKeyShare ? await query.for("key share") : await query;
 
       if (!knowledgeDocument) {
         const message = "Knowledge document not found";
