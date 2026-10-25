@@ -15,6 +15,8 @@ export enum LogCategory {
   Conversation = "Conversation",
   Budget = "Budget",
   Knowledge = "Knowledge",
+  // DEV_NOTE: The R2 side of the files registry (FileStorageProvider), shared by knowledge documents and eval transcripts
+  Files = "Files",
   Feedback = "Feedback",
   Action = "Action",
   Rollup = "Rollup",

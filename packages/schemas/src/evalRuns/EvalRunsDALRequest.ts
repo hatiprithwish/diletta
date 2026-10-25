@@ -21,9 +21,14 @@ export type FindLatestEvalRunDALRequest = Pick<EvalRun, "companyId" | "chatbotCo
 // DEV_NOTE: The safety cases of a page of runs, read in one query (the Repo tallies them against each run's k)
 export type GetEvalRunSafetyCasesDALRequest = Pick<EvalRun, "companyId"> & { evalRunIds: string[] };
 
-// DEV_NOTE: One run's cases, grouped from its results; k decides whether a case passed
+// DEV_NOTE: One run's cases, grouped from its results. k and isRunUnderway place each case for the Result sort (failed,
+// still running, passed), the same three states as evalCaseRunResult.
 export type GetEvalRunCasesDALRequest = Pick<EvalRun, "companyId" | "k"> &
-  PageDALRequest & { evalRunId: string; sortColumn: EvalRunCaseSortColumn };
+  PageDALRequest & {
+    evalRunId: string;
+    isRunUnderway: boolean;
+    sortColumn: EvalRunCaseSortColumn;
+  };
 
 export type CountEvalRunCasesDALRequest = Pick<EvalRun, "companyId"> & { evalRunId: string };
 

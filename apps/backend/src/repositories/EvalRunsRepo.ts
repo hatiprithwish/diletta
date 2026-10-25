@@ -312,6 +312,7 @@ export default class EvalRunsRepo {
           companyId,
           evalRunId: run.id,
           k: run.k,
+          isRunUnderway: Schemas.isEvalRunUnderway(run.status),
           pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
           pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
           sortColumn: params.sortColumn ?? Schemas.EvalRunCaseSortColumn.Result,
@@ -337,7 +338,12 @@ export default class EvalRunsRepo {
             },
             attemptCount: row.attemptCount,
             passedAttemptCount: row.passedAttemptCount,
-            hasPassed: Schemas.hasEvalCasePassed(row.passedAttemptCount, run.k),
+            hasPassed: Schemas.evalCaseRunResult({
+              passedAttemptCount: row.passedAttemptCount,
+              attemptCount: row.attemptCount,
+              k: run.k,
+              runStatus: run.status,
+            }),
           })),
           totalRecords: counted.totalRecords ?? 0,
         };
@@ -376,7 +382,6 @@ export default class EvalRunsRepo {
         }
         const rows = listed.attempts;
         const [first] = rows;
-        if (!first) return { isSuccess: false, message: "No attempts", isNotFound: true };
         const passedAttemptCount = rows.filter((row) => row.hasPassed).length;
 
         return {
@@ -391,7 +396,12 @@ export default class EvalRunsRepo {
             },
             attemptCount: rows.length,
             passedAttemptCount,
-            hasPassed: Schemas.hasEvalCasePassed(passedAttemptCount, run.k),
+            hasPassed: Schemas.evalCaseRunResult({
+              passedAttemptCount,
+              attemptCount: rows.length,
+              k: run.k,
+              runStatus: run.status,
+            }),
           },
           k: run.k,
           attempts: rows.map((row) => EvalRunsProvider.attempt(row)),
@@ -448,10 +458,15 @@ export default class EvalRunsRepo {
         failure: Schemas.EvalTranscriptFailureEnum.Unreadable,
       };
     };
-    // DEV_NOTE: The registry's size is checked before the bytes are fetched, and parseEvalTranscript checks the bytes
+    // DEV_NOTE: The registry's size is checked first, then the object's own size before its body is read (the row may be
+    // wrong), and parseEvalTranscript checks the bytes
     if (located.sizeBytes > Schemas.EVAL_TRANSCRIPT_MAX_BYTES) return unreadable("too large");
 
-    const object = await FileStorageProvider.getObject(this.env, { key: located.key });
+    const object = await FileStorageProvider.getObject(this.env, {
+      key: located.key,
+      maxBytes: Schemas.EVAL_TRANSCRIPT_MAX_BYTES,
+    });
+    if (object.isTooLarge) return unreadable("too large");
     if (!object.isSuccess || !object.bytes) {
       return { isSuccess: false, message: object.message, isNotFound: object.isNotFound };
     }

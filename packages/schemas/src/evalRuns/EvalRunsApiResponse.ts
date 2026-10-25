@@ -67,7 +67,7 @@ export interface GetEvalRunsSummaryApiResponse extends ApiResponse {
 }
 
 // DEV_NOTE: One case of a run: how many of its attempts ran and passed. isPlatform = one of the platform's own cases
-// (read-only for a company). hasPassed = every one of the run's k attempts passed.
+// (read-only for a company). hasPassed = evalCaseRunResult: null while the run is still grading it.
 export interface EvalRunCaseItem {
   evalCase: {
     publicId: string;
@@ -77,7 +77,7 @@ export interface EvalRunCaseItem {
   };
   attemptCount: number;
   passedAttemptCount: number;
-  hasPassed: boolean;
+  hasPassed: boolean | null;
 }
 
 export interface GetEvalRunCasesApiResponse extends ApiResponse {

@@ -4,7 +4,14 @@ import { Check, DotsThree, FileText, Plus, X } from "@phosphor-icons/react";
 import * as Schemas from "@app/schemas";
 import { Button } from "@app/ui/components/button";
 import { Card } from "@app/ui/components/card";
-import { Dialog, DialogContent, DialogTitle } from "@app/ui/components/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@app/ui/components/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -92,6 +99,26 @@ function runResult(evalRun: RunResult): { label: string; tone: Schemas.Dashboard
 function RunResultChip({ evalRun }: Schemas.DashboardTestRunResultProps) {
   const { label, tone } = runResult(evalRun);
   return <StatusChip label={label} tone={tone} />;
+}
+
+// DEV_NOTE: A case's result in a run; null = the run is still grading it (never shown as failed)
+function CaseResultChip({ hasPassed }: Schemas.DashboardTestCaseResultProps) {
+  if (hasPassed === null) return <StatusChip label="Running" tone={Tone.Brand} />;
+  return hasPassed ? (
+    <StatusChip label="Passed" tone={Tone.Success} />
+  ) : (
+    <StatusChip label="Failed" tone={Tone.Destructive} />
+  );
+}
+
+// DEV_NOTE: The case card's line under its name: "failed 1 of 3 attempts", "passed all 3 attempts", or while the run is
+// still grading it "running, 1 of 3 attempts passed so far"
+function caseResultText(runCase: Schemas.EvalRunCaseItem, k: number): string {
+  if (runCase.hasPassed === null) {
+    return `running, ${runCase.passedAttemptCount} of ${Utilities.plural(k, "attempt")} passed so far`;
+  }
+  if (runCase.hasPassed) return `passed all ${Utilities.plural(k, "attempt")}`;
+  return `failed ${runCase.attemptCount - runCase.passedAttemptCount} of ${Utilities.plural(runCase.attemptCount, "attempt")}`;
 }
 
 function configText(config: Schemas.EvalRunListItem["config"]): string {
@@ -249,7 +276,7 @@ export function TestsPage({ search }: Schemas.DashboardTestsPageProps) {
         <TestCases page={page} onPage={onPage} />
       )}
 
-      <TestCaseDialog open={isCreating} evalCase={null} onClose={() => setIsCreating(false)} />
+      <NewTestCaseDialog open={isCreating} onClose={() => setIsCreating(false)} />
     </div>
   );
 }
@@ -446,7 +473,7 @@ function TestCases({ page, onPage }: Schemas.DashboardTestCasesProps) {
 }
 
 // DEV_NOTE: One case: name with its chips (safety, the platform's own, off), its chatbot (every chatbot for a platform
-// case), its newest result linked to that run, and for the company's own cases Edit / Turn off / Turn on
+// case), its newest result linked to its attempts in that run, and for the company's own cases Edit / Turn off / Turn on
 function TestCaseRow({ evalCase }: Schemas.DashboardTestCaseRowProps) {
   const update = useUpdateTestCase(evalCase.publicId);
   const [isEditing, setIsEditing] = useState(false);
@@ -477,12 +504,10 @@ function TestCaseRow({ evalCase }: Schemas.DashboardTestCaseRowProps) {
           <Link
             to="/tests/$id"
             params={{ id: latestResult.evalRunPublicId }}
+            search={{ caseId: evalCase.publicId }}
             className="inline-flex items-center gap-2 text-subtle-foreground hover:text-foreground"
           >
-            <StatusChip
-              label={latestResult.hasPassed ? "Passed" : "Failed"}
-              tone={latestResult.hasPassed ? Tone.Success : Tone.Destructive}
-            />
+            <CaseResultChip hasPassed={latestResult.hasPassed} />
             <span className="text-caption">{Utilities.formatWhen(latestResult.createdAt)}</span>
           </Link>
         ) : (
@@ -523,65 +548,108 @@ function TestCaseRow({ evalCase }: Schemas.DashboardTestCaseRowProps) {
   );
 }
 
-// DEV_NOTE: Edit loads the case's conversation and rubric first; a shape the page can't edit says so
-function TestCaseEditDialog({ publicId, onClose }: Schemas.DashboardTestCaseEditDialogProps) {
-  const query = useTestCase(publicId);
-  const evalCase = query.data?.evalCase;
-  if (evalCase) return <TestCaseDialog open evalCase={evalCase} onClose={onClose} />;
+const CASE_FORM_DESCRIPTION =
+  "Write the conversation up to the question to test, and what a good reply does. Tests run against your staging environment.";
+
+// DEV_NOTE: New case, for the default chatbot; the form mounts fresh each time the dialog opens
+function NewTestCaseDialog({ open, onClose }: Schemas.DashboardNewTestCaseDialogProps) {
+  const create = useCreateTestCase();
+  const save = async (value: Schemas.EvalCaseDraft) => {
+    await create.mutateAsync(value);
+    onClose();
+  };
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogTitle>Edit case</DialogTitle>
-        {query.isPending ? (
-          <Skeleton className="h-48 rounded-lg" aria-label="Loading" />
-        ) : (
-          <PageError title="The case didn't load" onRetry={() => void query.refetch()} />
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        {open && (
+          <EvalCaseForm
+            defaultValues={EMPTY_CASE}
+            canEditMessages
+            title="New case"
+            description={CASE_FORM_DESCRIPTION}
+            submitLabel="Save case"
+            onSubmit={save}
+            onCancel={onClose}
+          />
         )}
       </DialogContent>
     </Dialog>
   );
 }
 
-// DEV_NOTE: New case (evalCase null: the default chatbot's) or Edit (the conversation can grow or shrink)
-function TestCaseDialog({ open, evalCase, onClose }: Schemas.DashboardTestCaseDialogProps) {
-  const create = useCreateTestCase();
-  const update = useUpdateTestCase(evalCase?.publicId ?? "");
-  const body = evalCase?.body ?? null;
-
-  const save = async (value: Schemas.EvalCaseDraft) => {
-    if (evalCase) {
-      await update.mutateAsync(value);
-    } else {
-      await create.mutateAsync(value);
-    }
-    onClose();
-  };
-
+// DEV_NOTE: Edit loads the case's conversation and rubric first
+function TestCaseEditDialog({ publicId, onClose }: Schemas.DashboardTestCaseEditDialogProps) {
+  const query = useTestCase(publicId);
+  const evalCase = query.data?.evalCase;
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-        {evalCase && body === null ? (
-          <div className="flex flex-col gap-3">
-            <DialogTitle>Edit case</DialogTitle>
-            <p className="text-body text-muted-foreground">
-              This case's conversation can't be edited here. You can still turn it on or off.
-            </p>
-          </div>
+        {evalCase ? (
+          <TestCaseEditForm evalCase={evalCase} onClose={onClose} />
         ) : (
-          open && (
-            <EvalCaseForm
-              defaultValues={evalCase && body ? { name: evalCase.name, ...body } : EMPTY_CASE}
-              canEditMessages
-              title={evalCase ? "Edit case" : "New case"}
-              description="Write the conversation up to the question to test, and what a good reply does. Tests run against your staging environment."
-              submitLabel="Save case"
-              onSubmit={save}
-              onCancel={onClose}
-            />
-          )
+          <>
+            <DialogTitle>Edit case</DialogTitle>
+            {query.isPending ? (
+              <Skeleton className="h-48 rounded-lg" aria-label="Loading" />
+            ) : (
+              <PageError title="The case didn't load" onRetry={() => void query.refetch()} />
+            )}
+          </>
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// DEV_NOTE: The edit form (the conversation can grow or shrink); a case stored in a shape this page can't edit offers
+// only Turn off / Turn on
+function TestCaseEditForm({ evalCase, onClose }: Schemas.DashboardTestCaseEditFormProps) {
+  const update = useUpdateTestCase(evalCase.publicId);
+  const { body } = evalCase;
+
+  if (body === null) {
+    return (
+      <div className="flex flex-col gap-5">
+        <DialogHeader>
+          <DialogTitle>Edit case</DialogTitle>
+          <DialogDescription>
+            This case's conversation can't be edited here. You can still turn it on or off.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          <Button
+            disabled={update.isPending}
+            onClick={() =>
+              update
+                .mutateAsync({ isActive: !evalCase.isActive })
+                .then(onClose)
+                .catch(() => undefined)
+            }
+          >
+            {evalCase.isActive ? "Turn off" : "Turn on"}
+          </Button>
+        </DialogFooter>
+      </div>
+    );
+  }
+
+  const save = async (value: Schemas.EvalCaseDraft) => {
+    await update.mutateAsync(value);
+    onClose();
+  };
+  return (
+    <EvalCaseForm
+      defaultValues={{ name: evalCase.name, ...body }}
+      canEditMessages
+      title="Edit case"
+      description={CASE_FORM_DESCRIPTION}
+      submitLabel="Save case"
+      onSubmit={save}
+      onCancel={onClose}
+    />
   );
 }
 
@@ -742,10 +810,7 @@ function TestRunCaseRow({
           Passed {runCase.passedAttemptCount} of {Utilities.plural(runCase.attemptCount, "attempt")}
         </p>
       </div>
-      <StatusChip
-        label={runCase.hasPassed ? "Passed" : "Failed"}
-        tone={runCase.hasPassed ? Tone.Success : Tone.Destructive}
-      />
+      <CaseResultChip hasPassed={runCase.hasPassed} />
     </li>
   );
 }
@@ -801,30 +866,23 @@ function TestRunCaseCard({
         <>
           <div className="flex flex-col items-start gap-1.5 px-[22px] pt-5 pr-14 pb-4">
             <div className="flex flex-wrap gap-2">
-              <StatusChip
-                label={runCase.hasPassed ? "Passed" : "Failed"}
-                tone={runCase.hasPassed ? Tone.Success : Tone.Destructive}
-              />
+              <CaseResultChip hasPassed={runCase.hasPassed} />
               {runCase.evalCase.isSafety && <StatusChip label="Safety" tone={Tone.Neutral} />}
             </div>
             <h2 className="text-section break-words text-foreground">{runCase.evalCase.name}</h2>
             <p className="text-caption text-muted-foreground">
               {evalRun ? `${configText(evalRun.config)}, ` : ""}
-              {runCase.hasPassed ? "passed" : "failed"}{" "}
-              {runCase.hasPassed
-                ? `all ${Utilities.plural(query.data?.k ?? runCase.attemptCount, "attempt")}`
-                : `${runCase.attemptCount - runCase.passedAttemptCount} of ${Utilities.plural(runCase.attemptCount, "attempt")}`}
+              {caseResultText(runCase, query.data?.k ?? runCase.attemptCount)}
             </p>
           </div>
           {attempts.map((attempt) => (
             <TestAttempt
               key={attempt.attempt}
-              runPublicId={runPublicId}
               attempt={attempt}
               onViewTranscript={setTranscriptId}
             />
           ))}
-          {runCase.evalCase.isSafety && !runCase.hasPassed && (
+          {runCase.evalCase.isSafety && runCase.hasPassed === false && (
             <p className="mx-[22px] mb-5 rounded-lg bg-destructive-soft px-3.5 py-3 text-body text-foreground">
               A failed safety case blocks publishing, even above the pass threshold.
             </p>
@@ -841,7 +899,7 @@ function TestRunCaseCard({
 }
 
 function TestAttempt({ attempt, onViewTranscript }: Schemas.DashboardTestAttemptProps) {
-  const { grader } = attempt;
+  const { grader, transcriptFilePublicId } = attempt;
   const checkKeys = contentKeys(grader?.checks ?? [], (check) => `${check.kind}:${check.label}`);
   return (
     <section
@@ -883,11 +941,11 @@ function TestAttempt({ attempt, onViewTranscript }: Schemas.DashboardTestAttempt
       {grader?.error && (
         <p className="text-body break-words text-destructive">Grading stopped: {grader.error}</p>
       )}
-      {attempt.transcriptFilePublicId && (
+      {transcriptFilePublicId && (
         <Button
           variant="outline"
           className="self-start"
-          onClick={() => onViewTranscript(attempt.transcriptFilePublicId!)}
+          onClick={() => onViewTranscript(transcriptFilePublicId)}
         >
           <FileText aria-hidden />
           View transcript

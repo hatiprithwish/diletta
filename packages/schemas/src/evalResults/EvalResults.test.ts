@@ -5,7 +5,7 @@ import {
   toEvalCaseV1,
   type EvalCaseBody,
 } from "../evalCases";
-import { hasEvalCasePassed } from "../evalRuns";
+import { EvalRunStatusIntEnum, evalCaseRunResult } from "../evalRuns";
 import { ToolCallStatusIntEnum } from "../toolCalls";
 import {
   EVAL_TRANSCRIPT_MAX_BYTES,
@@ -116,10 +116,34 @@ describe("readEvalCaseBody", () => {
   });
 });
 
-describe("hasEvalCasePassed", () => {
+describe("evalCaseRunResult", () => {
+  const { Queued, Running, Done, Failed } = EvalRunStatusIntEnum;
+  const result = (
+    passedAttemptCount: number,
+    attemptCount: number,
+    runStatus: EvalRunStatusIntEnum,
+  ) => evalCaseRunResult({ passedAttemptCount, attemptCount, k: 3, runStatus });
+
   it("passes only when every one of k attempts passed", () => {
-    expect(hasEvalCasePassed(3, 3)).toBe(true);
-    expect(hasEvalCasePassed(2, 3)).toBe(false);
-    expect(hasEvalCasePassed(0, 0)).toBe(false);
+    expect(result(3, 3, Done)).toBe(true);
+    expect(result(3, 3, Running)).toBe(true);
+    expect(
+      evalCaseRunResult({ passedAttemptCount: 0, attemptCount: 0, k: 0, runStatus: Done }),
+    ).toBe(false);
+  });
+
+  it("fails as soon as an attempt failed, even mid-run", () => {
+    expect(result(2, 3, Done)).toBe(false);
+    expect(result(0, 1, Running)).toBe(false);
+  });
+
+  it("is still running while the run is under way and nothing failed", () => {
+    expect(result(1, 1, Running)).toBeNull();
+    expect(result(0, 0, Queued)).toBeNull();
+  });
+
+  it("fails a case left short when the run ended", () => {
+    expect(result(1, 1, Done)).toBe(false);
+    expect(result(1, 1, Failed)).toBe(false);
   });
 });

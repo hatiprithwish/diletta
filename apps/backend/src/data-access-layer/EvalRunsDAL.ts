@@ -240,7 +240,7 @@ export default class EvalRunsDAL {
     return response;
   }
 
-  // DEV_NOTE: Every safety case of these runs with how many of its attempts passed, in one grouped read
+  // DEV_NOTE: Every safety case of these runs with how many of its attempts ran and passed, in one grouped read
   async getEvalRunSafetyCases(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetEvalRunSafetyCasesDALRequest,
@@ -263,6 +263,7 @@ export default class EvalRunsDAL {
       const selected = await tx
         .select({
           evalRunId: evalResults.evalRunId,
+          attemptCount: sql<number>`count(*)`.mapWith(Number),
           passedAttemptCount: this.passedAttemptCount(),
         })
         .from(evalResults)
@@ -288,8 +289,9 @@ export default class EvalRunsDAL {
     return response;
   }
 
-  // DEV_NOTE: One run's cases, grouped from its results. Result: failed first (fewer than k attempts passed), then
-  // safety cases, then by name; Name: by name. Case id breaks ties so pages never overlap.
+  // DEV_NOTE: One run's cases, grouped from its results. Result: failed first, then still running, then passed (the
+  // three states of Schemas.evalCaseRunResult), safety cases first within each, then by name; Name: by name. Case id
+  // breaks ties so pages never overlap.
   async getEvalRunCases(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetEvalRunCasesDALRequest,
@@ -303,13 +305,15 @@ export default class EvalRunsDAL {
       ];
       const passedAttemptCount = this.passedAttemptCount();
       const nameOrder = params.sortDirection === Schemas.SortDirection.Desc ? desc : asc;
+      // DEV_NOTE: 0 failed (an attempt failed, or the run ended short of k passes), 1 still running, 2 passed
+      const resultOrder = sql`case
+        when count(*) filter (where ${evalResults.hasPassed}) >= ${params.k} then 2
+        when count(*) > count(*) filter (where ${evalResults.hasPassed}) or not ${params.isRunUnderway}::boolean then 0
+        else 1
+      end`;
       const orderBy =
         params.sortColumn === Schemas.EvalRunCaseSortColumn.Result
-          ? [
-              sql`count(*) filter (where ${evalResults.hasPassed}) >= ${params.k}`,
-              desc(evalCases.isSafety),
-              asc(evalCases.name),
-            ]
+          ? [resultOrder, desc(evalCases.isSafety), asc(evalCases.name)]
           : [nameOrder(evalCases.name)];
       const offset = (params.pageNo - 1) * params.pageSize;
 
@@ -426,7 +430,8 @@ export default class EvalRunsDAL {
         .where(and(...conditions))
         .orderBy(asc(evalResults.attempt), asc(evalResults.id));
 
-      if (selected.length === 0) {
+      const [first, ...rest] = selected;
+      if (!first) {
         const message = "Eval case has no result in this run";
         AppLogger.warn({
           category: Schemas.LogCategory.DAL,
@@ -441,7 +446,7 @@ export default class EvalRunsDAL {
 
       response.isSuccess = true;
       response.message = "Eval run case attempts fetched successfully";
-      response.attempts = selected;
+      response.attempts = [first, ...rest];
     } catch (error) {
       const message = "Unknown error in fetching eval run case attempts";
       AppLogger.error({

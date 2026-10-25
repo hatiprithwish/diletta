@@ -2,8 +2,8 @@ import type { ApiResponse } from "../common";
 import type { EvalCaseBody, EvalCaseUpdateFailureEnum } from "./EvalCasesCommon";
 
 // DEV_NOTE: One case on the Tests page (M4-8). isPlatform = the platform's own case (read-only, runs against every
-// chatbot; chatbotName null). latestResult = the newest run it was part of: hasPassed = every attempt passed; null =
-// never run.
+// chatbot; chatbotName null). latestResult = the newest run it was part of (the botId chatbot's runs when filtered):
+// hasPassed = evalCaseRunResult, null while that run is still grading it; latestResult null = never run.
 export interface EvalCaseListItem {
   publicId: string;
   name: string;
@@ -13,7 +13,7 @@ export interface EvalCaseListItem {
   chatbotName: string | null;
   latestResult: {
     evalRunPublicId: string;
-    hasPassed: boolean;
+    hasPassed: boolean | null;
     attemptCount: number;
     passedAttemptCount: number;
     createdAt: string;
@@ -22,8 +22,9 @@ export interface EvalCaseListItem {
   updatedAt: string;
 }
 
-// DEV_NOTE: GET /dashboard/eval-cases/:publicId: the list item with its conversation and rubric (body null = a shape
-// the page can't show or edit, readEvalCaseBody)
+// DEV_NOTE: GET /dashboard/eval-cases/:publicId: the list item with its conversation and rubric. body null = a platform
+// case (its prompts and pass criteria gate publishing, so a company never sees them) or a shape the page can't show or
+// edit (readEvalCaseBody).
 export interface EvalCaseDetail extends EvalCaseListItem {
   body: EvalCaseBody | null;
 }

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, max, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { chatbots, evalCases, evalResults, evalRuns } from "@/db/tables";
+import { chatbotConfigs, chatbots, evalCases, evalResults, evalRuns } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -282,8 +282,9 @@ export default class EvalCasesDAL {
     return response;
   }
 
-  // DEV_NOTE: Each case's newest run among this company's results (the highest eval_run_id: ids grow with time) and how
-  // its attempts went in it, with the run's k. A case never run has no entry.
+  // DEV_NOTE: Each case's newest run among this company's results (the highest eval_run_id: ids grow with time), only
+  // runs of chatbotId's configs when set (a platform case runs against every chatbot), and how its attempts went in it,
+  // with the run's k and status (a run still going leaves its unfinished cases undecided). A case never run has no entry.
   async getLatestEvalCaseResults(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetLatestEvalCaseResultsDALRequest,
@@ -298,16 +299,29 @@ export default class EvalCasesDAL {
     }
 
     try {
+      const latestRunJoinConditions = [
+        eq(evalRuns.id, evalResults.evalRunId),
+        eq(evalRuns.companyId, evalResults.companyId),
+      ];
+      const latestConfigJoinConditions = [
+        eq(chatbotConfigs.id, evalRuns.chatbotConfigId),
+        eq(chatbotConfigs.companyId, evalRuns.companyId),
+      ];
       const latestConditions = [
         eq(evalResults.companyId, params.companyId),
         inArray(evalResults.evalCaseId, params.evalCaseIds),
       ];
+      if (params.chatbotId !== null) {
+        latestConditions.push(eq(chatbotConfigs.chatbotId, params.chatbotId));
+      }
       const latest = tx
         .select({
           evalCaseId: evalResults.evalCaseId,
           evalRunId: max(evalResults.evalRunId).as("latest_eval_run_id"),
         })
         .from(evalResults)
+        .innerJoin(evalRuns, and(...latestRunJoinConditions))
+        .innerJoin(chatbotConfigs, and(...latestConfigJoinConditions))
         .where(and(...latestConditions))
         .groupBy(evalResults.evalCaseId)
         .as("latest");
@@ -323,6 +337,7 @@ export default class EvalCasesDAL {
         .select({
           evalCaseId: evalResults.evalCaseId,
           evalRunPublicId: evalRuns.publicId,
+          evalRunStatus: evalRuns.status,
           k: evalRuns.k,
           attemptCount: sql<number>`count(*)`.mapWith(Number),
           passedAttemptCount: sql<number>`count(*) filter (where ${evalResults.hasPassed})`.mapWith(
@@ -334,7 +349,7 @@ export default class EvalCasesDAL {
         .innerJoin(latest, and(...latestJoinConditions))
         .innerJoin(evalRuns, and(...runJoinConditions))
         .where(eq(evalResults.companyId, params.companyId))
-        .groupBy(evalResults.evalCaseId, evalRuns.publicId, evalRuns.k);
+        .groupBy(evalResults.evalCaseId, evalRuns.publicId, evalRuns.status, evalRuns.k);
 
       response.isSuccess = true;
       response.message = "Latest eval case results fetched successfully";
@@ -346,7 +361,11 @@ export default class EvalCasesDAL {
         action: Schemas.LogAction.GetLatestEvalCaseResults,
         message,
         error,
-        metadata: { companyId: params.companyId, caseCount: params.evalCaseIds.length },
+        metadata: {
+          companyId: params.companyId,
+          chatbotId: params.chatbotId,
+          caseCount: params.evalCaseIds.length,
+        },
       });
       response.message = message;
     }

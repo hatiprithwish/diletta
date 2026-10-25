@@ -350,11 +350,21 @@ export interface DashboardTestCaseRowProps {
   evalCase: EvalCaseListItem;
 }
 
-// DEV_NOTE: New case (evalCase null) or Edit of one loaded case; open = the dialog shows
-export interface DashboardTestCaseDialogProps {
+// DEV_NOTE: New case (for the default chatbot); open = the dialog shows
+export interface DashboardNewTestCaseDialogProps {
   open: boolean;
-  evalCase: EvalCaseDetail | null;
   onClose: () => void;
+}
+
+// DEV_NOTE: Edit of one loaded case (its body, or a note and the on / off switch when it can't be edited here)
+export interface DashboardTestCaseEditFormProps {
+  evalCase: EvalCaseDetail;
+  onClose: () => void;
+}
+
+// DEV_NOTE: A case's result in a run: Passed, Failed, or still being graded (null)
+export interface DashboardTestCaseResultProps {
+  hasPassed: boolean | null;
 }
 
 // DEV_NOTE: Edit of one case: its conversation and rubric load first
@@ -392,7 +402,6 @@ export interface DashboardTestRunCaseCardProps {
 }
 
 export interface DashboardTestAttemptProps {
-  runPublicId: string;
   attempt: EvalAttempt;
   onViewTranscript: (filePublicId: string) => void;
 }

@@ -137,6 +137,7 @@ let goodTranscript = "";
 let badTranscript = "";
 let missingTranscript = "";
 let gateTranscript = "";
+let oversizedTranscript = "";
 const r2Keys: string[] = [];
 
 async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Promise<T> {
@@ -336,7 +337,7 @@ beforeAll(async () => {
         evalCase({ companyId: companyB, chatbotId: other!.id, name: "B's case", minute: 5 }),
       ])
       .returning({ id: evalCases.id, publicId: evalCases.publicId });
-    const [fire, off, , platform, otherC] = cases;
+    const [fire, off, salesC, platform, otherC] = cases;
     [fireCase, offCase, salesCase, platformCase, otherCase] = cases.map((row) => row.publicId);
     platformCaseId = platform!.id;
     // DEV_NOTE: A case stored in a shape this page can't edit (as M5-1's v2 will be)
@@ -405,7 +406,7 @@ beforeAll(async () => {
           chatbotConfigId: salesLive!.id,
           trigger: Manual,
           status: Running,
-          k: 1,
+          k: 2,
           hasPassed: null,
           costUsd: "0",
           minute: 30,
@@ -422,7 +423,7 @@ beforeAll(async () => {
         }),
       ])
       .returning({ id: evalRuns.id, publicId: evalRuns.publicId });
-    const [gate, draftR, , otherR] = runs;
+    const [gate, draftR, salesR, otherR] = runs;
     [gateRun, draftRun, salesRun, otherRun] = runs.map((row) => row.publicId);
     await ownerDb
       .update(chatbotConfigs)
@@ -532,6 +533,23 @@ beforeAll(async () => {
         }),
       ])
       .returning({ id: evalResults.id });
+    // DEV_NOTE: The running Sales run has graded only the first of 2 attempts: both its cases are still undecided
+    await ownerDb.insert(evalResults).values([
+      result({
+        evalRunId: salesR!.id,
+        evalCaseId: salesC!.id,
+        attempt: 1,
+        hasPassed: true,
+        minute: 31,
+      }),
+      result({
+        evalRunId: salesR!.id,
+        evalCaseId: platform!.id,
+        attempt: 1,
+        hasPassed: true,
+        minute: 31,
+      }),
+    ]);
     // DEV_NOTE: Transcripts: platform attempt 1 (good), off attempt 1 (not a transcript), platform attempt 2 (no R2
     // object), and gate's fire attempt 1 (a file of another run than the one asked for)
     const transcriptOf = (resultId: string, bytes: Uint8Array) => ({
@@ -554,6 +572,8 @@ beforeAll(async () => {
         transcriptOf(results[8]!.id, badBytes),
         transcriptOf(results[7]!.id, goodBytes),
         transcriptOf(results[0]!.id, goodBytes),
+        // DEV_NOTE: Its row says it is small; its R2 object is over EVAL_TRANSCRIPT_MAX_BYTES
+        transcriptOf(results[9]!.id, goodBytes),
       ])
       .returning({ id: files.id, publicId: files.publicId, ownerId: files.ownerId });
     for (const file of fileRows) {
@@ -562,13 +582,13 @@ beforeAll(async () => {
         .set({ transcriptFileId: file.id })
         .where(eq(evalResults.id, file.ownerId));
     }
-    [goodTranscript, badTranscript, missingTranscript, gateTranscript] = fileRows.map(
-      (row) => row.publicId,
-    );
+    [goodTranscript, badTranscript, missingTranscript, gateTranscript, oversizedTranscript] =
+      fileRows.map((row) => row.publicId);
     for (const [publicId, bytes] of [
       [goodTranscript, goodBytes],
       [badTranscript, badBytes],
       [gateTranscript, goodBytes],
+      [oversizedTranscript, new Uint8Array(Schemas.EVAL_TRANSCRIPT_MAX_BYTES + 1)],
     ] as const) {
       const key = Schemas.fileR2Key(companyAPublicId, publicId);
       r2Keys.push(key);
@@ -724,6 +744,20 @@ describe("GET /dashboard/eval-runs/:publicId and its cases", () => {
     ]);
   });
 
+  it("shows the running run's cases as still being graded, with no safety case counted", async () => {
+    const { body } = await get<Schemas.GetEvalRunCasesApiResponse>(`eval-runs/${salesRun}/cases`);
+    expect(body.cases?.map((row) => [row.evalCase.publicId, row.hasPassed])).toEqual([
+      [platformCase, null],
+      [salesCase, null],
+    ]);
+    const run = await get<Schemas.GetEvalRunApiResponse>(`eval-runs/${salesRun}`);
+    expect(run.body.evalRun?.safety).toEqual({ passedCount: 0, totalCount: 0 });
+    const attempts = await get<Schemas.GetEvalRunCaseApiResponse>(
+      `eval-runs/${salesRun}/cases/${salesCase}`,
+    );
+    expect(attempts.body.runCase?.hasPassed).toBeNull();
+  });
+
   it("reads a case's attempts with their grader output and transcript", async () => {
     const { status, body } = await get<Schemas.GetEvalRunCaseApiResponse>(
       `eval-runs/${draftRun}/cases/${platformCase}`,
@@ -775,6 +809,14 @@ describe("GET /dashboard/eval-runs/:publicId/transcripts/:filePublicId", () => {
     ]);
   });
 
+  it("refuses an object over the cap from its R2 size, whatever its row says", async () => {
+    const oversized = await get<Schemas.GetEvalTranscriptApiResponse>(
+      `eval-runs/${draftRun}/transcripts/${oversizedTranscript}`,
+    );
+    expect(oversized.status).toBe(422);
+    expect(oversized.body.failure).toBe(Schemas.EvalTranscriptFailureEnum.Unreadable);
+  });
+
   it("answers 422 for a file that isn't a transcript, and 404 for a missing object", async () => {
     const bad = await get<Schemas.GetEvalTranscriptApiResponse>(
       `eval-runs/${draftRun}/transcripts/${badTranscript}`,
@@ -823,17 +865,44 @@ describe("GET /dashboard/eval-cases", () => {
 
   it("has no result for a case never run", async () => {
     const { body } = await get<Schemas.GetEvalCasesApiResponse>(
-      `eval-cases?botId=${salesPublicId}&pageSize=100`,
+      `eval-cases?botId=${supportPublicId}&pageSize=100`,
     );
-    expect(body.evalCases?.find((row) => row.publicId === salesCase)?.latestResult).toBeNull();
+    expect(body.evalCases?.find((row) => row.publicId === v2Case)?.latestResult).toBeNull();
   });
 
-  it("reads a case with its conversation and rubric; a platform case too", async () => {
+  it("shows a case the running run is still grading as undecided, not failed", async () => {
+    const { body } = await get<Schemas.GetEvalCasesApiResponse>(
+      `eval-cases?botId=${salesPublicId}&pageSize=100`,
+    );
+    expect(body.evalCases?.find((row) => row.publicId === salesCase)?.latestResult).toMatchObject({
+      evalRunPublicId: salesRun,
+      hasPassed: null,
+      attemptCount: 1,
+      passedAttemptCount: 1,
+    });
+  });
+
+  it("takes a platform case's newest result from the filtered chatbot's runs only", async () => {
+    const support = await get<Schemas.GetEvalCasesApiResponse>(
+      `eval-cases?botId=${supportPublicId}&pageSize=100`,
+    );
+    const sales = await get<Schemas.GetEvalCasesApiResponse>(
+      `eval-cases?botId=${salesPublicId}&pageSize=100`,
+    );
+    const platformOf = (response: typeof support) =>
+      response.body.evalCases?.find((row) => row.publicId === platformCase)?.latestResult;
+    expect(platformOf(support)).toMatchObject({ evalRunPublicId: draftRun, hasPassed: false });
+    expect(platformOf(sales)).toMatchObject({ evalRunPublicId: salesRun, hasPassed: null });
+  });
+
+  it("reads a case with its conversation and rubric; a platform case without them", async () => {
     const own = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${fireCase}`);
     expect(own.status).toBe(200);
     expect(own.body.evalCase?.body).toEqual(FIRE_BODY);
+    // DEV_NOTE: A platform case's prompts and pass criteria gate publishing, so a company never reads them
     const platform = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${platformCase}`);
-    expect(platform.body.evalCase).toMatchObject({ isPlatform: true, body: FIRE_BODY });
+    expect(platform.status).toBe(200);
+    expect(platform.body.evalCase).toMatchObject({ isPlatform: true, body: null });
     const future = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${v2Case}`);
     expect(future.body.evalCase?.body).toBeNull();
     expect((await get(`eval-cases/${otherCase}`)).status).toBe(404);

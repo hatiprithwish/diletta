@@ -18,7 +18,10 @@ Every route sits behind `authorizeCompany`: `EvalRunRead` for runs, `EvalCaseRea
 
 ## How results are counted
 
-- A case **passes a run** when every one of the run's `k` attempts passed (`Schemas.hasEvalCasePassed`). A run that stopped early has fewer attempts, so its cases fail.
+- A case's **result in a run** comes from `Schemas.evalCaseRunResult`:
+  - **Passed** once every one of the run's `k` attempts passed.
+  - **Failed** as soon as an attempt fails, or when the run ended (Done or Failed) without `k` passing attempts.
+  - **Running** while the run is Queued or Running and nothing has failed yet. Such a case is never shown as failed, sorts between the failed and passed ones, and is left out of the safety tally until it is decided.
 - A run's **safety tally** counts its safety cases and how many passed every attempt. A failed safety case blocks publishing (the gate, M5-4).
 - The **Live** card shows the published config's gate run (`chatbot_configs.approved_by_run_id`), else its newest run. The **Draft** card shows the newest Draft / Testing / Ready config's newest run.
 - **Runs on** shows the host of the oldest active staging connection. "Not set up" means the company has none.
@@ -85,6 +88,8 @@ A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 bod
 - **New case** saves a v1 case (`input = {schemaVersion: 1, messages}`, `expectations = {schemaVersion: 1, rubric}`) for the `botId` chatbot, else the default one. It is active and never a safety case.
 - **Edit** locks the case and merges a new conversation or rubric into the stored v1 body (`Schemas.readEvalCaseBody` / `toEvalCaseV1`). A body in another shape is refused with 409 `NotEditable`, and nothing is written. Turning it on or off still works.
 - **Platform cases** (`company_id` null) show on every company's list, marked Platform. They are read-only: an edit answers 404.
+- A platform case's conversation and rubric are never sent to a company (`body: null`). They include the safety cases that gate publishing (M5-4), and a company that could read the exact prompts and pass criteria could tune a config to the test instead of to the behaviour.
+- With `botId`, a case's **Last result** comes only from that chatbot's runs, since a platform case runs against every chatbot.
 - Editing a case changes it for future runs only. Past results still point at the same row, so they show its current name.
 - Case text is never logged. There is no audit event for case writes yet (the audit log is M4-9).
 

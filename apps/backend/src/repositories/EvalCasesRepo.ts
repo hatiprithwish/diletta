@@ -39,7 +39,12 @@ export default class EvalCasesRepo {
       latestResult: latest
         ? {
             evalRunPublicId: latest.evalRunPublicId,
-            hasPassed: Schemas.hasEvalCasePassed(latest.passedAttemptCount, latest.k),
+            hasPassed: Schemas.evalCaseRunResult({
+              passedAttemptCount: latest.passedAttemptCount,
+              attemptCount: latest.attemptCount,
+              k: latest.k,
+              runStatus: latest.evalRunStatus,
+            }),
             attemptCount: latest.attemptCount,
             passedAttemptCount: latest.passedAttemptCount,
             createdAt: latest.createdAt.toISOString(),
@@ -50,15 +55,14 @@ export default class EvalCasesRepo {
     };
   }
 
-  // DEV_NOTE: The newest result of each case, keyed by internal case id
+  // DEV_NOTE: The newest result of each case, keyed by internal case id; chatbotId set = only that chatbot's runs
   private async latestResults(
     tx: Tx,
-    companyId: string,
-    evalCaseIds: string[],
+    params: Schemas.GetLatestEvalCaseResultsDALRequest,
   ): Promise<
     { isSuccess: true; byCase: Map<string, Schemas.LatestEvalCaseResult> } | Schemas.ApiResponse
   > {
-    const latest = await this.evalCasesDal.getLatestEvalCaseResults(tx, { companyId, evalCaseIds });
+    const latest = await this.evalCasesDal.getLatestEvalCaseResults(tx, params);
     if (!latest.isSuccess) return { isSuccess: false, message: latest.message };
     return {
       isSuccess: true,
@@ -100,11 +104,11 @@ export default class EvalCasesRepo {
         const counted = await this.evalCasesDal.getEvalCasesCount(tx, { companyId, chatbotId });
         if (!counted.isSuccess) return { isSuccess: false, message: counted.message };
 
-        const latest = await this.latestResults(
-          tx,
+        const latest = await this.latestResults(tx, {
           companyId,
-          rows.map((row) => row.id),
-        );
+          chatbotId,
+          evalCaseIds: rows.map((row) => row.id),
+        });
         if (!("byCase" in latest)) return latest;
 
         return {
@@ -171,8 +175,8 @@ export default class EvalCasesRepo {
   }
 
   // DEV_NOTE: Edit or turn on / off the company's own case, under its row lock (a platform or another company's case →
-  // 404). A new conversation or rubric is merged into the stored v1 body; a body this page can't read refuses them with
-  // failure NotEditable (409, nothing written), while isActive still changes.
+  // 404). A new conversation or rubric is merged into the stored v1 body; a body this page can't read refuses a new
+  // conversation or rubric with NotEditable (409, nothing in the request is written); an isActive-only edit still works.
   async updateEvalCase(
     params: Schemas.UpdateEvalCaseApiRequest & { companyId: string; publicId: string },
   ): Promise<Schemas.WriteEvalCaseApiResponse> {
@@ -252,21 +256,26 @@ export default class EvalCasesRepo {
     return detail;
   }
 
-  // DEV_NOTE: The detail: the list item, its newest result and its conversation and rubric (null = a shape the page
-  // can't show, readEvalCaseBody)
+  // DEV_NOTE: The detail: the list item, its newest result (any chatbot's run) and its conversation and rubric. A platform
+  // case never shows its body: its prompts and pass criteria gate publishing (M5-4), and a company that could read them
+  // could tune a config to the test. body is also null for a shape the page can't show (readEvalCaseBody).
   private async withDetail(
     tx: Tx,
     companyId: string,
     row: Schemas.DashboardEvalCaseRow,
   ): Promise<Schemas.GetEvalCaseApiResponse> {
-    const latest = await this.latestResults(tx, companyId, [row.id]);
+    const latest = await this.latestResults(tx, {
+      companyId,
+      chatbotId: null,
+      evalCaseIds: [row.id],
+    });
     if (!("byCase" in latest)) return latest;
     return {
       isSuccess: true,
       message: "Eval case fetched successfully",
       evalCase: {
         ...this.toListItem(row, latest.byCase.get(row.id)),
-        body: Schemas.readEvalCaseBody(row.input, row.expectations),
+        body: row.companyId === null ? null : Schemas.readEvalCaseBody(row.input, row.expectations),
       },
     };
   }

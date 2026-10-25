@@ -1,4 +1,5 @@
 import type { ApiResponse, TotalRecordsResponse } from "../common";
+import type { EvalRunStatusIntEnum } from "../evalRuns";
 import type { EvalCase } from "./EvalCasesCommon";
 
 // DAL results carry the raw DB row (internal ids). The Repo maps them to API responses.
@@ -26,6 +27,7 @@ export type EvalCasesCountDALResponse = TotalRecordsResponse;
 export interface LatestEvalCaseResult {
   evalCaseId: string;
   evalRunPublicId: string;
+  evalRunStatus: EvalRunStatusIntEnum;
   k: number;
   attemptCount: number;
   passedAttemptCount: number;

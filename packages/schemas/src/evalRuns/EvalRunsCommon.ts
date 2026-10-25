@@ -80,7 +80,21 @@ export const ZEvalRunCaseSortColumn = z.enum(EvalRunCaseSortColumn);
 export const EVAL_RUNS_PAGE_SIZE = 25;
 export const EVAL_RUN_CASES_PAGE_SIZE = 25;
 
-// DEV_NOTE: A case passes a run when every one of its k attempts passed (pass^k)
-export function hasEvalCasePassed(passedAttemptCount: number, k: number): boolean {
-  return k > 0 && passedAttemptCount >= k;
+// DEV_NOTE: How a case did in a run (pass^k): true once every one of the run's k attempts passed; false as soon as an
+// attempt failed, or when the run ended (Done or Failed) without k passing attempts; null while the run is still going
+// (Queued or Running) and nothing has failed yet, so a case being graded never reads as failed.
+export function evalCaseRunResult(params: {
+  passedAttemptCount: number;
+  attemptCount: number;
+  k: number;
+  runStatus: EvalRunStatusIntEnum;
+}): boolean | null {
+  if (params.k > 0 && params.passedAttemptCount >= params.k) return true;
+  if (params.attemptCount > params.passedAttemptCount) return false;
+  return isEvalRunUnderway(params.runStatus) ? null : false;
+}
+
+// DEV_NOTE: A run still writing results
+export function isEvalRunUnderway(status: EvalRunStatusIntEnum): boolean {
+  return status === EvalRunStatusIntEnum.Queued || status === EvalRunStatusIntEnum.Running;
 }

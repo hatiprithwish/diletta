@@ -23,9 +23,10 @@ export interface DashboardEvalRunsDALResponse extends ApiResponse {
 
 export type EvalRunsCountDALResponse = TotalRecordsResponse;
 
-// DEV_NOTE: One safety case of a run and how many of its attempts passed
+// DEV_NOTE: One safety case of a run: how many of its attempts ran and passed
 export interface EvalRunSafetyCaseRow {
   evalRunId: string;
+  attemptCount: number;
   passedAttemptCount: number;
 }
 
@@ -61,7 +62,7 @@ export interface EvalRunCaseAttemptRow extends Omit<
   createdAt: Date;
 }
 
-// DEV_NOTE: isNotFound when the case has no result in the run
+// DEV_NOTE: isNotFound when the case has no result in the run, so on success there is always a first attempt
 export interface EvalRunCaseAttemptsDALResponse extends ApiResponse {
-  attempts?: EvalRunCaseAttemptRow[];
+  attempts?: [EvalRunCaseAttemptRow, ...EvalRunCaseAttemptRow[]];
 }

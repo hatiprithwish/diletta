@@ -30,24 +30,46 @@ const attemptRow = (
 });
 
 describe("EvalRunsProvider.safetyTallies", () => {
+  const { Done, Running } = Schemas.EvalRunStatusIntEnum;
+
   it("counts a safety case as passed only when all of its run's k attempts passed", () => {
     const tallies = EvalRunsProvider.safetyTallies(
       [
-        { id: "1", k: 3 },
-        { id: "2", k: 1 },
-        { id: "3", k: 3 },
+        { id: "1", k: 3, status: Done },
+        { id: "2", k: 1, status: Done },
+        { id: "3", k: 3, status: Done },
       ],
       [
-        { evalRunId: "1", passedAttemptCount: 3 },
-        { evalRunId: "1", passedAttemptCount: 2 },
-        { evalRunId: "2", passedAttemptCount: 1 },
-        { evalRunId: "9", passedAttemptCount: 1 },
+        { evalRunId: "1", attemptCount: 3, passedAttemptCount: 3 },
+        { evalRunId: "1", attemptCount: 3, passedAttemptCount: 2 },
+        { evalRunId: "2", attemptCount: 1, passedAttemptCount: 1 },
+        { evalRunId: "9", attemptCount: 1, passedAttemptCount: 1 },
       ],
     );
     expect(tallies.get("1")).toEqual({ passedCount: 1, totalCount: 2 });
     expect(tallies.get("2")).toEqual({ passedCount: 1, totalCount: 1 });
     expect(tallies.get("3")).toEqual({ passedCount: 0, totalCount: 0 });
     expect(tallies.has("9")).toBe(false);
+  });
+
+  it("leaves out a case a running run is still grading, but counts one that already failed", () => {
+    const tallies = EvalRunsProvider.safetyTallies(
+      [{ id: "1", k: 3, status: Running }],
+      [
+        { evalRunId: "1", attemptCount: 1, passedAttemptCount: 1 },
+        { evalRunId: "1", attemptCount: 2, passedAttemptCount: 1 },
+        { evalRunId: "1", attemptCount: 3, passedAttemptCount: 3 },
+      ],
+    );
+    expect(tallies.get("1")).toEqual({ passedCount: 1, totalCount: 2 });
+  });
+
+  it("fails a case a finished run left short of k attempts", () => {
+    const tallies = EvalRunsProvider.safetyTallies(
+      [{ id: "1", k: 3, status: Done }],
+      [{ evalRunId: "1", attemptCount: 1, passedAttemptCount: 1 }],
+    );
+    expect(tallies.get("1")).toEqual({ passedCount: 0, totalCount: 1 });
   });
 });
 

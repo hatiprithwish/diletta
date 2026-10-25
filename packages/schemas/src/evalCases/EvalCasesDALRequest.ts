@@ -39,8 +39,13 @@ export type UpdateEvalCaseDALRequest = Pick<EvalCase, "id"> & {
   isActive?: boolean;
 };
 
-// DEV_NOTE: The newest run each of these cases was part of, for the Cases tab
-export type GetLatestEvalCaseResultsDALRequest = { companyId: string; evalCaseIds: string[] };
+// DEV_NOTE: The newest run each of these cases was part of, for the Cases tab. chatbotId set = only runs of that
+// chatbot's configs (a platform case runs against every chatbot); null = any of the company's runs.
+export type GetLatestEvalCaseResultsDALRequest = {
+  companyId: string;
+  chatbotId: string | null;
+  evalCaseIds: string[];
+};
 
 // DEV_NOTE: The active cases that run against one chatbot: its own and the platform's (the summary's counts)
 export type CountActiveEvalCasesDALRequest = { companyId: string; chatbotId: string };

@@ -122,6 +122,16 @@ const OWN_DETAIL: Schemas.EvalCaseDetail = {
   },
 };
 
+// DEV_NOTE: A case stored in a shape the page can't edit, whose newest run is still grading it
+const FUTURE_CASE: Schemas.EvalCaseListItem = {
+  ...OWN_CASE,
+  publicId: "case_future",
+  name: "Future shape",
+  latestResult: { ...OWN_CASE.latestResult!, evalRunPublicId: "run_live", hasPassed: null },
+};
+
+const FUTURE_DETAIL: Schemas.EvalCaseDetail = { ...FUTURE_CASE, body: null };
+
 const RUN_CASES: Schemas.GetEvalRunCasesApiResponse = {
   isSuccess: true,
   cases: [
@@ -271,8 +281,17 @@ function defaultApi(url: string, init?: RequestInit) {
   if (path.endsWith("/eval-cases")) {
     return {
       status: 200,
-      body: { isSuccess: true, evalCases: [OWN_CASE, PLATFORM_CASE], totalRecords: 2 },
+      body: { isSuccess: true, evalCases: [OWN_CASE, PLATFORM_CASE, FUTURE_CASE], totalRecords: 3 },
     };
+  }
+  if (path.endsWith("/eval-cases/case_future")) {
+    if (init?.method === "PATCH") {
+      return {
+        status: 200,
+        body: { isSuccess: true, evalCase: { ...FUTURE_DETAIL, isActive: false } },
+      };
+    }
+    return { status: 200, body: { isSuccess: true, evalCase: FUTURE_DETAIL } };
   }
   if (path.endsWith("/eval-cases/case_own")) {
     if (init?.method === "PATCH") {
@@ -457,6 +476,42 @@ describe("Tests page", () => {
       messages: OWN_DETAIL.body!.messages,
       rubric: "Says quarterly, never every 6 months.",
     });
+  });
+});
+
+describe("Tests page, cases", () => {
+  it("shows a case its newest run is still grading as Running, and links a result to the case", async () => {
+    mockApi(defaultApi);
+    renderPage("/tests?tab=cases");
+    const table = await screen.findByRole("table", { name: "Cases" });
+    const futureRow = within(table).getByText("Future shape").closest("tr")!;
+    expect(within(futureRow).getByText("Running")).toBeInTheDocument();
+    expect(within(futureRow).queryByText("Failed")).not.toBeInTheDocument();
+
+    const ownRow = within(table).getByText(OWN_CASE.name).closest("tr")!;
+    expect(within(ownRow).getByRole("link")).toHaveAttribute(
+      "href",
+      "/tests/run_draft?caseId=case_own",
+    );
+  });
+
+  it("offers Turn off in the dialog of a case it can't edit", async () => {
+    const fetchMock = mockApi(defaultApi);
+    renderPage("/tests?tab=cases");
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Future shape" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit case" });
+    expect(await within(dialog).findByText(/can't be edited here/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Turn off" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit case" })).not.toBeInTheDocument(),
+    );
+    const patch = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(String(patch?.[0])).toContain("/dashboard/eval-cases/case_future");
+    expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toEqual({ isActive: false });
   });
 });
 

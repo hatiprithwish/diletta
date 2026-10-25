@@ -10,6 +10,9 @@ export const QUERY_KEY_ROOTS = {
   tests: ["tests"],
 } as const;
 
+// DEV_NOTE: The Tests page's key segments that another page refreshes (TestsQueries.keys builds its keys from them)
+export const TESTS_KEY_SEGMENTS = { cases: "cases", summary: "summary" } as const;
+
 // DEV_NOTE: The key segment after a root that holds one record's detail (keys.details() on each page)
 const DETAIL_KEY_SEGMENT = "detail";
 
@@ -29,6 +32,10 @@ export function invalidateOpenIssueViews(queryClient: QueryClient) {
 // DEV_NOTE: A test case was added outside the Tests page (Quality's Create test, M4-6): the Tests page's case list and
 // metric strip refetch
 export function invalidateTestCaseViews(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: [...QUERY_KEY_ROOTS.tests, "cases"] });
-  void queryClient.invalidateQueries({ queryKey: [...QUERY_KEY_ROOTS.tests, "summary"] });
+  void queryClient.invalidateQueries({
+    queryKey: [...QUERY_KEY_ROOTS.tests, TESTS_KEY_SEGMENTS.cases],
+  });
+  void queryClient.invalidateQueries({
+    queryKey: [...QUERY_KEY_ROOTS.tests, TESTS_KEY_SEGMENTS.summary],
+  });
 }

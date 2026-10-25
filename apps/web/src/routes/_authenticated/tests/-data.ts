@@ -10,7 +10,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
-import { QUERY_KEY_ROOTS } from "../-invalidation";
+import { QUERY_KEY_ROOTS, TESTS_KEY_SEGMENTS } from "../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -20,7 +20,7 @@ type GetToken = Parameters<typeof apiClient>[1];
 export class TestsQueries {
   static keys = {
     all: () => QUERY_KEY_ROOTS.tests,
-    summary: () => [...TestsQueries.keys.all(), "summary"] as const,
+    summary: () => [...TestsQueries.keys.all(), TESTS_KEY_SEGMENTS.summary] as const,
     runs: () => [...TestsQueries.keys.all(), "runs"] as const,
     runList: (page: number) => [...TestsQueries.keys.runs(), page] as const,
     run: (publicId: string) => [...TestsQueries.keys.all(), "run", publicId] as const,
@@ -30,7 +30,7 @@ export class TestsQueries {
       [...TestsQueries.keys.run(publicId), "case", casePublicId] as const,
     transcript: (publicId: string, filePublicId: string) =>
       [...TestsQueries.keys.run(publicId), "transcript", filePublicId] as const,
-    cases: () => [...TestsQueries.keys.all(), "cases"] as const,
+    cases: () => [...TestsQueries.keys.all(), TESTS_KEY_SEGMENTS.cases] as const,
     caseList: (page: number) => [...TestsQueries.keys.cases(), page] as const,
     details: () => [...TestsQueries.keys.all(), "detail"] as const,
     caseDetail: (publicId: string) => [...TestsQueries.keys.details(), publicId] as const,

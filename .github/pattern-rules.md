@@ -1922,18 +1922,18 @@ deleteKnowledgeDocuments(BySource)?\(
 **Rule:** The Tests page (M4-8) reads runs and results only through `GET /dashboard/eval-runs…` (`authorizeCompany(EvalRunRead)`) → `EvalRunsRepo` → `EvalRunsDAL` (one `withTenant`). `eval_results.grader_output` is read only through `Schemas.parseEvalGraderOutput` (`EvalRunsProvider.attempt`); a body that fails it is shown as unreadable (`isGraderOutputUnreadable`), never passed through. A transcript is opened only by `EvalRunsRepo.getEvalRunTranscript`:
 
 - `FilesDAL.getEvalRunTranscriptFile` finds the file inside `withTenant`. It must be `owner_type eval_result`, owned by a result of the run in the URL, and that result's `transcript_file_id` must point back at it; anything else is 404.
-- The size is checked against `EVAL_TRANSCRIPT_MAX_BYTES` before the read.
+- The size is checked against `EVAL_TRANSCRIPT_MAX_BYTES` twice: the row's, then the R2 object's own (`getObject({ maxBytes })`) before its body is read.
 - `FileStorageProvider.getObject` reads it outside the transaction.
 - `Schemas.parseEvalTranscript` parses it; a file that fails is 422 `Unreadable`.
 
-The client gets the parsed entries only. Raw bytes are never returned or logged, and tool calls carry no args or values. A case passes a run only through `Schemas.hasEvalCasePassed` (every one of k attempts). Cases are written only through `EvalCasesRepo` with v1 bodies (`Schemas.toEvalCaseV1`), and read for editing through `Schemas.readEvalCaseBody`. An edit takes the company's own case under its row lock (`getEvalCase({ isForUpdate: true })` matches `company_id`, so a platform case is 404). A body it can't read refuses a new conversation or rubric (409 `NotEditable`). The page never starts a run (M5-2).
+The client gets the parsed entries only. Raw bytes are never returned or logged, and tool calls carry no args or values. A case's result in a run comes only from `Schemas.evalCaseRunResult` (passed, failed, or null while the run is still grading it: never shown as failed, never counted in the safety tally). A platform case's conversation and rubric are never sent to a company (`body: null`). Cases are written only through `EvalCasesRepo` with v1 bodies (`Schemas.toEvalCaseV1`), and read for editing through `Schemas.readEvalCaseBody`. An edit takes the company's own case under its row lock (`getEvalCase({ isForUpdate: true })` matches `company_id`, so a platform case is 404). A body it can't read refuses a new conversation or rubric (409 `NotEditable`). The page never starts a run (M5-2).
 
 **Violations:**
 
 - Returning `grader_output` or a transcript's bytes to a client without its parser, or serving the R2 object directly
 - Opening a transcript by file id alone (without the run, the owner result and `transcript_file_id`)
 - Writing an eval case's `input` / `expectations` by hand, or editing a platform case
-- Deciding pass / fail of a case from anything but `hasEvalCasePassed`
+- Deciding a case's result from anything but `evalCaseRunResult`, or returning a platform case's body
 
 **Detection Pattern:**
 
