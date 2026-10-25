@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import configSpecJsonSchema from "../../../evals/schemas/config-spec.schema.json";
+import evalGraderOutputJsonSchema from "../../../evals/schemas/eval-grader-output.schema.json";
+import evalTranscriptJsonSchema from "../../../evals/schemas/eval-transcript.schema.json";
 import { buildJsonSchema, JSON_SCHEMA_EXPORTS } from "./jsonSchemaExports";
 
 // DEV_NOTE: The committed files in evals/schemas/, by file name. A new JSON_SCHEMA_EXPORTS entry adds its import
 // here after its first `pnpm --filter @app/schemas schema:export`.
 const COMMITTED: Record<string, unknown> = {
   "config-spec.schema.json": configSpecJsonSchema,
+  "eval-grader-output.schema.json": evalGraderOutputJsonSchema,
+  "eval-transcript.schema.json": evalTranscriptJsonSchema,
 };
 
 describe("JSON Schema exports to evals/", () => {

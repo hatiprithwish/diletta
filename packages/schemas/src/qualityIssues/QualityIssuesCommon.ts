@@ -1,10 +1,5 @@
 import { z } from "zod";
-import {
-  EvalCaseMessageRoleEnum,
-  ZEvalCaseMessages,
-  ZEvalCaseName,
-  ZEvalCaseRubric,
-} from "../evalCases";
+import { EvalCaseMessageRoleEnum, ZEvalCaseDraft } from "../evalCases";
 
 export enum QualityIssueSourceIntEnum {
   User = 1,
@@ -213,12 +208,9 @@ export const QUALITY_TEST_DRAFT_FAILURE_HTTP_STATUS_MAP: Record<
 };
 
 // DEV_NOTE: A test made from an issue (M4-6): the model's rewrite of the chat without personal details, which the admin
-// reviews and edits before saving (POST …/convert takes it back as edited)
-export const ZQualityTestDraft = z.object({
-  name: ZEvalCaseName,
-  messages: ZEvalCaseMessages,
-  rubric: ZEvalCaseRubric,
-});
+// reviews and edits before saving (POST …/convert takes it back as edited). The same shape as a case written on the Tests
+// page (M4-8).
+export const ZQualityTestDraft = ZEvalCaseDraft;
 export type QualityTestDraft = z.infer<typeof ZQualityTestDraft>;
 
 // DEV_NOTE: What the rewrite model is asked to return (structured output). Plain types only, since it becomes the JSON

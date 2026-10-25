@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotConfigs, chatbots } from "@/db/tables";
@@ -7,7 +7,7 @@ import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). M2-2 reads the published config, M4-4 lists the ever
-// published ones (a filter); drafts, publish and rollback come with the dashboard (M4-10). body is returned raw: callers read it through loadConfigSpec.
+// published ones (a filter), M4-8 reads the newest draft; drafts, publish and rollback come with the dashboard (M4-10). body is returned raw: callers read it through loadConfigSpec.
 export default class ChatbotConfigsDAL {
   // DEV_NOTE: isNotFound when the chatbot has no published config (it can't answer yet)
   async getPublishedChatbotConfig(
@@ -49,6 +49,55 @@ export default class ChatbotConfigsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetPublishedChatbotConfig,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The chatbot's newest config being worked on (Draft, Testing or Ready): the Tests page's Draft card (M4-8).
+  // isNotFound when every config is published or archived.
+  async getLatestDraftChatbotConfig(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindLatestDraftChatbotConfigDALRequest,
+  ) {
+    const response: Schemas.ChatbotConfigDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotConfigs.chatbotId, params.chatbotId),
+        eq(chatbotConfigs.companyId, params.companyId),
+        inArray(chatbotConfigs.status, [
+          Schemas.ChatbotConfigStatusIntEnum.Draft,
+          Schemas.ChatbotConfigStatusIntEnum.Testing,
+          Schemas.ChatbotConfigStatusIntEnum.Ready,
+        ]),
+      ];
+      const [chatbotConfig] = await tx
+        .select()
+        .from(chatbotConfigs)
+        .where(and(...conditions))
+        .orderBy(desc(chatbotConfigs.configVersion))
+        .limit(1);
+
+      if (!chatbotConfig) {
+        response.message = "Chatbot has no draft config";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Latest draft chatbot config fetched successfully";
+      response.chatbotConfig = chatbotConfig;
+    } catch (error) {
+      const message = "Unknown error in fetching latest draft chatbot config";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLatestDraftChatbotConfig,
         message,
         error,
         metadata: params,

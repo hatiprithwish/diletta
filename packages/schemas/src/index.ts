@@ -16,6 +16,7 @@ export * from "./toolDefinitions";
 export * from "./hostAdapter";
 export * from "./evalRuns";
 export * from "./evalCases";
+export * from "./evalResults";
 export * from "./qualityIssues";
 export * from "./conversations";
 export * from "./messages";

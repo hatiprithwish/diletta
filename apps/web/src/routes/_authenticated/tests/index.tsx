@@ -1,15 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import * as Schemas from "@app/schemas";
+import { TestsPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/tests/")({
-  component: TestsPage,
+  validateSearch: Schemas.ZTestsPageSearch,
+  component: TestsListPage,
 });
 
-function TestsPage() {
-  return (
-    <PageHeader
-      title="Tests"
-      description="Run against your staging environment before a configuration goes live"
-    />
-  );
+function TestsListPage() {
+  const search = Route.useSearch();
+  return <TestsPage search={search} />;
 }

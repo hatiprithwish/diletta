@@ -67,3 +67,51 @@ export const ZEvalCase = z.object({
   updatedAt: z.date(),
 });
 export type EvalCase = z.infer<typeof ZEvalCase>;
+
+// DEV_NOTE: A case as an admin writes it (New case, Edit, and Create test on the Quality page): the conversation and the
+// rubric of a v1 case, with its name
+export const ZEvalCaseDraft = z.object({
+  name: ZEvalCaseName,
+  messages: ZEvalCaseMessages,
+  rubric: ZEvalCaseRubric,
+});
+export type EvalCaseDraft = z.infer<typeof ZEvalCaseDraft>;
+
+// DEV_NOTE: A case's conversation and rubric, the part of a draft its input and expectations hold
+export type EvalCaseBody = Pick<EvalCaseDraft, "messages" | "rubric">;
+
+// DEV_NOTE: The one way a stored case's input and expectations are read for the dashboard. null = a shape this page
+// can't show or edit (M5-1's v2 adds its upgrader here).
+export function readEvalCaseBody(input: unknown, expectations: unknown): EvalCaseBody | null {
+  const parsedInput = ZEvalCaseInputV1.safeParse(input);
+  const parsedExpectations = ZEvalCaseExpectationsV1.safeParse(expectations);
+  if (!parsedInput.success || !parsedExpectations.success) return null;
+  return { messages: parsedInput.data.messages, rubric: parsedExpectations.data.rubric };
+}
+
+// DEV_NOTE: The v1 input and expectations of a body, as they are stored
+export function toEvalCaseV1(body: EvalCaseBody): {
+  input: EvalCaseInputV1;
+  expectations: EvalCaseExpectationsV1;
+} {
+  return {
+    input: { schemaVersion: EVAL_CASE_INPUT_SCHEMA_VERSION, messages: body.messages },
+    expectations: { schemaVersion: EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION, rubric: body.rubric },
+  };
+}
+
+export enum EvalCaseSortColumn {
+  CreatedAt = "createdAt",
+  Name = "name",
+}
+
+export const ZEvalCaseSortColumn = z.enum(EvalCaseSortColumn);
+
+// DEV_NOTE: The Cases tab's rows per page
+export const EVAL_CASES_PAGE_SIZE = 25;
+
+// DEV_NOTE: Why an edit changed nothing (409): the stored conversation or rubric is a shape this page can't rewrite
+// (readEvalCaseBody null). Turning the case on or off still works.
+export enum EvalCaseUpdateFailureEnum {
+  NotEditable = "NotEditable",
+}

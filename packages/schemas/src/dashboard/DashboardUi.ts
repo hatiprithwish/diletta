@@ -21,6 +21,15 @@ import type {
   DocGapClusterListTabEnum,
   KnowledgePageSearch,
 } from "../docGapClusters";
+import type { EvalCaseDetail, EvalCaseDraft, EvalCaseListItem } from "../evalCases";
+import type { EvalAttempt, EvalTranscriptEntryView } from "../evalResults";
+import type {
+  EvalRunCaseItem,
+  EvalRunListItem,
+  EvalRunsSummary,
+  TestRunPageSearch,
+  TestsPageSearch,
+} from "../evalRuns";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type {
   GetKnowledgeDocumentsApiResponse,
@@ -294,6 +303,109 @@ export interface DashboardQualityTestDialogProps {
   publicId: string;
   draft: QualityTestDraft | null;
   onClose: () => void;
+}
+
+// DEV_NOTE: A test case's form (apps/web components/eval-case-form): Quality's Create test review (messages fixed, as
+// rewritten) and the Tests page's New case / Edit (messages added and removed). onSubmit resolves once saved; the
+// caller closes the dialog.
+export interface DashboardEvalCaseFormProps {
+  defaultValues: EvalCaseDraft;
+  canEditMessages: boolean;
+  title: string;
+  description: string;
+  submitLabel: string;
+  onSubmit: (value: EvalCaseDraft) => Promise<void>;
+  onCancel: () => void;
+}
+
+// DEV_NOTE: The Tests page (M4-8): the metric strip, then Runs or Cases (tab and page in the URL)
+export interface DashboardTestsPageProps {
+  search: TestsPageSearch;
+}
+
+export interface DashboardTestsSummaryProps {
+  summary: EvalRunsSummary;
+}
+
+export interface DashboardTestRunsProps {
+  page: number;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardTestRunRowProps {
+  evalRun: EvalRunListItem;
+}
+
+// DEV_NOTE: A run's result chip: Passed / Failed once Done, else where it stands
+export interface DashboardTestRunResultProps {
+  evalRun: Pick<EvalRunListItem, "evalRunStatus" | "evalRunStatusLabel" | "hasPassed">;
+}
+
+export interface DashboardTestCasesProps {
+  page: number;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardTestCaseRowProps {
+  evalCase: EvalCaseListItem;
+}
+
+// DEV_NOTE: New case (evalCase null) or Edit of one loaded case; open = the dialog shows
+export interface DashboardTestCaseDialogProps {
+  open: boolean;
+  evalCase: EvalCaseDetail | null;
+  onClose: () => void;
+}
+
+// DEV_NOTE: Edit of one case: its conversation and rubric load first
+export interface DashboardTestCaseEditDialogProps {
+  publicId: string;
+  onClose: () => void;
+}
+
+// DEV_NOTE: A list's empty or not-found state on the Tests pages
+export interface DashboardTestsEmptyProps {
+  text: string;
+}
+
+// DEV_NOTE: /tests/$id: one run, its cases in 2 columns, and the open case's detail card in the third
+export interface DashboardTestRunPageProps {
+  publicId: string;
+  search: TestRunPageSearch;
+}
+
+export interface DashboardTestRunCasesProps extends DashboardTestRunPageProps {
+  onPage: (page: number) => void;
+}
+
+export interface DashboardTestRunCaseRowProps {
+  runPublicId: string;
+  runCase: EvalRunCaseItem;
+  search: TestRunPageSearch;
+  isSelected: boolean;
+}
+
+export interface DashboardTestRunCaseCardProps {
+  runPublicId: string;
+  casePublicId: string;
+  search: TestRunPageSearch;
+}
+
+export interface DashboardTestAttemptProps {
+  runPublicId: string;
+  attempt: EvalAttempt;
+  onViewTranscript: (filePublicId: string) => void;
+}
+
+// DEV_NOTE: The transcript sheet (filePublicId null = closed)
+export interface DashboardTestTranscriptSheetProps {
+  runPublicId: string;
+  filePublicId: string | null;
+  onClose: () => void;
+}
+
+export interface DashboardTestTranscriptEntryProps {
+  entry: EvalTranscriptEntryView;
 }
 
 // DEV_NOTE: The Knowledge page (M4-7): the sources table, a banner per failed source, and the groups of questions the
