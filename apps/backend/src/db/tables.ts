@@ -969,6 +969,14 @@ export const activityLog = table(
     // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2); on the
     // partitioned parent, so every partition (and every one the maintenance function adds) gets it
     t.index("IDX_activity_log_company_id_created_at").on(table.companyId, table.createdAt),
+    // DEV_NOTE: The audit log (M4-9): a company's rows written by an admin or an operator, newest first, without reading
+    // its chatbot-user and system events
+    t
+      .index("IDX_activity_log_company_id_created_at_audit")
+      .on(table.companyId, table.createdAt)
+      .where(
+        sql`${table.actorType} IN (${lit(Schemas.ActivityLogActorTypeIntEnum.Admin)}, ${lit(Schemas.ActivityLogActorTypeIntEnum.Operator)})`,
+      ),
     t.index("IDX_activity_log_actor_id").on(table.actorId),
     t.index("IDX_activity_log_entity_id").on(table.entityId),
     t.index("IDX_activity_log_parent_log_id").on(table.parentLogId),

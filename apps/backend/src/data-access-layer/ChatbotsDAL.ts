@@ -64,7 +64,7 @@ export default class ChatbotsDAL {
 
   async getChatbotDetails(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindChatbotDALRequest,
+    params: Schemas.GetChatbotDetailsDALRequest,
   ) {
     const response: Schemas.ChatbotDALResponse = { isSuccess: false };
 
@@ -73,11 +73,12 @@ export default class ChatbotsDAL {
         eq(chatbots.publicId, params.publicId),
         eq(chatbots.companyId, params.companyId),
       ];
-      const [chatbot] = await tx
+      const query = tx
         .select()
         .from(chatbots)
         .where(and(...conditions))
         .limit(1);
+      const [chatbot] = params.isForUpdate ? await query.for("update") : await query;
 
       if (!chatbot) {
         const message = "Chatbot not found";

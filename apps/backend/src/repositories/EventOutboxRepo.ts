@@ -43,6 +43,22 @@ export default class EventOutboxRepo {
     });
   }
 
+  // DEV_NOTE: After a write's commit, from its route: relays the write's outbox rows in waitUntil (none = nothing to do).
+  // The Cron sweep publishes them if this never runs.
+  static relayInBackground(
+    env: Env,
+    ctx: { waitUntil(promise: Promise<unknown>): void },
+    params: { companyId: string; outboxIds?: string[] },
+  ): void {
+    if (!params.outboxIds || params.outboxIds.length === 0) return;
+    ctx.waitUntil(
+      new EventOutboxRepo(env).relayEvents({
+        companyId: params.companyId,
+        outboxIds: params.outboxIds,
+      }),
+    );
+  }
+
   // DEV_NOTE: After-commit relay for the rows a writer just recorded. Rows already published, or locked by the
   // sweep, are skipped.
   async relayEvents(params: {

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import EvalCasesRepo from "@/repositories/EvalCasesRepo";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
@@ -48,11 +49,14 @@ EvalCasesRoutes.post(
   authorizeCompany(Schemas.AuthzActionEnum.EvalCaseCreate),
   zValidator("json", Schemas.ZCreateEvalCaseApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new EvalCasesRepo(c.env);
-    const response = await repo.createEvalCase({
+    const { outboxIds, ...response } = await repo.createEvalCase({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, response.isSuccess ? 201 : response.isNotFound ? 404 : 500);
   },
@@ -65,12 +69,15 @@ EvalCasesRoutes.patch(
   authorizeCompany(Schemas.AuthzActionEnum.EvalCaseUpdate),
   zValidator("json", Schemas.ZUpdateEvalCaseApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new EvalCasesRepo(c.env);
-    const response = await repo.updateEvalCase({
+    const { outboxIds, ...response } = await repo.updateEvalCase({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     if (response.isSuccess) return c.json(response, 200);
     if (response.isNotFound) return c.json(response, 404);

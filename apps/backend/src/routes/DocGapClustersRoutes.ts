@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import DocGapClustersRepo from "@/repositories/DocGapClustersRepo";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
@@ -41,12 +42,15 @@ DocGapClustersRoutes.post(
   authorizeCompany(Schemas.AuthzActionEnum.DocGapClusterUpdate),
   zValidator("json", Schemas.ZAnswerDocGapClusterApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new DocGapClustersRepo(c.env);
-    const response = await repo.answerDocGapCluster({
+    const { outboxIds, ...response } = await repo.answerDocGapCluster({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, writeStatus(response));
   },
@@ -57,11 +61,14 @@ DocGapClustersRoutes.post(
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.DocGapClusterUpdate),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new DocGapClustersRepo(c.env);
-    const response = await repo.dismissDocGapCluster({
-      companyId: c.get("companyId"),
+    const { outboxIds, ...response } = await repo.dismissDocGapCluster({
+      companyId,
       publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, writeStatus(response));
   },

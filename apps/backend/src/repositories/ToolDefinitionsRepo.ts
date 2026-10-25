@@ -5,6 +5,8 @@ import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AppLogger from "@/providers/logger";
+import { operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 const STORED_OPS_INVALID_MESSAGE = "Stored tool ops are invalid";
@@ -25,6 +27,8 @@ const STORED_OPS_INVALID_MESSAGE = "Stored tool ops are invalid";
 // runtime loads exactly a config's { name, version } pins (the config spec refuses a name twice), never a tool by
 // name or "latest Active".
 // Ops are written only through normalizeToolOps (current schema_version) and read only through loadToolOps.
+// Every write records its audit row (M4-9) with actor Operator (these routes are operator-only), the tool's name and
+// version, in its own transaction; the outbox ids go back to the route to relay.
 export default class ToolDefinitionsRepo {
   private db: NodePgDatabase;
   private dal: ToolDefinitionsDAL;
@@ -116,6 +120,60 @@ export default class ToolDefinitionsRepo {
       throw new TenantRollbackError(response.message ?? STORED_OPS_INVALID_MESSAGE);
     }
     return response;
+  }
+
+  // DEV_NOTE: The operator's audit row in the write's transaction; a failure rolls the write back
+  private async audit(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyId: string; adminId: string },
+    row: Schemas.ToolDefinitionRow,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ToolDefinition>,
+  ): Promise<string> {
+    return await recordAuditOrRollback(tx, {
+      companyId: params.companyId,
+      actor: operatorAuditActor(params.adminId),
+      entityType: Schemas.AuditEntityTypeEnum.ToolDefinition,
+      entityAction,
+      entity: row,
+      entityVersion: row.version,
+      label: row.name,
+    });
+  }
+
+  // DEV_NOTE: Whether a draft edit changed what the tool is (connection, description, risk, modes, source, ops), so a
+  // save that changes nothing records no audit row
+  private isDraftChanged(
+    before: Schemas.ToolDefinitionRow,
+    after: Schemas.ToolDefinitionRow,
+  ): boolean {
+    const content = (row: Schemas.ToolDefinitionRow) =>
+      Utility.stableStringify({
+        connectionId: row.connectionId,
+        description: row.description,
+        risk: row.risk,
+        idempotencyMode: row.idempotencyMode,
+        approval: row.approval,
+        source: row.source,
+        schemaVersion: row.schemaVersion,
+        inputSchema: row.inputSchema,
+        callOp: row.callOp,
+        readbackOp: row.readbackOp,
+        inverseOp: row.inverseOp,
+      });
+    return content(before) !== content(after);
+  }
+
+  // DEV_NOTE: A written row's answer (withWrittenToolResponse) with its audit row
+  private async withAuditedToolResponse(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyId: string; adminId: string },
+    result: Schemas.ToolDefinitionDALResponse,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ToolDefinition>,
+  ): Promise<Schemas.WithOutboxIds<Schemas.ToolDefinitionMutationResponse>> {
+    const response = this.withWrittenToolResponse(result);
+    if (!response.isSuccess || !result.toolDefinition) return response;
+    const outboxId = await this.audit(tx, params, result.toolDefinition, entityAction);
+    return { ...response, outboxIds: [outboxId] };
   }
 
   // DEV_NOTE: Client ops at the current schema version, checked against the risk and idempotency mode they will be
@@ -242,7 +300,7 @@ export default class ToolDefinitionsRepo {
 
   async createToolDefinition(
     params: Schemas.CreateToolDefinitionApiRequest & { companyId: string; adminId: string },
-  ): Promise<Schemas.CreateToolDefinitionApiResponse> {
+  ): Promise<Schemas.WithOutboxIds<Schemas.CreateToolDefinitionApiResponse>> {
     const body = params.toolDefinition;
     const ops = this.normalizeOps(body, body.ops);
     if (!ops.isSuccess) return ops.response;
@@ -250,7 +308,7 @@ export default class ToolDefinitionsRepo {
     return await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.CreateToolDefinitionApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.CreateToolDefinitionApiResponse>> => {
         const connection = await this.resolveConnection(tx, {
           companyId: params.companyId,
           connectionPublicId: body.connectionPublicId,
@@ -282,7 +340,12 @@ export default class ToolDefinitionsRepo {
           source: body.source,
           createdBy: params.adminId,
         });
-        return this.withWrittenToolResponse(created);
+        return await this.withAuditedToolResponse(
+          tx,
+          params,
+          created,
+          Schemas.AuditEntityActionEnum.Created,
+        );
       },
     );
   }
@@ -344,11 +407,11 @@ export default class ToolDefinitionsRepo {
       publicId: string;
       adminId: string;
     },
-  ): Promise<Schemas.UpdateToolDefinitionApiResponse> {
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateToolDefinitionApiResponse>> {
     return await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.UpdateToolDefinitionApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateToolDefinitionApiResponse>> => {
         const found = await this.dal.getToolDefinitionDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
@@ -389,7 +452,15 @@ export default class ToolDefinitionsRepo {
           ops: edit.opsColumns,
           updatedBy: params.adminId,
         });
-        return this.withWrittenToolResponse(updated);
+        if (updated.toolDefinition && !this.isDraftChanged(row, updated.toolDefinition)) {
+          return this.withWrittenToolResponse(updated);
+        }
+        return await this.withAuditedToolResponse(
+          tx,
+          params,
+          updated,
+          Schemas.AuditEntityActionEnum.Updated,
+        );
       },
     );
   }
@@ -401,11 +472,13 @@ export default class ToolDefinitionsRepo {
     companyId: string;
     publicId: string;
     adminId: string;
-  }): Promise<Schemas.CreateToolDefinitionVersionApiResponse> {
+  }): Promise<Schemas.WithOutboxIds<Schemas.CreateToolDefinitionVersionApiResponse>> {
     return await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.CreateToolDefinitionVersionApiResponse> => {
+      async (
+        tx,
+      ): Promise<Schemas.WithOutboxIds<Schemas.CreateToolDefinitionVersionApiResponse>> => {
         const found = await this.dal.getToolDefinitionDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
@@ -444,7 +517,12 @@ export default class ToolDefinitionsRepo {
           source: source.source,
           createdBy: params.adminId,
         });
-        return this.withWrittenToolResponse(created);
+        return await this.withAuditedToolResponse(
+          tx,
+          params,
+          created,
+          Schemas.AuditEntityActionEnum.VersionCreated,
+        );
       },
     );
   }
@@ -458,11 +536,11 @@ export default class ToolDefinitionsRepo {
       publicId: string;
       adminId: string;
     },
-  ): Promise<Schemas.SetToolDefinitionStatusApiResponse> {
+  ): Promise<Schemas.WithOutboxIds<Schemas.SetToolDefinitionStatusApiResponse>> {
     return await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.SetToolDefinitionStatusApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.SetToolDefinitionStatusApiResponse>> => {
         const found = await this.dal.getToolDefinitionDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
@@ -506,7 +584,14 @@ export default class ToolDefinitionsRepo {
           status: params.status,
           updatedBy: params.adminId,
         });
-        return this.withWrittenToolResponse(updated);
+        return await this.withAuditedToolResponse(
+          tx,
+          params,
+          updated,
+          params.status === Schemas.ToolDefinitionStatusIntEnum.Active
+            ? Schemas.AuditEntityActionEnum.Activated
+            : Schemas.AuditEntityActionEnum.Disabled,
+        );
       },
     );
   }
@@ -514,12 +599,17 @@ export default class ToolDefinitionsRepo {
   async deleteToolDefinition(params: {
     companyId: string;
     publicId: string;
-  }): Promise<Schemas.DeleteToolDefinitionApiResponse> {
+    adminId: string;
+  }): Promise<Schemas.WithOutboxIds<Schemas.DeleteToolDefinitionApiResponse>> {
     return await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<Schemas.DeleteToolDefinitionApiResponse> => {
-        const found = await this.dal.getToolDefinitionDetails(tx, { ...params, isForUpdate: true });
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.DeleteToolDefinitionApiResponse>> => {
+        const found = await this.dal.getToolDefinitionDetails(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+          isForUpdate: true,
+        });
         if (!found.isSuccess || !found.toolDefinition) {
           return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
         }
@@ -529,7 +619,18 @@ export default class ToolDefinitionsRepo {
             "Only a draft version can be deleted; disable it instead",
           );
         }
-        return await this.dal.deleteToolDefinitionDraft(tx, params);
+        const deleted = await this.dal.deleteToolDefinitionDraft(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+        });
+        if (!deleted.isSuccess) return deleted;
+        const outboxId = await this.audit(
+          tx,
+          params,
+          found.toolDefinition,
+          Schemas.AuditEntityActionEnum.Deleted,
+        );
+        return { ...deleted, outboxIds: [outboxId] };
       },
     );
   }

@@ -91,7 +91,7 @@ A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 bod
 - A platform case's conversation and rubric are never sent to a company (`body: null`). They include the safety cases that gate publishing (M5-4), and a company that could read the exact prompts and pass criteria could tune a config to the test instead of to the behaviour.
 - With `botId`, a case's **Last result** comes only from that chatbot's runs, since a platform case runs against every chatbot.
 - Editing a case changes it for future runs only. Past results still point at the same row, so they show its current name.
-- Case text is never logged. There is no audit event for case writes yet (the audit log is M4-9).
+- Case text is never logged. Each case write records an audit row (M4-9) with the case's name only (`docs/runbooks/security.md`).
 
 ## Troubleshooting
 

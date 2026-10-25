@@ -40,6 +40,9 @@ export enum AuthzActionEnum {
   ChangeRequestRead = "change_request.read",
   ChangeRequestResolve = "change_request.resolve",
 
+  // Security page (company-scoped, M4-9): read the audit log (every admin and operator write on the company)
+  AuditLogRead = "audit_log.read",
+
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
   CompanyList = "company.list",

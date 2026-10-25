@@ -14455,7 +14455,7 @@
       "x": 5620,
       "y": 3821.0,
       "width": 540,
-      "height": 458.0,
+      "height": 491.0,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "#ffffff",
@@ -14472,8 +14472,8 @@
         "type": 3
       },
       "seed": 1772883716,
-      "version": 13,
-      "versionNonce": 1085887945,
+      "version": 14,
+      "versionNonce": 2063488222,
       "isDeleted": false,
       "boundElements": [
         {
@@ -14489,7 +14489,7 @@
           "type": "arrow"
         }
       ],
-      "updated": 1791217365960,
+      "updated": 1792930478112,
       "link": null,
       "locked": false
     },
@@ -14648,7 +14648,7 @@
       "x": 5632,
       "y": 3907.5,
       "width": 468.0,
-      "height": 357.5,
+      "height": 390.0,
       "angle": 0,
       "strokeColor": "#343a40",
       "backgroundColor": "transparent",
@@ -14663,15 +14663,15 @@
       "frameId": null,
       "roundness": null,
       "seed": 1546812014,
-      "version": 13,
-      "versionNonce": 1666092581,
+      "version": 14,
+      "versionNonce": 952845928,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1791217365960,
+      "updated": 1792930478112,
       "link": null,
       "locked": false,
-      "text": "*id                    bigint PK\n*company_id            bigint\n*actor_type            smallint chatbot_user/admin/\n                       operator/system\n*actor_id              bigint null\n*entity_type           text (conversation, turn,\n                       change_request, chatbot_config,\n                       company_secret, eval_run…)\n*entity_id             bigint null (for joins)\n*entity_action         text (started, approved, verified,\n                       published, added, destroyed…)\n*entity_version        int null (config / tool version)\n*parent_log_id         bigint null (immediate parent)\n*root_log_id           bigint null (NULL = this is the root;\n                       conversation / eval run / workflow)\n*detail                jsonb (ids and reasons, never values)\n*created_at            timestamptz NN\n*append-only · partitioned by month · no FKs\n*critical events: + event_outbox row in the same txn\n*low-stakes telemetry via waitUntil\n*PK (id, created_at): the partition key must be in the PK\n*partitions y2026m10 … y2027m12 + activity_log_default",
-      "originalText": "*id                    bigint PK\n*company_id            bigint\n*actor_type            smallint chatbot_user/admin/\n                       operator/system\n*actor_id              bigint null\n*entity_type           text (conversation, turn,\n                       change_request, chatbot_config,\n                       company_secret, eval_run…)\n*entity_id             bigint null (for joins)\n*entity_action         text (started, approved, verified,\n                       published, added, destroyed…)\n*entity_version        int null (config / tool version)\n*parent_log_id         bigint null (immediate parent)\n*root_log_id           bigint null (NULL = this is the root;\n                       conversation / eval run / workflow)\n*detail                jsonb (ids and reasons, never values)\n*created_at            timestamptz NN\n*append-only · partitioned by month · no FKs\n*critical events: + event_outbox row in the same txn\n*low-stakes telemetry via waitUntil\n*PK (id, created_at): the partition key must be in the PK\n*partitions y2026m10 … y2027m12 + activity_log_default",
+      "text": "*id                    bigint PK\n*company_id            bigint\n*actor_type            smallint chatbot_user/admin/\n                       operator/system\n*actor_id              bigint null\n*entity_type           text (conversation, turn,\n                       change_request, chatbot_config,\n                       company_secret, eval_run…)\n*entity_id             bigint null (for joins)\n*entity_action         text (started, approved, verified,\n                       published, added, destroyed…)\n*entity_version        int null (config / tool version)\n*parent_log_id         bigint null (immediate parent)\n*root_log_id           bigint null (NULL = this is the root;\n                       conversation / eval run / workflow)\n*detail                jsonb (ids and reasons, never values)\n*created_at            timestamptz NN\n*append-only · partitioned by month · no FKs\n*critical events: + event_outbox row in the same txn\n*low-stakes telemetry via waitUntil\n*PK (id, created_at): the partition key must be in the PK\n*partitions y2026m10 … y2027m12 + activity_log_default\n*IX (company_id, created_at) WHERE actor admin/operator:\n                       the audit log (M4-9)",
+      "originalText": "*id                    bigint PK\n*company_id            bigint\n*actor_type            smallint chatbot_user/admin/\n                       operator/system\n*actor_id              bigint null\n*entity_type           text (conversation, turn,\n                       change_request, chatbot_config,\n                       company_secret, eval_run…)\n*entity_id             bigint null (for joins)\n*entity_action         text (started, approved, verified,\n                       published, added, destroyed…)\n*entity_version        int null (config / tool version)\n*parent_log_id         bigint null (immediate parent)\n*root_log_id           bigint null (NULL = this is the root;\n                       conversation / eval run / workflow)\n*detail                jsonb (ids and reasons, never values)\n*created_at            timestamptz NN\n*append-only · partitioned by month · no FKs\n*critical events: + event_outbox row in the same txn\n*low-stakes telemetry via waitUntil\n*PK (id, created_at): the partition key must be in the PK\n*partitions y2026m10 … y2027m12 + activity_log_default\n*IX (company_id, created_at) WHERE actor admin/operator:\n                       the audit log (M4-9)",
       "fontSize": 13,
       "fontFamily": 3,
       "textAlign": "left",

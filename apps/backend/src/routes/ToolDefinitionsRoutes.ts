@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import ToolDefinitionsRepo from "@/repositories/ToolDefinitionsRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizePlatform, resolveOperatorCompany } from "@/middlewares/AdminMiddleware";
@@ -10,7 +11,8 @@ import * as Schemas from "@app/schemas";
 // Chain: checkAuth → authorizePlatform(action) → resolveOperatorCompany (unknown company → 404) → zValidator →
 // handler. Operators curate a company's tools; a company admin gets 403. Tools are addressed by publicId. A refused request
 // answers its failure's TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP status (409 state, 400 ops or connection); isSuccess ?
-// 200 : isNotFound ? 404 : 500 otherwise.
+// 200 : isNotFound ? 404 : 500 otherwise. A write's audit row (M4-9, actor Operator) is relayed after the commit; its
+// outbox ids never reach the client.
 const ToolDefinitionsRoutes = new Hono<AppContext>();
 
 function stateStatus(response: Schemas.ToolDefinitionStateResponse, success: 200 | 201) {
@@ -76,12 +78,14 @@ ToolDefinitionsRoutes.post(
   resolveOperatorCompany(),
   zValidator("json", Schemas.ZCreateToolDefinitionApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new ToolDefinitionsRepo(c.env);
-    const response = await repo.createToolDefinition({
+    const { outboxIds, ...response } = await repo.createToolDefinition({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 201));
   },
@@ -94,13 +98,15 @@ ToolDefinitionsRoutes.patch(
   resolveOperatorCompany(),
   zValidator("json", Schemas.ZUpdateToolDefinitionApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new ToolDefinitionsRepo(c.env);
-    const response = await repo.updateToolDefinition({
+    const { outboxIds, ...response } = await repo.updateToolDefinition({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 200));
   },
@@ -112,12 +118,14 @@ ToolDefinitionsRoutes.post(
   authorizePlatform(Schemas.AuthzActionEnum.ToolDefinitionCreate),
   resolveOperatorCompany(),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new ToolDefinitionsRepo(c.env);
-    const response = await repo.createToolDefinitionVersion({
-      companyId: c.get("companyId"),
+    const { outboxIds, ...response } = await repo.createToolDefinitionVersion({
+      companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 201));
   },
@@ -130,13 +138,15 @@ ToolDefinitionsRoutes.put(
   resolveOperatorCompany(),
   zValidator("json", Schemas.ZSetToolDefinitionStatusApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new ToolDefinitionsRepo(c.env);
-    const response = await repo.setToolDefinitionStatus({
+    const { outboxIds, ...response } = await repo.setToolDefinitionStatus({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 200));
   },
@@ -148,11 +158,14 @@ ToolDefinitionsRoutes.delete(
   authorizePlatform(Schemas.AuthzActionEnum.ToolDefinitionDelete),
   resolveOperatorCompany(),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new ToolDefinitionsRepo(c.env);
-    const response = await repo.deleteToolDefinition({
-      companyId: c.get("companyId"),
+    const { outboxIds, ...response } = await repo.deleteToolDefinition({
+      companyId,
       publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 200));
   },

@@ -7,8 +7,10 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import {
+  activityLog,
   admins,
   companies,
+  eventOutbox,
   files,
   knowledgeChunks,
   knowledgeDocuments,
@@ -283,6 +285,8 @@ afterAll(async () => {
   const companyIds = [companyA, companyB].filter(Boolean);
   if (companyIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(modelCalls).where(inArray(modelCalls.companyId, companyIds));
     await ownerDb.delete(knowledgeChunks).where(inArray(knowledgeChunks.companyId, companyIds));
     await ownerDb
@@ -776,6 +780,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       documentPublicId: document!.publicId,
+      adminId: adminA,
     });
     expect(deleted.isSuccess).toBe(true);
     expect(await documentsOf(source.id)).toEqual([]);
@@ -886,6 +891,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
     const deleted = await new KnowledgeSourcesRepo(env).deleteKnowledgeSource({
       companyId: companyA,
       publicId: source.publicId,
+      adminId: adminA,
     });
     expect(deleted.isSuccess).toBe(true);
     expect(await sourceRow(source.publicId)).toBeUndefined();
@@ -975,8 +981,13 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       (await repo.startSync({ companyId: companyB, publicId: source.publicId })).isNotFound,
     ).toBe(true);
     expect(
-      (await repo.deleteKnowledgeSource({ companyId: companyB, publicId: source.publicId }))
-        .isNotFound,
+      (
+        await repo.deleteKnowledgeSource({
+          companyId: companyB,
+          publicId: source.publicId,
+          adminId: adminB,
+        })
+      ).isNotFound,
     ).toBe(true);
 
     // DEV_NOTE: A sync step run under the wrong company finds no source and writes nothing

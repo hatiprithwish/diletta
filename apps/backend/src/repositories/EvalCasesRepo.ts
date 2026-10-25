@@ -6,6 +6,8 @@ import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AppLogger from "@/providers/logger";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
@@ -13,7 +15,8 @@ type Tx = NodePgTransaction<EmptyRelations>;
 // DEV_NOTE: Tenant Repo — test cases as the Tests page works them (M4-8): the Cases tab (the company's cases and the
 // platform's, with each one's newest result), one case with its conversation and rubric, New case and Edit (v1 bodies:
 // Schemas.readEvalCaseBody / toEvalCaseV1), and turning a case on or off. Only the company's own cases change: a
-// platform case reads, and an edit of one answers 404. Case text never reaches a log. No event: the audit log is M4-9.
+// platform case reads, and an edit of one answers 404. Case text never reaches a log, nor the audit row each write
+// records (M4-9: the case's name only).
 export default class EvalCasesRepo {
   private db: NodePgDatabase;
   private evalCasesDal: EvalCasesDAL;
@@ -137,13 +140,13 @@ export default class EvalCasesRepo {
   // DEV_NOTE: New case: a v1 case for botId's chatbot, else the company's default one (unknown, or no default → 404).
   // Saved active, never a safety case.
   async createEvalCase(
-    params: Schemas.CreateEvalCaseApiRequest & { companyId: string },
-  ): Promise<Schemas.WriteEvalCaseApiResponse> {
+    params: Schemas.CreateEvalCaseApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse>> {
     const { companyId } = params;
     return await withTenant(
       this.db,
       companyId,
-      async (tx): Promise<Schemas.WriteEvalCaseApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse>> => {
         const chatbot =
           params.botId !== undefined
             ? await this.chatbotsDal.getChatbotDetails(tx, { companyId, publicId: params.botId })
@@ -169,7 +172,16 @@ export default class EvalCasesRepo {
         if (!found.isSuccess || !found.evalCase) {
           throw new TenantRollbackError(found.message ?? "Eval case not read back");
         }
-        return await this.writtenDetail(tx, companyId, found.evalCase);
+        const outboxId = await this.audit(
+          tx,
+          params,
+          found.evalCase,
+          Schemas.AuditEntityActionEnum.Created,
+        );
+        return {
+          ...(await this.writtenDetail(tx, companyId, found.evalCase)),
+          outboxIds: [outboxId],
+        };
       },
     );
   }
@@ -178,13 +190,17 @@ export default class EvalCasesRepo {
   // 404). A new conversation or rubric is merged into the stored v1 body; a body this page can't read refuses a new
   // conversation or rubric with NotEditable (409, nothing in the request is written); an isActive-only edit still works.
   async updateEvalCase(
-    params: Schemas.UpdateEvalCaseApiRequest & { companyId: string; publicId: string },
-  ): Promise<Schemas.WriteEvalCaseApiResponse> {
+    params: Schemas.UpdateEvalCaseApiRequest & {
+      companyId: string;
+      publicId: string;
+      adminId: string;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse>> {
     const { companyId } = params;
-    const result: Schemas.WriteEvalCaseApiResponse = await withTenant(
+    const result: Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse> = await withTenant(
       this.db,
       companyId,
-      async (tx): Promise<Schemas.WriteEvalCaseApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse>> => {
         const found = await this.evalCasesDal.getEvalCase(tx, {
           companyId,
           publicId: params.publicId,
@@ -205,10 +221,13 @@ export default class EvalCasesRepo {
               failure: Schemas.EvalCaseUpdateFailureEnum.NotEditable,
             };
           }
-          body = {
+          const merged: Schemas.EvalCaseBody = {
             messages: params.messages ?? stored.messages,
             rubric: params.rubric ?? stored.rubric,
           };
+          // DEV_NOTE: The Edit form sends the whole case, so a body equal to the stored one is no change: not written,
+          // not audited
+          if (Utility.stableStringify(merged) !== Utility.stableStringify(stored)) body = merged;
         }
 
         const updated = await this.evalCasesDal.updateEvalCase(tx, {
@@ -229,7 +248,25 @@ export default class EvalCasesRepo {
         if (!reread.isSuccess || !reread.evalCase) {
           throw new TenantRollbackError(reread.message ?? "Eval case not read back");
         }
-        return await this.writtenDetail(tx, companyId, reread.evalCase);
+        const after = reread.evalCase;
+
+        // DEV_NOTE: Audited by what changed: a new name, conversation or rubric is Updated, on / off its own row
+        const actions: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.EvalCase>[] = [];
+        if (after.name !== row.name || body !== undefined) {
+          actions.push(Schemas.AuditEntityActionEnum.Updated);
+        }
+        if (after.isActive !== row.isActive) {
+          actions.push(
+            after.isActive
+              ? Schemas.AuditEntityActionEnum.TurnedOn
+              : Schemas.AuditEntityActionEnum.TurnedOff,
+          );
+        }
+        const outboxIds: string[] = [];
+        for (const action of actions) {
+          outboxIds.push(await this.audit(tx, params, after, action));
+        }
+        return { ...(await this.writtenDetail(tx, companyId, after)), outboxIds };
       },
     );
     if (!result.isSuccess && result.failure) {
@@ -241,6 +278,24 @@ export default class EvalCasesRepo {
       });
     }
     return result;
+  }
+
+  // DEV_NOTE: The admin's audit row (M4-9) in the write's transaction, labelled with the case's name (never its text); a
+  // failure rolls the write back
+  private async audit(
+    tx: Tx,
+    params: { companyId: string; adminId: string },
+    row: Schemas.DashboardEvalCaseRow,
+    entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.EvalCase>,
+  ): Promise<string> {
+    return await recordAuditOrRollback(tx, {
+      companyId: params.companyId,
+      actor: adminAuditActor(params.adminId),
+      entityType: Schemas.AuditEntityTypeEnum.EvalCase,
+      entityAction,
+      entity: row,
+      label: row.name,
+    });
   }
 
   // DEV_NOTE: A write's answer, read in its own transaction: a failed read rolls the write back, so the client never
