@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import RoiAssumptionsRepo from "@/repositories/RoiAssumptionsRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
@@ -17,12 +18,14 @@ RoiAssumptionsRoutes.post(
   authorizeCompany(Schemas.AuthzActionEnum.RoiAssumptionUpdate),
   zValidator("json", Schemas.ZCreateRoiAssumptionApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new RoiAssumptionsRepo(c.env);
-    const response = await repo.createRoiAssumption({
+    const { outboxIds, ...response } = await repo.createRoiAssumption({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, response.isSuccess ? 201 : response.isNotFound ? 404 : 500);
   },

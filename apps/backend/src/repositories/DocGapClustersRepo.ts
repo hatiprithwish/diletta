@@ -5,6 +5,7 @@ import DocGapClustersDAL from "@/data-access-layer/DocGapClustersDAL";
 import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import AuditEventProvider from "@/providers/auditEvent";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
@@ -118,13 +119,17 @@ export default class DocGapClustersRepo {
   // DEV_NOTE: Open → Answered by a document of any source in the company (unknown group or document → 404; not Open →
   // failure NotOpen, 409, nothing written)
   async answerDocGapCluster(
-    params: Schemas.AnswerDocGapClusterApiRequest & { companyId: string; publicId: string },
-  ): Promise<Schemas.UpdateDocGapClusterApiResponse> {
+    params: Schemas.AnswerDocGapClusterApiRequest & {
+      companyId: string;
+      publicId: string;
+      adminId: string;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>> {
     const { companyId } = params;
     const result = await withTenant(
       this.db,
       companyId,
-      async (tx): Promise<Schemas.UpdateDocGapClusterApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>> => {
         const open = await this.lockOpenCluster(tx, params);
         if (!open.isSuccess) return open.response;
 
@@ -148,22 +153,29 @@ export default class DocGapClustersRepo {
         if (!answered.isSuccess) {
           throw new TenantRollbackError(answered.message ?? "Doc gap cluster not answered");
         }
-        return await this.readBack(tx, params);
+        const outboxId = await this.audit(
+          tx,
+          params,
+          open.row,
+          Schemas.AuditEntityActionEnum.Answered,
+        );
+        return { ...(await this.readBack(tx, params)), outboxIds: [outboxId] };
       },
     );
     return this.logRefusal(result, params, Schemas.LogAction.AnswerDocGapCluster);
   }
 
-  // DEV_NOTE: Open → Dismissed (unknown → 404; not Open → failure NotOpen, 409, nothing written)
+  // DEV_NOTE: Open → Dismissed (unknown → 404; not Open → failure NotOpen, 409, nothing written), with its audit row
   async dismissDocGapCluster(params: {
     companyId: string;
     publicId: string;
-  }): Promise<Schemas.UpdateDocGapClusterApiResponse> {
+    adminId: string;
+  }): Promise<Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>> {
     const { companyId } = params;
     const result = await withTenant(
       this.db,
       companyId,
-      async (tx): Promise<Schemas.UpdateDocGapClusterApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>> => {
         const open = await this.lockOpenCluster(tx, params);
         if (!open.isSuccess) return open.response;
 
@@ -171,10 +183,39 @@ export default class DocGapClustersRepo {
         if (!dismissed.isSuccess) {
           throw new TenantRollbackError(dismissed.message ?? "Doc gap cluster not dismissed");
         }
-        return await this.readBack(tx, params);
+        const outboxId = await this.audit(
+          tx,
+          params,
+          open.row,
+          Schemas.AuditEntityActionEnum.Dismissed,
+        );
+        return { ...(await this.readBack(tx, params)), outboxIds: [outboxId] };
       },
     );
     return this.logRefusal(result, params, Schemas.LogAction.DismissDocGapCluster);
+  }
+
+  // DEV_NOTE: The admin's audit row (M4-9) in the write's transaction, labelled with the group's label; a failure rolls
+  // the write back
+  private async audit(
+    tx: Tx,
+    params: { companyId: string; adminId: string },
+    row: Schemas.DocGapClusterRow,
+    entityAction: Schemas.AuditEntityActionEnum,
+  ): Promise<string> {
+    const audited = await AuditEventProvider.record(tx, {
+      companyId: params.companyId,
+      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+      entityType: Schemas.AuditEntityTypeEnum.DocGapCluster,
+      entityAction,
+      entityId: row.id,
+      entityPublicId: row.publicId,
+      label: row.label,
+    });
+    if (!audited.isSuccess || !audited.outboxId) {
+      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
+    }
+    return audited.outboxId;
   }
 
   // DEV_NOTE: The group locked (unknown → 404) and checked Open (else failure NotOpen)
@@ -236,10 +277,10 @@ export default class DocGapClustersRepo {
   }
 
   private logRefusal(
-    result: Schemas.UpdateDocGapClusterApiResponse,
+    result: Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>,
     params: { companyId: string; publicId: string },
     action: Schemas.LogAction,
-  ): Schemas.UpdateDocGapClusterApiResponse {
+  ): Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse> {
     if (!result.isSuccess && result.failure) {
       AppLogger.warn({
         category: Schemas.LogCategory.Repo,

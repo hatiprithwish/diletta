@@ -2,12 +2,14 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import RoiAssumptionsDAL from "@/data-access-layer/RoiAssumptionsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import AuditEventProvider from "@/providers/auditEvent";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — Impact's minutes per task (M4-3). A save is a new row in force from today (UTC), never an
 // edit, so the hours saved on earlier days keep the minutes they had. A tool task must name one of the company's write
-// tools (getWriteToolSummaries), else 404; answers always exists.
+// tools (getWriteToolSummaries), else 404; answers always exists. Each save records its audit row (M4-9), labelled with
+// the task (the tool's name, or answers' label).
 export default class RoiAssumptionsRepo {
   private db: NodePgDatabase;
   private dal: RoiAssumptionsDAL;
@@ -30,13 +32,13 @@ export default class RoiAssumptionsRepo {
       adminId: string;
       now?: number;
     },
-  ): Promise<Schemas.CreateRoiAssumptionApiResponse> {
+  ): Promise<Schemas.WithOutboxIds<Schemas.CreateRoiAssumptionApiResponse>> {
     const { companyId } = params;
 
     return await withTenant(
       this.db,
       companyId,
-      async (tx): Promise<Schemas.CreateRoiAssumptionApiResponse> => {
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.CreateRoiAssumptionApiResponse>> => {
         const toolName = Schemas.roiTaskToolName(params.taskType);
         if (toolName !== null) {
           const tools = await this.toolDefinitionsDal.getWriteToolSummaries(tx, { companyId });
@@ -54,7 +56,25 @@ export default class RoiAssumptionsRepo {
           createdBy: params.adminId,
         });
         const { roiAssumption, ...rest } = created;
-        return { ...rest, roiAssumption: roiAssumption ? this.toView(roiAssumption) : undefined };
+        if (!created.isSuccess || !roiAssumption) return { ...rest, roiAssumption: undefined };
+
+        const audited = await AuditEventProvider.record(tx, {
+          companyId,
+          actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+          entityType: Schemas.AuditEntityTypeEnum.RoiAssumption,
+          entityAction: Schemas.AuditEntityActionEnum.Updated,
+          entityId: roiAssumption.id,
+          entityPublicId: roiAssumption.publicId,
+          label: toolName ?? Schemas.ROI_ANSWERS_TASK_LABEL,
+        });
+        if (!audited.isSuccess || !audited.outboxId) {
+          throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
+        }
+        return {
+          ...rest,
+          roiAssumption: this.toView(roiAssumption),
+          outboxIds: [audited.outboxId],
+        };
       },
     );
   }

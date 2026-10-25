@@ -15,7 +15,8 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
-// and every query filters on companyId (defence in depth on top of RLS). activity_log is append-only: insert, and read by entity.
+// and every query filters on companyId (defence in depth on top of RLS). activity_log is append-only: insert, and read by
+// entity or as the audit log.
 // Critical events reach it through CriticalEventProvider, which writes the event_outbox row in the same tx.
 export default class ActivityLogDAL {
   async createActivityLog(
@@ -273,6 +274,97 @@ export default class ActivityLogDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetChangeRequestRollupGroups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The audit log (M4-9): the company's rows written by an admin or an operator, with the admin's name (left
+  // join on an admin of the same company, so a removed admin's row still reads; an operator's name is never read: RLS
+  // hides operators from a tenant). The actor types are inlined, not bound, so the planner matches the partial index
+  // IDX_activity_log_company_id_created_at_audit.
+  private auditActorCondition() {
+    return sql`${activityLog.actorType} IN (${sql.raw(String(Schemas.ActivityLogActorTypeIntEnum.Admin))}, ${sql.raw(String(Schemas.ActivityLogActorTypeIntEnum.Operator))})`;
+  }
+
+  async getAuditLog(tx: NodePgTransaction<EmptyRelations>, params: Schemas.GetAuditLogDALRequest) {
+    const response: Schemas.AuditLogDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(activityLog.companyId, params.companyId), this.auditActorCondition()];
+      const adminJoinConditions = [
+        eq(activityLog.actorType, Schemas.ActivityLogActorTypeIntEnum.Admin),
+        eq(admins.id, activityLog.actorId),
+        eq(admins.companyId, activityLog.companyId),
+      ];
+      const sortColumns = {
+        [Schemas.AuditLogSortColumn.CreatedAt]: activityLog.createdAt,
+      };
+      const sortColumn = sortColumns[params.sortColumn];
+      const sortExpr =
+        params.sortDirection === Schemas.SortDirection.Asc ? asc(sortColumn) : desc(sortColumn);
+
+      const auditLog = await tx
+        .select({
+          actorType: activityLog.actorType,
+          entityType: activityLog.entityType,
+          entityAction: activityLog.entityAction,
+          entityVersion: activityLog.entityVersion,
+          detail: activityLog.detail,
+          createdAt: activityLog.createdAt,
+          actorName: admins.name,
+        })
+        .from(activityLog)
+        .leftJoin(admins, and(...adminJoinConditions))
+        .where(and(...conditions))
+        .orderBy(sortExpr, asc(activityLog.id))
+        .limit(params.pageSize)
+        .offset((params.pageNo - 1) * params.pageSize);
+
+      response.isSuccess = true;
+      response.message = "Audit log fetched successfully";
+      response.auditLog = auditLog;
+    } catch (error) {
+      const message = "Unknown error in fetching audit log";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetAuditLog,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getAuditLogCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetAuditLogCountDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(activityLog.companyId, params.companyId), this.auditActorCondition()];
+      const [result] = await tx
+        .select({ count: count() })
+        .from(activityLog)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Audit log counted successfully";
+      response.totalRecords = result?.count ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting audit log";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountAuditLog,
         message,
         error,
         metadata: params,

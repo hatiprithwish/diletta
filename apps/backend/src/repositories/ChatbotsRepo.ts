@@ -1,7 +1,9 @@
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { EmptyRelations } from "drizzle-orm";
+import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import AuditEventProvider from "@/providers/auditEvent";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
@@ -35,16 +37,49 @@ export default class ChatbotsRepo {
     return { ...rest, chatbot: chatbot ? this.withStatusLabel(chatbot) : undefined };
   }
 
-  async createChatbot(
-    params: Schemas.CreateChatbotApiRequest & { companyId: string },
-  ): Promise<Schemas.CreateChatbotApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const result = await this.dal.createChatbot(tx, {
-        companyId: params.companyId,
-        name: params.chatbot.name,
-      });
-      return this.withChatbotResponse(result);
+  // DEV_NOTE: An admin's audit row (M4-9) in the write's transaction; a failure rolls the write back
+  private async audit(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyId: string; adminId: string },
+    chatbot: Schemas.Chatbot,
+    entityAction: Schemas.AuditEntityActionEnum,
+  ): Promise<string> {
+    const audited = await AuditEventProvider.record(tx, {
+      companyId: params.companyId,
+      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Admin, actorId: params.adminId },
+      entityType: Schemas.AuditEntityTypeEnum.Chatbot,
+      entityAction,
+      entityId: chatbot.id,
+      entityPublicId: chatbot.publicId,
+      label: chatbot.name,
     });
+    if (!audited.isSuccess || !audited.outboxId) {
+      throw new TenantRollbackError(audited.message ?? "Audit event not recorded");
+    }
+    return audited.outboxId;
+  }
+
+  async createChatbot(
+    params: Schemas.CreateChatbotApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.CreateChatbotApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.CreateChatbotApiResponse>> => {
+        const result = await this.dal.createChatbot(tx, {
+          companyId: params.companyId,
+          name: params.chatbot.name,
+        });
+        if (!result.isSuccess || !result.chatbot) return this.withChatbotResponse(result);
+        const outboxId = await this.audit(
+          tx,
+          params,
+          result.chatbot,
+          Schemas.AuditEntityActionEnum.Created,
+        );
+        return { ...this.withChatbotResponse(result), outboxIds: [outboxId] };
+      },
+    );
   }
 
   async getChatbotDetails(params: {
@@ -64,18 +99,50 @@ export default class ChatbotsRepo {
     });
   }
 
+  // DEV_NOTE: Audited by what changed against the row before: a new name is Updated, a new status Paused / Resumed
+  // (both = two rows); a save that changes nothing records nothing
   async updateChatbot(
-    params: Schemas.UpdateChatbotApiRequest & { companyId: string; publicId: string },
-  ): Promise<Schemas.UpdateChatbotApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const result = await this.dal.updateChatbot(tx, {
-        companyId: params.companyId,
-        publicId: params.publicId,
-        name: params.chatbot.name ?? null,
-        status: params.chatbot.status ?? null,
-      });
-      return this.withChatbotResponse(result);
-    });
+    params: Schemas.UpdateChatbotApiRequest & {
+      companyId: string;
+      publicId: string;
+      adminId: string;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateChatbotApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateChatbotApiResponse>> => {
+        const before = await this.dal.getChatbotDetails(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+        });
+        if (!before.isSuccess || !before.chatbot) return this.withChatbotResponse(before);
+
+        const result = await this.dal.updateChatbot(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+          name: params.chatbot.name ?? null,
+          status: params.chatbot.status ?? null,
+        });
+        if (!result.isSuccess || !result.chatbot) return this.withChatbotResponse(result);
+        const after = result.chatbot;
+
+        const actions: Schemas.AuditEntityActionEnum[] = [];
+        if (after.name !== before.chatbot.name) actions.push(Schemas.AuditEntityActionEnum.Updated);
+        if (after.status !== before.chatbot.status) {
+          actions.push(
+            after.status === Schemas.ChatbotStatusIntEnum.Paused
+              ? Schemas.AuditEntityActionEnum.Paused
+              : Schemas.AuditEntityActionEnum.Resumed,
+          );
+        }
+        const outboxIds: string[] = [];
+        for (const action of actions) {
+          outboxIds.push(await this.audit(tx, params, after, action));
+        }
+        return { ...this.withChatbotResponse(result), outboxIds };
+      },
+    );
   }
 
   async deleteChatbot(params: { companyId: string; publicId: string }) {

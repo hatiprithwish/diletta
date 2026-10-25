@@ -1,11 +1,12 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import {
+  activityLog,
   admins,
   chatbotConfigs,
   chatbots,
@@ -14,6 +15,7 @@ import {
   evalCases,
   evalResults,
   evalRuns,
+  eventOutbox,
   files,
 } from "@/db/tables";
 import worker from "@/index";
@@ -147,6 +149,33 @@ async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Pro
   } finally {
     await pool.end();
   }
+}
+
+// DEV_NOTE: The company's audit rows (M4-9) of one entity type, oldest first, read as the owner
+async function auditEvents(companyId: string, entityType: string) {
+  let rows: {
+    actorType: number;
+    entityAction: string;
+    entityVersion: number | null;
+    detail: unknown;
+  }[] = [];
+  await withOwnerDb(async (ownerDb) => {
+    const conditions = [
+      eq(activityLog.companyId, companyId),
+      eq(activityLog.entityType, entityType),
+    ];
+    rows = await ownerDb
+      .select({
+        actorType: activityLog.actorType,
+        entityAction: activityLog.entityAction,
+        entityVersion: activityLog.entityVersion,
+        detail: activityLog.detail,
+      })
+      .from(activityLog)
+      .where(and(...conditions))
+      .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+  });
+  return rows;
 }
 
 async function call<T>(
@@ -602,6 +631,8 @@ afterAll(async () => {
   const companyIds = [companyA, companyB].filter(Boolean);
   if (companyIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(files).where(inArray(files.companyId, companyIds));
     await ownerDb.delete(evalResults).where(inArray(evalResults.companyId, companyIds));
     await ownerDb.delete(evalRuns).where(inArray(evalRuns.companyId, companyIds));
@@ -942,6 +973,16 @@ describe("POST /dashboard/eval-cases", () => {
       body: { ...draft, botId: salesPublicId },
     });
     expect(sales.body.evalCase?.chatbotName).toBe("Sales");
+
+    // DEV_NOTE: Each save left one audit row by the admin, with the case's name only (M4-9)
+    expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.EvalCase)).toEqual(
+      [1, 2].map(() => ({
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Created,
+        entityVersion: null,
+        detail: { label: "Badge reprints" },
+      })),
+    );
   });
 
   it("refuses a conversation that doesn't end with the user, an unknown chatbot and an operator", async () => {
@@ -979,6 +1020,11 @@ describe("PATCH /dashboard/eval-cases/:publicId", () => {
     });
     const off = await patch(salesCase, { isActive: false });
     expect(off.body.evalCase?.isActive).toBe(false);
+    expect(
+      (await auditEvents(companyA, Schemas.AuditEntityTypeEnum.EvalCase))
+        .filter((event) => (event.detail as { label: string }).label === "Scheduled exports")
+        .map((event) => event.entityAction),
+    ).toEqual([Schemas.AuditEntityActionEnum.Updated, Schemas.AuditEntityActionEnum.TurnedOff]);
   });
 
   it("refuses to rewrite a shape it can't read, but still turns it on or off", async () => {

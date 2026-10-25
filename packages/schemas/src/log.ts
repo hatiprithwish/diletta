@@ -369,6 +369,12 @@ export enum LogAction {
   CountActiveEvalCases = "CountActiveEvalCases",
   UpdateEvalCase = "UpdateEvalCase",
 
+  // Audit log (M4-9)
+  RecordAuditEvent = "RecordAuditEvent",
+  GetAuditLog = "GetAuditLog",
+  CountAuditLog = "CountAuditLog",
+  ExportAuditLog = "ExportAuditLog",
+
   // Cron
   DispatchCron = "DispatchCron",
 }

@@ -1,15 +1,17 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import {
+  activityLog,
   admins,
   companies,
   docGapClusters,
   docGaps,
+  eventOutbox,
   files,
   knowledgeDocuments,
   knowledgeSources,
@@ -105,6 +107,33 @@ async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Pro
   } finally {
     await pool.end();
   }
+}
+
+// DEV_NOTE: The company's audit rows (M4-9) of one entity type, oldest first, read as the owner
+async function auditEvents(companyId: string, entityType: string) {
+  let rows: {
+    actorType: number;
+    entityAction: string;
+    entityVersion: number | null;
+    detail: unknown;
+  }[] = [];
+  await withOwnerDb(async (ownerDb) => {
+    const conditions = [
+      eq(activityLog.companyId, companyId),
+      eq(activityLog.entityType, entityType),
+    ];
+    rows = await ownerDb
+      .select({
+        actorType: activityLog.actorType,
+        entityAction: activityLog.entityAction,
+        entityVersion: activityLog.entityVersion,
+        detail: activityLog.detail,
+      })
+      .from(activityLog)
+      .where(and(...conditions))
+      .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+  });
+  return rows;
 }
 
 async function call<T>(
@@ -330,6 +359,8 @@ afterAll(async () => {
     await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminA, adminB]));
     const companyIds = [companyA, companyB].filter(Boolean);
     if (companyIds.length === 0) return;
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(docGaps).where(inArray(docGaps.companyId, companyIds));
     await ownerDb.delete(docGapClusters).where(inArray(docGapClusters.companyId, companyIds));
     await ownerDb
@@ -510,6 +541,12 @@ describe("/dashboard/doc-gap-clusters", () => {
     expect(again.body.failure).toBe(Schemas.DocGapClusterUpdateFailureEnum.NotOpen);
     expect((await dismiss(mediumCluster)).status).toBe(409);
     expect((await dismiss(answeredCluster)).status).toBe(409);
+
+    // DEV_NOTE: One audit row for the answer (M4-9), none for the refusals
+    const events = await auditEvents(companyA, Schemas.AuditEntityTypeEnum.DocGapCluster);
+    expect(events.map((event) => [event.actorType, event.entityAction])).toEqual([
+      [Schemas.ActivityLogActorTypeIntEnum.Admin, Schemas.AuditEntityActionEnum.Answered],
+    ]);
   });
 
   it("dismisses an Open group, once", async () => {
@@ -520,6 +557,11 @@ describe("/dashboard/doc-gap-clusters", () => {
     expect((await dismiss(bigCluster)).status).toBe(409);
     expect((await answer(bigCluster, certificatesDoc)).status).toBe(409);
     expect((await clusterRow(bigCluster))?.answeredByDocumentId).toBeNull();
+    expect(
+      (await auditEvents(companyA, Schemas.AuditEntityTypeEnum.DocGapCluster)).map(
+        (event) => event.entityAction,
+      ),
+    ).toEqual([Schemas.AuditEntityActionEnum.Answered, Schemas.AuditEntityActionEnum.Dismissed]);
   });
 
   it("reopens a group when the document that answered it is removed", async () => {

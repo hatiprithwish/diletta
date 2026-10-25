@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { and, count, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -11,10 +11,11 @@ import {
   admins,
   changeRequests,
   chatbotConfigs,
-  chatbotUsers,
   chatbots,
+  chatbotUsers,
   companies,
   conversations,
+  eventOutbox,
   knowledgeSources,
   modelCalls,
   qualityIssues,
@@ -92,6 +93,33 @@ async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Pro
   } finally {
     await pool.end();
   }
+}
+
+// DEV_NOTE: The company's audit rows (M4-9) of one entity type, oldest first, read as the owner
+async function auditEvents(companyId: string, entityType: string) {
+  let rows: {
+    actorType: number;
+    entityAction: string;
+    entityVersion: number | null;
+    detail: unknown;
+  }[] = [];
+  await withOwnerDb(async (ownerDb) => {
+    const conditions = [
+      eq(activityLog.companyId, companyId),
+      eq(activityLog.entityType, entityType),
+    ];
+    rows = await ownerDb
+      .select({
+        actorType: activityLog.actorType,
+        entityAction: activityLog.entityAction,
+        entityVersion: activityLog.entityVersion,
+        detail: activityLog.detail,
+      })
+      .from(activityLog)
+      .where(and(...conditions))
+      .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+  });
+  return rows;
 }
 
 async function call<T>(
@@ -416,6 +444,7 @@ afterAll(async () => {
   const companyIds = [companyA, companyB].filter(Boolean);
   if (companyIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
     await ownerDb.delete(activityRollups).where(inArray(activityRollups.companyId, companyIds));
     await ownerDb.delete(roiAssumptions).where(inArray(roiAssumptions.companyId, companyIds));
     await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
@@ -585,6 +614,16 @@ describe("POST /dashboard/roi-assumptions and GET /dashboard/insights/impact", (
       body: { taskType: `tool:${toolName}`, manualMinutes: 4.5 },
     });
     expect(tool.status).toBe(201);
+    // DEV_NOTE: Each save left one audit row, labelled with the task (M4-9)
+    expect(
+      (await auditEvents(companyA, Schemas.AuditEntityTypeEnum.RoiAssumption)).map((event) => [
+        event.entityAction,
+        event.detail,
+      ]),
+    ).toEqual([
+      [Schemas.AuditEntityActionEnum.Updated, { label: Schemas.ROI_ANSWERS_TASK_LABEL }],
+      [Schemas.AuditEntityActionEnum.Updated, { label: toolName }],
+    ]);
 
     const { status, body } = await call<Schemas.GetInsightsImpactApiResponse>(
       "GET",

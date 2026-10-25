@@ -1,11 +1,19 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { admins, companies, files, knowledgeDocuments, knowledgeSources } from "@/db/tables";
+import {
+  activityLog,
+  admins,
+  companies,
+  eventOutbox,
+  files,
+  knowledgeDocuments,
+  knowledgeSources,
+} from "@/db/tables";
 import worker from "@/index";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -70,6 +78,33 @@ async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   }
 }
 
+// DEV_NOTE: The company's audit rows (M4-9) of one entity type, oldest first, read as the owner
+async function auditEvents(companyId: string, entityType: string) {
+  let rows: {
+    actorType: number;
+    entityAction: string;
+    entityVersion: number | null;
+    detail: unknown;
+  }[] = [];
+  await withOwnerDb(async (ownerDb) => {
+    const conditions = [
+      eq(activityLog.companyId, companyId),
+      eq(activityLog.entityType, entityType),
+    ];
+    rows = await ownerDb
+      .select({
+        actorType: activityLog.actorType,
+        entityAction: activityLog.entityAction,
+        entityVersion: activityLog.entityVersion,
+        detail: activityLog.detail,
+      })
+      .from(activityLog)
+      .where(and(...conditions))
+      .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+  });
+  return rows;
+}
+
 async function call(
   method: string,
   path: string,
@@ -119,6 +154,8 @@ afterAll(async () => {
     await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminA, adminB]));
     const companyIds = [companyA, companyB].filter(Boolean);
     if (companyIds.length === 0) return;
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb
       .delete(knowledgeDocuments)
       .where(inArray(knowledgeDocuments.companyId, companyIds));
@@ -276,6 +313,31 @@ describe("/dashboard/knowledge-sources", () => {
       expect((await call("DELETE", base, { as: adminB })).status).toBe(404);
       expect((await call("DELETE", base, { as: adminA })).status).toBe(200);
       expect((await call("DELETE", base, { as: adminA })).status).toBe(404);
+
+      // DEV_NOTE: Each admin write left one audit row (M4-9); the refused ones and the sync the upload started none
+      const admin = Schemas.ActivityLogActorTypeIntEnum.Admin;
+      expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.KnowledgeSource)).toEqual(
+        [
+          Schemas.AuditEntityActionEnum.Created,
+          Schemas.AuditEntityActionEnum.Paused,
+          Schemas.AuditEntityActionEnum.Deleted,
+        ].map((entityAction) => ({
+          actorType: admin,
+          entityAction,
+          entityVersion: null,
+          detail: { label: "Uploads" },
+        })),
+      );
+      expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.KnowledgeDocument)).toEqual(
+        [Schemas.AuditEntityActionEnum.Uploaded, Schemas.AuditEntityActionEnum.Deleted].map(
+          (entityAction) => ({
+            actorType: admin,
+            entityAction,
+            entityVersion: null,
+            detail: { label: "guide.md" },
+          }),
+        ),
+      );
     },
   );
 
