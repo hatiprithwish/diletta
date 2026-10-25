@@ -140,9 +140,11 @@ const ZJwtIssuer = ZHttpsUrl.refine((value) => !value.includes("?") && !value.in
 
 // DEV_NOTE: A browser Origin header is scheme://host[:port] only, so a stored path, query or trailing slash
 // could never match it. Only exact origins are accepted.
-const ZOrigin = z.url().refine((value) => URL.canParse(value) && new URL(value).origin === value, {
-  message: "Must be an origin (scheme://host[:port]) with no path",
-});
+export const ZOrigin = z
+  .url()
+  .refine((value) => URL.canParse(value) && new URL(value).origin === value, {
+    message: "Must be an origin (scheme://host[:port]) with no path",
+  });
 
 // Create Company Connection Body
 // DEV_NOTE: authConfig is any JSON object here: its shape depends on the auth type, so the create request and the

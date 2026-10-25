@@ -54,6 +54,7 @@ import type {
   InsightsOverview,
   InsightsUsage,
 } from "../insights";
+import type { ContentRetention, SecurityConnection, SecurityPageSearch } from "../security";
 
 // DEV_NOTE: Props of the dashboard shell (apps/web, M4-1). The header's actions come in as children.
 
@@ -538,10 +539,21 @@ export interface DashboardKnowledgeFrequencySelectProps {
 }
 
 // DEV_NOTE: Previous / Next under a paged list, with "1–25 of 214"
+// DEV_NOTE: totalRecords null = not known (the count is loading or failed): the pager then pages by rowCount, the rows
+// on this page (a full page may have a next one), rather than disappearing
 export interface DashboardPagerProps {
   page: number;
   pageSize: number;
-  totalRecords: number;
+  totalRecords: number | null;
+  rowCount?: number;
+  onPage: (page: number) => void;
+}
+
+// DEV_NOTE: An empty page past the end of a paged list (an old link, or rows that moved): a way back to the last page
+// when the count is known, else to the first
+export interface DashboardPastEndNoteProps {
+  pageSize: number;
+  totalRecords: number | null;
   onPage: (page: number) => void;
 }
 
@@ -570,4 +582,35 @@ export interface DashboardNavCountProps {
   label: string;
   tone: DashboardChipToneEnum.Destructive | DashboardChipToneEnum.Warning;
   isRail: boolean;
+}
+
+// ─── Security page (M4-9)
+
+export interface DashboardSecurityPageProps {
+  search: SecurityPageSearch;
+}
+
+// DEV_NOTE: A paged section of the page; onPage keeps the rest of the URL search
+export interface DashboardSecurityPagedSectionProps {
+  page: number;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardSecurityConnectionProps {
+  connection: SecurityConnection;
+}
+
+// DEV_NOTE: One labelled row of a connection card (its value is the children)
+export interface DashboardSecurityRowProps {
+  label: string;
+}
+
+export interface DashboardSecurityRetentionFormProps {
+  retention: ContentRetention;
+}
+
+export interface DashboardSecurityOriginsDialogProps {
+  connection: SecurityConnection;
+  isOpen: boolean;
+  onClose: () => void;
 }

@@ -8,6 +8,7 @@ export const QUERY_KEY_ROOTS = {
   conversations: ["conversations"],
   quality: ["quality"],
   tests: ["tests"],
+  security: ["security"],
 } as const;
 
 // DEV_NOTE: The Tests page's key segments that another page refreshes (TestsQueries.keys builds its keys from them)

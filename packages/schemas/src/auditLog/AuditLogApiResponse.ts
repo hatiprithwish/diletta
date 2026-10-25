@@ -13,7 +13,7 @@ export interface AuditLogEntry {
   actorName: string | null;
   action: string;
   on: string | null;
-  createdAt: Date;
+  createdAt: string;
 }
 
 export interface GetAuditLogApiResponse extends ApiResponse {

@@ -77,7 +77,7 @@ describe("AuditLogProvider", () => {
       actorName: "Ana Ruiz",
       action: "Synced knowledge source",
       on: "Help center",
-      createdAt,
+      createdAt: createdAt.toISOString(),
     });
   });
 });

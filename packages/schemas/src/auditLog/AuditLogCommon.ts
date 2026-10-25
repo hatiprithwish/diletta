@@ -14,6 +14,10 @@ export enum AuditEntityTypeEnum {
   EvalCase = "eval_case",
   RoiAssumption = "roi_assumption",
   ToolDefinition = "tool_definition",
+  // DEV_NOTE: The Security page's own settings (M4-9)
+  CompanyConnection = "company_connection",
+  CompanyEncryptionKey = "company_encryption_key",
+  Company = "company",
 }
 
 // DEV_NOTE: A status change is its own action (paused, resumed, turned on / off, activated, disabled), so the log says
@@ -33,6 +37,9 @@ export enum AuditEntityActionEnum {
   VersionCreated = "version_created",
   Activated = "activated",
   Disabled = "disabled",
+  OriginsChanged = "origins_changed",
+  Rotated = "rotated",
+  RetentionChanged = "retention_changed",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -76,6 +83,9 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Disabled,
     AuditEntityActionEnum.Deleted,
   ],
+  [AuditEntityTypeEnum.CompanyConnection]: [AuditEntityActionEnum.OriginsChanged],
+  [AuditEntityTypeEnum.CompanyEncryptionKey]: [AuditEntityActionEnum.Rotated],
+  [AuditEntityTypeEnum.Company]: [AuditEntityActionEnum.RetentionChanged],
 } as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;
 
 export type AuditEntityActionFor<T extends AuditEntityTypeEnum> =

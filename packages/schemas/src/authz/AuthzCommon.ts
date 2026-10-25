@@ -40,8 +40,14 @@ export enum AuthzActionEnum {
   ChangeRequestRead = "change_request.read",
   ChangeRequestResolve = "change_request.resolve",
 
-  // Security page (company-scoped, M4-9): read the audit log (every admin and operator write on the company)
+  // Security page (company-scoped, M4-9): read the audit log (every admin and operator write on the company)…
   AuditLogRead = "audit_log.read",
+  // and the rest of the page: read identity and origins, keys, retention and prompt-injection events; change where the
+  // widget may run, rotate the company key, set how long chat content is kept
+  SecurityRead = "security.read",
+  ConnectionOriginsUpdate = "company_connection.origins_update",
+  EncryptionKeyRotate = "company_encryption_key.rotate",
+  RetentionUpdate = "company.retention_update",
 
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
