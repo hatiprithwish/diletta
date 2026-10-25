@@ -80,13 +80,17 @@ export default class CompanyEncryptionKeysRepo {
   // failed step throws TenantRollbackError, so the old key stays active. One rotation at a time (max 2 live keys):
   // refused while a retiring key is still waiting for the rotation job. Values already stored keep decrypting with
   // their own encryption_key_version; new writes use the new key. Only an admin rotates (the Security page, M4-9): the
-  // rotation records its audit row in the same transaction; a refusal (failure, 409) writes nothing.
+  // rotation records its audit row in the same transaction; a refusal (failure, 409) writes nothing. The key rows are
+  // locked first, so a second rotation at the same moment waits for the first and is refused as RotationInProgress.
   async rotateCompanyEncryptionKey(params: {
     companyId: string;
     adminId: string;
   }): Promise<Schemas.WithOutboxIds<Schemas.RotateCompanyEncryptionKeyApiResponse>> {
     return await withTenant(this.db, params.companyId, async (tx) => {
-      const listed = await this.dal.getCompanyEncryptionKeys(tx, { companyId: params.companyId });
+      const listed = await this.dal.getCompanyEncryptionKeys(tx, {
+        companyId: params.companyId,
+        isForUpdate: true,
+      });
       if (!listed.isSuccess || !listed.companyEncryptionKeys) {
         throw new TenantRollbackError(listed.message);
       }
@@ -144,7 +148,8 @@ export default class CompanyEncryptionKeysRepo {
   }
 
   // DEV_NOTE: The Security page's keys (M4-9): every version, newest first, never its bytes or master key version.
-  // rotatedAt = when it left Active (its updated_at, set when it was marked Retiring); a Retiring one means a rotation is
+  // rotatedAt = when it left Active: the next version's created_at (a rotation retires v<n> and creates v<n+1> in one
+  // transaction), never updated_at, which later writes such as the M6-3 destroy move. A Retiring one means a rotation is
   // still in progress.
   async getSecurityEncryptionKeys(params: {
     companyId: string;
@@ -161,16 +166,19 @@ export default class CompanyEncryptionKeysRepo {
         return {
           isSuccess: true,
           message: "Encryption keys fetched successfully",
-          encryptionKeys: keys.map((key) => ({
-            version: key.version,
-            status: key.status,
-            statusLabel: Schemas.COMPANY_ENCRYPTION_KEY_STATUS_LABEL_MAP[key.status],
-            createdAt: key.createdAt.toISOString(),
-            rotatedAt:
-              key.status === Schemas.CompanyEncryptionKeyStatusIntEnum.Active
-                ? null
-                : key.updatedAt.toISOString(),
-          })),
+          encryptionKeys: keys.map((key, index) => {
+            const next = index > 0 ? keys[index - 1] : undefined;
+            return {
+              version: key.version,
+              status: key.status,
+              statusLabel: Schemas.COMPANY_ENCRYPTION_KEY_STATUS_LABEL_MAP[key.status],
+              createdAt: key.createdAt.toISOString(),
+              rotatedAt:
+                key.status === Schemas.CompanyEncryptionKeyStatusIntEnum.Active || !next
+                  ? null
+                  : next.createdAt.toISOString(),
+            };
+          }),
           isRotationInProgress: keys.some(
             (key) => key.status === Schemas.CompanyEncryptionKeyStatusIntEnum.Retiring,
           ),
@@ -186,14 +194,12 @@ export default class CompanyEncryptionKeysRepo {
     adminId: string;
   }): Promise<Schemas.WithOutboxIds<Schemas.RotateEncryptionKeyApiResponse>> {
     const rotated = await this.rotateCompanyEncryptionKey(params);
+    const failure = "failure" in rotated ? rotated.failure : undefined;
+    // DEV_NOTE: A server error answers without the keys; only a refusal reads them, so the page shows why
+    if (!rotated.isSuccess && !failure) return { isSuccess: false, message: rotated.message };
     const keys = await this.getSecurityEncryptionKeys({ companyId: params.companyId });
     if (!rotated.isSuccess) {
-      return {
-        ...keys,
-        isSuccess: false,
-        message: rotated.message,
-        failure: "failure" in rotated ? rotated.failure : undefined,
-      };
+      return { ...keys, isSuccess: false, message: rotated.message, failure };
     }
     // DEV_NOTE: The rotation committed whatever the read does: a failed read still answers success, without the list
     // (the page reloads it)

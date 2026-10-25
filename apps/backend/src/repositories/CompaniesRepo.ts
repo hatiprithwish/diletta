@@ -153,8 +153,9 @@ export default class CompaniesRepo {
     );
   }
 
-  // DEV_NOTE: Save retention, with its audit row (M4-9) labelled with the days; the days already stored change nothing
-  // and record nothing. The purge that deletes chat content past it is M6-1.
+  // DEV_NOTE: Save retention, with its audit row (M4-9) labelled with the days. Compared with the retention in force
+  // (NULL = DEFAULT_CONTENT_RETENTION_DAYS), under the row lock: the days already in force, the default included, change
+  // nothing and record nothing. The purge that deletes chat content past it is M6-1.
   async updateContentRetention(
     params: Schemas.UpdateContentRetentionApiRequest & { companyId: string; adminId: string },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateContentRetentionApiResponse>> {
@@ -162,11 +163,17 @@ export default class CompaniesRepo {
       this.db,
       params.companyId,
       async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateContentRetentionApiResponse>> => {
-        const found = await this.dal.getCompanyDetails(tx, { companyId: params.companyId });
+        const found = await this.dal.getCompanyDetails(tx, {
+          companyId: params.companyId,
+          isForUpdate: true,
+        });
         if (!found.isSuccess || !found.company) {
           return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
         }
-        if (found.company.contentRetentionDays === params.contentRetentionDays) {
+        if (
+          Schemas.effectiveContentRetentionDays(found.company.contentRetentionDays) ===
+          params.contentRetentionDays
+        ) {
           return {
             isSuccess: true,
             message: "Content retention unchanged",

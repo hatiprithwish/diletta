@@ -320,10 +320,16 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
     expect(updated.body.connection?.allowedOrigins).toEqual(origins);
     expect(updated.body).not.toHaveProperty("outboxIds");
 
-    // DEV_NOTE: The same list again changes nothing and records nothing
+    // DEV_NOTE: The same list again, in either order (the gate checks membership), changes nothing and records nothing
     expect(
       (await call("PUT", path, { as: adminA, body: { allowedOrigins: origins } })).status,
     ).toBe(200);
+    const reordered = await call("PUT", path, {
+      as: adminA,
+      body: { allowedOrigins: [...origins].reverse() },
+    });
+    expect(reordered.status).toBe(200);
+    expect(reordered.body.connection?.allowedOrigins).toEqual(origins);
     expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.CompanyConnection)).toEqual([
       {
         actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
@@ -372,16 +378,22 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
     expect(before.body.encryptionKeys?.[0]).not.toHaveProperty("encryptedKey");
     expect(before.body.encryptionKeys?.[0]).not.toHaveProperty("masterKeyVersion");
 
-    const rotated = await call("POST", "/dashboard/security/encryption-keys/rotate", {
-      as: adminA,
-    });
-    expect(rotated.status).toBe(200);
+    // DEV_NOTE: Two admins at the same moment: the key rows are locked, so one rotates and the other is refused (409)
+    const both = await Promise.all([
+      call("POST", "/dashboard/security/encryption-keys/rotate", { as: adminA }),
+      call("POST", "/dashboard/security/encryption-keys/rotate", { as: adminA }),
+    ]);
+    expect(both.map((response) => response.status).sort()).toEqual([200, 409]);
+    const rotated = both.find((response) => response.status === 200)!;
     expect(rotated.body.isRotationInProgress).toBe(true);
     expect(rotated.body.encryptionKeys?.map((key) => [key.version, key.statusLabel])).toEqual([
       [2, Schemas.CompanyEncryptionKeyStatusLabelEnum.Active],
       [1, Schemas.CompanyEncryptionKeyStatusLabelEnum.Retiring],
     ]);
-    expect(rotated.body.encryptionKeys?.[1]?.rotatedAt).not.toBeNull();
+    // DEV_NOTE: v1 was rotated when v2 was created, whatever later writes do to v1's updated_at
+    expect(rotated.body.encryptionKeys?.[1]?.rotatedAt).toBe(
+      rotated.body.encryptionKeys?.[0]?.createdAt,
+    );
 
     const again = await call("POST", "/dashboard/security/encryption-keys/rotate", { as: adminA });
     expect(again.status).toBe(409);
@@ -418,6 +430,13 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
         })
       ).status,
     ).toBe(400);
+    // DEV_NOTE: The default saved explicitly is the retention already in force: nothing written, nothing recorded
+    const pinned = await call("PUT", "/dashboard/security/retention", {
+      as: adminA,
+      body: { contentRetentionDays: Schemas.DEFAULT_CONTENT_RETENTION_DAYS },
+    });
+    expect(pinned.status).toBe(200);
+    expect(pinned.body.retention?.isDefault).toBe(true);
     const saved = await call("PUT", "/dashboard/security/retention", {
       as: adminA,
       body: { contentRetentionDays: 90 },

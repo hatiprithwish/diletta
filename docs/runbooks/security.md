@@ -7,19 +7,19 @@ The Security page (M4-9, `/security`) shows how the widget proves who the user i
 One card per connection (production first, then staging): the JWT issuer, when its signing keys were last fetched, and the allowed origins.
 
 - **Signing keys** come from the JWKS cache (`JWKS_CACHE`, `jwks:<issuer>`, 1 h TTL). "Last refreshed" is the cached set's `fetchedAt`; nothing cached shows "Fetched from the issuer when a user next signs in". The page never fetches the issuer itself.
-- **Edit** replaces the connection's allowed origins (`PUT /dashboard/security/connections/:publicId/origins`). Each must be an exact origin (`https://host[:port]`, no path, no trailing slash), at least one, at most 20, each once. The widget gate reads the new list at the next connect; open widgets keep their socket.
+- **Edit** replaces the connection's allowed origins (`PUT /dashboard/security/connections/:publicId/origins`). Each must be an exact origin (`https://host[:port]`, no path, no trailing slash), at least one, at most 20, each once. Order doesn't matter: the same origins in another order change nothing and record no row. The widget gate reads the new list at the next connect; open widgets keep their socket.
 - **The issuer** is not editable here: it decides which keys the platform trusts and is unique across companies, so an operator sets it (and the connection) with the company.
 
 ## Encryption keys
 
-Every version of the company key, newest first, with its status, when it was created and when it stopped being the active key.
+Every version of the company key, newest first, with its status, when it was created and when it stopped being the active key (the next version's creation time: a rotation creates it in the same transaction).
 
 - **Rotate key** (after a confirm) makes a new version active at once and moves the old one to Retiring; new writes use the new key and stored values keep decrypting with their own version.
-- **One rotation at a time.** While a key is Retiring, the button is disabled and a direct call answers 409 (`RotationInProgress`). The job that re-encrypts rows and retires the old key is M6-3; until it lands, a Retiring key stays Retiring and a second rotation isn't possible. There is no manual unblock: re-encrypting the old key's rows by hand would race live writes.
+- **One rotation at a time.** While a key is Retiring, the button is disabled and a direct call answers 409 (`RotationInProgress`). Two rotations at the same moment run one after the other (the key rows are locked), so the second gets the same 409. The job that re-encrypts rows and retires the old key is M6-3; until it lands, a Retiring key stays Retiring and a second rotation isn't possible. There is no manual unblock: re-encrypting the old key's rows by hand would race live writes.
 
 ## Retention
 
-"Keep chat content for" is one of 7, 30, 90, 180 or 365 days, counted from a conversation's last message (`companies.content_retention_days`; empty = 30, shown as the default). Saving records an audit row.
+"Keep chat content for" is one of 7, 30, 90, 180 or 365 days, counted from a conversation's last message (`companies.content_retention_days`; empty = 30, shown as the default). Saving records an audit row, unless it changes nothing: saving 30 while on the default stores nothing and records nothing.
 
 - The purge that deletes transcripts past the period is M6-1. Until it runs, the setting is stored and shown, and the page says transcripts are kept until automatic deletion is switched on.
 - Model gateway logs are kept 7 days (AI Gateway setting, not this page).

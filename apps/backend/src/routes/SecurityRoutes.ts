@@ -75,7 +75,13 @@ SecurityRoutes.post(
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     if (response.isSuccess) return c.json(response, 200);
-    return c.json(response, response.failure ? 409 : 500);
+    if (response.failure) {
+      return c.json(
+        response,
+        Schemas.ENCRYPTION_KEY_ROTATE_FAILURE_HTTP_STATUS_MAP[response.failure],
+      );
+    }
+    return c.json(response, 500);
   },
 );
 

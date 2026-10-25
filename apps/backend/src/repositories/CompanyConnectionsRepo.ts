@@ -179,7 +179,8 @@ export default class CompanyConnectionsRepo {
   }
 
   // DEV_NOTE: Edit allowed origins: the whole list, replacing the stored one, with its audit row (M4-9) labelled with the
-  // environment. The same list again changes nothing and records nothing. The widget gate reads the new list at the next
+  // environment. The same origins again, in any order (the gate checks membership only), change nothing and record
+  // nothing; the row is locked first, so two saves of one new list record one row. The widget gate reads the new list at the next
   // connect (WidgetAuthRepo.authenticate).
   async updateAllowedOrigins(
     params: Schemas.UpdateAllowedOriginsApiRequest & {
@@ -195,13 +196,14 @@ export default class CompanyConnectionsRepo {
         const before = await this.dal.getCompanyConnectionDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
+          isForUpdate: true,
         });
         if (!before.isSuccess || !before.companyConnection) return before;
+        // DEV_NOTE: The request has no repeats (ZUpdateAllowedOriginsApiRequest), so equal sizes + every one stored = same
+        const stored = new Set(before.companyConnection.allowedOrigins);
         const isSame =
-          before.companyConnection.allowedOrigins.length === params.allowedOrigins.length &&
-          before.companyConnection.allowedOrigins.every(
-            (origin, index) => origin === params.allowedOrigins[index],
-          );
+          stored.size === params.allowedOrigins.length &&
+          params.allowedOrigins.every((origin) => stored.has(origin));
         if (isSame) return { ...before, outboxIds: [] };
 
         const result = await this.dal.updateCompanyConnectionOrigins(tx, {

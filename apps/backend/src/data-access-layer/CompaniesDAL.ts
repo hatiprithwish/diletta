@@ -44,16 +44,13 @@ export default class CompaniesDAL {
 
   async getCompanyDetails(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindCompanyDALRequest,
+    params: Schemas.GetCompanyDetailsDALRequest,
   ) {
     const response: Schemas.CompanyDALResponse = { isSuccess: false };
 
     try {
-      const [company] = await tx
-        .select()
-        .from(companies)
-        .where(eq(companies.id, params.companyId))
-        .limit(1);
+      const query = tx.select().from(companies).where(eq(companies.id, params.companyId)).limit(1);
+      const [company] = params.isForUpdate ? await query.for("update") : await query;
 
       if (!company) {
         const message = "Company not found";

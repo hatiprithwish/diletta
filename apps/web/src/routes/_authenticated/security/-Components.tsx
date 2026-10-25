@@ -44,7 +44,7 @@ import { Textarea } from "@app/ui/components/textarea";
 import { cn } from "@app/ui/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
-import { Pager } from "@/components/pager";
+import { Pager, PastEndNote } from "@/components/pager";
 import { SectionHeader } from "@/components/section-header";
 import { StatusChip } from "@/components/status-chip";
 import Utilities from "@/utils";
@@ -572,12 +572,17 @@ function InjectionEvents({ page, onPage }: Schemas.DashboardSecurityPagedSection
             </Table>
           </div>
           {events.length === 0 && (
-            <p className="text-body text-muted-foreground">Nothing on this page.</p>
+            <PastEndNote
+              pageSize={Schemas.INJECTION_EVENTS_PAGE_SIZE}
+              totalRecords={counted.data?.totalRecords ?? null}
+              onPage={onPage}
+            />
           )}
           <Pager
             page={page}
             pageSize={Schemas.INJECTION_EVENTS_PAGE_SIZE}
-            totalRecords={counted.data?.totalRecords ?? 0}
+            totalRecords={counted.data?.totalRecords ?? null}
+            rowCount={events.length}
             onPage={onPage}
           />
         </div>
@@ -663,12 +668,17 @@ function AuditLog({ page, onPage }: Schemas.DashboardSecurityPagedSectionProps) 
             </Table>
           </div>
           {entries.length === 0 && (
-            <p className="text-body text-muted-foreground">Nothing on this page.</p>
+            <PastEndNote
+              pageSize={Schemas.AUDIT_LOG_PAGE_SIZE}
+              totalRecords={counted.data?.totalRecords ?? null}
+              onPage={onPage}
+            />
           )}
           <Pager
             page={page}
             pageSize={Schemas.AUDIT_LOG_PAGE_SIZE}
-            totalRecords={counted.data?.totalRecords ?? 0}
+            totalRecords={counted.data?.totalRecords ?? null}
+            rowCount={entries.length}
             onPage={onPage}
           />
         </div>

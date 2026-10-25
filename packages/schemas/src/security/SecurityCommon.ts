@@ -33,6 +33,14 @@ export enum EncryptionKeyRotateFailureEnum {
   RotationInProgress = "RotationInProgress",
 }
 
+// DEV_NOTE: The HTTP status of each rotate refusal, so a new failure can't answer a status by accident
+export const ENCRYPTION_KEY_ROTATE_FAILURE_HTTP_STATUS_MAP: Record<
+  EncryptionKeyRotateFailureEnum,
+  409
+> = {
+  [EncryptionKeyRotateFailureEnum.RotationInProgress]: 409,
+};
+
 // DEV_NOTE: A prompt-injection event's "Action taken", from its quality issue's status (until M6-4 detects them, the
 // events are the issues an admin typed as Prompt injection)
 export const INJECTION_EVENT_ACTION_LABEL_MAP: Record<QualityIssueStatusIntEnum, string> = {

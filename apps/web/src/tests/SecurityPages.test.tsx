@@ -386,4 +386,43 @@ describe("Security page", () => {
     expect(await within(section).findByText("The audit log didn't load")).toBeInTheDocument();
     expect(within(section).getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
+  it("offers a way back from an audit page past the end", async () => {
+    mockApi((url) => {
+      if (url.includes("/audit-log/count")) {
+        return { status: 200, body: { isSuccess: true, totalRecords: 30 } };
+      }
+      if (url.includes("/audit-log") && url.includes("pageNo=9")) {
+        return { status: 200, body: { isSuccess: true, auditLog: [] } };
+      }
+      return null;
+    });
+    const router = renderPage("/security?auditPage=9");
+
+    const section = await screen.findByRole("region", { name: "Audit log" });
+    expect(await within(section).findByText("Nothing on this page.")).toBeInTheDocument();
+    await userEvent.click(within(section).getByRole("button", { name: "Go to the last page" }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ auditPage: 2 }));
+  });
+
+  it("keeps paging the audit log when its count didn't load", async () => {
+    const fullPage = Array.from({ length: Schemas.AUDIT_LOG_PAGE_SIZE }, (_, index) => ({
+      ...AUDIT[0]!,
+      on: `v${index + 1}`,
+    }));
+    mockApi((url) => {
+      if (url.includes("/audit-log/count")) return { status: 500, body: { isSuccess: false } };
+      if (url.includes("/audit-log")) {
+        return { status: 200, body: { isSuccess: true, auditLog: fullPage } };
+      }
+      return null;
+    });
+    const router = renderPage();
+
+    const section = await screen.findByRole("region", { name: "Audit log" });
+    expect(await within(section).findByText("Page 1")).toBeInTheDocument();
+    const next = within(section).getByRole("button", { name: "Next" });
+    expect(next).toBeEnabled();
+    await userEvent.click(next);
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ auditPage: 2 }));
+  });
 });

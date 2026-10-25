@@ -78,7 +78,7 @@ export default class CompanyConnectionsDAL {
 
   async getCompanyConnectionDetails(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindCompanyConnectionDALRequest,
+    params: Schemas.GetCompanyConnectionDetailsDALRequest,
   ) {
     const response: Schemas.CompanyConnectionDALResponse = { isSuccess: false };
 
@@ -87,11 +87,12 @@ export default class CompanyConnectionsDAL {
         eq(companyConnections.publicId, params.publicId),
         eq(companyConnections.companyId, params.companyId),
       ];
-      const [companyConnection] = await tx
+      const query = tx
         .select()
         .from(companyConnections)
         .where(and(...conditions))
         .limit(1);
+      const [companyConnection] = params.isForUpdate ? await query.for("update") : await query;
 
       if (!companyConnection) {
         const message = "Company connection not found";

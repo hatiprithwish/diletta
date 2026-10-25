@@ -11,14 +11,20 @@ import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
 import Utilities from "@/utils";
+import { QUERY_KEY_ROOTS } from "../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
+// DEV_NOTE: Rows other pages add (audit rows, injection events): refetched on every visit, never served stale
+const LIVE_LIST_STALE_TIME_MS = 0;
+
 // DEV_NOTE: The Security page (M4-9): identity and origins, encryption keys, retention, prompt-injection events and the
-// audit log. keys.all() covers them all. Every write here adds an audit row, so it refreshes the audit log too.
+// audit log. keys.all() covers them all. Every write here adds an audit row, so it refreshes the audit log too. Every
+// other page's writes add audit rows as well, and a Quality triage can add an injection event, so those two lists (and
+// their counts) are never fresh from the cache: staleTime 0 refetches them each time the page opens.
 export class SecurityQueries {
   static keys = {
-    all: () => ["security"] as const,
+    all: () => QUERY_KEY_ROOTS.security,
     connections: () => [...SecurityQueries.keys.all(), "connections"] as const,
     encryptionKeys: () => [...SecurityQueries.keys.all(), "encryption-keys"] as const,
     retention: () => [...SecurityQueries.keys.all(), "retention"] as const,
@@ -76,6 +82,7 @@ export class SecurityQueries {
     });
     return queryOptions({
       queryKey: SecurityQueries.keys.injectionEventList(page),
+      staleTime: LIVE_LIST_STALE_TIME_MS,
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetInjectionEventsApiResponse>(
           `/dashboard/security/injection-events?${params.toString()}`,
@@ -89,6 +96,7 @@ export class SecurityQueries {
   static injectionEventCount(getToken: GetToken) {
     return queryOptions({
       queryKey: SecurityQueries.keys.injectionEventCount(),
+      staleTime: LIVE_LIST_STALE_TIME_MS,
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetInjectionEventsCountApiResponse>(
           "/dashboard/security/injection-events/count",
@@ -105,6 +113,7 @@ export class SecurityQueries {
     });
     return queryOptions({
       queryKey: SecurityQueries.keys.auditLogList(page),
+      staleTime: LIVE_LIST_STALE_TIME_MS,
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetAuditLogApiResponse>(
           `/dashboard/audit-log?${params.toString()}`,
@@ -118,6 +127,7 @@ export class SecurityQueries {
   static auditLogCount(getToken: GetToken) {
     return queryOptions({
       queryKey: SecurityQueries.keys.auditLogCount(),
+      staleTime: LIVE_LIST_STALE_TIME_MS,
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetAuditLogCountApiResponse>("/dashboard/audit-log/count", getToken, {
           signal,

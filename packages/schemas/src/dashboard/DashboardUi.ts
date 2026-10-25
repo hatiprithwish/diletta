@@ -539,10 +539,21 @@ export interface DashboardKnowledgeFrequencySelectProps {
 }
 
 // DEV_NOTE: Previous / Next under a paged list, with "1–25 of 214"
+// DEV_NOTE: totalRecords null = not known (the count is loading or failed): the pager then pages by rowCount, the rows
+// on this page (a full page may have a next one), rather than disappearing
 export interface DashboardPagerProps {
   page: number;
   pageSize: number;
-  totalRecords: number;
+  totalRecords: number | null;
+  rowCount?: number;
+  onPage: (page: number) => void;
+}
+
+// DEV_NOTE: An empty page past the end of a paged list (an old link, or rows that moved): a way back to the last page
+// when the count is known, else to the first
+export interface DashboardPastEndNoteProps {
+  pageSize: number;
+  totalRecords: number | null;
   onPage: (page: number) => void;
 }
 
