@@ -15,6 +15,8 @@ export enum LogCategory {
   Conversation = "Conversation",
   Budget = "Budget",
   Knowledge = "Knowledge",
+  // DEV_NOTE: The R2 side of the files registry (FileStorageProvider), shared by knowledge documents and eval transcripts
+  Files = "Files",
   Feedback = "Feedback",
   Action = "Action",
   Rollup = "Rollup",
@@ -233,6 +235,7 @@ export enum LogAction {
 
   // Chatbot configs
   GetPublishedChatbotConfig = "GetPublishedChatbotConfig",
+  GetLatestDraftChatbotConfig = "GetLatestDraftChatbotConfig",
 
   // Conversations
   CreateConversation = "CreateConversation",
@@ -346,6 +349,25 @@ export enum LogAction {
   AnswerDocGapCluster = "AnswerDocGapCluster",
   DismissDocGapCluster = "DismissDocGapCluster",
   ReopenDocGapClusters = "ReopenDocGapClusters",
+
+  // Tests page (M4-8)
+  GetDashboardEvalRuns = "GetDashboardEvalRuns",
+  CountDashboardEvalRuns = "CountDashboardEvalRuns",
+  GetDashboardEvalRun = "GetDashboardEvalRun",
+  GetLatestEvalRun = "GetLatestEvalRun",
+  GetEvalRunSafetyCases = "GetEvalRunSafetyCases",
+  GetEvalRunCases = "GetEvalRunCases",
+  CountEvalRunCases = "CountEvalRunCases",
+  GetEvalRunCaseAttempts = "GetEvalRunCaseAttempts",
+  GetEvalRunTranscriptFile = "GetEvalRunTranscriptFile",
+  GetEvalRunTranscript = "GetEvalRunTranscript",
+  GetEvalRunsSummary = "GetEvalRunsSummary",
+  GetDashboardEvalCases = "GetDashboardEvalCases",
+  CountDashboardEvalCases = "CountDashboardEvalCases",
+  GetDashboardEvalCase = "GetDashboardEvalCase",
+  GetLatestEvalCaseResults = "GetLatestEvalCaseResults",
+  CountActiveEvalCases = "CountActiveEvalCases",
+  UpdateEvalCase = "UpdateEvalCase",
 
   // Cron
   DispatchCron = "DispatchCron",

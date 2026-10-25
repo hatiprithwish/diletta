@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { companies, files } from "@/db/tables";
+import { companies, evalResults, files } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 
@@ -143,6 +143,68 @@ export default class FilesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetFile,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: An eval transcript (Tests page, M4-8) by its file's public id, only when it is the transcript of a result
+  // of this run: owner eval_result, and that result points back at the file. With the company's public id, the other half
+  // of its R2 key. isNotFound for any other file.
+  async getEvalRunTranscriptFile(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindEvalRunTranscriptFileDALRequest,
+  ) {
+    const response: Schemas.FileWithCompanyDALResponse = { isSuccess: false };
+
+    try {
+      const resultJoinConditions = [
+        eq(evalResults.id, files.ownerId),
+        eq(evalResults.companyId, files.companyId),
+        eq(evalResults.transcriptFileId, files.id),
+      ];
+      const companyJoinConditions = [eq(companies.id, files.companyId)];
+      const conditions = [
+        eq(files.publicId, params.publicId),
+        eq(files.companyId, params.companyId),
+        eq(files.ownerType, Schemas.FileOwnerTypeEnum.EvalResult),
+        eq(evalResults.evalRunId, params.evalRunId),
+      ];
+      const [selected] = await tx
+        .select({ file: files, companyPublicId: companies.publicId })
+        .from(files)
+        .innerJoin(evalResults, and(...resultJoinConditions))
+        .innerJoin(companies, and(...companyJoinConditions))
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!selected) {
+        const message = "Transcript file not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetEvalRunTranscriptFile,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Transcript file fetched successfully";
+      response.file = selected.file;
+      response.companyPublicId = selected.companyPublicId;
+    } catch (error) {
+      const message = "Unknown error in fetching transcript file";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetEvalRunTranscriptFile,
         message,
         error,
         metadata: params,

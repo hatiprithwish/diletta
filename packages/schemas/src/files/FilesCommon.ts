@@ -1,9 +1,12 @@
 import { z } from "zod";
 
 // DEV_NOTE: What owns a file (files.owner_type, text in the DB): owner_id is that table's internal id. The file is
-// purged with its owner (row + R2 object). Conversation images, eval transcripts and exports add theirs when they land.
+// purged with its owner (row + R2 object). Conversation images and exports add theirs when they land.
 export enum FileOwnerTypeEnum {
   KnowledgeDocument = "knowledge_document",
+  // DEV_NOTE: An eval attempt's transcript (M4-8 reads it, M5-3 writes it): owner_id = eval_results.id, and the result's
+  // transcript_file_id points back at the file
+  EvalResult = "eval_result",
 }
 
 // Whole Stored File Body — DB shape

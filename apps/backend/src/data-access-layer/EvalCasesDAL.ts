@@ -1,14 +1,15 @@
-import { and, eq } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, max, or, sql } from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { chatbots, evalCases } from "@/db/tables";
+import { chatbotConfigs, chatbots, evalCases, evalResults, evalRuns } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). M4-6 creates customer cases from quality
-// issues; platform cases (company_id null) are written by the eval harness's own seed (M5), never here.
+// issues; M4-8 lists, reads and edits them on the Tests page. Platform cases (company_id null) are written by the eval
+// harness's own seed (M5), never here: the Tests page reads them (RLS lets every tenant read them) and never edits one.
 export default class EvalCasesDAL {
   async createEvalCase(
     tx: NodePgTransaction<EmptyRelations>,
@@ -66,6 +67,350 @@ export default class EvalCasesDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The cases as the Tests page reads them, with their chatbot's name (left join: null for a platform case or a
+  // removed chatbot)
+  private dashboardQuery(tx: NodePgTransaction<EmptyRelations>) {
+    const chatbotJoinConditions = [
+      eq(chatbots.id, evalCases.chatbotId),
+      eq(chatbots.companyId, evalCases.companyId),
+    ];
+    return tx
+      .select({
+        id: evalCases.id,
+        publicId: evalCases.publicId,
+        companyId: evalCases.companyId,
+        chatbotId: evalCases.chatbotId,
+        name: evalCases.name,
+        input: evalCases.input,
+        expectations: evalCases.expectations,
+        isSafety: evalCases.isSafety,
+        isActive: evalCases.isActive,
+        createdAt: evalCases.createdAt,
+        updatedAt: evalCases.updatedAt,
+        chatbotName: chatbots.name,
+      })
+      .from(evalCases)
+      .leftJoin(chatbots, and(...chatbotJoinConditions));
+  }
+
+  // DEV_NOTE: The company's cases (one chatbot's when chatbotId is set) and every platform case
+  private dashboardConditions(params: Schemas.EvalCasesFilterDALRequest) {
+    const ownConditions = [eq(evalCases.companyId, params.companyId)];
+    if (params.chatbotId !== null) ownConditions.push(eq(evalCases.chatbotId, params.chatbotId));
+    return [or(and(...ownConditions), isNull(evalCases.companyId))];
+  }
+
+  async getEvalCases(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetEvalCasesDALRequest,
+  ) {
+    const response: Schemas.DashboardEvalCasesDALResponse = { isSuccess: false };
+
+    try {
+      const sortColumnMap = {
+        [Schemas.EvalCaseSortColumn.CreatedAt]: evalCases.createdAt,
+        [Schemas.EvalCaseSortColumn.Name]: evalCases.name,
+      };
+      const sortCol = sortColumnMap[params.sortColumn];
+      const orderExpr =
+        params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
+      const offset = (params.pageNo - 1) * params.pageSize;
+
+      const selected = await this.dashboardQuery(tx)
+        .where(and(...this.dashboardConditions(params)))
+        // DEV_NOTE: id breaks ties, so rows never repeat or go missing between pages
+        .orderBy(orderExpr, asc(evalCases.id))
+        .limit(params.pageSize)
+        .offset(offset);
+
+      response.isSuccess = true;
+      response.message = "Eval cases fetched successfully";
+      response.evalCases = selected;
+    } catch (error) {
+      const message = "Unknown error in listing eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardEvalCases,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getEvalCasesCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.EvalCasesFilterDALRequest,
+  ) {
+    const response: Schemas.EvalCasesCountDALResponse = { isSuccess: false };
+
+    try {
+      const [result] = await tx
+        .select({ total: sql<number>`count(*)`.mapWith(Number) })
+        .from(evalCases)
+        .where(and(...this.dashboardConditions(params)));
+
+      response.isSuccess = true;
+      response.message = "Eval cases counted successfully";
+      response.totalRecords = result?.total ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountDashboardEvalCases,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One case by its public id: the company's own or a platform case. isForUpdate (an edit) finds the
+  // company's own only and locks it (the case row only: Postgres refuses to lock the nullable side of an outer join).
+  async getEvalCase(tx: NodePgTransaction<EmptyRelations>, params: Schemas.FindEvalCaseDALRequest) {
+    const response: Schemas.DashboardEvalCaseDALResponse = { isSuccess: false };
+
+    try {
+      const conditions: (SQL | undefined)[] = [eq(evalCases.publicId, params.publicId)];
+      if (params.isForUpdate) {
+        conditions.push(eq(evalCases.companyId, params.companyId));
+      } else {
+        conditions.push(or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)));
+      }
+      const query = this.dashboardQuery(tx)
+        .where(and(...conditions))
+        .limit(1);
+      const [selected] = params.isForUpdate
+        ? await query.for("update", { of: evalCases })
+        : await query;
+
+      if (!selected) {
+        const message = "Eval case not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetDashboardEvalCase,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Eval case fetched successfully";
+      response.evalCase = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching eval case";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDashboardEvalCase,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Edits the company's own case (never a platform one: the DAL matches company_id). An absent field keeps its
+  // value. name, input and expectations are case text, so they stay out of the log.
+  async updateEvalCase(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateEvalCaseDALRequest,
+  ) {
+    const response: Schemas.EvalCaseDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, id: params.id };
+
+    try {
+      const conditions = [eq(evalCases.id, params.id), eq(evalCases.companyId, params.companyId)];
+      const [updated] = await tx
+        .update(evalCases)
+        .set({
+          name: params.name,
+          input: params.input,
+          expectations: params.expectations,
+          isActive: params.isActive,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!updated) {
+        const message = "Eval case not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.UpdateEvalCase,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Eval case updated successfully";
+      response.evalCase = updated;
+    } catch (error) {
+      const message = "Unknown error in updating eval case";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateEvalCase,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Each case's newest run among this company's results (the highest eval_run_id: ids grow with time), only
+  // runs of chatbotId's configs when set (a platform case runs against every chatbot), and how its attempts went in it,
+  // with the run's k and status (a run still going leaves its unfinished cases undecided). A case never run has no entry.
+  async getLatestEvalCaseResults(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetLatestEvalCaseResultsDALRequest,
+  ) {
+    const response: Schemas.LatestEvalCaseResultsDALResponse = { isSuccess: false };
+
+    if (params.evalCaseIds.length === 0) {
+      response.isSuccess = true;
+      response.message = "No eval cases to look up";
+      response.results = [];
+      return response;
+    }
+
+    try {
+      const latestRunJoinConditions = [
+        eq(evalRuns.id, evalResults.evalRunId),
+        eq(evalRuns.companyId, evalResults.companyId),
+      ];
+      const latestConfigJoinConditions = [
+        eq(chatbotConfigs.id, evalRuns.chatbotConfigId),
+        eq(chatbotConfigs.companyId, evalRuns.companyId),
+      ];
+      const latestConditions = [
+        eq(evalResults.companyId, params.companyId),
+        inArray(evalResults.evalCaseId, params.evalCaseIds),
+      ];
+      if (params.chatbotId !== null) {
+        latestConditions.push(eq(chatbotConfigs.chatbotId, params.chatbotId));
+      }
+      const latest = tx
+        .select({
+          evalCaseId: evalResults.evalCaseId,
+          evalRunId: max(evalResults.evalRunId).as("latest_eval_run_id"),
+        })
+        .from(evalResults)
+        .innerJoin(evalRuns, and(...latestRunJoinConditions))
+        .innerJoin(chatbotConfigs, and(...latestConfigJoinConditions))
+        .where(and(...latestConditions))
+        .groupBy(evalResults.evalCaseId)
+        .as("latest");
+      const latestJoinConditions = [
+        eq(latest.evalCaseId, evalResults.evalCaseId),
+        eq(latest.evalRunId, evalResults.evalRunId),
+      ];
+      const runJoinConditions = [
+        eq(evalRuns.id, evalResults.evalRunId),
+        eq(evalRuns.companyId, evalResults.companyId),
+      ];
+      const selected = await tx
+        .select({
+          evalCaseId: evalResults.evalCaseId,
+          evalRunPublicId: evalRuns.publicId,
+          evalRunStatus: evalRuns.status,
+          k: evalRuns.k,
+          attemptCount: sql<number>`count(*)`.mapWith(Number),
+          passedAttemptCount: sql<number>`count(*) filter (where ${evalResults.hasPassed})`.mapWith(
+            Number,
+          ),
+          createdAt: sql<Date>`max(${evalResults.createdAt})`.mapWith(evalResults.createdAt),
+        })
+        .from(evalResults)
+        .innerJoin(latest, and(...latestJoinConditions))
+        .innerJoin(evalRuns, and(...runJoinConditions))
+        .where(eq(evalResults.companyId, params.companyId))
+        .groupBy(evalResults.evalCaseId, evalRuns.publicId, evalRuns.status, evalRuns.k);
+
+      response.isSuccess = true;
+      response.message = "Latest eval case results fetched successfully";
+      response.results = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching latest eval case results";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLatestEvalCaseResults,
+        message,
+        error,
+        metadata: {
+          companyId: params.companyId,
+          chatbotId: params.chatbotId,
+          caseCount: params.evalCaseIds.length,
+        },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The active cases that run against one chatbot (its own and the platform's), and how many are safety cases
+  async countActiveEvalCases(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountActiveEvalCasesDALRequest,
+  ) {
+    const response: Schemas.ActiveEvalCaseCountsDALResponse = { isSuccess: false };
+
+    try {
+      const ownConditions = [
+        eq(evalCases.companyId, params.companyId),
+        eq(evalCases.chatbotId, params.chatbotId),
+      ];
+      const conditions = [
+        eq(evalCases.isActive, true),
+        or(and(...ownConditions), isNull(evalCases.companyId)),
+      ];
+      const [result] = await tx
+        .select({
+          caseCount: sql<number>`count(*)`.mapWith(Number),
+          safetyCaseCount: sql<number>`count(*) filter (where ${evalCases.isSafety})`.mapWith(
+            Number,
+          ),
+        })
+        .from(evalCases)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Active eval cases counted successfully";
+      response.caseCount = result?.caseCount ?? 0;
+      response.safetyCaseCount = result?.safetyCaseCount ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting active eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountActiveEvalCases,
+        message,
+        error,
+        metadata: params,
       });
       response.message = message;
     }

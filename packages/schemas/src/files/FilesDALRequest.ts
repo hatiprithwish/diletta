@@ -23,3 +23,9 @@ export type SetFileOwnerDALRequest = Pick<StoredFile, "id" | "companyId" | "owne
 export type FindFileDALRequest = Pick<StoredFile, "id" | "companyId">;
 
 export type DeleteFilesDALRequest = Pick<StoredFile, "companyId"> & { ids: string[] };
+
+// DEV_NOTE: An eval transcript by its file's public id, only when it is the transcript of a result of this run
+// (Tests page, M4-8)
+export type FindEvalRunTranscriptFileDALRequest = Pick<StoredFile, "companyId" | "publicId"> & {
+  evalRunId: string;
+};

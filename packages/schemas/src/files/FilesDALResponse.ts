@@ -9,3 +9,8 @@ export interface FileDALResponse extends ApiResponse {
 export interface FilesDALResponse extends ApiResponse {
   files?: StoredFile[];
 }
+
+// DEV_NOTE: A file with its company's public id, the other half of its R2 key (fileR2Key)
+export interface FileWithCompanyDALResponse extends FileDALResponse {
+  companyPublicId?: string;
+}

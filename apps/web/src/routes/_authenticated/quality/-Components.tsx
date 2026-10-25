@@ -7,16 +7,8 @@ import type { IconProps } from "@phosphor-icons/react";
 import * as Schemas from "@app/schemas";
 import { Button } from "@app/ui/components/button";
 import { Card } from "@app/ui/components/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@app/ui/components/dialog";
+import { Dialog, DialogContent } from "@app/ui/components/dialog";
 import { Field, FieldError, FieldLabel } from "@app/ui/components/field";
-import { Input } from "@app/ui/components/input";
 import {
   Select,
   SelectContent,
@@ -28,6 +20,7 @@ import { Skeleton } from "@app/ui/components/skeleton";
 import { Textarea } from "@app/ui/components/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@app/ui/components/toggle-group";
 import { cn } from "@app/ui/lib/utils";
+import { EvalCaseForm } from "@/components/eval-case-form";
 import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
 import { StatusChip } from "@/components/status-chip";
@@ -568,146 +561,32 @@ function QualityTestDialog({ publicId, draft, onClose }: Schemas.DashboardQualit
   );
 }
 
-function nameIssue(value: string): string | undefined {
-  return Schemas.ZEvalCaseName.safeParse(value).success
-    ? undefined
-    : `Give the test a name, up to ${Schemas.EVAL_CASE_NAME_MAX_CHARS} characters.`;
-}
-
-function messageIssue(value: string): string | undefined {
-  return Schemas.ZEvalCaseMessage.shape.text.safeParse(value).success
-    ? undefined
-    : `Keep each message between 1 and ${Utilities.formatCount(Schemas.EVAL_CASE_MESSAGE_MAX_CHARS)} characters.`;
-}
-
-function rubricIssue(value: string): string | undefined {
-  return Schemas.ZEvalCaseRubric.safeParse(value).success
-    ? undefined
-    : `Say what a good reply does, up to ${Utilities.formatCount(Schemas.EVAL_CASE_RUBRIC_MAX_CHARS)} characters.`;
-}
-
 function QualityTestForm({
   publicId,
   draft,
   onClose,
 }: Schemas.DashboardQualityTestDialogProps & { draft: Schemas.QualityTestDraft }) {
   const convert = useConvertQualityIssue(publicId);
-  // DEV_NOTE: The review never adds or removes a message, so each keeps the key it gets here
-  const [messageFields] = useState(() =>
-    draft.messages.map((message, index) => ({
-      key: crypto.randomUUID(),
-      index,
-      role: message.role,
-    })),
-  );
-  const form = useForm({
-    defaultValues: draft,
-    onSubmit: async ({ value }) => {
-      try {
-        await convert.mutateAsync(value);
-      } catch (error) {
-        // DEV_NOTE: A 409 (closed meanwhile, or the chatbot is gone) can't succeed on a retry: the review closes
-        if (error instanceof ApiError && error.status === 409) onClose();
-        throw error;
-      }
-      onClose();
-    },
-  });
+  const save = async (value: Schemas.QualityTestDraft) => {
+    try {
+      await convert.mutateAsync(value);
+    } catch (error) {
+      // DEV_NOTE: A 409 (closed meanwhile, or the chatbot is gone) can't succeed on a retry: the review closes
+      if (error instanceof ApiError && error.status === 409) onClose();
+      throw error;
+    }
+    onClose();
+  };
 
   return (
-    <form
-      className="flex flex-col gap-5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void form.handleSubmit().catch(() => undefined);
-      }}
-    >
-      <DialogHeader>
-        <DialogTitle>Review the test</DialogTitle>
-        <DialogDescription>
-          The chat was rewritten without personal details. Check that nothing personal is left, then
-          save. The test is saved as you see it.
-        </DialogDescription>
-      </DialogHeader>
-      <form.Field name="name" validators={{ onChange: ({ value }) => nameIssue(value) }}>
-        {(field) => (
-          <Field data-invalid={field.state.meta.errors.length > 0}>
-            <FieldLabel htmlFor="test-name">Name</FieldLabel>
-            <Input
-              id="test-name"
-              name={field.name}
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(event) => field.handleChange(event.target.value)}
-              aria-invalid={field.state.meta.errors.length > 0}
-            />
-            <FieldError
-              errors={field.state.meta.errors.map((message) => ({ message: String(message) }))}
-            />
-          </Field>
-        )}
-      </form.Field>
-      <div className="flex flex-col gap-3">
-        <p className="text-body font-medium text-foreground">Conversation</p>
-        {messageFields.map(({ key, index, role }) => (
-          <form.Field
-            key={key}
-            name={`messages[${index}].text`}
-            validators={{ onChange: ({ value }) => messageIssue(value) }}
-          >
-            {(field) => (
-              <Field data-invalid={field.state.meta.errors.length > 0}>
-                <FieldLabel htmlFor={`test-message-${index}`} className="text-muted-foreground">
-                  {role === Schemas.EvalCaseMessageRoleEnum.User ? "User" : "Assistant"}
-                </FieldLabel>
-                <Textarea
-                  id={`test-message-${index}`}
-                  name={field.name}
-                  rows={2}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  aria-invalid={field.state.meta.errors.length > 0}
-                />
-                <FieldError
-                  errors={field.state.meta.errors.map((message) => ({ message: String(message) }))}
-                />
-              </Field>
-            )}
-          </form.Field>
-        ))}
-      </div>
-      <form.Field name="rubric" validators={{ onChange: ({ value }) => rubricIssue(value) }}>
-        {(field) => (
-          <Field data-invalid={field.state.meta.errors.length > 0}>
-            <FieldLabel htmlFor="test-rubric">What a good reply does</FieldLabel>
-            <Textarea
-              id="test-rubric"
-              name={field.name}
-              rows={3}
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(event) => field.handleChange(event.target.value)}
-              aria-invalid={field.state.meta.errors.length > 0}
-            />
-            <FieldError
-              errors={field.state.meta.errors.map((message) => ({ message: String(message) }))}
-            />
-          </Field>
-        )}
-      </form.Field>
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-          {([canSubmit, isSubmitting]) => (
-            <Button type="submit" disabled={!canSubmit || isSubmitting}>
-              {isSubmitting ? "Saving…" : "Save test"}
-            </Button>
-          )}
-        </form.Subscribe>
-      </DialogFooter>
-    </form>
+    <EvalCaseForm
+      defaultValues={draft}
+      canEditMessages={false}
+      title="Review the test"
+      description="The chat was rewritten without personal details. Check that nothing personal is left, then save. The test is saved as you see it."
+      submitLabel="Save test"
+      onSubmit={save}
+      onCancel={onClose}
+    />
   );
 }

@@ -30,6 +30,12 @@ export enum AuthzActionEnum {
   QualityIssueUpdate = "quality_issue.update",
   EvalCaseCreate = "eval_case.create",
 
+  // Tests page (company-scoped, M4-8): read runs, their results and transcripts, and cases; write and edit a case, or turn
+  // one on or off (EvalCaseCreate above covers New case too). Running tests comes with the harness (M5-2).
+  EvalRunRead = "eval_run.read",
+  EvalCaseRead = "eval_case.read",
+  EvalCaseUpdate = "eval_case.update",
+
   // Changes (company-scoped, M4-4 detail; M4-5 the list and timeline): read; mark one that needs a person resolved
   ChangeRequestRead = "change_request.read",
   ChangeRequestResolve = "change_request.resolve",

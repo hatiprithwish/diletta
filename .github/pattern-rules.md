@@ -1917,6 +1917,45 @@ deleteKnowledgeDocuments(BySource)?\(
 
 **Fix:** Mirror `DocGapClustersRepo`, `DocGapClustersDAL` and `providers/knowledgeDocumentFiles.ts` (`docs/runbooks/knowledge.md`).
 
+### 3.44 Eval Results Are Read Through Their Parsers; Transcripts Never Leave R2 Raw [CRITICAL]
+
+**Rule:** The Tests page (M4-8) reads runs and results only through `GET /dashboard/eval-runs…` (`authorizeCompany(EvalRunRead)`) → `EvalRunsRepo` → `EvalRunsDAL` (one `withTenant`). `eval_results.grader_output` is read only through `Schemas.parseEvalGraderOutput` (`EvalRunsProvider.attempt`); a body that fails it is shown as unreadable (`isGraderOutputUnreadable`), never passed through. A transcript is opened only by `EvalRunsRepo.getEvalRunTranscript`:
+
+- `FilesDAL.getEvalRunTranscriptFile` finds the file inside `withTenant`. It must be `owner_type eval_result`, owned by a result of the run in the URL, and that result's `transcript_file_id` must point back at it; anything else is 404.
+- The size is checked against `EVAL_TRANSCRIPT_MAX_BYTES` twice: the row's, then the R2 object's own (`getObject({ maxBytes })`) before its body is read.
+- `FileStorageProvider.getObject` reads it outside the transaction.
+- `Schemas.parseEvalTranscript` parses it; a file that fails is 422 `Unreadable`.
+
+The client gets the parsed entries only. Raw bytes are never returned or logged, and tool calls carry no args or values. A case's result in a run comes only from `Schemas.evalCaseRunResult` (passed, failed, or null while the run is still grading it: never shown as failed, never counted in the safety tally). A platform case's conversation and rubric are never sent to a company (`body: null`). Cases are written only through `EvalCasesRepo` with v1 bodies (`Schemas.toEvalCaseV1`), and read for editing through `Schemas.readEvalCaseBody`. An edit takes the company's own case under its row lock (`getEvalCase({ isForUpdate: true })` matches `company_id`, so a platform case is 404). A body it can't read refuses a new conversation or rubric (409 `NotEditable`). The page never starts a run (M5-2).
+
+**Violations:**
+
+- Returning `grader_output` or a transcript's bytes to a client without its parser, or serving the R2 object directly
+- Opening a transcript by file id alone (without the run, the owner result and `transcript_file_id`)
+- Writing an eval case's `input` / `expectations` by hand, or editing a platform case
+- Deciding a case's result from anything but `evalCaseRunResult`, or returning a platform case's body
+
+**Detection Pattern:**
+
+```regex
+graderOutput:\s*row\.graderOutput
+FILES_BUCKET\.get\(
+```
+
+- The first should match nowhere: an attempt reaches a response only through `EvalRunsProvider.attempt`.
+- The second may be called only from `providers/fileStorage.ts`.
+
+**Examples:**
+
+```
+- ❌ return c.body(await env.FILES_BUCKET.get(key))                       // raw transcript to the client
+- ✅ EvalRunsRepo.getEvalRunTranscript → getEvalRunTranscriptFile → getObject → parseEvalTranscript
+- ❌ attempts.map((row) => ({ ...row, graderOutput: row.graderOutput }))  // unparsed jsonb
+- ✅ attempts.map((row) => EvalRunsProvider.attempt(row))
+```
+
+**Fix:** Mirror `EvalRunsRepo`, `EvalCasesRepo` and `providers/evalRuns.ts` (`docs/runbooks/tests.md`).
+
 ---
 
 ## 4. ADDING NEW RULES
@@ -2006,5 +2045,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag); 2026-10-24 (M4-5: 3.41 Mark resolved only from NeedsHuman with its admin event, Changes page shows no values); 2026-10-24 (M4-6: 3.42 quality issues leave Open once with their admin event, a test is a reviewed rewrite); 2026-10-24 (M4-7: 3.43 gap clusters close once on a company document, removing it reopens them)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag); 2026-10-24 (M4-5: 3.41 Mark resolved only from NeedsHuman with its admin event, Changes page shows no values); 2026-10-24 (M4-6: 3.42 quality issues leave Open once with their admin event, a test is a reviewed rewrite); 2026-10-24 (M4-7: 3.43 gap clusters close once on a company document, removing it reopens them); 2026-10-25 (M4-8: 3.44 eval results read through their parsers, transcripts never leave R2 raw)
 Maintainer: hatiprithwish

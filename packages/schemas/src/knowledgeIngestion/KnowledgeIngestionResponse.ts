@@ -68,9 +68,11 @@ export interface KnowledgeEmbedResponse extends ApiResponse {
   calls?: KnowledgeModelCall[];
 }
 
-// DEV_NOTE: An object read back from R2 (FileStorageProvider)
+// DEV_NOTE: An object read back from R2 (FileStorageProvider). isTooLarge (with isSuccess false) = the object is over the
+// caller's maxBytes, refused from its size before the body is read.
 export interface FileObjectResponse extends ApiResponse {
   bytes?: Uint8Array<ArrayBuffer>;
+  isTooLarge?: boolean;
 }
 
 export interface ParsedSitemapResponse extends ApiResponse {

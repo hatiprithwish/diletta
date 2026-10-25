@@ -10,7 +10,11 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
-import { QUERY_KEY_ROOTS, invalidateOpenIssueViews } from "../-invalidation";
+import {
+  QUERY_KEY_ROOTS,
+  invalidateOpenIssueViews,
+  invalidateTestCaseViews,
+} from "../-invalidation";
 
 // DEV_NOTE: The Quality page (M4-6): the inbox list, one issue, the sidebar's open count, and the admin's work on an
 // issue (triage, Mark fixed, Dismiss, Create test). One list query per tab + page, one detail per issue; keys.all()
@@ -228,6 +232,7 @@ export function useConvertQualityIssue(publicId: string) {
       ),
     onSuccess: (response) => {
       applyWrite(queryClient, publicId, response, true);
+      invalidateTestCaseViews(queryClient);
       toast.success("Test saved.");
     },
     onError: (error) => {
