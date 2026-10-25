@@ -26,6 +26,13 @@ export default class JwksProvider {
     return await JwksProvider.fetchJwks(env, issuer);
   }
 
+  // DEV_NOTE: When the issuer's keys were last fetched into the cache (the Security page, M4-9); null when nothing is
+  // cached (never fetched, or expired). Reads the cache only: never fetches.
+  static async getCachedFetchedAt(env: Env, issuer: string): Promise<Date | null> {
+    const cached = await JwksProvider.readCache(env, issuer);
+    return cached ? new Date(cached.fetchedAt) : null;
+  }
+
   static getJwksUrl(issuer: string): string {
     return `${issuer.replace(/\/+$/, "")}/.well-known/jwks.json`;
   }

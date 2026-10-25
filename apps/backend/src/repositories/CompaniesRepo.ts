@@ -5,6 +5,7 @@ import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import CompanyKeyProvider from "@/providers/companyKey";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenancy-root Repo. Creating and listing companies are operator actions across companies, so they
@@ -122,5 +123,82 @@ export default class CompaniesRepo {
       });
       return this.withCompanyResponse(result);
     });
+  }
+
+  private toRetention(company: Schemas.Company): Schemas.ContentRetention {
+    return {
+      contentRetentionDays: Schemas.effectiveContentRetentionDays(company.contentRetentionDays),
+      isDefault: company.contentRetentionDays === null,
+    };
+  }
+
+  // DEV_NOTE: The Security page's retention (M4-9): the days in force (the default until the company chooses)
+  async getContentRetention(params: {
+    companyId: string;
+  }): Promise<Schemas.GetContentRetentionApiResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetContentRetentionApiResponse> => {
+        const found = await this.dal.getCompanyDetails(tx, params);
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        return {
+          isSuccess: true,
+          message: "Content retention fetched successfully",
+          retention: this.toRetention(found.company),
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Save retention, with its audit row (M4-9) labelled with the days; the days already stored change nothing
+  // and record nothing. The purge that deletes chat content past it is M6-1.
+  async updateContentRetention(
+    params: Schemas.UpdateContentRetentionApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateContentRetentionApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateContentRetentionApiResponse>> => {
+        const found = await this.dal.getCompanyDetails(tx, { companyId: params.companyId });
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        if (found.company.contentRetentionDays === params.contentRetentionDays) {
+          return {
+            isSuccess: true,
+            message: "Content retention unchanged",
+            retention: this.toRetention(found.company),
+            outboxIds: [],
+          };
+        }
+
+        const updated = await this.dal.updateCompanyContentRetention(tx, {
+          companyId: params.companyId,
+          contentRetentionDays: params.contentRetentionDays,
+          updatedBy: params.adminId,
+        });
+        if (!updated.isSuccess || !updated.company) {
+          return { isSuccess: false, message: updated.message, isNotFound: updated.isNotFound };
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: adminAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.Company,
+          entityAction: Schemas.AuditEntityActionEnum.RetentionChanged,
+          entity: updated.company,
+          label: `${params.contentRetentionDays} days`,
+        });
+        return {
+          isSuccess: true,
+          message: "Content retention updated successfully",
+          retention: this.toRetention(updated.company),
+          outboxIds: [outboxId],
+        };
+      },
+    );
   }
 }

@@ -1,15 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import * as Schemas from "@app/schemas";
+import { SecurityPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/security/")({
-  component: SecurityPage,
+  validateSearch: Schemas.ZSecurityPageSearch,
+  component: SecurityRoutePage,
 });
 
-function SecurityPage() {
-  return (
-    <PageHeader
-      title="Security"
-      description="Identity, encryption, data retention and the audit trail"
-    />
-  );
+function SecurityRoutePage() {
+  const search = Route.useSearch();
+  return <SecurityPage search={search} />;
 }

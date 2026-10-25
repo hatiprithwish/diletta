@@ -106,6 +106,56 @@ export default class QualityIssuesRepo {
     };
   }
 
+  // DEV_NOTE: A prompt-injection event on the Security page (M4-9): the admin's note says where it was found, else the
+  // issue's source; a purged conversation's title stays out
+  private toInjectionEvent(row: Schemas.DashboardQualityIssueRow): Schemas.InjectionEvent {
+    return {
+      publicId: row.publicId,
+      conversationPublicId: row.conversationPublicId,
+      conversationTitle: row.conversationContentPurgedAt === null ? row.conversationTitle : null,
+      detectedIn: row.note ?? Schemas.QUALITY_ISSUE_SOURCE_LABEL_MAP[row.source],
+      status: row.status,
+      statusLabel: Schemas.QUALITY_ISSUE_STATUS_LABEL_MAP[row.status],
+      actionLabel: Schemas.INJECTION_EVENT_ACTION_LABEL_MAP[row.status],
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  // DEV_NOTE: The Security page's prompt-injection events (M4-9): issues typed Prompt injection, any status, newest first.
+  // M6-4 adds the automatic detections.
+  async getInjectionEvents(
+    params: Schemas.GetInjectionEventsApiRequest & { companyId: string },
+  ): Promise<Schemas.GetInjectionEventsApiResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetInjectionEventsApiResponse> => {
+        const { qualityIssues, ...rest } = await this.qualityIssuesDal.getInjectionQualityIssues(
+          tx,
+          {
+            companyId: params.companyId,
+            pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
+            pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
+            sortColumn: params.sortColumn ?? Schemas.InjectionEventSortColumn.CreatedAt,
+            sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
+          },
+        );
+        return {
+          ...rest,
+          injectionEvents: qualityIssues?.map((row) => this.toInjectionEvent(row)),
+        };
+      },
+    );
+  }
+
+  async getInjectionEventsCount(params: {
+    companyId: string;
+  }): Promise<Schemas.GetInjectionEventsCountApiResponse> {
+    return await withTenant(this.db, params.companyId, async (tx) => {
+      return await this.qualityIssuesDal.getInjectionQualityIssuesCount(tx, params);
+    });
+  }
+
   async getQualityIssues(
     params: Schemas.GetQualityIssuesApiRequest & { companyId: string },
   ): Promise<Schemas.GetQualityIssuesApiResponse> {

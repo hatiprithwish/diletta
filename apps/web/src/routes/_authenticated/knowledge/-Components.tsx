@@ -62,6 +62,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@app/ui/components/toggle-group";
 import { cn } from "@app/ui/lib/utils";
 import { PageHeader } from "@/components/page-header";
+import { Pager } from "@/components/pager";
 import { PageError } from "@/components/page-state";
 import { SectionHeader } from "@/components/section-header";
 import { StatusChip } from "@/components/status-chip";
@@ -196,28 +197,6 @@ async function uploadEach(upload: (file: File) => Promise<unknown>, files: File[
     }
   }
   return addedCount;
-}
-
-function Pager({ page, pageSize, totalRecords, onPage }: Schemas.DashboardPagerProps) {
-  const pageCount = Math.max(1, Math.ceil(totalRecords / pageSize));
-  if (pageCount <= 1) return null;
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <p className="text-caption text-muted-foreground">
-        {Utilities.formatCount((page - 1) * pageSize + 1)}–
-        {Utilities.formatCount(Math.min(page * pageSize, totalRecords))} of{" "}
-        {Utilities.formatCount(totalRecords)}
-      </p>
-      <div className="flex gap-2">
-        <Button variant="outline" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-          Previous
-        </Button>
-        <Button variant="outline" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>
-          Next
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function SourceStatus({ source }: Schemas.DashboardKnowledgeSourceProps) {

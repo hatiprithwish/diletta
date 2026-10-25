@@ -37,6 +37,7 @@ export * from "./docGaps";
 export * from "./activityLog";
 export * from "./activityRollups";
 export * from "./auditLog";
+export * from "./security";
 export * from "./insights";
 export * from "./roiAssumptions";
 export * from "./eventOutbox";

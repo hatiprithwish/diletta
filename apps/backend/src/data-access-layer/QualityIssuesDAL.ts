@@ -814,4 +814,87 @@ export default class QualityIssuesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The Security page's prompt-injection events (M4-9): the company's issues typed Prompt injection, any status,
+  // with their conversation (the dashboard query's row)
+  private injectionConditions(params: { companyId: string }): SQL[] {
+    return [
+      eq(qualityIssues.companyId, params.companyId),
+      eq(conversations.companyId, params.companyId),
+      eq(qualityIssues.issueType, Schemas.QualityIssueTypeIntEnum.Injection),
+    ];
+  }
+
+  async getInjectionQualityIssues(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetInjectionQualityIssuesDALRequest,
+  ) {
+    const response: Schemas.DashboardQualityIssuesDALResponse = { isSuccess: false };
+
+    try {
+      const sortColumnMap = {
+        [Schemas.InjectionEventSortColumn.CreatedAt]: qualityIssues.createdAt,
+      };
+      const sortCol = sortColumnMap[params.sortColumn];
+      const orderExpr =
+        params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
+
+      const selected = await this.dashboardQuery(tx)
+        .where(and(...this.injectionConditions(params)))
+        .orderBy(orderExpr, asc(qualityIssues.id))
+        .limit(params.pageSize)
+        .offset((params.pageNo - 1) * params.pageSize);
+
+      response.isSuccess = true;
+      response.message = "Injection quality issues fetched successfully";
+      response.qualityIssues = selected;
+    } catch (error) {
+      const message = "Unknown error in listing injection quality issues";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetInjectionQualityIssues,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getInjectionQualityIssuesCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountInjectionQualityIssuesDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conversationJoinConditions = [
+        eq(conversations.id, qualityIssues.conversationId),
+        eq(conversations.companyId, qualityIssues.companyId),
+      ];
+      const [result] = await tx
+        .select({ count: count() })
+        .from(qualityIssues)
+        .innerJoin(conversations, and(...conversationJoinConditions))
+        .where(and(...this.injectionConditions(params)));
+
+      response.isSuccess = true;
+      response.message = "Injection quality issues counted successfully";
+      response.totalRecords = result?.count ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting injection quality issues";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountInjectionQualityIssues,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

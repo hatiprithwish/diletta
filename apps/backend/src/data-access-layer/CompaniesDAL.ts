@@ -274,4 +274,46 @@ export default class CompaniesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The Security page's Save retention (M4-9), by the admin, on the company's own row (withTenant)
+  async updateCompanyContentRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanyContentRetentionDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          contentRetentionDays: params.contentRetentionDays,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Content retention updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating content retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateContentRetention,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

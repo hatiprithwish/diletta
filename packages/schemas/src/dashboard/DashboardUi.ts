@@ -54,6 +54,7 @@ import type {
   InsightsOverview,
   InsightsUsage,
 } from "../insights";
+import type { ContentRetention, SecurityConnection, SecurityPageSearch } from "../security";
 
 // DEV_NOTE: Props of the dashboard shell (apps/web, M4-1). The header's actions come in as children.
 
@@ -570,4 +571,35 @@ export interface DashboardNavCountProps {
   label: string;
   tone: DashboardChipToneEnum.Destructive | DashboardChipToneEnum.Warning;
   isRail: boolean;
+}
+
+// ─── Security page (M4-9)
+
+export interface DashboardSecurityPageProps {
+  search: SecurityPageSearch;
+}
+
+// DEV_NOTE: A paged section of the page; onPage keeps the rest of the URL search
+export interface DashboardSecurityPagedSectionProps {
+  page: number;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardSecurityConnectionProps {
+  connection: SecurityConnection;
+}
+
+// DEV_NOTE: One labelled row of a connection card (its value is the children)
+export interface DashboardSecurityRowProps {
+  label: string;
+}
+
+export interface DashboardSecurityRetentionFormProps {
+  retention: ContentRetention;
+}
+
+export interface DashboardSecurityOriginsDialogProps {
+  connection: SecurityConnection;
+  isOpen: boolean;
+  onClose: () => void;
 }

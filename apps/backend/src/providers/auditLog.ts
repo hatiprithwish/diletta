@@ -49,6 +49,15 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Disabled]: "Disabled tool",
     [Schemas.AuditEntityActionEnum.Deleted]: "Deleted tool draft",
   },
+  [Schemas.AuditEntityTypeEnum.CompanyConnection]: {
+    [Schemas.AuditEntityActionEnum.OriginsChanged]: "Changed allowed origins",
+  },
+  [Schemas.AuditEntityTypeEnum.CompanyEncryptionKey]: {
+    [Schemas.AuditEntityActionEnum.Rotated]: "Rotated encryption key",
+  },
+  [Schemas.AuditEntityTypeEnum.Company]: {
+    [Schemas.AuditEntityActionEnum.RetentionChanged]: "Changed chat retention",
+  },
 };
 
 // DEV_NOTE: The admin events other pages record with their own entity types
@@ -101,7 +110,7 @@ export default class AuditLogProvider {
       actorName: row.actorName,
       action: AuditLogProvider.actionWords(row.entityType, row.entityAction),
       on: AuditLogProvider.onText(row),
-      createdAt: row.createdAt,
+      createdAt: row.createdAt.toISOString(),
     };
   }
 }

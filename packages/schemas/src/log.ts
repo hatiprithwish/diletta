@@ -375,6 +375,14 @@ export enum LogAction {
   CountAuditLog = "CountAuditLog",
   ExportAuditLog = "ExportAuditLog",
 
+  // Security page (M4-9)
+  GetSecurityConnections = "GetSecurityConnections",
+  UpdateAllowedOrigins = "UpdateAllowedOrigins",
+  RotateEncryptionKey = "RotateEncryptionKey",
+  UpdateContentRetention = "UpdateContentRetention",
+  GetInjectionQualityIssues = "GetInjectionQualityIssues",
+  CountInjectionQualityIssues = "CountInjectionQualityIssues",
+
   // Cron
   DispatchCron = "DispatchCron",
 }
