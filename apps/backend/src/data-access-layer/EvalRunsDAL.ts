@@ -461,4 +461,50 @@ export default class EvalRunsDAL {
 
     return response;
   }
+
+  // DEV_NOTE: Each config's newest run in one read (DISTINCT ON config, newest first); a config never tested has none
+  async getLatestEvalRunsByConfig(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetLatestEvalRunsByConfigDALRequest,
+  ) {
+    const response: Schemas.LatestEvalRunsByConfigDALResponse = { isSuccess: false };
+
+    try {
+      if (params.chatbotConfigIds.length === 0) {
+        response.isSuccess = true;
+        response.message = "No configs to read runs for";
+        response.runs = [];
+        return response;
+      }
+      const conditions = [
+        eq(evalRuns.companyId, params.companyId),
+        inArray(evalRuns.chatbotConfigId, params.chatbotConfigIds),
+      ];
+      const runs = await tx
+        .selectDistinctOn([evalRuns.chatbotConfigId], {
+          chatbotConfigId: evalRuns.chatbotConfigId,
+          status: evalRuns.status,
+          hasPassed: evalRuns.hasPassed,
+        })
+        .from(evalRuns)
+        .where(and(...conditions))
+        .orderBy(evalRuns.chatbotConfigId, desc(evalRuns.createdAt), desc(evalRuns.id));
+
+      response.isSuccess = true;
+      response.message = "Latest eval runs by config fetched successfully";
+      response.runs = runs;
+    } catch (error) {
+      const message = "Unknown error in fetching latest eval runs by config";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLatestEvalRunsByConfig,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

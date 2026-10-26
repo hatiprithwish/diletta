@@ -18,6 +18,8 @@ export enum AuditEntityTypeEnum {
   CompanyConnection = "company_connection",
   CompanyEncryptionKey = "company_encryption_key",
   Company = "company",
+  // DEV_NOTE: Settings › Bots (M4-10): a chatbot's versions
+  ChatbotConfig = "chatbot_config",
 }
 
 // DEV_NOTE: A status change is its own action (paused, resumed, turned on / off, activated, disabled), so the log says
@@ -40,6 +42,9 @@ export enum AuditEntityActionEnum {
   OriginsChanged = "origins_changed",
   Rotated = "rotated",
   RetentionChanged = "retention_changed",
+  MadeDefault = "made_default",
+  Discarded = "discarded",
+  Published = "published",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -51,6 +56,7 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Updated,
     AuditEntityActionEnum.Paused,
     AuditEntityActionEnum.Resumed,
+    AuditEntityActionEnum.MadeDefault,
   ],
   [AuditEntityTypeEnum.KnowledgeSource]: [
     AuditEntityActionEnum.Created,
@@ -85,7 +91,17 @@ export const AUDIT_ENTITY_ACTIONS = {
   ],
   [AuditEntityTypeEnum.CompanyConnection]: [AuditEntityActionEnum.OriginsChanged],
   [AuditEntityTypeEnum.CompanyEncryptionKey]: [AuditEntityActionEnum.Rotated],
-  [AuditEntityTypeEnum.Company]: [AuditEntityActionEnum.RetentionChanged],
+  [AuditEntityTypeEnum.Company]: [
+    AuditEntityActionEnum.RetentionChanged,
+    AuditEntityActionEnum.TurnedOn,
+    AuditEntityActionEnum.TurnedOff,
+  ],
+  [AuditEntityTypeEnum.ChatbotConfig]: [
+    AuditEntityActionEnum.Created,
+    AuditEntityActionEnum.Updated,
+    AuditEntityActionEnum.Discarded,
+    AuditEntityActionEnum.Published,
+  ],
 } as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;
 
 export type AuditEntityActionFor<T extends AuditEntityTypeEnum> =

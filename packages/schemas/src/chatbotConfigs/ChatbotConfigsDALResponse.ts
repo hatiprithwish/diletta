@@ -18,3 +18,28 @@ export interface ChatbotConfigOptionRow {
 export interface ChatbotConfigOptionsDALResponse extends ApiResponse {
   options?: ChatbotConfigOptionRow[];
 }
+
+// DEV_NOTE: A version row with the name of the admin who last saved it (else created it): left join, null when gone
+export type ChatbotConfigVersionRow = ChatbotConfig & { editedByName: string | null };
+
+export interface ChatbotConfigVersionDALResponse extends ApiResponse {
+  chatbotConfig?: ChatbotConfigVersionRow;
+}
+
+export interface ChatbotConfigVersionsDALResponse extends ApiResponse {
+  chatbotConfigs?: ChatbotConfigVersionRow[];
+}
+
+export interface ChatbotConfigVersionStateDALResponse extends ApiResponse {
+  latestVersion?: number;
+  hasOpenVersion?: boolean;
+}
+
+export interface PublishedToolPinDALResponse extends ApiResponse {
+  isPinned?: boolean;
+}
+
+// DEV_NOTE: chatbotId is internal (the Repo matches it to its chatbots)
+export interface ChatbotConfigHeadsDALResponse extends ApiResponse {
+  heads?: Pick<ChatbotConfig, "chatbotId" | "publicId" | "configVersion" | "status">[];
+}

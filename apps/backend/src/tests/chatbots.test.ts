@@ -233,7 +233,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
     expect(result).toEqual({ isSuccess: false, message: "Company not found", chatbot: undefined });
   });
 
-  it("switches the default chatbot and rolls back when the new one is missing", async () => {
+  it("switches the default chatbot, audits it, and leaves the default when the new one is missing", async () => {
     const repo = new ChatbotsRepo(env);
     const first = await repo.createChatbot({
       companyId: companyB,
@@ -248,20 +248,52 @@ describe("ChatbotsRepo (tenant golden)", () => {
     const firstId = first.chatbot?.publicId ?? "";
     const secondId = second.chatbot?.publicId ?? "";
 
-    const firstDefault = await repo.setDefaultChatbot({ companyId: companyB, publicId: firstId });
+    const firstDefault = await repo.setDefaultChatbot({
+      companyId: companyB,
+      publicId: firstId,
+      adminId: adminB,
+    });
     expect(firstDefault.isSuccess).toBe(true);
     expect(firstDefault.chatbot?.isDefault).toBe(true);
+    expect(firstDefault.outboxIds).toHaveLength(1);
 
-    // Missing target: clearing the old default must roll back with the failed step
+    // Already the default: nothing written, nothing recorded
+    const again = await repo.setDefaultChatbot({
+      companyId: companyB,
+      publicId: firstId,
+      adminId: adminB,
+    });
+    expect(again.isSuccess).toBe(true);
+    expect(again.outboxIds).toEqual([]);
+    expect((await auditRowsOf(firstId)).map((row) => row.entityAction)).toEqual([
+      Schemas.AuditEntityActionEnum.Created,
+      Schemas.AuditEntityActionEnum.MadeDefault,
+    ]);
+
+    // Missing target: refused before the old default is cleared
     const failed = await repo.setDefaultChatbot({
       companyId: companyB,
       publicId: "does-not-exist",
+      adminId: adminB,
     });
-    expect(failed).toEqual({ isSuccess: false, message: "Chatbot not found" });
+    expect(failed.isSuccess).toBe(false);
+    expect(failed.isNotFound).toBe(true);
     const stillDefault = await repo.getChatbotDetails({ companyId: companyB, publicId: firstId });
     expect(stillDefault.chatbot?.isDefault).toBe(true);
 
-    const switched = await repo.setDefaultChatbot({ companyId: companyB, publicId: secondId });
+    // Another company's chatbot is not found here either
+    const crossCompany = await repo.setDefaultChatbot({
+      companyId: companyA,
+      publicId: secondId,
+      adminId: adminA,
+    });
+    expect(crossCompany.isNotFound).toBe(true);
+
+    const switched = await repo.setDefaultChatbot({
+      companyId: companyB,
+      publicId: secondId,
+      adminId: adminB,
+    });
     expect(switched.isSuccess).toBe(true);
     expect(switched.chatbot?.isDefault).toBe(true);
 

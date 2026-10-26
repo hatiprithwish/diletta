@@ -15,6 +15,7 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Updated]: "Renamed chatbot",
     [Schemas.AuditEntityActionEnum.Paused]: "Paused chatbot",
     [Schemas.AuditEntityActionEnum.Resumed]: "Resumed chatbot",
+    [Schemas.AuditEntityActionEnum.MadeDefault]: "Made chatbot the default",
   },
   [Schemas.AuditEntityTypeEnum.KnowledgeSource]: {
     [Schemas.AuditEntityActionEnum.Created]: "Added knowledge source",
@@ -57,6 +58,14 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
   },
   [Schemas.AuditEntityTypeEnum.Company]: {
     [Schemas.AuditEntityActionEnum.RetentionChanged]: "Changed chat retention",
+    [Schemas.AuditEntityActionEnum.TurnedOn]: "Turned on read-only mode",
+    [Schemas.AuditEntityActionEnum.TurnedOff]: "Turned off read-only mode",
+  },
+  [Schemas.AuditEntityTypeEnum.ChatbotConfig]: {
+    [Schemas.AuditEntityActionEnum.Created]: "Started a draft version",
+    [Schemas.AuditEntityActionEnum.Updated]: "Edited a draft version",
+    [Schemas.AuditEntityActionEnum.Discarded]: "Discarded a draft version",
+    [Schemas.AuditEntityActionEnum.Published]: "Published a version",
   },
 };
 

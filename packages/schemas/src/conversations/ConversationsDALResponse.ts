@@ -20,3 +20,8 @@ export interface DashboardConversationDALResponse extends ApiResponse {
 export interface ConversationTabCountsDALResponse extends TotalRecordsResponse {
   tabCounts?: ConversationTabCounts;
 }
+
+// DEV_NOTE: chatbotId is internal (the Repo matches it to its chatbots)
+export interface ChatbotConversationCountsDALResponse extends ApiResponse {
+  counts?: { chatbotId: string; conversationCount: number }[];
+}

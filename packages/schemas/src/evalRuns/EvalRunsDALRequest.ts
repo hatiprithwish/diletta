@@ -18,6 +18,11 @@ export type FindEvalRunByIdDALRequest = Pick<EvalRun, "companyId" | "id">;
 // DEV_NOTE: A config's newest run (the summary's live and draft cards)
 export type FindLatestEvalRunDALRequest = Pick<EvalRun, "companyId" | "chatbotConfigId">;
 
+// DEV_NOTE: Each of these configs' newest run in one read (Settings › Bots' Tests column, M4-10)
+export type GetLatestEvalRunsByConfigDALRequest = Pick<EvalRun, "companyId"> & {
+  chatbotConfigIds: string[];
+};
+
 // DEV_NOTE: The safety cases of a page of runs, read in one query (the Repo tallies them against each run's k)
 export type GetEvalRunSafetyCasesDALRequest = Pick<EvalRun, "companyId"> & { evalRunIds: string[] };
 

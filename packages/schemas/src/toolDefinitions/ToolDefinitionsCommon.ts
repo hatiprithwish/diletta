@@ -137,6 +137,8 @@ export enum ToolDefinitionFailureEnum {
   InvalidOps = "InvalidOps",
   ConnectionNotFound = "ConnectionNotFound",
   ConnectionUnavailable = "ConnectionUnavailable",
+  // DEV_NOTE: M4-10: a version a Published chatbot config pins can't be disabled (roll the config off it first)
+  PinnedByPublishedConfig = "PinnedByPublishedConfig",
 }
 
 // DEV_NOTE: 409 = the tool's state refused it; 400 = the request's ops or connection can't be used
@@ -149,6 +151,7 @@ export const TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP: Record<ToolDefinitionFailu
     [ToolDefinitionFailureEnum.InvalidOps]: 400,
     [ToolDefinitionFailureEnum.ConnectionNotFound]: 400,
     [ToolDefinitionFailureEnum.ConnectionUnavailable]: 400,
+    [ToolDefinitionFailureEnum.PinnedByPublishedConfig]: 409,
   };
 
 // DEV_NOTE: The name the model calls the tool by: provider tool-name rules (letters, digits, _ and -, at most 64,

@@ -9,6 +9,7 @@ export const QUERY_KEY_ROOTS = {
   quality: ["quality"],
   tests: ["tests"],
   security: ["security"],
+  bots: ["bots"],
 } as const;
 
 // DEV_NOTE: The Tests page's key segments that another page refreshes (TestsQueries.keys builds its keys from them)
@@ -39,4 +40,15 @@ export function invalidateTestCaseViews(queryClient: QueryClient) {
   void queryClient.invalidateQueries({
     queryKey: [...QUERY_KEY_ROOTS.tests, TESTS_KEY_SEGMENTS.summary],
   });
+}
+
+// DEV_NOTE: A chatbot's live version changed (a publish on Settings › Bots, M4-10): every view showing the live config
+// refetches: Overview's live config, the Tests page's strip (the live and draft configs' runs) and the Conversations'
+// Config filter
+export function invalidateLiveConfigViews(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.overview });
+  void queryClient.invalidateQueries({
+    queryKey: [...QUERY_KEY_ROOTS.tests, TESTS_KEY_SEGMENTS.summary],
+  });
+  void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.conversations });
 }

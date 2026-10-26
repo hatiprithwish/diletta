@@ -236,6 +236,22 @@ export enum LogAction {
   // Chatbot configs
   GetPublishedChatbotConfig = "GetPublishedChatbotConfig",
   GetLatestDraftChatbotConfig = "GetLatestDraftChatbotConfig",
+  ListChatbotConfigs = "ListChatbotConfigs",
+  CountChatbotConfigs = "CountChatbotConfigs",
+  GetChatbotConfigDetails = "GetChatbotConfigDetails",
+  GetChatbotConfigVersionState = "GetChatbotConfigVersionState",
+  CreateChatbotConfig = "CreateChatbotConfig",
+  UpdateChatbotConfigDraft = "UpdateChatbotConfigDraft",
+  ArchiveChatbotConfigDraft = "ArchiveChatbotConfigDraft",
+  ArchivePublishedChatbotConfig = "ArchivePublishedChatbotConfig",
+  PublishChatbotConfig = "PublishChatbotConfig",
+  FindPublishedToolPin = "FindPublishedToolPin",
+  GetChatbotConfigHeads = "GetChatbotConfigHeads",
+  GetChatbotConversationCounts = "GetChatbotConversationCounts",
+  GetLatestEvalRunsByConfig = "GetLatestEvalRunsByConfig",
+  GetActiveToolDefinitionOptions = "GetActiveToolDefinitionOptions",
+  GetKnowledgeSourceOptions = "GetKnowledgeSourceOptions",
+  UpdateCompanyReadOnly = "UpdateCompanyReadOnly",
 
   // Conversations
   CreateConversation = "CreateConversation",

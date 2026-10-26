@@ -55,6 +55,17 @@ import type {
   InsightsUsage,
 } from "../insights";
 import type { ContentRetention, SecurityConnection, SecurityPageSearch } from "../security";
+import type {
+  BotsPageSearch,
+  ChatbotConfigDetail,
+  ChatbotConfigOptions,
+  ChatbotConfigPin,
+  ChatbotConfigVersion,
+  ChatbotConfigWriteApiResponse,
+} from "../chatbotConfigs";
+import type { ChatbotSettingsRow } from "../chatbots";
+import type { ModelProviderEnum } from "../companySecrets";
+import type { ApprovalRuleApprovalEnum, ConfigSpecBody, ModelTierEnum } from "../configSpec";
 
 // DEV_NOTE: Props of the dashboard shell (apps/web, M4-1). The header's actions come in as children.
 
@@ -613,4 +624,164 @@ export interface DashboardSecurityOriginsDialogProps {
   connection: SecurityConnection;
   isOpen: boolean;
   onClose: () => void;
+}
+
+// ─── Settings › Bots (M4-10)
+
+export interface DashboardBotsPageProps {
+  search: BotsPageSearch;
+}
+
+export interface DashboardBotsTableProps {
+  chatbots: ChatbotSettingsRow[];
+  selectedPublicId: string | null;
+  onSelect: (publicId: string) => void;
+}
+
+export interface DashboardBotRowProps {
+  chatbot: ChatbotSettingsRow;
+  isSelected: boolean;
+  onSelect: (publicId: string) => void;
+}
+
+// DEV_NOTE: New bot (chatbot null) or Rename (the chatbot)
+export interface DashboardBotNameDialogProps {
+  chatbot: ChatbotSettingsRow | null;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export interface DashboardBotVersionsProps {
+  chatbot: ChatbotSettingsRow;
+  page: number;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardBotVersionRowProps {
+  chatbotPublicId: string;
+  version: ChatbotConfigVersion;
+  canCopy: boolean;
+}
+
+// DEV_NOTE: /settings/bots/$id/versions/$versionId (versionPublicId) or …/versions/new (null: a first or blank draft)
+export interface DashboardBotVersionPageProps {
+  chatbotPublicId: string;
+  versionPublicId: string | null;
+}
+
+// DEV_NOTE: The draft editor's form. Numbers are kept as the text the admin typed ("" = the platform default) and checked
+// on submit through Schemas.ZConfigSpecBody, which the backend checks again (normalizeConfigBody).
+export interface DashboardConfigProcedureFormValue {
+  name: string;
+  whenToUse: string;
+  steps: string;
+}
+
+export interface DashboardConfigApprovalRuleFormValue {
+  roles: string; // comma-separated, "" = any role
+  tools: string[]; // [] = every pinned tool
+  approval: ApprovalRuleApprovalEnum;
+}
+
+export interface DashboardConfigTierFormValue {
+  provider: ModelProviderEnum;
+  model: string;
+}
+
+export type DashboardConfigLimitKey =
+  | "maxStepsPerTurn"
+  | "maxTokensPerTurn"
+  | "turnTimeoutSeconds"
+  | "turnCostCapUsd"
+  | "conversationTurnsPerHour"
+  | "conversationCostCapUsd"
+  | "userMessagesPerMinute"
+  | "userDailyCostCapUsd";
+
+export interface DashboardConfigFormValues {
+  instructions: string;
+  procedures: DashboardConfigProcedureFormValue[];
+  tools: ChatbotConfigPin[];
+  approvalRules: DashboardConfigApprovalRuleFormValue[];
+  routing: {
+    small: DashboardConfigTierFormValue;
+    mid: DashboardConfigTierFormValue;
+    top: DashboardConfigTierFormValue;
+    defaultTier: ModelTierEnum;
+  };
+  sourceIds: string[];
+  topK: string;
+  greeting: string;
+  suggestions: string[];
+  launcherLabel: string;
+  limits: Record<DashboardConfigLimitKey, string>;
+}
+
+// DEV_NOTE: The form, editable for a draft (isEditable) and read-only for any other version. onSave answers the body the
+// backend took (or throws); attachments are carried through unchanged (no editor for them until image upload ships).
+export interface DashboardConfigFormProps {
+  defaultValues: DashboardConfigFormValues;
+  attachments: ConfigSpecBody["attachments"];
+  options: ChatbotConfigOptions;
+  isEditable: boolean;
+  // A first or blank draft not saved yet: Save works before any edit
+  isNew: boolean;
+  onSave: (body: ConfigSpecBody) => Promise<void>;
+  onDirtyChange: (isDirty: boolean) => void;
+}
+
+export interface DashboardConfigSectionProps {
+  title: string;
+  description?: string;
+}
+
+// DEV_NOTE: What would stop this version publishing, checked in the browser against the editor options (the publish
+// checks it again), and the refusal the last publish answered
+export interface DashboardPublishIssuesProps {
+  body: ConfigSpecBody | null;
+  options: ChatbotConfigOptions;
+  refusal: ChatbotConfigWriteApiResponse | null;
+}
+
+export interface DashboardVersionActionsProps {
+  chatbotPublicId: string;
+  version: ChatbotConfigDetail;
+  isDirty: boolean;
+  onRefusal: (refusal: ChatbotConfigWriteApiResponse | null) => void;
+}
+
+export interface DashboardBotBackLinkProps {
+  chatbotPublicId: string;
+}
+
+export interface DashboardBotNewDraftProps {
+  chatbot: ChatbotSettingsRow;
+  options: ChatbotConfigOptions;
+}
+
+export interface DashboardBotExistingVersionProps extends DashboardBotNewDraftProps {
+  versionPublicId: string;
+}
+
+export interface DashboardBotVersionEditorProps extends DashboardBotNewDraftProps {
+  version: ChatbotConfigDetail;
+}
+
+// DEV_NOTE: Which of a draft's confirmations is open
+export enum DashboardVersionConfirmEnum {
+  Publish = "publish",
+  Discard = "discard",
+}
+
+// DEV_NOTE: One limit field of the editor: its config key, its label, and whether it holds dollars
+export interface DashboardConfigLimitField {
+  key: DashboardConfigLimitKey;
+  label: string;
+  isUsd: boolean;
+}
+
+// DEV_NOTE: The form's body checked with the config spec in the browser: the body, or the issues in the editor's words
+export interface DashboardConfigBodyCheck {
+  body: ConfigSpecBody | null;
+  issues: string[];
 }

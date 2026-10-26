@@ -208,4 +208,80 @@ export default class CompaniesRepo {
       },
     );
   }
+
+  // DEV_NOTE: The Bots page's Read-only mode (M4-10)
+  async getReadOnlyMode(params: {
+    companyId: string;
+  }): Promise<Schemas.GetReadOnlyModeApiResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetReadOnlyModeApiResponse> => {
+        const found = await this.dal.getCompanyDetails(tx, params);
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        return {
+          isSuccess: true,
+          message: "Read-only mode fetched successfully",
+          readOnlyMode: { isReadOnly: found.company.isReadOnly },
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Turn Read-only mode on or off, with its audit row (Turned on / Turned off), under the row lock; the value
+  // already in force writes nothing and records nothing. The action engine reads is_read_only at every turn start (a
+  // read-only company gets read tools only) and every change request step re-checks it, so it takes effect at once.
+  async updateReadOnlyMode(
+    params: Schemas.UpdateReadOnlyModeApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateReadOnlyModeApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateReadOnlyModeApiResponse>> => {
+        const found = await this.dal.getCompanyDetails(tx, {
+          companyId: params.companyId,
+          isForUpdate: true,
+        });
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        if (found.company.isReadOnly === params.isReadOnly) {
+          return {
+            isSuccess: true,
+            message: "Read-only mode unchanged",
+            readOnlyMode: { isReadOnly: found.company.isReadOnly },
+            outboxIds: [],
+          };
+        }
+
+        const updated = await this.dal.updateCompanyReadOnly(tx, {
+          companyId: params.companyId,
+          isReadOnly: params.isReadOnly,
+          updatedBy: params.adminId,
+        });
+        if (!updated.isSuccess || !updated.company) {
+          return { isSuccess: false, message: updated.message, isNotFound: updated.isNotFound };
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: adminAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.Company,
+          entityAction: params.isReadOnly
+            ? Schemas.AuditEntityActionEnum.TurnedOn
+            : Schemas.AuditEntityActionEnum.TurnedOff,
+          entity: updated.company,
+          label: "Read-only mode",
+        });
+        return {
+          isSuccess: true,
+          message: "Read-only mode updated successfully",
+          readOnlyMode: { isReadOnly: updated.company.isReadOnly },
+          outboxIds: [outboxId],
+        };
+      },
+    );
+  }
 }

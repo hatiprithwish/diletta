@@ -66,3 +66,8 @@ export interface EvalRunCaseAttemptRow extends Omit<
 export interface EvalRunCaseAttemptsDALResponse extends ApiResponse {
   attempts?: [EvalRunCaseAttemptRow, ...EvalRunCaseAttemptRow[]];
 }
+
+// DEV_NOTE: chatbotConfigId is internal (the Repo matches it to its versions)
+export interface LatestEvalRunsByConfigDALResponse extends ApiResponse {
+  runs?: Pick<EvalRun, "chatbotConfigId" | "status" | "hasPassed">[];
+}

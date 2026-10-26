@@ -29,3 +29,10 @@ export const ZGetCompaniesApiRequest = ZPageApiRequest.extend({
   sortColumn: ZCompanySortColumn.nullable().optional(),
 });
 export type GetCompaniesApiRequest = z.infer<typeof ZGetCompaniesApiRequest>;
+
+// DEV_NOTE: PUT /dashboard/settings/read-only (Settings › Bots, M4-10): the company's emergency switch. On, every write
+// tool is left out of every chatbot's turns (the action engine's is_read_only check); answers keep working.
+export const ZUpdateReadOnlyModeApiRequest = z.object({
+  isReadOnly: z.boolean(),
+});
+export type UpdateReadOnlyModeApiRequest = z.infer<typeof ZUpdateReadOnlyModeApiRequest>;

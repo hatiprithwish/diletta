@@ -46,3 +46,7 @@ export interface ToolDefinitionWithConnectionDALResponse extends ApiResponse {
 export interface WriteToolSummariesDALResponse extends ApiResponse {
   tools?: Pick<ToolDefinition, "name" | "description">[];
 }
+
+export interface ToolDefinitionOptionsDALResponse extends ApiResponse {
+  options?: Pick<ToolDefinition, "name" | "version" | "description" | "risk">[];
+}

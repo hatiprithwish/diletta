@@ -313,4 +313,46 @@ export default class CompaniesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The Bots page's Read-only mode (M4-10), by the admin, on the company's own row (withTenant)
+  async updateCompanyReadOnly(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanyReadOnlyDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          isReadOnly: params.isReadOnly,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Read-only mode updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating read-only mode";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateCompanyReadOnly,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

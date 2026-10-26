@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
+import ChatbotConfigsRepo from "@/repositories/ChatbotConfigsRepo";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
@@ -20,6 +21,32 @@ ChatbotsRoutes.get(
   async (c) => {
     const repo = new ChatbotsRepo(c.env);
     const response = await repo.getChatbots({ companyId: c.get("companyId") });
+
+    return c.json(response, response.isSuccess ? 200 : 500);
+  },
+);
+
+// DEV_NOTE: Settings › Bots' table (M4-10): live version and recent conversations per chatbot. Before "/:publicId".
+ChatbotsRoutes.get(
+  "/settings",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotRead),
+  async (c) => {
+    const repo = new ChatbotsRepo(c.env);
+    const response = await repo.getChatbotSettingsRows({ companyId: c.get("companyId") });
+
+    return c.json(response, response.isSuccess ? 200 : 500);
+  },
+);
+
+// DEV_NOTE: The Bots draft editor's pickers (M4-10), company-wide. Before "/:publicId".
+ChatbotsRoutes.get(
+  "/config-options",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotConfigRead),
+  async (c) => {
+    const repo = new ChatbotConfigsRepo(c.env);
+    const response = await repo.getChatbotConfigOptions({ companyId: c.get("companyId") });
 
     return c.json(response, response.isSuccess ? 200 : 500);
   },
@@ -69,6 +96,24 @@ ChatbotsRoutes.patch(
     const repo = new ChatbotsRepo(c.env);
     const { outboxIds, ...response } = await repo.updateChatbot({
       ...c.req.valid("json"),
+      companyId,
+      publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
+  },
+);
+
+ChatbotsRoutes.post(
+  "/:publicId/default",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotUpdate),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new ChatbotsRepo(c.env);
+    const { outboxIds, ...response } = await repo.setDefaultChatbot({
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,

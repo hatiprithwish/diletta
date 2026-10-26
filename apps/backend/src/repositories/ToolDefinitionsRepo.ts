@@ -1,6 +1,7 @@
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import Constants from "@/config/Constants";
+import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
@@ -32,10 +33,12 @@ const STORED_OPS_INVALID_MESSAGE = "Stored tool ops are invalid";
 export default class ToolDefinitionsRepo {
   private db: NodePgDatabase;
   private dal: ToolDefinitionsDAL;
+  private chatbotConfigsDal: ChatbotConfigsDAL;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
     this.dal = new ToolDefinitionsDAL();
+    this.chatbotConfigsDal = new ChatbotConfigsDAL();
   }
 
   private refuse(
@@ -560,6 +563,23 @@ export default class ToolDefinitionsRepo {
             Schemas.ToolDefinitionFailureEnum.InvalidTransition,
             `A ${from} version can't be set to ${to}`,
           );
+        }
+
+        // DEV_NOTE: M4-10: a version a Published chatbot config pins stays Active until no Published config pins it (the
+        // publish reads its pins FOR SHARE, so the two can't cross)
+        if (params.status === Schemas.ToolDefinitionStatusIntEnum.Disabled) {
+          const pinned = await this.chatbotConfigsDal.findPublishedToolPin(tx, {
+            companyId: params.companyId,
+            name: row.name,
+            version: row.version,
+          });
+          if (!pinned.isSuccess) return { isSuccess: false, message: pinned.message };
+          if (pinned.isPinned) {
+            return this.refuse(
+              Schemas.ToolDefinitionFailureEnum.PinnedByPublishedConfig,
+              "A published chatbot version uses this tool version; publish one without it first",
+            );
+          }
         }
 
         if (params.status === Schemas.ToolDefinitionStatusIntEnum.Active) {
