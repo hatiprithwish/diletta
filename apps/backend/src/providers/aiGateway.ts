@@ -34,6 +34,20 @@ const PROVIDER_MODEL_FACTORY: Record<
   [Schemas.ModelProviderEnum.Google]: (settings, model) => createGoogle(settings)(model),
 };
 
+// DEV_NOTE: Each provider's own auth header, as its SDK sends it (Anthropic also needs its API version), for the
+// model key check, which calls the provider's REST API directly through the gateway
+const PROVIDER_KEY_HEADERS: Record<
+  Schemas.ModelProviderEnum,
+  (apiKey: string) => Record<string, string>
+> = {
+  [Schemas.ModelProviderEnum.Anthropic]: (apiKey) => ({
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+  }),
+  [Schemas.ModelProviderEnum.OpenAI]: (apiKey) => ({ Authorization: `Bearer ${apiKey}` }),
+  [Schemas.ModelProviderEnum.Google]: (apiKey) => ({ "x-goog-api-key": apiKey }),
+};
+
 const GATEWAY_LOG_ID_HEADER = "cf-aig-log-id";
 // DEV_NOTE: The gateway keeps the first 5 metadata entries and drops the rest silently
 const MAX_METADATA_ENTRIES = 5;
@@ -253,20 +267,91 @@ export default class AiGatewayProvider {
     if (!APICallError.isInstance(error) || error.statusCode === undefined) {
       return false;
     }
-    const providerError = AiGatewayProvider.readProviderError(error.responseBody);
+    return AiGatewayProvider.isRejectedKeyAnswer(provider, error.statusCode, error.responseBody);
+  }
+
+  // DEV_NOTE: Settings › Model keys (M4-10): ask the provider, through the gateway, whether a key works, on its
+  // list-models endpoint (GET …/models: no model call, nothing billed). The same rule as the router's decides Rejected
+  // (isRejectedKeyAnswer), so a key the dashboard accepts is one the router won't invalidate on its first call. Any
+  // other answer, a gateway error or a timeout is Unreachable. Never throws; the key goes only into the provider's own
+  // auth header and is never logged.
+  static async checkModelKey(
+    env: Env,
+    params: { provider: Schemas.ModelProviderEnum; apiKey: string },
+  ): Promise<Schemas.ModelKeyCheckOutcomeEnum> {
+    const logMetadata = { provider: params.provider };
+
+    try {
+      const token = await AiGatewayProvider.getGatewayToken(env);
+      if (!token || !env.AI_GATEWAY_ACCOUNT_ID || !env.AI_GATEWAY_NAME) {
+        AppLogger.error({
+          category: Schemas.LogCategory.ModelRouter,
+          action: Schemas.LogAction.CheckModelKey,
+          message: "AI Gateway is not configured",
+          metadata: logMetadata,
+        });
+        return Schemas.ModelKeyCheckOutcomeEnum.Unreachable;
+      }
+
+      const res = await fetch(
+        `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}/models`,
+        {
+          headers: {
+            ...PROVIDER_KEY_HEADERS[params.provider](params.apiKey),
+            "cf-aig-authorization": `Bearer ${token}`,
+          },
+          redirect: "error",
+          signal: AbortSignal.timeout(Constants.MODEL_KEY_CHECK_TIMEOUT_MS),
+        },
+      );
+      if (res.ok) {
+        await res.body?.cancel();
+        return Schemas.ModelKeyCheckOutcomeEnum.Valid;
+      }
+
+      const responseBody = await res.text();
+      if (AiGatewayProvider.isRejectedKeyAnswer(params.provider, res.status, responseBody)) {
+        return Schemas.ModelKeyCheckOutcomeEnum.Rejected;
+      }
+      AppLogger.error({
+        category: Schemas.LogCategory.ModelRouter,
+        action: Schemas.LogAction.CheckModelKey,
+        message: `Model key check failed with status ${res.status}`,
+        metadata: logMetadata,
+      });
+      return Schemas.ModelKeyCheckOutcomeEnum.Unreachable;
+    } catch (error) {
+      AppLogger.error({
+        category: Schemas.LogCategory.ModelRouter,
+        action: Schemas.LogAction.CheckModelKey,
+        message: "Unknown error in checking model key",
+        error,
+        metadata: logMetadata,
+      });
+      return Schemas.ModelKeyCheckOutcomeEnum.Unreachable;
+    }
+  }
+
+  // DEV_NOTE: The per-provider rule behind isRejectedKeyError and checkModelKey, on the answer's status and body
+  private static isRejectedKeyAnswer(
+    provider: Schemas.ModelProviderEnum,
+    statusCode: number,
+    responseBody: string | undefined,
+  ): boolean {
+    const providerError = AiGatewayProvider.readProviderError(responseBody);
     if (!providerError) {
       return false;
     }
 
     switch (provider) {
       case Schemas.ModelProviderEnum.Anthropic:
-        return error.statusCode === 401 && providerError.type === "authentication_error";
+        return statusCode === 401 && providerError.type === "authentication_error";
       case Schemas.ModelProviderEnum.OpenAI:
-        return error.statusCode === 401;
+        return statusCode === 401;
       case Schemas.ModelProviderEnum.Google:
         return (
-          (error.statusCode === 400 && providerError.reasons.includes("API_KEY_INVALID")) ||
-          (error.statusCode === 401 && providerError.status === "UNAUTHENTICATED")
+          (statusCode === 400 && providerError.reasons.includes("API_KEY_INVALID")) ||
+          (statusCode === 401 && providerError.status === "UNAUTHENTICATED")
         );
     }
   }

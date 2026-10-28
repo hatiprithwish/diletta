@@ -53,6 +53,8 @@ export enum ModelProviderEnum {
   Anthropic = "anthropic",
 }
 
+export const ZModelProvider = z.enum(ModelProviderEnum);
+
 // Create Company Secret Body
 // DEV_NOTE: secret is the plaintext the admin pastes. The Repo encrypts it under the company key straight away;
 // it is never stored, logged or returned as-is (only the last four characters of a long secret are kept for display).
@@ -105,4 +107,34 @@ export type CompanySecretWithStatus = Omit<
   companySecretStatusLabel: CompanySecretStatusLabelEnum;
   companySecretType: CompanySecretTypeIntEnum;
   companySecretTypeLabel: CompanySecretTypeLabelEnum;
+};
+
+// ─── Settings › Model keys (M4-10)
+
+// DEV_NOTE: A pasted key is at most this long (provider keys are well under 200 characters)
+export const MODEL_KEY_SECRET_MAX_CHARS = 1_000;
+
+export const ZModelKeySecret = z.string().trim().min(1).max(MODEL_KEY_SECRET_MAX_CHARS);
+
+// DEV_NOTE: What the provider said about a key on its list-models endpoint, through AI Gateway (AiGatewayProvider.
+// checkModelKey): Valid = accepted, Rejected = refused the key itself (the router's rule: AiGatewayProvider.isRejectedKeyError; never a 403), Unreachable =
+// anything else (the gateway or provider down, a timeout, an answer we can't read). No model call: nothing is billed.
+export enum ModelKeyCheckOutcomeEnum {
+  Valid = "Valid",
+  Rejected = "Rejected",
+  Unreachable = "Unreachable",
+}
+
+// DEV_NOTE: Why Add key / Rotate saved nothing. 400 = the provider refused the key, 502 = it couldn't be checked,
+// 409 = the provider already has an Active key (rotate that one)
+export enum ModelKeyFailureEnum {
+  KeyRejected = "KeyRejected",
+  CheckUnavailable = "CheckUnavailable",
+  ProviderHasActiveKey = "ProviderHasActiveKey",
+}
+
+export const MODEL_KEY_FAILURE_HTTP_STATUS_MAP: Record<ModelKeyFailureEnum, 400 | 409 | 502> = {
+  [ModelKeyFailureEnum.KeyRejected]: 400,
+  [ModelKeyFailureEnum.CheckUnavailable]: 502,
+  [ModelKeyFailureEnum.ProviderHasActiveKey]: 409,
 };

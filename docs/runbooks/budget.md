@@ -30,7 +30,9 @@ When a new month starts, BudgetDO seeds the month from `SUM(model_calls.cost_usd
 
 ## Change a company's budget
 
-Until Settings › Budget ships (M4), set it on the owner connection (`DATABASE_URL`, staging or production):
+A company admin sets it on Settings › Budget (M4-10, `/settings/budget`, `PUT /dashboard/settings/budget`): a dollar amount per billing period (the UTC month), above $0, whole cents, at most `SPENDING_BUDGET_MAX_USD`. Saving the amount already in force (the $10 default included) changes nothing and records nothing; any other amount records a "Changed spending budget" audit row (Security › Audit log). The page also shows this period's spend: `SUM(model_calls.cost_usd)` since the 1st, without embeddings, the same sum BudgetDO is seeded from. It is read from Neon, so it can trail BudgetDO by calls still being backfilled (Pending rows add 0) and by holds in flight.
+
+An operator who has to change it for a company (support, an emergency stop) uses the owner connection (`DATABASE_URL`, staging or production); that change has no audit row:
 
 ```sql
 UPDATE companies SET spending_budget = 50, updated_at = now() WHERE public_id = '<company public id>';
@@ -53,7 +55,7 @@ All budget logs use the `Budget` category (`LogCategory.Budget`):
 
 Not built yet, each tracked in the dev plan's open questions:
 
-- **Budget alerts at 50% / 80% / 100%** (the Cron in the architecture). Nothing tells an admin the budget is running out; at 100% the chatbot just shows "Temporarily unavailable". No task owns it yet (suggested: with M6-6).
+- **Budget alerts at 50% / 80% / 100%** (the Cron in the architecture). Nothing tells an admin the budget is running out; at 100% the chatbot just shows "Temporarily unavailable". No task owns it yet (suggested: with M6-6). Settings › Budget draws the 50% and 80% ticks on its bar but doesn't promise alerts.
 - **Loop guard** (same tool + same args twice in a turn → stop). There are no tools until M3 (`activeTools: []`), so there is nothing to guard. Add it with the first tool calls (M3-1 / M3-4), next to `stopWhen` in `ConversationDO.beforeTurn`.
 - **Sub-agents sharing the parent turn's budget** (architecture cost box). None exist yet.
 

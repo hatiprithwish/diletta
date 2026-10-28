@@ -13,6 +13,13 @@ export enum AuthzActionEnum {
   ChatbotConfigPublish = "chatbot_config.publish",
   ReadOnlyModeUpdate = "company.read_only_update",
 
+  // Settings › Model keys and Budget (company-scoped, M4-10): read the model keys, add one or replace its value (checked
+  // with the provider first); read the spending budget and what's used, change the budget
+  ModelKeyRead = "model_key.read",
+  ModelKeyUpdate = "model_key.update",
+  BudgetRead = "budget.read",
+  BudgetUpdate = "budget.update",
+
   // Knowledge sources and their documents (company-scoped)
   KnowledgeSourceRead = "knowledge_source.read",
   KnowledgeSourceCreate = "knowledge_source.create",

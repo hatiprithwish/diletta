@@ -1,15 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import { ModelKeysPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/settings/model-keys/")({
-  component: SettingsModelKeysPage,
+  component: ModelKeysPage,
 });
-
-function SettingsModelKeysPage() {
-  return (
-    <PageHeader
-      title="Model keys"
-      description="Your provider keys, required for every model call"
-    />
-  );
-}

@@ -1,10 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import { BudgetPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/settings/budget/")({
-  component: SettingsBudgetPage,
+  component: BudgetPage,
 });
-
-function SettingsBudgetPage() {
-  return <PageHeader title="Budget" description="Spending limit across all bots" />;
-}

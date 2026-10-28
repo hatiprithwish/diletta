@@ -1,8 +1,10 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import AiGatewayProvider from "@/providers/aiGateway";
 import CompanyKeyProvider from "@/providers/companyKey";
+import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Trailing characters kept in plaintext for display (last_four_chars), and only for a secret long enough
@@ -161,6 +163,254 @@ export default class CompanySecretsRepo {
       });
       return this.withCompanySecretResponse(result);
     });
+  }
+
+  // DEV_NOTE: A model key as Settings › Model keys shows it, or null for a row that isn't one (another secret type, or
+  // a provider this build doesn't know)
+  private toModelKey(companySecret: Schemas.CompanySecret): Schemas.ModelKey | null {
+    const provider = Schemas.ZModelProvider.safeParse(companySecret.provider);
+    if (companySecret.type !== Schemas.CompanySecretTypeIntEnum.ModelKey || !provider.success) {
+      return null;
+    }
+    return {
+      publicId: companySecret.publicId,
+      provider: provider.data,
+      providerLabel: Schemas.MODEL_PROVIDER_LABEL_MAP[provider.data],
+      lastFourChars: companySecret.lastFourChars,
+      status: companySecret.status,
+      statusLabel: Schemas.COMPANY_SECRET_STATUS_LABEL_MAP[companySecret.status],
+      lastValidatedAt: companySecret.lastValidatedAt?.toISOString() ?? null,
+      rotatedAt: companySecret.rotatedAt?.toISOString() ?? null,
+      createdAt: companySecret.createdAt.toISOString(),
+    };
+  }
+
+  // DEV_NOTE: The provider's verdict on a pasted key as a refusal, or null when it was accepted
+  private modelKeyCheckRefusal(
+    outcome: Schemas.ModelKeyCheckOutcomeEnum,
+  ): Schemas.ModelKeyWriteApiResponse | null {
+    switch (outcome) {
+      case Schemas.ModelKeyCheckOutcomeEnum.Valid:
+        return null;
+      case Schemas.ModelKeyCheckOutcomeEnum.Rejected:
+        return {
+          isSuccess: false,
+          message: "The provider rejected this key",
+          failure: Schemas.ModelKeyFailureEnum.KeyRejected,
+        };
+      case Schemas.ModelKeyCheckOutcomeEnum.Unreachable:
+        return {
+          isSuccess: false,
+          message: "The key couldn't be checked with the provider",
+          failure: Schemas.ModelKeyFailureEnum.CheckUnavailable,
+        };
+    }
+  }
+
+  private activeKeyTaken(): Schemas.ModelKeyWriteApiResponse {
+    return {
+      isSuccess: false,
+      message: "This provider already has an active key",
+      failure: Schemas.ModelKeyFailureEnum.ProviderHasActiveKey,
+    };
+  }
+
+  // DEV_NOTE: Settings › Model keys (M4-10): every model key, oldest first (a handful: one Active per provider)
+  async getModelKeys(params: { companyId: string }): Promise<Schemas.GetModelKeysApiResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetModelKeysApiResponse> => {
+        const result = await this.dal.getCompanySecrets(tx, params);
+        if (!result.isSuccess || !result.companySecrets) {
+          return { isSuccess: false, message: result.message };
+        }
+        return {
+          isSuccess: true,
+          message: "Model keys fetched successfully",
+          modelKeys: result.companySecrets.flatMap((companySecret) => {
+            const modelKey = this.toModelKey(companySecret);
+            return modelKey ? [modelKey] : [];
+          }),
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Add key (M4-10). The provider checks the key first (list-models through AI Gateway, outside the
+  // transaction: no lock held across a network call); a refused or unchecked key saves nothing. Then one withTenant:
+  // the provider's Active key looked up (one only: UNQ_company_secrets_company_id_provider_active, which also catches
+  // a key added at the same moment), the value encrypted, the row Active with last_validated_at, and its Created audit
+  // row labelled with the provider. The value is never logged or returned.
+  async addModelKey(
+    params: Schemas.AddModelKeyApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> {
+    const outcome = await AiGatewayProvider.checkModelKey(this.env, {
+      provider: params.provider,
+      apiKey: params.secret,
+    });
+    const refusal = this.modelKeyCheckRefusal(outcome);
+    if (refusal) return { ...refusal, outboxIds: [] };
+    const validatedAt = new Date();
+
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> => {
+        const active = await this.dal.getActiveModelKey(tx, {
+          companyId: params.companyId,
+          provider: params.provider,
+        });
+        if (active.isSuccess) return { ...this.activeKeyTaken(), outboxIds: [] };
+        if (!active.isNotFound) return { isSuccess: false, message: active.message, outboxIds: [] };
+
+        const encrypted = await CompanyKeyProvider.encryptValue(this.env, tx, {
+          companyId: params.companyId,
+          column: Schemas.EncryptedColumnEnum.CompanySecret,
+          plaintext: params.secret,
+        });
+        if (!encrypted.isSuccess) {
+          return { isSuccess: false, message: encrypted.message, outboxIds: [] };
+        }
+
+        const created = await this.dal.createCompanySecret(tx, {
+          companyId: params.companyId,
+          type: Schemas.CompanySecretTypeIntEnum.ModelKey,
+          provider: params.provider,
+          connectionId: null,
+          encryptedSecret: encrypted.encryptedValue.ciphertext,
+          iv: encrypted.encryptedValue.iv,
+          encryptionKeyVersion: encrypted.encryptionKeyVersion,
+          lastFourChars: this.visibleChars(params.secret),
+          expiresAt: null,
+          lastValidatedAt: validatedAt,
+          createdBy: params.adminId,
+        });
+        if (created.isActiveKeyTaken) return { ...this.activeKeyTaken(), outboxIds: [] };
+        const modelKey = created.companySecret ? this.toModelKey(created.companySecret) : null;
+        if (!created.isSuccess || !created.companySecret || !modelKey) {
+          return { isSuccess: false, message: created.message, outboxIds: [] };
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: adminAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.ModelKey,
+          entityAction: Schemas.AuditEntityActionEnum.Created,
+          entity: created.companySecret,
+          label: modelKey.providerLabel,
+        });
+        return {
+          isSuccess: true,
+          message: "Model key added successfully",
+          modelKey,
+          outboxIds: [outboxId],
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Rotate (M4-10): a new value for a model key, checked with the provider first like Add key. The row is
+  // locked, so two rotations run one after the other; any status may be rotated (an Invalid or Revoked key comes back
+  // Active), unless the provider has another Active key by then (409). The new value is encrypted under the company's
+  // active key; rotated_at is set by the DAL. Its Rotated audit row is labelled with the provider.
+  async rotateModelKey(
+    params: Schemas.RotateModelKeyApiRequest & {
+      companyId: string;
+      adminId: string;
+      publicId: string;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> {
+    const found: Schemas.CompanySecretDALResponse = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.CompanySecretDALResponse> =>
+        await this.dal.getCompanySecretDetails(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+        }),
+    );
+    const foundKey = found.companySecret ? this.toModelKey(found.companySecret) : null;
+    if (!found.isSuccess || !foundKey) {
+      return {
+        isSuccess: false,
+        message: found.isSuccess ? "Model key not found" : found.message,
+        isNotFound: found.isSuccess || found.isNotFound,
+        outboxIds: [],
+      };
+    }
+
+    const outcome = await AiGatewayProvider.checkModelKey(this.env, {
+      provider: foundKey.provider,
+      apiKey: params.secret,
+    });
+    const refusal = this.modelKeyCheckRefusal(outcome);
+    if (refusal) return { ...refusal, outboxIds: [] };
+    const validatedAt = new Date();
+
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> => {
+        const locked = await this.dal.getCompanySecretDetails(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+          isForUpdate: true,
+        });
+        const lockedKey = locked.companySecret ? this.toModelKey(locked.companySecret) : null;
+        if (!locked.isSuccess || !lockedKey) {
+          return {
+            isSuccess: false,
+            message: locked.isSuccess ? "Model key not found" : locked.message,
+            isNotFound: locked.isSuccess || locked.isNotFound,
+            outboxIds: [],
+          };
+        }
+
+        const encrypted = await CompanyKeyProvider.encryptValue(this.env, tx, {
+          companyId: params.companyId,
+          column: Schemas.EncryptedColumnEnum.CompanySecret,
+          plaintext: params.secret,
+        });
+        if (!encrypted.isSuccess) {
+          return { isSuccess: false, message: encrypted.message, outboxIds: [] };
+        }
+
+        const updated = await this.dal.updateCompanySecret(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+          encryptedSecret: encrypted.encryptedValue.ciphertext,
+          iv: encrypted.encryptedValue.iv,
+          encryptionKeyVersion: encrypted.encryptionKeyVersion,
+          lastFourChars: this.visibleChars(params.secret),
+          expiresAt: null,
+          status: Schemas.CompanySecretStatusIntEnum.Active,
+          lastValidatedAt: validatedAt,
+          updatedBy: params.adminId,
+        });
+        if (updated.isActiveKeyTaken) return { ...this.activeKeyTaken(), outboxIds: [] };
+        const modelKey = updated.companySecret ? this.toModelKey(updated.companySecret) : null;
+        if (!updated.isSuccess || !updated.companySecret || !modelKey) {
+          // DEV_NOTE: The row was locked above, so a miss here is a server error, never a not-found
+          throw new TenantRollbackError(updated.message ?? "Model key not rotated");
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: adminAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.ModelKey,
+          entityAction: Schemas.AuditEntityActionEnum.Rotated,
+          entity: updated.companySecret,
+          label: modelKey.providerLabel,
+        });
+        return {
+          isSuccess: true,
+          message: "Model key rotated successfully",
+          modelKey,
+          outboxIds: [outboxId],
+        };
+      },
+    );
   }
 
   // DEV_NOTE: Server-side only. Decrypts with the row's own encryption_key_version, so it reads values written

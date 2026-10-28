@@ -64,7 +64,8 @@ import type {
   ChatbotConfigWriteApiResponse,
 } from "../chatbotConfigs";
 import type { ChatbotSettingsRow } from "../chatbots";
-import type { ModelProviderEnum } from "../companySecrets";
+import type { ModelKey, ModelProviderEnum } from "../companySecrets";
+import type { SpendingBudget } from "../budget";
 import type { ApprovalRuleApprovalEnum, ConfigSpecBody, ModelTierEnum } from "../configSpec";
 
 // DEV_NOTE: Props of the dashboard shell (apps/web, M4-1). The header's actions come in as children.
@@ -784,4 +785,25 @@ export interface DashboardConfigLimitField {
 export interface DashboardConfigBodyCheck {
   body: ConfigSpecBody | null;
   issues: string[];
+}
+
+// ─── Settings › Model keys and Budget (M4-10)
+
+export interface DashboardModelKeyRowProps {
+  modelKey: ModelKey;
+}
+
+// DEV_NOTE: Add key (modelKey null) or Rotate (the key)
+export interface DashboardModelKeyDialogProps {
+  modelKey: ModelKey | null;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export interface DashboardBudgetFormProps {
+  spendingBudget: SpendingBudget;
+}
+
+export interface DashboardBudgetUsageProps {
+  spendingBudget: SpendingBudget;
 }

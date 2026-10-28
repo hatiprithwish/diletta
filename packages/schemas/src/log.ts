@@ -252,6 +252,8 @@ export enum LogAction {
   GetActiveToolDefinitionOptions = "GetActiveToolDefinitionOptions",
   GetKnowledgeSourceOptions = "GetKnowledgeSourceOptions",
   UpdateCompanyReadOnly = "UpdateCompanyReadOnly",
+  CheckModelKey = "CheckModelKey",
+  UpdateCompanySpendingBudget = "UpdateCompanySpendingBudget",
 
   // Conversations
   CreateConversation = "CreateConversation",

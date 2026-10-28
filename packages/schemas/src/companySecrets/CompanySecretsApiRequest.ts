@@ -3,6 +3,8 @@ import {
   CompanySecretStatusIntEnum,
   CompanySecretTypeIntEnum,
   ZCompanySecretBase,
+  ZModelProvider,
+  ZModelKeySecret,
 } from "./CompanySecretsCommon";
 
 // DEV_NOTE: expiresAt defaults to none. The refine mirrors CHK_company_secrets_model_key_provider. The connection
@@ -29,3 +31,17 @@ export const ZUpdateCompanySecretApiRequest = z.object({
     .partial(),
 });
 export type UpdateCompanySecretApiRequest = z.infer<typeof ZUpdateCompanySecretApiRequest>;
+
+// DEV_NOTE: Settings › Model keys (M4-10): POST /dashboard/settings/model-keys. The key is checked with the provider
+// before anything is stored; it never comes back.
+export const ZAddModelKeyApiRequest = z.object({
+  provider: ZModelProvider,
+  secret: ZModelKeySecret,
+});
+export type AddModelKeyApiRequest = z.infer<typeof ZAddModelKeyApiRequest>;
+
+// POST /dashboard/settings/model-keys/:publicId/rotate: a new value for the key, checked first
+export const ZRotateModelKeyApiRequest = z.object({
+  secret: ZModelKeySecret,
+});
+export type RotateModelKeyApiRequest = z.infer<typeof ZRotateModelKeyApiRequest>;

@@ -10,7 +10,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
-import { QUERY_KEY_ROOTS, invalidateLiveConfigViews } from "../../-invalidation";
+import { BOTS_KEY_SEGMENTS, QUERY_KEY_ROOTS, invalidateLiveConfigViews } from "../../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -22,7 +22,7 @@ export class BotsQueries {
   static keys = {
     all: () => QUERY_KEY_ROOTS.bots,
     rows: () => [...BotsQueries.keys.all(), "rows"] as const,
-    options: () => [...BotsQueries.keys.all(), "options"] as const,
+    options: () => [...BotsQueries.keys.all(), BOTS_KEY_SEGMENTS.options] as const,
     readOnly: () => [...BotsQueries.keys.all(), "read-only"] as const,
     versions: (chatbotPublicId: string) =>
       [...BotsQueries.keys.all(), "versions", chatbotPublicId] as const,

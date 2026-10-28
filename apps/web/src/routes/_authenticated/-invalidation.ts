@@ -12,6 +12,9 @@ export const QUERY_KEY_ROOTS = {
   bots: ["bots"],
 } as const;
 
+// DEV_NOTE: The Bots page's key segments that another page refreshes (BotsQueries.keys builds its keys from them)
+export const BOTS_KEY_SEGMENTS = { options: "options" } as const;
+
 // DEV_NOTE: The Tests page's key segments that another page refreshes (TestsQueries.keys builds its keys from them)
 export const TESTS_KEY_SEGMENTS = { cases: "cases", summary: "summary" } as const;
 
@@ -51,4 +54,12 @@ export function invalidateLiveConfigViews(queryClient: QueryClient) {
     queryKey: [...QUERY_KEY_ROOTS.tests, TESTS_KEY_SEGMENTS.summary],
   });
   void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.conversations });
+}
+
+// DEV_NOTE: A model key was added or rotated (Settings › Model keys, M4-10): the draft editor's pickers refetch, since they
+// list the providers with an Active key
+export function invalidateModelKeyViews(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({
+    queryKey: [...QUERY_KEY_ROOTS.bots, BOTS_KEY_SEGMENTS.options],
+  });
 }
