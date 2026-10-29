@@ -417,4 +417,45 @@ export default class EvalCasesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The active cases one chatbot's eval run runs (M5-2): its own and every platform case, safety cases first,
+  // then by name (a fixed order, so a run's attempts go in the same order every time). Case text stays out of the log.
+  async getRunnableEvalCases(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetRunnableEvalCasesDALRequest,
+  ) {
+    const response: Schemas.EvalCasesDALResponse = { isSuccess: false };
+
+    try {
+      const ownConditions = [
+        eq(evalCases.companyId, params.companyId),
+        eq(evalCases.chatbotId, params.chatbotId),
+      ];
+      const conditions = [
+        eq(evalCases.isActive, true),
+        or(and(...ownConditions), isNull(evalCases.companyId)),
+      ];
+      const selected = await tx
+        .select()
+        .from(evalCases)
+        .where(and(...conditions))
+        .orderBy(desc(evalCases.isSafety), asc(evalCases.name), asc(evalCases.id));
+
+      response.isSuccess = true;
+      response.message = "Runnable eval cases fetched successfully";
+      response.evalCases = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching runnable eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetRunnableEvalCases,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

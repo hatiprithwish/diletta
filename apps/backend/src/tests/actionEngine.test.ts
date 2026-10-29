@@ -146,6 +146,7 @@ async function createFixture(label: string): Promise<Schemas.ConversationSession
       chatbotUserId: chatbotUser?.id ?? "",
       conversationId: conversation?.id ?? "",
       conversationPublicId: conversation?.publicId ?? "",
+      eval: null,
     };
   });
 }

@@ -18,6 +18,12 @@ export interface CompanyVariables {
   companyId: string;
 }
 
+// DEV_NOTE: Set by authenticateEval (EvalAuthMiddleware) on /eval/* (M5-2): the verified eval caller. Internal ids:
+// never put it in a response.
+export interface EvalVariables {
+  evalIdentity: Schemas.EvalIdentity;
+}
+
 interface AppContext {
   Bindings: Env;
   Variables: AuthVariables;

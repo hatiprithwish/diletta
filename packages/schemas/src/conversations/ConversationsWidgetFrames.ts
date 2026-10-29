@@ -242,6 +242,9 @@ export interface ActiveTurn<TModel, TCaps> {
   turnId: string;
   userMessageId: string | null;
   isContinuation: boolean;
+  // DEV_NOTE: An eval attempt's turn (M5-2), run by saveMessages: its requestId is Think's own, so like a continuation
+  // the first turn end Think reports while it is active is it
+  isEval: boolean;
   model: TModel | null;
   spec: ConfigSpec | null;
   caps: TCaps | null;

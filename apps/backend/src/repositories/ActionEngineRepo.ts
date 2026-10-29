@@ -68,6 +68,7 @@ export default class ActionEngineRepo {
       const found = await this.toolDefinitionsDal.getPinnedToolDefinitions(tx, {
         companyId: session.companyId,
         pins,
+        evalConnectionId: session.eval?.connectionId ?? null,
       });
       if (!found.isSuccess || !found.toolDefinitions) {
         return { isSuccess: false, message: found.message };
@@ -373,6 +374,7 @@ export default class ActionEngineRepo {
       const toolRow = await this.toolDefinitionsDal.getToolDefinitionById(tx, {
         companyId: session.companyId,
         id: row.toolId,
+        evalConnectionId: session.eval?.connectionId ?? null,
       });
       if (!toolRow.isSuccess && !toolRow.isNotFound) {
         return {
@@ -535,7 +537,7 @@ export default class ActionEngineRepo {
         return await this.refuseTransition(tx, row);
       }
       const rootLogId = await this.findRootLogId(tx, session);
-      const loaded = await this.loadTool(tx, session.companyId, row.toolId);
+      const loaded = await this.loadTool(tx, ActionEngineRepo.toolScope(session), row.toolId);
       if (!loaded.isSuccess && loaded.failure === Schemas.ChangeRequestFailureEnum.ServerError) {
         return { isSuccess: false, message: loaded.message, failure: loaded.failure };
       }
@@ -761,7 +763,7 @@ export default class ActionEngineRepo {
         changeRequest: ChangeRequestsProvider.toView(row, payload, Date.now()),
       });
       if (refusal) return refuse(refusal, "Change request can't be undone now");
-      const loaded = await this.loadTool(tx, session.companyId, row.toolId);
+      const loaded = await this.loadTool(tx, ActionEngineRepo.toolScope(session), row.toolId);
       if (!loaded.isSuccess) return refuse(loaded.failure, loaded.message);
       if (!loaded.tool.ops.inverseOp || !payload) {
         return refuse(
@@ -880,7 +882,7 @@ export default class ActionEngineRepo {
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
-      const ready = await this.checkEditable(tx, row);
+      const ready = await this.checkEditable(tx, session, row);
       if (!ready.isSuccess) return ready.response;
       return {
         isSuccess: true,
@@ -904,7 +906,7 @@ export default class ActionEngineRepo {
       const found = await this.findChangeRequest(tx, session, params.changeRequestPublicId);
       if (!found.isSuccess) return found.response;
       const row = found.changeRequest;
-      const ready = await this.checkEditable(tx, row);
+      const ready = await this.checkEditable(tx, session, row);
       if (!ready.isSuccess) return ready.response;
 
       const parsed = Schemas.ZChangeRequestPayload.safeParse(params.payload);
@@ -989,7 +991,7 @@ export default class ActionEngineRepo {
         // DEV_NOTE: Only a Proposed one can be edited, so only its tool is read (once per tool version)
         if (payload && row.status === Schemas.ChangeRequestStatusIntEnum.Proposed) {
           if (!tools.has(row.toolId)) {
-            const loaded = await this.loadTool(tx, session.companyId, row.toolId);
+            const loaded = await this.loadTool(tx, ActionEngineRepo.toolScope(session), row.toolId);
             tools.set(row.toolId, loaded.isSuccess ? loaded.tool : null);
           }
           const tool = tools.get(row.toolId);
@@ -1096,6 +1098,7 @@ export default class ActionEngineRepo {
   // (PastDeadline: the expiry ends it), its tool version still loading (ToolUnavailable) and its payload readable
   private async checkEditable(
     tx: NodePgTransaction<EmptyRelations>,
+    session: Schemas.ConversationSession,
     row: Schemas.ChangeRequestRow,
   ): Promise<
     | { isSuccess: true; tool: Schemas.RuntimeTool; payload: Schemas.ChangeRequestPayload }
@@ -1117,7 +1120,7 @@ export default class ActionEngineRepo {
         },
       };
     }
-    const loaded = await this.loadTool(tx, row.companyId, row.toolId);
+    const loaded = await this.loadTool(tx, ActionEngineRepo.toolScope(session), row.toolId);
     if (!loaded.isSuccess) {
       return {
         isSuccess: false,
@@ -1143,18 +1146,26 @@ export default class ActionEngineRepo {
     return { isSuccess: true, tool: loaded.tool, payload };
   }
 
-  // DEV_NOTE: A change request's tool version as it would run now (HostToolsProvider.toRuntimeTool), by its id
+  // DEV_NOTE: Where a session's host calls run: its company, and an eval's staging connection in place of each tool's
+  // own (M5-2), null for a widget conversation
+  private static toolScope(session: Schemas.ConversationSession): Schemas.RuntimeToolScope {
+    return { companyId: session.companyId, evalConnectionId: session.eval?.connectionId ?? null };
+  }
+
+  // DEV_NOTE: A change request's tool version as it would run now (HostToolsProvider.toRuntimeTool), by its id, on the
+  // scope's connection
   private async loadTool(
     tx: NodePgTransaction<EmptyRelations>,
-    companyId: string,
+    scope: Schemas.RuntimeToolScope,
     toolId: string,
   ): Promise<
     | { isSuccess: true; tool: Schemas.RuntimeTool }
     | { isSuccess: false; message: string; failure: Schemas.ChangeRequestFailureEnum }
   > {
     const toolRow = await this.toolDefinitionsDal.getToolDefinitionById(tx, {
-      companyId,
+      companyId: scope.companyId,
       id: toolId,
+      evalConnectionId: scope.evalConnectionId,
     });
     if (!toolRow.isSuccess && !toolRow.isNotFound) {
       return {
@@ -1174,6 +1185,41 @@ export default class ActionEngineRepo {
       };
     }
     return { isSuccess: true, tool: runtime.tool };
+  }
+
+  // DEV_NOTE: An eval readback assert's plan (M5-2): a change request of one eval conversation, its decrypted payload
+  // (args, the commit's result) and its tool version on the conversation's staging connection, for the same readback
+  // request live verification sends. Read only: nothing changes. The payload stays server-side (host data).
+  async getEvalReadbackPlan(params: {
+    companyId: string;
+    conversationId: string;
+    evalConnectionId: string;
+    changeRequestPublicId: string;
+  }): Promise<Schemas.EvalReadbackPlanResponse> {
+    return await withTenant(this.db, params.companyId, async (tx) => {
+      const found = await this.changeRequestsDal.getChangeRequestDetails(tx, {
+        companyId: params.companyId,
+        conversationId: params.conversationId,
+        publicId: params.changeRequestPublicId,
+        isForUpdate: false,
+      });
+      if (!found.isSuccess || !found.changeRequest) {
+        return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+      }
+      const loaded = await this.loadTool(
+        tx,
+        { companyId: params.companyId, evalConnectionId: params.evalConnectionId },
+        found.changeRequest.toolId,
+      );
+      if (!loaded.isSuccess) return { isSuccess: false, message: loaded.message };
+      const payload = await this.decryptPayload(tx, found.changeRequest);
+      if (!payload) return { isSuccess: false, message: "Change request payload unreadable" };
+      return {
+        isSuccess: true,
+        message: "Readback plan loaded",
+        plan: { tool: loaded.tool, payload },
+      };
+    });
   }
 
   // DEV_NOTE: An undo starts: a Mismatch's auto-undo, or the user's undo of a Verified one (M3-7: the row is Verified;

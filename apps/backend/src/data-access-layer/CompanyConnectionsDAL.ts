@@ -216,6 +216,8 @@ export default class CompanyConnectionsDAL {
           jwtIssuer: params.jwtIssuer ?? undefined,
           allowedOrigins: params.allowedOrigins ?? undefined,
           status: params.status ?? undefined,
+          // DEV_NOTE: undefined = unchanged, null = cleared
+          resetOp: params.resetOp,
           updatedAt: now,
         })
         .where(and(...conditions))

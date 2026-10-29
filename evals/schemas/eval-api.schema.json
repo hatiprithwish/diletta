@@ -1,0 +1,846 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "createRunRequest": {
+      "$ref": "#/$defs/CreateEvalRunApiRequest"
+    },
+    "createRunResponse": {
+      "$ref": "#/$defs/CreateEvalRunApiResponse"
+    },
+    "runAttemptRequest": {
+      "$ref": "#/$defs/RunEvalAttemptApiRequest"
+    },
+    "runAttemptResponse": {
+      "$ref": "#/$defs/RunEvalAttemptApiResponse"
+    },
+    "readbackRequest": {
+      "$ref": "#/$defs/EvalReadbackApiRequest"
+    },
+    "readbackResponse": {
+      "$ref": "#/$defs/EvalReadbackApiResponse"
+    },
+    "recordResultRequest": {
+      "$ref": "#/$defs/RecordEvalResultApiRequest"
+    },
+    "recordResultResponse": {
+      "$ref": "#/$defs/RecordEvalResultApiResponse"
+    },
+    "resetResponse": {
+      "$ref": "#/$defs/ResetEvalRunApiResponse"
+    },
+    "finishRequest": {
+      "$ref": "#/$defs/FinishEvalRunApiRequest"
+    },
+    "finishResponse": {
+      "$ref": "#/$defs/FinishEvalRunApiResponse"
+    },
+    "refusal": {
+      "$ref": "#/$defs/EvalRefusalApiResponse"
+    }
+  },
+  "required": [
+    "createRunRequest",
+    "createRunResponse",
+    "runAttemptRequest",
+    "runAttemptResponse",
+    "readbackRequest",
+    "readbackResponse",
+    "recordResultRequest",
+    "recordResultResponse",
+    "resetResponse",
+    "finishRequest",
+    "finishResponse",
+    "refusal"
+  ],
+  "$defs": {
+    "CreateEvalRunApiRequest": {
+      "type": "object",
+      "properties": {
+        "chatbotConfigId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "harnessVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "trigger": {
+          "type": "number",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "required": [
+        "chatbotConfigId",
+        "k",
+        "harnessVersion",
+        "trigger"
+      ]
+    },
+    "CreateEvalRunApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "run": {
+          "$ref": "#/$defs/EvalHarnessRun"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvalHarnessCase"
+          }
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "run",
+        "cases"
+      ]
+    },
+    "EvalHarnessRun": {
+      "type": "object",
+      "properties": {
+        "publicId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "harnessVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "publicId",
+        "k",
+        "harnessVersion"
+      ]
+    },
+    "EvalHarnessCase": {
+      "type": "object",
+      "properties": {
+        "publicId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "isSafety": {
+          "type": "boolean"
+        },
+        "input": {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "messages": {
+              "minItems": 1,
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "assistant"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  }
+                },
+                "required": [
+                  "role",
+                  "text"
+                ]
+              }
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "messages"
+          ]
+        },
+        "expectations": {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 2
+            },
+            "rubric": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rules": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "contains",
+                      "not_contains"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ]
+              }
+            },
+            "toolCalls": {
+              "maxItems": 10,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "toolName": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "args": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "additionalProperties": {
+                      "$ref": "#/$defs/EvalCaseJsonValue"
+                    },
+                    "maxProperties": 50
+                  }
+                },
+                "required": [
+                  "toolName",
+                  "args"
+                ]
+              }
+            },
+            "forbiddenTools": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              }
+            },
+            "readbacks": {
+              "maxItems": 10,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "toolName": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "expect": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "additionalProperties": {
+                      "$ref": "#/$defs/EvalCaseJsonValue"
+                    },
+                    "maxProperties": 50,
+                    "minProperties": 1
+                  }
+                },
+                "required": [
+                  "toolName",
+                  "expect"
+                ]
+              }
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "rubric",
+            "rules",
+            "toolCalls",
+            "forbiddenTools",
+            "readbacks"
+          ]
+        }
+      },
+      "required": [
+        "publicId",
+        "name",
+        "isSafety",
+        "input",
+        "expectations"
+      ]
+    },
+    "EvalCaseJsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvalCaseJsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/EvalCaseJsonValue"
+          }
+        }
+      ]
+    },
+    "RunEvalAttemptApiRequest": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "messages": {
+          "minItems": 1,
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "role",
+              "text"
+            ]
+          }
+        }
+      },
+      "required": [
+        "caseId",
+        "attempt",
+        "messages"
+      ]
+    },
+    "RunEvalAttemptApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "turnStatus": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "error",
+            "aborted",
+            "skipped"
+          ]
+        },
+        "reply": {
+          "type": "string"
+        },
+        "toolCalls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvalAttemptToolCall"
+          }
+        },
+        "latencyMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "conversationId",
+        "turnStatus",
+        "reply",
+        "toolCalls",
+        "latencyMs"
+      ]
+    },
+    "EvalAttemptToolCall": {
+      "type": "object",
+      "properties": {
+        "toolCallId": {
+          "type": "string"
+        },
+        "toolName": {
+          "type": "string"
+        },
+        "args": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/EvalCaseJsonValue"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "ok",
+                "error",
+                "blocked",
+                "no_change",
+                "committed",
+                "verified",
+                "undone",
+                "failed",
+                "needs_review"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changeRequestId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "toolCallId",
+        "toolName",
+        "args",
+        "status",
+        "changeRequestId"
+      ]
+    },
+    "EvalReadbackApiRequest": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "changeRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "readback": {
+          "type": "object",
+          "properties": {
+            "toolName": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+            },
+            "expect": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/EvalCaseJsonValue"
+              },
+              "maxProperties": 50,
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "toolName",
+            "expect"
+          ]
+        }
+      },
+      "required": [
+        "conversationId",
+        "changeRequestId",
+        "readback"
+      ]
+    },
+    "EvalReadbackApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "matches",
+            "differs",
+            "unknown"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvalReadbackField"
+          }
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "verdict",
+        "fields",
+        "reason"
+      ]
+    },
+    "EvalReadbackField": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "isMatch": {
+          "type": "boolean"
+        },
+        "expected": {
+          "$ref": "#/$defs/EvalCaseJsonValue"
+        },
+        "found": {
+          "$ref": "#/$defs/EvalCaseJsonValue"
+        },
+        "isFound": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "isMatch",
+        "expected",
+        "found",
+        "isFound"
+      ]
+    },
+    "RecordEvalResultApiRequest": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "hasPassed": {
+          "type": "boolean"
+        },
+        "graderOutput": {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "checks": {
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "forbidden_tool",
+                      "tool_call",
+                      "readback",
+                      "judge",
+                      "rubric"
+                    ]
+                  },
+                  "hasPassed": {
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "hasPassed",
+                  "label",
+                  "detail"
+                ]
+              }
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "checks",
+            "error"
+          ]
+        },
+        "latencyMs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "caseId",
+        "attempt",
+        "hasPassed",
+        "graderOutput",
+        "latencyMs"
+      ]
+    },
+    "RecordEvalResultApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message"
+      ]
+    },
+    "ResetEvalRunApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "isReset": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "isReset"
+      ]
+    },
+    "FinishEvalRunApiRequest": {
+      "type": "object",
+      "properties": {
+        "isComplete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "isComplete"
+      ]
+    },
+    "FinishEvalRunApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "type": "number",
+          "enum": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "caseCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "passAllKCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "hasPassed": {
+          "type": "boolean"
+        },
+        "costUsd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "status",
+        "caseCount",
+        "passAllKCount",
+        "hasPassed",
+        "costUsd"
+      ]
+    },
+    "EvalRefusalApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": false
+        },
+        "message": {
+          "type": "string"
+        },
+        "failure": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message"
+      ]
+    }
+  },
+  "title": "EvalApi",
+  "description": "The eval harness's /eval/* API (M5-2): every request body and answer, by name; the root object is never sent"
+}

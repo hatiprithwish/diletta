@@ -8,10 +8,12 @@ import type {
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // The DAL generates publicId and checks the chatbot and chatbot user exist in the company.
+// DEV_NOTE: evalRunId + chatbotConfigId only for an eval attempt's conversation (M5-2): pinned to the run's config
 export type CreateConversationDALRequest = Pick<
   Conversation,
   "companyId" | "chatbotId" | "chatbotUserId"
->;
+> &
+  Partial<Pick<Conversation, "evalRunId" | "chatbotConfigId">>;
 
 // Params to find a conversation by its public ID within one company
 export type FindConversationDALRequest = Pick<Conversation, "publicId" | "companyId">;

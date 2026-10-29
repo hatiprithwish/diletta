@@ -14,7 +14,9 @@ import {
   EvalCheckKindEnum,
   EvalTranscriptEntryKindEnum,
 } from "./evalResults";
-import { ToolCallStatusIntEnum } from "./toolCalls";
+import { EvalReadbackVerdictEnum, EvalTurnStatusEnum } from "./evalHarness";
+import { EvalRunStatusIntEnum, EvalRunTriggerIntEnum } from "./evalRuns";
+import { HostToolStatusEnum, ToolCallStatusIntEnum } from "./toolCalls";
 
 // DEV_NOTE: The contract between packages/schemas and the Python harness (M5-1): for every JSON_SCHEMA_EXPORTS file,
 // bodies its Zod schema accepts (valid) and refuses (invalid). `schema:export` writes them to
@@ -93,6 +95,91 @@ const fullExpectations = {
       expect: { name: `Drill ${EVAL_CASE_TAG_PLACEHOLDER}`, amount: 120 },
     },
   ],
+};
+
+// DEV_NOTE: Every /eval/* message once (M5-2), with ids as the API sends them (public ids)
+const graderOutput = {
+  schemaVersion: EVAL_GRADER_OUTPUT_SCHEMA_VERSION,
+  checks: [
+    {
+      kind: EvalCheckKindEnum.ToolCall,
+      hasPassed: true,
+      label: "Called create_record",
+      detail: null,
+    },
+  ],
+  error: null,
+};
+const toolCall = {
+  toolCallId: "toolu_1",
+  toolName: "create_record",
+  args: { name: "Drill t1", amount: 120, tags: ["a"], meta: null },
+  status: HostToolStatusEnum.Verified,
+  changeRequestId: "cr_1",
+};
+const evalApi = {
+  createRunRequest: {
+    chatbotConfigId: "cfg_1",
+    k: 3,
+    harnessVersion: "0.1.0",
+    trigger: EvalRunTriggerIntEnum.Manual,
+  },
+  createRunResponse: {
+    isSuccess: true,
+    message: "Eval run started",
+    run: { publicId: "run_1", k: 3, harnessVersion: "0.1.0" },
+    cases: [
+      {
+        publicId: "case_1",
+        name: "Creates a drill",
+        isSafety: false,
+        input: caseInput,
+        expectations: fullExpectations,
+      },
+    ],
+  },
+  runAttemptRequest: { caseId: "case_1", attempt: 1, messages: caseInput.messages },
+  runAttemptResponse: {
+    isSuccess: true,
+    message: "Eval attempt ran",
+    conversationId: "conv_1",
+    turnStatus: EvalTurnStatusEnum.Completed,
+    reply: "Created Drill t1.",
+    toolCalls: [toolCall, { ...toolCall, toolCallId: "toolu_2", args: null, status: null }],
+    latencyMs: 1200,
+  },
+  readbackRequest: {
+    conversationId: "conv_1",
+    changeRequestId: "cr_1",
+    readback: { toolName: "create_record", expect: { amount: 120 } },
+  },
+  readbackResponse: {
+    isSuccess: true,
+    message: "Record read back",
+    verdict: EvalReadbackVerdictEnum.Differs,
+    fields: [{ name: "amount", isMatch: false, expected: 120, found: null, isFound: false }],
+    reason: null,
+  },
+  recordResultRequest: {
+    caseId: "case_1",
+    attempt: 1,
+    hasPassed: true,
+    graderOutput,
+    latencyMs: null,
+  },
+  recordResultResponse: { isSuccess: true, message: "Eval result recorded" },
+  resetResponse: { isSuccess: true, message: "Staging data reset", isReset: true },
+  finishRequest: { isComplete: true },
+  finishResponse: {
+    isSuccess: true,
+    message: "Eval run finished",
+    status: EvalRunStatusIntEnum.Done,
+    caseCount: 1,
+    passAllKCount: 1,
+    hasPassed: true,
+    costUsd: "0.012000",
+  },
+  refusal: { isSuccess: false, message: "Forbidden", failure: "Forbidden" },
 };
 
 export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamples> = {
@@ -189,6 +276,26 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
           },
         ],
       },
+    ],
+  },
+  "eval-api.schema.json": {
+    valid: [evalApi, { ...evalApi, refusal: { isSuccess: false, message: "Unauthorized" } }],
+    invalid: [
+      { ...evalApi, createRunRequest: { ...evalApi.createRunRequest, k: 0 } },
+      { ...evalApi, createRunRequest: { ...evalApi.createRunRequest, trigger: 9 } },
+      { ...evalApi, runAttemptRequest: { ...evalApi.runAttemptRequest, messages: [] } },
+      { ...evalApi, runAttemptResponse: { ...evalApi.runAttemptResponse, turnStatus: "done" } },
+      {
+        ...evalApi,
+        readbackRequest: {
+          ...evalApi.readbackRequest,
+          readback: { toolName: "create_record", expect: {} },
+        },
+      },
+      { ...evalApi, readbackResponse: { ...evalApi.readbackResponse, verdict: "maybe" } },
+      { ...evalApi, recordResultRequest: { ...evalApi.recordResultRequest, graderOutput: {} } },
+      { ...evalApi, finishResponse: { ...evalApi.finishResponse, costUsd: 0.012 } },
+      { ...evalApi, finishRequest: undefined },
     ],
   },
   "eval-case-tag.schema.json": {

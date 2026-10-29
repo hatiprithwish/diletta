@@ -16,6 +16,11 @@
 CLERK_PUBLISHABLE_KEY=  # runtime-only
 CLERK_SECRET_KEY=       # runtime-only
 
+# The eval harness's public keys (M5-2): a JWKS ({"keys":[…]}) of the platform's ES256 eval keys. Public, but set as a
+# secret so each env holds its own (staging and production). The private key is the harness's EVAL_JWT_PRIVATE_KEY.
+# See docs/runbooks/evals.md.
+EVAL_JWT_PUBLIC_JWKS=   # runtime-only
+
 CLOUDFLARE_API_TOKEN=   # ci-required
 CLOUDFLARE_ACCOUNT_ID=  # ci-required
 

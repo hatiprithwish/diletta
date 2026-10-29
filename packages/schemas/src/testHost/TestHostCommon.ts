@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConnectionResetOp } from "../companyConnections/CompanyConnectionsCommon";
 import { HOST_IDEMPOTENCY_KEY_PATTERN } from "../hostAdapter/HostAdapterCommon";
 import { ToolOpMethodEnum } from "../toolDefinitions/ToolOpsV1";
 import type { Jwk } from "../widgetAuth/WidgetAuthCommon";
@@ -107,6 +108,13 @@ export const ZTestHostListRecordsQuery = z.strictObject({
     .default(TEST_HOST_LIST_DEFAULT_LIMIT),
 });
 export type TestHostListRecordsQuery = z.infer<typeof ZTestHostListRecordsQuery>;
+
+// DEV_NOTE: The test host connection's reset_op (M5-2): POST /v1/_reset (the path is relative to the connection's
+// base_url, {issuer}/v1/), which puts the token's workspace back to TEST_HOST_SEED_RECORDS. The seed stores it.
+export const TEST_HOST_RESET_OP: ConnectionResetOp = {
+  method: ToolOpMethodEnum.Post,
+  path: "/_reset",
+};
 
 // DEV_NOTE: What POST /v1/_reset puts back: the eval suite's fixed starting state (state-independent cases + reset_op)
 export const TEST_HOST_SEED_RECORDS: TestHostRecord[] = [

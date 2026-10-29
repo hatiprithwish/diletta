@@ -21,8 +21,9 @@ export type FindCompanyConnectionByIssuerDALRequest = Pick<CompanyConnection, "j
 export type GetCompanyConnectionsDALRequest = Pick<CompanyConnection, "companyId">;
 
 // DEV_NOTE: Only client-editable fields. updatedAt is set by the DAL.
+// DEV_NOTE: resetOp (M5-2) is the one field null can't mean "unchanged" for (null clears it): undefined = unchanged
 export type UpdateCompanyConnectionDALRequest = FindCompanyConnectionDALRequest &
   NullableDALFields<
     Pick<CompanyConnectionBase, "baseUrl" | "authConfig" | "jwtIssuer" | "allowedOrigins"> &
       Pick<CompanyConnection, "status">
-  >;
+  > & { resetOp?: CompanyConnectionBase["resetOp"] };

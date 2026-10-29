@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { findToolOpPlaceholders } from "../toolDefinitions/ToolOpPlaceholders";
+import { ZToolCallOpV1 } from "../toolDefinitions/ToolOpsV1";
 
 export enum CompanyConnectionEnvironmentIntEnum {
   Production = 1,
@@ -162,9 +164,20 @@ export const ZOrigin = z
     message: "Must be an origin (scheme://host[:port]) with no path",
   });
 
+// DEV_NOTE: company_connections.reset_op (staging only, M5-2): the one host call that puts the staging data back after
+// an eval run. A call op with no placeholders (there are no args), sent once as the host test user after every attempt
+// of the run. null = the host needs no reset (state-independent cases only).
+export const ZConnectionResetOp = ZToolCallOpV1.superRefine((op, ctx) => {
+  const templates = [op.path, ...Object.values(op.query ?? {}), JSON.stringify(op.bodyMap ?? {})];
+  if (templates.some((template) => findToolOpPlaceholders(template).length > 0)) {
+    ctx.addIssue({ code: "custom", message: "A reset op has no placeholders" });
+  }
+});
+export type ConnectionResetOp = z.infer<typeof ZConnectionResetOp>;
+
 // Create Company Connection Body
 // DEV_NOTE: authConfig is any JSON object here: its shape depends on the auth type, so the create request and the
-// Repo check it with getAuthConfigIssue. resetOp stays any JSON until the eval reset flow (M5-2).
+// Repo check it with getAuthConfigIssue. resetOp only on a Staging connection (the request refines it).
 export const ZCompanyConnectionBase = z.object({
   environment: z.enum(CompanyConnectionEnvironmentIntEnum),
   adapterType: z.enum(CompanyConnectionAdapterTypeIntEnum),
@@ -174,7 +187,7 @@ export const ZCompanyConnectionBase = z.object({
   credentialScope: z.enum(CompanyConnectionCredentialScopeIntEnum),
   jwtIssuer: ZJwtIssuer,
   allowedOrigins: z.array(ZOrigin),
-  resetOp: z.json().nullable(),
+  resetOp: ZConnectionResetOp.nullable(),
 });
 export type CompanyConnectionBase = z.infer<typeof ZCompanyConnectionBase>;
 

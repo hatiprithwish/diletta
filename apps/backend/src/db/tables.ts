@@ -575,7 +575,8 @@ export const qualityIssues = table(
 // ─── Conversations & usage ──────────────────────────────────────────────────
 
 // DEV_NOTE: Index of one chat. The live transcript lives in the Think session; public_id = the DO name.
-// Content expiry = last_activity_at + companies.content_retention_days.
+// Content expiry = last_activity_at + companies.content_retention_days. eval_run_id set = an eval attempt's chat
+// (M5-2): it runs that run's config on the staging connection and never shows on the dashboard.
 export const conversations = table(
   "conversations",
   {
@@ -585,6 +586,7 @@ export const conversations = table(
     chatbotUserId: t.bigint("chatbot_user_id", { mode: "string" }).notNull(), // → chatbot_users.id
     chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     chatbotConfigId: t.bigint("chatbot_config_id", { mode: "string" }), // → chatbot_configs.id (current)
+    evalRunId: t.bigint("eval_run_id", { mode: "string" }), // → eval_runs.id, null = a widget chat
     status: t
       .smallint()
       .$type<Schemas.ConversationStatusIntEnum>()
@@ -606,6 +608,7 @@ export const conversations = table(
     t.index("IDX_conversations_chatbot_user_id").on(table.chatbotUserId),
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),
+    t.index("IDX_conversations_eval_run_id").on(table.evalRunId),
   ],
 );
 

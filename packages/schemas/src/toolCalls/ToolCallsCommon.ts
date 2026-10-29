@@ -109,6 +109,13 @@ export interface RuntimeTool {
   connection: HostConnection;
 }
 
+// DEV_NOTE: Server-side only — where a conversation's host calls run: its company, and an eval conversation's staging
+// connection in place of each tool's own (M5-2; null = the tool's own connection)
+export interface RuntimeToolScope {
+  companyId: string;
+  evalConnectionId: string | null;
+}
+
 // DEV_NOTE: The longest host response a read tool hands the model, in characters (JSON); the rest is cut with a marker
 export const HOST_TOOL_OUTPUT_MAX_CHARS = 8_000;
 

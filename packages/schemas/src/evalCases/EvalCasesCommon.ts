@@ -91,7 +91,7 @@ export type EvalCaseJsonValue =
   | null
   | EvalCaseJsonValue[]
   | { [key: string]: EvalCaseJsonValue };
-const ZEvalCaseJsonValue: z.ZodType<EvalCaseJsonValue> = z
+export const ZEvalCaseJsonValue: z.ZodType<EvalCaseJsonValue> = z
   .lazy(() =>
     z.union([
       z.string(),

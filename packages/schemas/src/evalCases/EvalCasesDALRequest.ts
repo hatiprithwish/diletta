@@ -49,3 +49,6 @@ export type GetLatestEvalCaseResultsDALRequest = {
 
 // DEV_NOTE: The active cases that run against one chatbot: its own and the platform's (the summary's counts)
 export type CountActiveEvalCasesDALRequest = { companyId: string; chatbotId: string };
+
+// DEV_NOTE: The cases an eval run of one chatbot runs (M5-2): its active cases and every active platform case
+export type GetRunnableEvalCasesDALRequest = { companyId: string; chatbotId: string };

@@ -607,7 +607,15 @@ beforeAll(async () => {
 
     const [platformCase] = await ownerDb
       .insert(evalCases)
-      .values({ publicId: pid(), name: "RLS platform case", input: {}, expectations: {} })
+      // DEV_NOTE: Inactive, so a copy a crashed run leaves behind never joins an eval run (M5-2 refuses a run while an
+      // active case can't be read)
+      .values({
+        publicId: pid(),
+        name: "RLS platform case",
+        input: {},
+        expectations: {},
+        isActive: false,
+      })
       .returning({ id: evalCases.id });
     platformCaseId = platformCase!.id;
   });

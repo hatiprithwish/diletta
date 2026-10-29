@@ -8,7 +8,7 @@ import type {
 } from "@cloudflare/think";
 import type { Connection, ConnectionContext } from "agents";
 import { jsonSchema, tool } from "ai";
-import type { LanguageModel, ToolSet } from "ai";
+import type { LanguageModel, ToolSet, UIMessage } from "ai";
 import TurnBudget from "@/budget/TurnBudget";
 import HostTokenAsk from "@/hostToken/HostTokenAsk";
 import Constants from "@/config/Constants";
@@ -602,6 +602,168 @@ export class ConversationDO extends Think<Env> {
     await this.resumeCommits();
   }
 
+  // DEV_NOTE: An eval attempt (M5-2), called by EvalHarnessRepo over DO RPC on a conversation it just started: the
+  // session (with its eval context) is stored like a first connect's, with no roles, and the harness's host token held
+  // in memory for the attempt only. The case's messages are saved and the last one answered in one turn
+  // (saveMessages), prepared like a widget turn but on the run's config (loadTurnTools on the staging connection, the
+  // run's id on every model call). Writes are approved as proposed (proposeWrite) and committed and verified in the
+  // turn. No socket: a step that needs a fresh host token finds no one to ask and fails at once. Answers the turn's
+  // status, the last reply and every tool call of the attempt (from the transcript: the tool parts after the first
+  // saved message), as JSON text (Schemas.ZEvalAttemptRunResponse). One attempt per conversation.
+  async runEvalAttempt(params: {
+    session: Schemas.ConversationSession;
+    hostToken: string;
+    messages: Schemas.EvalCaseMessage[];
+  }): Promise<string> {
+    return JSON.stringify(await this.runEvalAttemptTurn(params));
+  }
+
+  private async runEvalAttemptTurn(params: {
+    session: Schemas.ConversationSession;
+    hostToken: string;
+    messages: Schemas.EvalCaseMessage[];
+  }): Promise<Schemas.EvalAttemptRunResponse> {
+    const fail = (
+      failure: Schemas.EvalAttemptFailureEnum,
+      message: string,
+    ): Schemas.EvalAttemptRunResponse => ({ isSuccess: false, message, failure });
+    await this.__unsafe_ensureInitialized();
+    const parsed = Schemas.ZConversationSession.safeParse(params.session);
+    const messages = Schemas.ZEvalCaseMessages.safeParse(params.messages);
+    if (!parsed.success || !parsed.data.eval || parsed.data.conversationPublicId !== this.name) {
+      return fail(
+        Schemas.EvalAttemptFailureEnum.ServerError,
+        "Not an eval session of this conversation",
+      );
+    }
+    if (!messages.success) {
+      return fail(Schemas.EvalAttemptFailureEnum.ServerError, "The case's messages don't parse");
+    }
+    if (this.getRuntimeState() !== null || this.messages.length > 0 || this.isBusy()) {
+      return fail(Schemas.EvalAttemptFailureEnum.ServerError, "This conversation already ran");
+    }
+    const session = parsed.data;
+    this.configure<Schemas.ConversationRuntimeState>({
+      session,
+      lastActivityAt: Date.now(),
+      hasAnswer: false,
+      closeScheduleId: null,
+      isClosed: false,
+      lastSyncedMessageId: null,
+      turnIds: {},
+      lastSyncedTurnId: null,
+      turnStartedAts: [],
+      spentMicros: 0,
+      roles: [],
+      rolesExpiresAt: 0,
+      changeRequests: {},
+      undoWindows: {},
+      userUndos: {},
+    });
+    await this.armAutoClose();
+
+    const saved: UIMessage[] = messages.data.map((message) => ({
+      id: Utility.generateUlid(),
+      role: message.role,
+      parts: [{ type: "text", text: message.text }],
+    }));
+    const firstId = saved[0]?.id;
+    const userMessageId = saved.at(-1)?.id;
+    if (!firstId || !userMessageId) {
+      return fail(Schemas.EvalAttemptFailureEnum.ServerError, "The case has no message");
+    }
+    const turnId = Utility.generateUlid();
+    const requestId = `eval:${turnId}`;
+    const turn = { requestId, turnId, userMessageId, isEval: true };
+    this.activeTurn = ConversationDO.newTurn(turn);
+    this.patchRuntimeState({ turnIds: { [userMessageId]: turnId } });
+
+    const prepared = await this.prepareTurn(session, turnId);
+    if (!prepared.isSuccess) {
+      this.activeTurn = null;
+      this.patchRuntimeState({ turnIds: {} });
+      return prepared.refusal
+        ? fail(Schemas.EvalAttemptFailureEnum.BudgetRefused, "A budget refused the turn")
+        : fail(Schemas.EvalAttemptFailureEnum.ChatbotUnavailable, "The chatbot can't answer");
+    }
+    this.activeTurn = this.preparedTurn(ConversationDO.newTurn(turn), prepared);
+
+    this.hostToken = params.hostToken;
+    let status: Schemas.EvalTurnStatusEnum;
+    try {
+      const result = await this.saveMessages(saved);
+      status = ConversationDO.evalTurnStatus(result.status);
+    } catch (error) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Eval,
+        action: Schemas.LogAction.RunEvalAttempt,
+        message: "Eval turn failed",
+        error,
+        metadata: { conversationPublicId: this.name },
+      });
+      status = Schemas.EvalTurnStatusEnum.Error;
+    } finally {
+      // DEV_NOTE: A turn Think ended without onChatResponse is ended here; one that did end is already released
+      await this.finishTurn(requestId, "error", null, true);
+      this.hostToken = null;
+    }
+
+    const start = this.messages.findIndex((message) => message.id === firstId);
+    const attempt = start < 0 ? [] : this.messages.slice(start);
+    const replies = TranscriptProvider.toEntries(
+      attempt.filter((message) => message.role === "assistant"),
+    ).filter((entry) => entry.text.length > 0);
+    return {
+      isSuccess: true,
+      message: "Eval attempt ran",
+      turnStatus: status,
+      reply: replies.at(-1)?.text ?? "",
+      toolCalls: attempt.flatMap((message) =>
+        message.parts.flatMap((part) => ConversationDO.evalToolCall(part)),
+      ),
+    };
+  }
+
+  private static evalTurnStatus(status: string): Schemas.EvalTurnStatusEnum {
+    const parsed = Schemas.ZEvalTurnStatus.safeParse(status);
+    return parsed.success ? parsed.data : Schemas.EvalTurnStatusEnum.Error;
+  }
+
+  // DEV_NOTE: One tool part of the transcript as the eval harness grades it: name, the model's args, how it ended (a
+  // host tool's own status; search_help_docs is Ok once it answered) and a write's change request. Other parts: none.
+  private static evalToolCall(part: UIMessage["parts"][number]): Schemas.EvalAttemptToolCall[] {
+    const toolName =
+      part.type === "dynamic-tool"
+        ? part.toolName
+        : part.type.startsWith("tool-")
+          ? part.type.slice("tool-".length)
+          : null;
+    if (toolName === null || !("toolCallId" in part) || !("state" in part)) return [];
+    const args = Schemas.ZEvalToolArgs.safeParse("input" in part ? part.input : null);
+    let status: Schemas.HostToolStatusEnum | null = null;
+    let changeRequestId: string | null = null;
+    if (part.state === "output-available") {
+      const output = Schemas.ZHostToolOutput.safeParse(part.output);
+      if (output.success) {
+        status = output.data.status;
+        changeRequestId = output.data.changeRequestId ?? null;
+      } else if (toolName === Schemas.SEARCH_HELP_DOCS_TOOL_NAME) {
+        status = Schemas.HostToolStatusEnum.Ok;
+      }
+    } else if (part.state === "output-error") {
+      status = Schemas.HostToolStatusEnum.Error;
+    }
+    return [
+      {
+        toolCallId: part.toolCallId,
+        toolName,
+        args: args.success ? args.data : null,
+        status,
+        changeRequestId,
+      },
+    ];
+  }
+
   // DEV_NOTE: Admits a new user turn: refused while the conversation is closed or closing or another turn runs. The
   // turn's ULID and the activity time are stored first (so the read model and the auto-close see this turn even if the
   // DO is evicted), then the config and the model are prepared. false = refused; the widget was told why.
@@ -676,6 +838,7 @@ export class ConversationDO extends Think<Env> {
     requestId: string;
     turnId: string;
     userMessageId: string | null;
+    isEval?: boolean;
   }): Schemas.ActiveTurn<LanguageModel, TurnBudget> {
     return {
       requestId: params.requestId,
@@ -683,6 +846,7 @@ export class ConversationDO extends Think<Env> {
       turnId: params.turnId,
       userMessageId: params.userMessageId,
       isContinuation: params.userMessageId === null,
+      isEval: params.isEval ?? false,
       model: null,
       spec: null,
       caps: null,
@@ -852,7 +1016,8 @@ export class ConversationDO extends Think<Env> {
       chatbotId: session.chatbotId,
       chatbotUserId: session.chatbotUserId,
       conversationId: session.conversationId,
-      evalRunId: null,
+      // DEV_NOTE: An eval attempt's calls are its run's (M5-2): eval_runs.cost_usd sums them
+      evalRunId: session.eval?.evalRunId ?? null,
       turnId,
       taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
       tier: null,
@@ -939,9 +1104,10 @@ export class ConversationDO extends Think<Env> {
 
   // DEV_NOTE: Ends the active turn once (onChatResponse, or onChatError for a turn that failed before a response):
   // stores the activity and the outcome before releasing the turn, then catches the read model up, notes the
-  // execution ids of the proposals it parked and re-arms the auto-close. A continuation has Think's own request id, so
-  // the first turn end Think reports while one is active is it; the DO's own fallback end of a widget request
-  // (isFallback) ends only that request's turn, never a continuation an answer started meanwhile.
+  // execution ids of the proposals it parked and re-arms the auto-close. A continuation (and an eval attempt's turn,
+  // run by saveMessages) has Think's own request id, so the first turn end Think reports while one is active is it; the
+  // DO's own fallback end of a request (isFallback) ends only that request's turn, never a continuation an answer
+  // started meanwhile.
   private async finishTurn(
     requestId: string,
     status: ChatResponseResult["status"],
@@ -951,7 +1117,9 @@ export class ConversationDO extends Think<Env> {
     const turn = this.activeTurn;
     const state = this.getRuntimeState();
     if (!turn || !state) return;
-    if (turn.requestId !== requestId && (isFallback || !turn.isContinuation)) return;
+    if (turn.requestId !== requestId && (isFallback || !(turn.isContinuation || turn.isEval))) {
+      return;
+    }
 
     const replyText = reply ? (TranscriptProvider.toEntries([reply])[0]?.text ?? "") : "";
     this.patchRuntimeState({
@@ -1491,7 +1659,10 @@ export class ConversationDO extends Think<Env> {
         );
       }
 
-      const isApprovalRequired = approval === Schemas.ApprovalRuleApprovalEnum.Required;
+      // DEV_NOTE: An eval attempt has no user to answer (M5-2): every write the rules let through is approved as
+      // proposed and committed in the turn, then verified like any other; a Blocked one stays blocked
+      const isApprovalRequired =
+        approval === Schemas.ApprovalRuleApprovalEnum.Required && state.session.eval === null;
       const proposed = await this.actionEngineRepo().proposeChange({
         session: state.session,
         turnId: turn.turnId,

@@ -14,6 +14,7 @@ import CompaniesRoutes from "@/routes/CompaniesRoutes";
 import ConversationsRoutes from "@/routes/ConversationsRoutes";
 import DocGapClustersRoutes from "@/routes/DocGapClustersRoutes";
 import EvalCasesRoutes from "@/routes/EvalCasesRoutes";
+import EvalHarnessRoutes from "@/routes/EvalHarnessRoutes";
 import AuditLogRoutes from "@/routes/AuditLogRoutes";
 import SecurityRoutes from "@/routes/SecurityRoutes";
 import EvalRunsRoutes from "@/routes/EvalRunsRoutes";
@@ -105,6 +106,7 @@ app.route("/operator/companies", CompaniesRoutes);
 app.route("/operator/companies/:companyPublicId/tool-definitions", ToolDefinitionsRoutes);
 app.route("/operator/companies/:companyPublicId/rollups", ActivityRollupsRoutes);
 app.route("/widget", WidgetRoutes);
+app.route("/eval", EvalHarnessRoutes);
 
 export default {
   fetch(req: Request, env: Env, ctx: ExecutionContext) {

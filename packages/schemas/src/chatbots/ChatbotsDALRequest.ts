@@ -7,6 +7,9 @@ export type CreateChatbotDALRequest = ChatbotBase & Pick<Chatbot, "companyId">;
 // Params to find a chatbot by its public ID within one company
 export type FindChatbotDALRequest = Pick<Chatbot, "publicId" | "companyId">;
 
+// DEV_NOTE: By internal id: the chatbot of a config an eval run tests (M5-2)
+export type FindChatbotByIdDALRequest = Pick<Chatbot, "id" | "companyId">;
+
 // DEV_NOTE: isForUpdate locks the row for the rest of the transaction (SELECT … FOR UPDATE), so an edit diffs its
 // audit rows (M4-9) against a row no concurrent edit can change in between
 export type GetChatbotDetailsDALRequest = FindChatbotDALRequest & {
