@@ -12,7 +12,15 @@ export const QUERY_KEY_ROOTS = {
   bots: ["bots"],
   modelKeys: ["model-keys"],
   budget: ["budget"],
+  connections: ["connections"],
+  team: ["team"],
 } as const;
+
+// DEV_NOTE: The Security page's key segment that Settings › Connections refreshes (SecurityQueries.keys builds from it)
+// DEV_NOTE: Settings › Connections' list key segment (ConnectionsQueries.keys builds from it)
+export const CONNECTIONS_LIST_SEGMENT = "list";
+
+export const SECURITY_KEY_SEGMENTS = { connections: "connections", auditLog: "audit-log" } as const;
 
 // DEV_NOTE: The Bots page's key segments that another page refreshes (BotsQueries.keys builds its keys from them)
 export const BOTS_KEY_SEGMENTS = { options: "options" } as const;

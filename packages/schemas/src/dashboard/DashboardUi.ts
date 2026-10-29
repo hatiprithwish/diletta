@@ -54,7 +54,12 @@ import type {
   InsightsOverview,
   InsightsUsage,
 } from "../insights";
-import type { ContentRetention, SecurityConnection, SecurityPageSearch } from "../security";
+import type {
+  ContentRetention,
+  SecurityConnection,
+  SecurityPageSearch,
+  SettingsConnection,
+} from "../security";
 import type {
   BotsPageSearch,
   ChatbotConfigDetail,
@@ -65,6 +70,7 @@ import type {
 } from "../chatbotConfigs";
 import type { ChatbotSettingsRow } from "../chatbots";
 import type { ModelKey, ModelProviderEnum } from "../companySecrets";
+import type { TeamInvite, TeamMember } from "../adminInvites";
 import type { SpendingBudget } from "../budget";
 import type { ApprovalRuleApprovalEnum, ConfigSpecBody, ModelTierEnum } from "../configSpec";
 
@@ -621,10 +627,12 @@ export interface DashboardSecurityRetentionFormProps {
   retention: ContentRetention;
 }
 
-export interface DashboardSecurityOriginsDialogProps {
+// DEV_NOTE: components/origins-dialog: onSave sends the new list (the Security route) and resolves once it's saved
+export interface DashboardOriginsDialogProps {
   connection: SecurityConnection;
   isOpen: boolean;
   onClose: () => void;
+  onSave: (allowedOrigins: string[]) => Promise<unknown>;
 }
 
 // ─── Settings › Bots (M4-10)
@@ -819,4 +827,28 @@ export interface DashboardBudgetFormProps {
 
 export interface DashboardBudgetUsageProps {
   spendingBudget: SpendingBudget;
+}
+
+// ─── Settings › Connections and Team (M4-10)
+
+export interface DashboardSettingsConnectionCardProps {
+  connection: SettingsConnection;
+}
+
+export interface DashboardSettingsRowProps {
+  label: string;
+}
+
+export interface DashboardTeamMemberRowProps {
+  member: TeamMember;
+  isLastActiveKnown: boolean;
+}
+
+export interface DashboardTeamInviteRowProps {
+  invite: TeamInvite;
+}
+
+export interface DashboardInviteDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
 }

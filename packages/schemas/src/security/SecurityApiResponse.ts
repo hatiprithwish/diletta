@@ -29,6 +29,17 @@ export interface SecurityConnection {
   signingKeysFetchedAt: string | null;
 }
 
+// DEV_NOTE: Settings › Connections (M4-10): the Security view plus how the assistant reaches the host: the API address
+// and the sign-in method in words. Never auth settings or a credential.
+export interface SettingsConnection extends SecurityConnection {
+  baseUrl: string | null;
+  signInLabel: string;
+}
+
+export interface GetSettingsConnectionsApiResponse extends ApiResponse {
+  connections?: SettingsConnection[];
+}
+
 export interface GetSecurityConnectionsApiResponse extends ApiResponse {
   connections?: SecurityConnection[];
 }
