@@ -50,8 +50,6 @@ function amountIssue(value: string): string | undefined {
   return parsed.success ? undefined : (parsed.error.issues[0]?.message ?? "Enter an amount.");
 }
 
-const errorsOf = (errors: unknown[]) => errors.map((message) => ({ message: String(message) }));
-
 function BudgetForm({ spendingBudget }: Schemas.DashboardBudgetFormProps) {
   const update = useUpdateSpendingBudget();
   const savedAmount = Number(spendingBudget.budgetUsd).toFixed(2);
@@ -88,7 +86,7 @@ function BudgetForm({ spendingBudget }: Schemas.DashboardBudgetFormProps) {
               Across all bots, including test runs.
               {spendingBudget.isDefault && " This is the default until you choose."}
             </FieldDescription>
-            <FieldError errors={errorsOf(field.state.meta.errors)} />
+            <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
           </Field>
         )}
       </form.Field>
@@ -99,7 +97,12 @@ function BudgetForm({ spendingBudget }: Schemas.DashboardBudgetFormProps) {
       </p>
       <form.Subscribe
         selector={(state) =>
-          [state.values.amount.trim() !== savedAmount, state.canSubmit, state.isSubmitting] as const
+          [
+            // DEV_NOTE: Compared as amounts, so "10" against a saved $10.00 isn't a change
+            Number(state.values.amount.trim()) !== Number(savedAmount),
+            state.canSubmit,
+            state.isSubmitting,
+          ] as const
         }
       >
         {([isChanged, canSubmit, isSubmitting]) => (

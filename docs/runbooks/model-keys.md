@@ -12,14 +12,14 @@ One row per key: provider, the last four characters (none for a key under 12 cha
 
 ## Add key and Rotate
 
-Both check the pasted key with the provider before anything is saved: a `GET …/models` through AI Gateway (`AiGatewayProvider.checkModelKey`, 10 s timeout). Listing models is free, so the check is never billed, and it doesn't count against the budget. The check uses the router's own rule for a bad key, so a key the page accepts is one the router won't mark Invalid on its first call.
+Add first refuses a provider that already has an Active key (409, no provider call). Then both check the pasted key with the provider before anything is saved: a `GET …/models` through AI Gateway (`AiGatewayProvider.checkModelKey`, 10 s timeout, `cf-aig-skip-cache` so it is never answered from cache). A restricted OpenAI key that may not list models (401 "Missing scopes") authenticated fine, so it is accepted. Listing models is free, so the check is never billed, and it doesn't count against the budget. The check uses the router's own rule for a bad key, so a key the page accepts is one the router won't mark Invalid on its first call.
 
-| Answer                                                                                                 | Status                     | What the admin sees                                                 |
-| ------------------------------------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------------- |
-| Provider accepts the key                                                                               | 201 / 200                  | Saved, Active, Last checked = now                                   |
-| Anthropic 401 `authentication_error`, OpenAI 401, Google 400 `API_KEY_INVALID` / 401 `UNAUTHENTICATED` | 400 `KeyRejected`          | "The provider rejected this key." Nothing saved                     |
-| Anything else: a 403 (key fine, API or model not enabled), a gateway error, a timeout                  | 502 `CheckUnavailable`     | "The provider couldn't be reached to check this key." Nothing saved |
-| Add for a provider that already has an Active key                                                      | 409 `ProviderHasActiveKey` | Rotate that key instead                                             |
+| Answer                                                                                                                           | Status                     | What the admin sees                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------- |
+| Provider accepts the key                                                                                                         | 201 / 200                  | Saved, Active, Last checked = now                                   |
+| Anthropic 401 `authentication_error`, OpenAI 401 (not a missing-scope one), Google 400 `API_KEY_INVALID` / 401 `UNAUTHENTICATED` | 400 `KeyRejected`          | "The provider rejected this key." Nothing saved                     |
+| Anything else: a 403 (key fine, API or model not enabled), a gateway error, a timeout                                            | 502 `CheckUnavailable`     | "The provider couldn't be reached to check this key." Nothing saved |
+| Add for a provider that already has an Active key                                                                                | 409 `ProviderHasActiveKey` | Rotate that key instead                                             |
 
 - **Add key** picks a provider and saves a new Active key (one Active key per provider: `UNQ_company_secrets_company_id_provider_active`).
 - **Rotate** replaces a key's value in place (same row, so nothing pointing at it changes), any status: an Invalid key comes back Active. The row is locked, so two rotations run one after the other. `rotated_at` is set.

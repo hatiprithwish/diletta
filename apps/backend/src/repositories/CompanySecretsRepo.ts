@@ -237,14 +237,29 @@ export default class CompanySecretsRepo {
     );
   }
 
-  // DEV_NOTE: Add key (M4-10). The provider checks the key first (list-models through AI Gateway, outside the
-  // transaction: no lock held across a network call); a refused or unchecked key saves nothing. Then one withTenant:
+  // DEV_NOTE: Add key (M4-10). A provider that already has an Active key is refused first (409, no provider call). Then
+  // the provider checks the key (list-models through AI Gateway, outside the transaction: no lock held across a network
+  // call); a refused or unchecked key saves nothing. Then one withTenant:
   // the provider's Active key looked up (one only: UNQ_company_secrets_company_id_provider_active, which also catches
   // a key added at the same moment), the value encrypted, the row Active with last_validated_at, and its Created audit
   // row labelled with the provider. The value is never logged or returned.
   async addModelKey(
     params: Schemas.AddModelKeyApiRequest & { companyId: string; adminId: string },
   ): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> {
+    // DEV_NOTE: The one-Active-key rule first, so a second Add answers 409 without a provider call; checked again in the
+    // write's transaction (and by the unique index) for an Add at the same moment
+    const existing: Schemas.CompanySecretDALResponse = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.CompanySecretDALResponse> =>
+        await this.dal.getActiveModelKey(tx, {
+          companyId: params.companyId,
+          provider: params.provider,
+        }),
+    );
+    if (existing.isSuccess) return { ...this.activeKeyTaken(), outboxIds: [] };
+    if (!existing.isNotFound) return { isSuccess: false, message: existing.message, outboxIds: [] };
+
     const outcome = await AiGatewayProvider.checkModelKey(this.env, {
       provider: params.provider,
       apiKey: params.secret,

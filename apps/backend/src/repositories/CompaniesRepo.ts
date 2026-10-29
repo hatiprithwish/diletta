@@ -2,10 +2,10 @@ import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import Constants from "@/config/Constants";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
-import ModelCallsDAL from "@/data-access-layer/ModelCallsDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import BudgetPeriodSpendProvider from "@/providers/budgetPeriodSpend";
 import CompanyKeyProvider from "@/providers/companyKey";
 import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
@@ -17,13 +17,11 @@ export default class CompaniesRepo {
   private env: Env;
   private db: NodePgDatabase;
   private dal: CompaniesDAL;
-  private modelCallsDal: ModelCallsDAL;
 
   constructor(env: Env) {
     this.env = env;
     this.db = getDbClient(env);
     this.dal = new CompaniesDAL();
-    this.modelCallsDal = new ModelCallsDAL();
   }
 
   private withStatusLabel(company: Schemas.Company): Schemas.CompanyWithStatus {
@@ -289,18 +287,18 @@ export default class CompaniesRepo {
     );
   }
 
-  // DEV_NOTE: Settings › Budget (M4-10): the budget in force and what this billing period has used so far, the same sum
-  // BudgetDO is seeded from (model_calls from the period start, every tier but Embed). The page shows BudgetDO's own
-  // view of it as of the last call, so it can trail a call in flight.
+  // DEV_NOTE: Settings › Budget (M4-10): the budget in force and what this billing period has used so far, read from
+  // model_calls in Neon through BudgetPeriodSpendProvider (the sum BudgetDO is seeded from). It can trail BudgetDO's live
+  // count: Pending rows add 0 until backfilled, and holds in flight aren't rows yet.
   private async readSpendingBudget(
     tx: NodePgTransaction<EmptyRelations>,
     company: Schemas.Company,
   ): Promise<Schemas.GetSpendingBudgetApiResponse> {
     const periodKey = Schemas.budgetPeriodKey(Date.now());
     const periodStart = Schemas.budgetPeriodStart(periodKey);
-    const used = await this.modelCallsDal.getModelCallCostSum(tx, {
+    const used = await BudgetPeriodSpendProvider.getPeriodSpend(tx, {
       companyId: company.id,
-      from: periodStart,
+      periodStart,
     });
     if (!used.isSuccess || used.totalCostUsd === undefined) {
       return { isSuccess: false, message: used.message };
@@ -354,6 +352,7 @@ export default class CompaniesRepo {
         const inForce = found.company.spendingBudget ?? Schemas.DEFAULT_SPENDING_BUDGET_USD;
         if (Schemas.usdToMicros(inForce) === Schemas.usdToMicros(params.spendingBudgetUsd)) {
           const unchanged = await this.readSpendingBudget(tx, found.company);
+          if (!unchanged.isSuccess) return { ...unchanged, outboxIds: [] };
           return { ...unchanged, message: "Spending budget unchanged", outboxIds: [] };
         }
 

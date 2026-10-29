@@ -3,6 +3,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import type * as Schemas from "@app/schemas";
 import { apiClient } from "@/providers/apiClient";
+import { QUERY_KEY_ROOTS, invalidateBudgetViews } from "../../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -10,7 +11,7 @@ type GetToken = Parameters<typeof apiClient>[1];
 // replaces it (setQueryData).
 export class BudgetQueries {
   static keys = {
-    all: () => ["budget"] as const,
+    all: () => QUERY_KEY_ROOTS.budget,
     spendingBudget: () => [...BudgetQueries.keys.all(), "spending-budget"] as const,
   };
 
@@ -45,6 +46,7 @@ export function useUpdateSpendingBudget() {
         BudgetQueries.keys.spendingBudget(),
         response,
       );
+      invalidateBudgetViews(queryClient);
       toast.success("Budget saved. It applies within a minute.");
     },
     onError: () => {

@@ -1320,6 +1320,17 @@ describe("AiGatewayProvider.isRejectedKeyError", () => {
   it("ignores 403s, gateway errors, other statuses and non-HTTP errors", () => {
     expect(
       AiGatewayProvider.isRejectedKeyError(
+        Schemas.ModelProviderEnum.OpenAI,
+        apiError(401, {
+          error: {
+            message:
+              "You have insufficient permissions for this operation. Missing scopes: model.request.",
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      AiGatewayProvider.isRejectedKeyError(
         Schemas.ModelProviderEnum.Anthropic,
         apiError(403, { type: "error", error: { type: "permission_error" } }),
       ),
@@ -1380,6 +1391,7 @@ describe("AiGatewayProvider.checkModelKey", () => {
     expect(anthropic?.headers.get("x-api-key")).toBe(KEY);
     expect(anthropic?.headers.get("anthropic-version")).toBe("2023-06-01");
     expect(anthropic?.headers.get("cf-aig-authorization")).toBe(`Bearer ${GATEWAY_TOKEN}`);
+    expect(anthropic?.headers.get("cf-aig-skip-cache")).toBe("true");
     expect(openai?.url).toBe(`${GATEWAY_URL}/openai/models`);
     expect(openai?.headers.get("authorization")).toBe(`Bearer ${KEY}`);
     expect(google?.url).toBe(`${GATEWAY_URL}/google-ai-studio/v1beta/models`);
@@ -1412,6 +1424,23 @@ describe("AiGatewayProvider.checkModelKey", () => {
         Schemas.ModelProviderEnum.OpenAI,
         json(503, { error: { message: "overloaded" } }),
         Schemas.ModelKeyCheckOutcomeEnum.Unreachable,
+      ],
+      [
+        Schemas.ModelProviderEnum.OpenAI,
+        json(401, { error: { message: "Incorrect API key provided", code: "invalid_api_key" } }),
+        Schemas.ModelKeyCheckOutcomeEnum.Rejected,
+      ],
+      // DEV_NOTE: A restricted key that can't list models authenticated fine: it is accepted
+      [
+        Schemas.ModelProviderEnum.OpenAI,
+        json(401, {
+          error: {
+            message:
+              "You have insufficient permissions for this operation. Missing scopes: api.model.read.",
+            code: null,
+          },
+        }),
+        Schemas.ModelKeyCheckOutcomeEnum.Valid,
       ],
     ];
     for (const [provider, answer, outcome] of answers) {

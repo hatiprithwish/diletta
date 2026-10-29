@@ -42,6 +42,11 @@ export default class Utilities {
     return entry === undefined ? undefined : decodeURIComponent(entry.slice(prefix.length));
   }
 
+  // DEV_NOTE: A TanStack Form field's errors as FieldError takes them
+  static toFieldErrors(errors: unknown[]) {
+    return errors.map((message) => ({ message: String(message) }));
+  }
+
   // ─── Numbers on the Insights pages (M4-3). Money arrives as an exact decimal string; formatting is display only.
 
   // "$412.80"; a non-zero amount under a cent reads "<$0.01", so a small spend never shows as $0.00

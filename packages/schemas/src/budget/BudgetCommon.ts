@@ -108,13 +108,17 @@ export type BudgetUserCounters = z.infer<typeof ZBudgetUserCounters>;
 
 // ─── Settings › Budget (M4-10)
 
-export const SPENDING_BUDGET_MAX_USD = 1_000_000;
+// DEV_NOTE: companies.spending_budget is numeric(12, 6): 6 digits before the point, so whole cents top out here
+export const SPENDING_BUDGET_MAX_USD = 999_999.99;
 
 // DEV_NOTE: The amount an admin saves: positive, at most SPENDING_BUDGET_MAX_USD, whole cents
 export const ZSpendingBudgetUsd = z
   .number()
   .positive("Enter an amount above $0")
-  .max(SPENDING_BUDGET_MAX_USD, `At most $${SPENDING_BUDGET_MAX_USD.toLocaleString("en-US")}`)
+  .max(
+    SPENDING_BUDGET_MAX_USD,
+    `At most $${SPENDING_BUDGET_MAX_USD.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+  )
   .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-6, {
     message: "Whole cents only",
   });

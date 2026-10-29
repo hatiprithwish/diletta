@@ -793,11 +793,24 @@ export interface DashboardModelKeyRowProps {
   modelKey: ModelKey;
 }
 
-// DEV_NOTE: Add key (modelKey null) or Rotate (the key)
-export interface DashboardModelKeyDialogProps {
-  modelKey: ModelKey | null;
+export interface DashboardAddModelKeyDialogProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+export interface DashboardRotateModelKeyDialogProps extends DashboardAddModelKeyDialogProps {
+  modelKey: ModelKey;
+}
+
+// DEV_NOTE: The pasted key (Add and Rotate): a password input; refusal = the provider's answer, shown in place of the
+// field's own errors
+export interface DashboardSecretFieldProps {
+  id: string;
+  value: string;
+  errors: string[];
+  refusal: string | null;
+  onBlur: () => void;
+  onChange: (value: string) => void;
 }
 
 export interface DashboardBudgetFormProps {

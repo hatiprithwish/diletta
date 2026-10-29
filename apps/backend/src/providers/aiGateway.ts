@@ -299,6 +299,8 @@ export default class AiGatewayProvider {
           headers: {
             ...PROVIDER_KEY_HEADERS[params.provider](params.apiKey),
             "cf-aig-authorization": `Bearer ${token}`,
+            // DEV_NOTE: Always ask the provider: a cached answer would check nothing
+            "cf-aig-skip-cache": "true",
           },
           redirect: "error",
           signal: AbortSignal.timeout(Constants.MODEL_KEY_CHECK_TIMEOUT_MS),
@@ -312,6 +314,17 @@ export default class AiGatewayProvider {
       const responseBody = await res.text();
       if (AiGatewayProvider.isRejectedKeyAnswer(params.provider, res.status, responseBody)) {
         return Schemas.ModelKeyCheckOutcomeEnum.Rejected;
+      }
+      // DEV_NOTE: A restricted OpenAI key without the models scope: the provider authenticated it, it just can't list
+      // models, so it counts as checked
+      const providerError = AiGatewayProvider.readProviderError(responseBody);
+      if (
+        params.provider === Schemas.ModelProviderEnum.OpenAI &&
+        res.status === 401 &&
+        providerError &&
+        AiGatewayProvider.isMissingScope(providerError)
+      ) {
+        return Schemas.ModelKeyCheckOutcomeEnum.Valid;
       }
       AppLogger.error({
         category: Schemas.LogCategory.ModelRouter,
@@ -347,13 +360,20 @@ export default class AiGatewayProvider {
       case Schemas.ModelProviderEnum.Anthropic:
         return statusCode === 401 && providerError.type === "authentication_error";
       case Schemas.ModelProviderEnum.OpenAI:
-        return statusCode === 401;
+        // DEV_NOTE: A restricted key missing a scope gets a 401 too ("insufficient permissions … Missing scopes"): the
+        // key authenticated but can't do this one operation, like a 403, so it isn't a bad key
+        return statusCode === 401 && !AiGatewayProvider.isMissingScope(providerError);
       case Schemas.ModelProviderEnum.Google:
         return (
           (statusCode === 400 && providerError.reasons.includes("API_KEY_INVALID")) ||
           (statusCode === 401 && providerError.status === "UNAUTHENTICATED")
         );
     }
+  }
+
+  // DEV_NOTE: OpenAI's answer to a restricted key without the scope a request needs
+  private static isMissingScope(providerError: { message: string | null }): boolean {
+    return /insufficient permissions|missing scopes/i.test(providerError.message ?? "");
   }
 
   // DEV_NOTE: model_calls.error_code for a failed call: the HTTP status when the provider or gateway answered,
@@ -406,9 +426,12 @@ export default class AiGatewayProvider {
   // DEV_NOTE: The provider's error object: { error: { type } } (Anthropic), { error: { code, type } } (OpenAI),
   // { error: { status, details: [{ reason }] } } (Google). null when the body isn't JSON or `error` isn't an object
   // (the gateway's own errors carry an array).
-  private static readProviderError(
-    responseBody: string | undefined,
-  ): { type: string | null; status: string | null; reasons: string[] } | null {
+  private static readProviderError(responseBody: string | undefined): {
+    type: string | null;
+    status: string | null;
+    message: string | null;
+    reasons: string[];
+  } | null {
     if (!responseBody) return null;
     let body: unknown;
     try {
@@ -432,6 +455,10 @@ export default class AiGatewayProvider {
       "status" in providerError && typeof providerError.status === "string"
         ? providerError.status
         : null;
+    const message =
+      "message" in providerError && typeof providerError.message === "string"
+        ? providerError.message
+        : null;
     const reasons: string[] = [];
     if ("details" in providerError && Array.isArray(providerError.details)) {
       for (const detail of providerError.details as unknown[]) {
@@ -440,6 +467,6 @@ export default class AiGatewayProvider {
         }
       }
     }
-    return { type, status, reasons };
+    return { type, status, message, reasons };
   }
 }
