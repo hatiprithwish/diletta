@@ -4,7 +4,6 @@ import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
-import KnowledgeSourcesDAL from "@/data-access-layer/KnowledgeSourcesDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
@@ -30,8 +29,9 @@ type NormalizedBody =
 // the internal companies.id, resolved server-side; chatbots and versions are addressed by publicId, and every version is
 // read within its chatbot. Lifecycle: a draft (Draft) is created new or as a copy of any version (rollback = copy), saved
 // in place, discarded (→ Archived: configs are never deleted, runs and conversations point at them) or published
-// (→ Published, the previous Published → Archived). One open version (Draft, Testing, Ready) per chatbot, held by the
-// chatbot row's lock. Bodies are written only through normalizeConfigBody and read for the editor through
+// (→ Published, the previous Published → Archived). One open version (Draft, Testing, Ready) per chatbot: create, copy
+// and publish take the chatbot row's lock; save and discard lock the version row and act only on a Draft (the DAL
+// matches Draft), which is enough for them. Bodies are written only through normalizeConfigBody and read for the editor through
 // readConfigBody (no platform defaults). Every write records its audit row in its own transaction.
 export default class ChatbotConfigsRepo {
   private db: NodePgDatabase;
@@ -39,7 +39,6 @@ export default class ChatbotConfigsRepo {
   private chatbotsDal: ChatbotsDAL;
   private companySecretsDal: CompanySecretsDAL;
   private evalRunsDal: EvalRunsDAL;
-  private knowledgeSourcesDal: KnowledgeSourcesDAL;
   private toolDefinitionsDal: ToolDefinitionsDAL;
 
   constructor(env: Env) {
@@ -48,7 +47,6 @@ export default class ChatbotConfigsRepo {
     this.chatbotsDal = new ChatbotsDAL();
     this.companySecretsDal = new CompanySecretsDAL();
     this.evalRunsDal = new EvalRunsDAL();
-    this.knowledgeSourcesDal = new KnowledgeSourcesDAL();
     this.toolDefinitionsDal = new ToolDefinitionsDAL();
   }
 
@@ -78,7 +76,8 @@ export default class ChatbotConfigsRepo {
     };
   }
 
-  // DEV_NOTE: The chatbot by public id within the company; isForUpdate serialises every draft write and publish of it
+  // DEV_NOTE: The chatbot by public id within the company; isForUpdate (create, copy, publish) serialises the writes that
+  // change which version is open or live
   private async resolveChatbot(
     tx: Tx,
     params: ChatbotScope & { isForUpdate?: boolean },
@@ -262,57 +261,34 @@ export default class ChatbotConfigsRepo {
     );
   }
 
-  // DEV_NOTE: The editor's pickers: the company's Active tool versions and its knowledge sources (capped at
-  // CHATBOT_CONFIG_OPTIONS_MAX), and the providers with an Active model key
-  async getChatbotConfigOptions(params: {
-    companyId: string;
-  }): Promise<Schemas.GetChatbotConfigOptionsApiResponse> {
-    return await withTenant(
-      this.db,
-      params.companyId,
-      async (tx): Promise<Schemas.GetChatbotConfigOptionsApiResponse> => {
-        const tools = await this.toolDefinitionsDal.getActiveToolDefinitionOptions(tx, {
-          companyId: params.companyId,
-          limit: Schemas.CHATBOT_CONFIG_OPTIONS_MAX,
-        });
-        if (!tools.isSuccess || !tools.options) return { isSuccess: false, message: tools.message };
-        const sources = await this.knowledgeSourcesDal.getKnowledgeSourceOptions(tx, {
-          companyId: params.companyId,
-          limit: Schemas.CHATBOT_CONFIG_OPTIONS_MAX,
-        });
-        if (!sources.isSuccess || !sources.options) {
-          return { isSuccess: false, message: sources.message };
-        }
-        const secrets = await this.companySecretsDal.getCompanySecrets(tx, {
-          companyId: params.companyId,
-        });
-        if (!secrets.isSuccess || !secrets.companySecrets) {
-          return { isSuccess: false, message: secrets.message };
-        }
-
-        const providers = Object.values(Schemas.ModelProviderEnum);
-        const activeKeyProviders = providers.filter((provider) =>
-          secrets.companySecrets?.some(
-            (secret) =>
-              secret.type === Schemas.CompanySecretTypeIntEnum.ModelKey &&
-              secret.status === Schemas.CompanySecretStatusIntEnum.Active &&
-              secret.provider === provider,
-          ),
-        );
-        return {
-          isSuccess: true,
-          message: "Chatbot config options fetched successfully",
-          options: {
-            tools: tools.options.map((tool) => ({
-              ...tool,
-              riskLabel: Schemas.TOOL_DEFINITION_RISK_LABEL_MAP[tool.risk],
-            })),
-            knowledgeSources: sources.options,
-            activeKeyProviders,
-          },
-        };
-      },
-    );
+  // DEV_NOTE: The version locked and checked Draft (save, discard, publish): a write never lands on a version that left
+  // Draft. Refused with NotDraft (refusal = the words for this write).
+  private async lockDraft(
+    tx: Tx,
+    params: { companyId: string; chatbot: Schemas.Chatbot; publicId: string; refusal: string },
+  ): Promise<
+    | { isSuccess: true; chatbotConfig: Schemas.ChatbotConfig }
+    | { isSuccess: false; response: Schemas.ChatbotConfigWriteApiResponse }
+  > {
+    const found = await this.dal.getChatbotConfigDetails(tx, {
+      companyId: params.companyId,
+      chatbotId: params.chatbot.id,
+      publicId: params.publicId,
+      isForUpdate: true,
+    });
+    if (!found.isSuccess || !found.chatbotConfig) {
+      return {
+        isSuccess: false,
+        response: { isSuccess: false, message: found.message, isNotFound: found.isNotFound },
+      };
+    }
+    if (found.chatbotConfig.status !== Schemas.ChatbotConfigStatusIntEnum.Draft) {
+      return {
+        isSuccess: false,
+        response: this.refuse(Schemas.ChatbotConfigFailureEnum.NotDraft, params.refusal),
+      };
+    }
+    return { isSuccess: true, chatbotConfig: found.chatbotConfig };
   }
 
   // DEV_NOTE: The next version number and the one-draft rule, read under the chatbot row's lock
@@ -432,8 +408,7 @@ export default class ChatbotConfigsRepo {
     );
   }
 
-  // DEV_NOTE: The version locked and checked Draft first, so a save never lands on a version that left Draft. A body
-  // whose hash is unchanged writes nothing and records nothing.
+  // DEV_NOTE: A body whose hash is unchanged writes nothing and records nothing
   async saveChatbotConfigDraft(
     params: Schemas.SaveChatbotConfigApiRequest & ConfigScope & { adminId: string },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
@@ -446,21 +421,13 @@ export default class ChatbotConfigsRepo {
       async (tx): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> => {
         const resolved = await this.resolveChatbot(tx, params);
         if (!resolved.isSuccess) return resolved.response;
-        const found = await this.dal.getChatbotConfigDetails(tx, {
+        const found = await this.lockDraft(tx, {
           companyId: params.companyId,
-          chatbotId: resolved.chatbot.id,
+          chatbot: resolved.chatbot,
           publicId: params.publicId,
-          isForUpdate: true,
+          refusal: "Only a draft can be edited; copy this version into a new draft",
         });
-        if (!found.isSuccess || !found.chatbotConfig) {
-          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
-        }
-        if (found.chatbotConfig.status !== Schemas.ChatbotConfigStatusIntEnum.Draft) {
-          return this.refuse(
-            Schemas.ChatbotConfigFailureEnum.NotDraft,
-            "Only a draft can be edited; copy this version into a new draft",
-          );
-        }
+        if (!found.isSuccess) return found.response;
         if (
           found.chatbotConfig.bodyHash === normalized.bodyHash &&
           found.chatbotConfig.schemaVersion === normalized.schemaVersion
@@ -502,21 +469,13 @@ export default class ChatbotConfigsRepo {
       async (tx): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> => {
         const resolved = await this.resolveChatbot(tx, params);
         if (!resolved.isSuccess) return resolved.response;
-        const found = await this.dal.getChatbotConfigDetails(tx, {
+        const found = await this.lockDraft(tx, {
           companyId: params.companyId,
-          chatbotId: resolved.chatbot.id,
+          chatbot: resolved.chatbot,
           publicId: params.publicId,
-          isForUpdate: true,
+          refusal: "Only a draft can be discarded",
         });
-        if (!found.isSuccess || !found.chatbotConfig) {
-          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
-        }
-        if (found.chatbotConfig.status !== Schemas.ChatbotConfigStatusIntEnum.Draft) {
-          return this.refuse(
-            Schemas.ChatbotConfigFailureEnum.NotDraft,
-            "Only a draft can be discarded",
-          );
-        }
+        if (!found.isSuccess) return found.response;
 
         const archived = await this.dal.archiveChatbotConfigDraft(tx, {
           companyId: params.companyId,
@@ -536,8 +495,9 @@ export default class ChatbotConfigsRepo {
   }
 
   // DEV_NOTE: What a publish needs, checked in the database under the publish's locks: an Active model key for every
-  // provider the routing uses (the M4-10 "Done when"), a price for every model, and every pin Active (read FOR SHARE, so
-  // a Disable can't commit in between). Null = all there.
+  // provider the routing uses (the M4-10 "Done when"), a price for every model, and every pin Active. Keys and pins are
+  // read FOR SHARE, so a key's invalidation, revoke or replacement and a tool's Disable wait for the publish to commit.
+  // Null = all there.
   private async checkPublishNeeds(
     tx: Tx,
     params: { companyId: string; body: Schemas.ConfigSpecBody },
@@ -549,6 +509,7 @@ export default class ChatbotConfigsRepo {
       const key = await this.companySecretsDal.getActiveModelKey(tx, {
         companyId: params.companyId,
         provider,
+        isForShare: true,
       });
       if (key.isNotFound) {
         missingKeyProviders.push(provider);
@@ -613,21 +574,13 @@ export default class ChatbotConfigsRepo {
       async (tx): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> => {
         const resolved = await this.resolveChatbot(tx, { ...params, isForUpdate: true });
         if (!resolved.isSuccess) return resolved.response;
-        const found = await this.dal.getChatbotConfigDetails(tx, {
+        const found = await this.lockDraft(tx, {
           companyId: params.companyId,
-          chatbotId: resolved.chatbot.id,
+          chatbot: resolved.chatbot,
           publicId: params.publicId,
-          isForUpdate: true,
+          refusal: "Only a draft can be published",
         });
-        if (!found.isSuccess || !found.chatbotConfig) {
-          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
-        }
-        if (found.chatbotConfig.status !== Schemas.ChatbotConfigStatusIntEnum.Draft) {
-          return this.refuse(
-            Schemas.ChatbotConfigFailureEnum.NotDraft,
-            "Only a draft can be published",
-          );
-        }
+        if (!found.isSuccess) return found.response;
         const read = Schemas.readConfigBody({
           schemaVersion: found.chatbotConfig.schemaVersion,
           body: found.chatbotConfig.body,

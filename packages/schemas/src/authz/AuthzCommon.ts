@@ -11,6 +11,7 @@ export enum AuthzActionEnum {
   ChatbotConfigRead = "chatbot_config.read",
   ChatbotConfigUpdate = "chatbot_config.update",
   ChatbotConfigPublish = "chatbot_config.publish",
+  ReadOnlyModeRead = "company.read_only_read",
   ReadOnlyModeUpdate = "company.read_only_update",
 
   // Knowledge sources and their documents (company-scoped)

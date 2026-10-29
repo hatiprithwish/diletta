@@ -61,12 +61,10 @@ export type PublishChatbotConfigDALRequest = Pick<
   "companyId" | "chatbotId" | "publicId" | "publishedBy"
 >;
 
-// DEV_NOTE: Whether any Published config of the company pins this exact tool version (M4-10: a pinned version can't be
-// disabled). Read as jsonb containment on body->'tools', which every stored schema version keeps (v1).
-export type FindPublishedToolPinDALRequest = Pick<ChatbotConfig, "companyId"> & {
-  name: string;
-  version: number;
-};
+// DEV_NOTE: The company's Published configs (at most one per chatbot), for the pin guard (M4-10: a pinned tool version
+// can't be disabled). Bodies are returned as stored; the Repo reads them through Schemas.readConfigBody, never by
+// their raw shape, so a later schema version still guards.
+export type GetPublishedChatbotConfigBodiesDALRequest = Pick<ChatbotConfig, "companyId">;
 
 // DEV_NOTE: Each chatbot's Published version and its open one (Draft, Testing or Ready), for the Bots table's Live config
 // column and Open draft

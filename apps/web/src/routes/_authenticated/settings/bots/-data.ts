@@ -14,6 +14,9 @@ import { QUERY_KEY_ROOTS, invalidateLiveConfigViews } from "../../-invalidation"
 
 type GetToken = Parameters<typeof apiClient>[1];
 
+// DEV_NOTE: The key segment under a chatbot's versions that holds one version's detail
+const VERSION_DETAIL_SEGMENT = "detail";
+
 // DEV_NOTE: Settings › Bots (M4-10): the chatbots table, one chatbot's versions (paged, newest first) and one version, the
 // draft editor's pickers, and Read-only mode. keys.all() covers them all; keys.versions(chatbot) covers a chatbot's list,
 // count and every version of it. A version write sets its detail (setQueryData) and refreshes the chatbot's list and the
@@ -31,7 +34,7 @@ export class BotsQueries {
     versionCount: (chatbotPublicId: string) =>
       [...BotsQueries.keys.versions(chatbotPublicId), "count"] as const,
     version: (chatbotPublicId: string, publicId: string) =>
-      [...BotsQueries.keys.versions(chatbotPublicId), "detail", publicId] as const,
+      [...BotsQueries.keys.versions(chatbotPublicId), VERSION_DETAIL_SEGMENT, publicId] as const,
   };
 
   static rows(getToken: GetToken) {
@@ -168,9 +171,10 @@ function applyVersionWrite(
       { isSuccess: true, message: response.message, chatbotConfig },
     );
   }
+  const versionsKey = BotsQueries.keys.versions(chatbotPublicId);
   void queryClient.invalidateQueries({
-    queryKey: [...BotsQueries.keys.versions(chatbotPublicId)],
-    predicate: (query) => query.queryKey[3] !== "detail",
+    queryKey: versionsKey,
+    predicate: (query) => query.queryKey[versionsKey.length] !== VERSION_DETAIL_SEGMENT,
   });
   void queryClient.invalidateQueries({ queryKey: BotsQueries.keys.rows() });
 }
@@ -349,7 +353,16 @@ export function usePublishVersion(chatbotPublicId: string, publicId: string) {
         { method: "POST" },
       ),
     onSuccess: (response) => {
+      // DEV_NOTE: The version that was live is Archived now: its cached detail refetches (read before the rows refetch)
+      const previousLive = queryClient
+        .getQueryData<Schemas.GetChatbotSettingsRowsApiResponse>(BotsQueries.keys.rows())
+        ?.chatbots?.find((chatbot) => chatbot.publicId === chatbotPublicId)?.liveConfig;
       applyVersionWrite(queryClient, chatbotPublicId, response);
+      if (previousLive && previousLive.publicId !== response.chatbotConfig?.publicId) {
+        void queryClient.invalidateQueries({
+          queryKey: BotsQueries.keys.version(chatbotPublicId, previousLive.publicId),
+        });
+      }
       invalidateLiveConfigViews(queryClient);
       toast.success(
         `v${response.chatbotConfig?.configVersion ?? ""} is live. The assistant uses it from the next message.`,

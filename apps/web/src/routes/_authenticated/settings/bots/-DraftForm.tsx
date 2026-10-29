@@ -24,6 +24,7 @@ import {
   MODEL_TIERS,
   MODEL_TIER_LABELS,
   checkConfigBody,
+  isRuleOrphaned,
   toConfigBodyInput,
 } from "./-configForm";
 
@@ -394,8 +395,18 @@ export function ConfigForm({
                                   </label>
                                 ))}
                               </div>
-                              {pinnedTools.length > 0 && (
-                                <FieldDescription>None ticked means every tool.</FieldDescription>
+                              {isRuleOrphaned(
+                                field.state.value,
+                                pinnedTools.map((tool) => tool.name),
+                              ) ? (
+                                <p className="text-caption text-destructive">
+                                  This rule only named tools you removed. Tick a tool or delete the
+                                  rule; it isn't saved as a rule for every tool.
+                                </p>
+                              ) : (
+                                pinnedTools.length > 0 && (
+                                  <FieldDescription>None ticked means every tool.</FieldDescription>
+                                )
                               )}
                             </div>
                           )}

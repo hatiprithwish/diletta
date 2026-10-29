@@ -15,7 +15,7 @@ const SettingsRoutes = new Hono<AppContext>();
 SettingsRoutes.get(
   "/read-only",
   checkAuth,
-  authorizeCompany(Schemas.AuthzActionEnum.ChatbotConfigRead),
+  authorizeCompany(Schemas.AuthzActionEnum.ReadOnlyModeRead),
   async (c) => {
     const repo = new CompaniesRepo(c.env);
     const response = await repo.getReadOnlyMode({ companyId: c.get("companyId") });

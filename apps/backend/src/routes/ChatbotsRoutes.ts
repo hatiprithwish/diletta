@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import ChatbotConfigsRepo from "@/repositories/ChatbotConfigsRepo";
+import ChatbotConfigOptionsRepo from "@/repositories/ChatbotConfigOptionsRepo";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
@@ -45,7 +45,7 @@ ChatbotsRoutes.get(
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.ChatbotConfigRead),
   async (c) => {
-    const repo = new ChatbotConfigsRepo(c.env);
+    const repo = new ChatbotConfigOptionsRepo(c.env);
     const response = await repo.getChatbotConfigOptions({ companyId: c.get("companyId") });
 
     return c.json(response, response.isSuccess ? 200 : 500);

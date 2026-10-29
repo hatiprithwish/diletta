@@ -12,6 +12,7 @@ New bot (a name), Rename, Make default and Pause / Resume, each with its audit r
 - **Only a draft changes.** Save writes the form as a config body (checked in the browser and again with `normalizeConfigBody`; an invalid body is 400 `InvalidBody`, nothing saved). Saving an unchanged body records nothing. Published and Archived versions are read-only.
 - **Rollback = copy.** Copy to new draft puts an old version's body into a new draft at the next version number; publish it to roll back. The old version itself never changes.
 - **Discard** archives the draft (versions are never deleted: test runs and conversations point at them). The live version doesn't change.
+- **Approval rules and removed tools.** A rule with no tools ticked applies to every tool. So if you remove the only tools a rule named, the rule keeps their names and the save is refused ("names tool …, which is not pinned"): tick another tool or delete the rule. It's never quietly turned into a rule for every tool.
 - **Empty limits** keep the platform default (`CONFIG_SPEC_PLATFORM_DEFAULTS`, shown as the placeholder): the stored body holds only what the company set, so a later change to a default reaches every bot that didn't set it.
 
 ## Publish
