@@ -573,33 +573,33 @@ export default class ChatbotConfigsDAL {
     return response;
   }
 
-  async findPublishedToolPin(
+  // DEV_NOTE: The company's Published configs, as stored (the pin guard reads them through Schemas.readConfigBody)
+  async getPublishedChatbotConfigBodies(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindPublishedToolPinDALRequest,
+    params: Schemas.GetPublishedChatbotConfigBodiesDALRequest,
   ) {
-    const response: Schemas.PublishedToolPinDALResponse = { isSuccess: false };
+    const response: Schemas.PublishedChatbotConfigBodiesDALResponse = { isSuccess: false };
 
     try {
-      const pin = JSON.stringify([{ name: params.name, version: params.version }]);
       const conditions = [
         eq(chatbotConfigs.companyId, params.companyId),
         eq(chatbotConfigs.status, Schemas.ChatbotConfigStatusIntEnum.Published),
-        sql`${chatbotConfigs.body} -> 'tools' @> ${pin}::jsonb`,
       ];
-      const [found] = await tx
-        .select({ id: chatbotConfigs.id })
+      response.configs = await tx
+        .select({
+          publicId: chatbotConfigs.publicId,
+          schemaVersion: chatbotConfigs.schemaVersion,
+          body: chatbotConfigs.body,
+        })
         .from(chatbotConfigs)
-        .where(and(...conditions))
-        .limit(1);
-
+        .where(and(...conditions));
       response.isSuccess = true;
-      response.message = "Published tool pin checked successfully";
-      response.isPinned = found !== undefined;
+      response.message = "Published chatbot configs fetched successfully";
     } catch (error) {
-      const message = "Unknown error in checking published tool pin";
+      const message = "Unknown error in fetching published chatbot configs";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.FindPublishedToolPin,
+        action: Schemas.LogAction.GetPublishedChatbotConfigBodies,
         message,
         error,
         metadata: params,

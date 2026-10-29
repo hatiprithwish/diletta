@@ -17,6 +17,7 @@ import {
   eventOutbox,
   toolDefinitions,
 } from "@/db/tables";
+import ChatbotConfigOptionsRepo from "@/repositories/ChatbotConfigOptionsRepo";
 import ChatbotConfigsRepo from "@/repositories/ChatbotConfigsRepo";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
@@ -573,7 +574,9 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ).isNotFound,
     ).toBe(true);
 
-    const options = await repo.getChatbotConfigOptions({ companyId: tenantB.companyId });
+    const options = await new ChatbotConfigOptionsRepo(env).getChatbotConfigOptions({
+      companyId: tenantB.companyId,
+    });
     expect(options.options?.tools.map((tool) => `${tool.name}@${tool.version}`)).toEqual([
       "get_record@1",
     ]);

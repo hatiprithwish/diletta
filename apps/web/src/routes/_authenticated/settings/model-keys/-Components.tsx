@@ -116,7 +116,7 @@ export function ModelKeysPage() {
           </div>
         )}
       </section>
-      <ModelKeyDialog modelKey={null} isOpen={isAdding} onClose={() => setIsAdding(false)} />
+      <AddModelKeyDialog isOpen={isAdding} onClose={() => setIsAdding(false)} />
     </div>
   );
 }
@@ -152,7 +152,7 @@ function ModelKeyRow({ modelKey }: Schemas.DashboardModelKeyRowProps) {
           <ArrowsClockwise aria-hidden />
           Rotate
         </Button>
-        <ModelKeyDialog
+        <RotateModelKeyDialog
           modelKey={modelKey}
           isOpen={isRotating}
           onClose={() => setIsRotating(false)}
@@ -166,134 +166,212 @@ function secretIssue(value: string): string | undefined {
   return Schemas.ZModelKeySecret.safeParse(value).success ? undefined : "Paste the key.";
 }
 
-const errorsOf = (errors: unknown[]) => errors.map((message) => ({ message: String(message) }));
+// DEV_NOTE: The pasted key: a password input, never echoed back after saving
+function SecretField({
+  id,
+  value,
+  errors,
+  refusal,
+  onBlur,
+  onChange,
+}: Schemas.DashboardSecretFieldProps) {
+  const isInvalid = errors.length > 0 || refusal !== null;
+  return (
+    <Field data-invalid={isInvalid}>
+      <FieldLabel htmlFor={id}>Key</FieldLabel>
+      <Input
+        id={id}
+        name="secret"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        className="font-mono"
+        value={value}
+        onBlur={onBlur}
+        onChange={(event) => onChange(event.target.value)}
+        aria-invalid={isInvalid}
+      />
+      <FieldDescription>Only the last four characters are shown after saving.</FieldDescription>
+      <FieldError errors={refusal ? [{ message: refusal }] : Utilities.toFieldErrors(errors)} />
+    </Field>
+  );
+}
 
-// DEV_NOTE: Add key (modelKey null: provider + key) or Rotate (a new key for that provider). The key is checked with the
-// provider before it's saved; a refusal shows in the dialog and nothing is saved. The field is a password input and is
-// cleared whenever the dialog closes.
-function ModelKeyDialog({ modelKey, isOpen, onClose }: Schemas.DashboardModelKeyDialogProps) {
+// DEV_NOTE: Add key: a provider and its key, checked with the provider before it's saved. The form is mounted only while
+// the dialog is open, so the key never stays in the field. A refusal shows in the dialog (the hook doesn't toast it).
+function AddModelKeyDialog({ isOpen, onClose }: Schemas.DashboardAddModelKeyDialogProps) {
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>{isOpen && <AddModelKeyForm onClose={onClose} />}</DialogContent>
+    </Dialog>
+  );
+}
+
+function AddModelKeyForm({ onClose }: Pick<Schemas.DashboardAddModelKeyDialogProps, "onClose">) {
   const add = useAddModelKey();
-  const rotate = useRotateModelKey(modelKey?.publicId ?? "");
   const [refusal, setRefusal] = useState<Schemas.ModelKeyFailureEnum | null>(null);
-  const idPrefix = `model-key-${modelKey?.publicId ?? "new"}`;
   const form = useForm({
-    defaultValues: {
-      provider: modelKey?.provider ?? Schemas.ModelProviderEnum.Anthropic,
-      secret: "",
-    },
+    defaultValues: { provider: Schemas.ModelProviderEnum.Anthropic, secret: "" },
     onSubmit: async ({ value }) => {
       setRefusal(null);
       try {
-        if (modelKey) {
-          await rotate.mutateAsync({ secret: value.secret });
-        } else {
-          await add.mutateAsync({ provider: value.provider, secret: value.secret });
-        }
+        await add.mutateAsync({ provider: value.provider, secret: value.secret });
       } catch (error) {
         setRefusal(modelKeyRefusalOf(error));
         return;
       }
-      close();
+      onClose();
     },
   });
-  function close() {
-    form.reset();
-    setRefusal(null);
-    onClose();
-  }
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && close()}>
-      <DialogContent>
-        <form
-          className="flex flex-col gap-5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void form.handleSubmit();
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>
-              {modelKey ? `Rotate ${modelKey.providerLabel} key` : "Add model key"}
-            </DialogTitle>
-            <DialogDescription>
-              {modelKey
-                ? "Paste the new key. It's checked with the provider first; the old key stays in use until the new one is saved."
-                : "Paste a key from your provider. It's checked with the provider before it's saved, without a billed call."}
-            </DialogDescription>
-          </DialogHeader>
-          {!modelKey && (
-            <form.Field name="provider">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={`${idPrefix}-provider`}>Provider</FieldLabel>
-                  <Select
-                    value={field.state.value}
-                    onValueChange={(value) =>
-                      field.handleChange(value as Schemas.ModelProviderEnum)
-                    }
-                  >
-                    <SelectTrigger id={`${idPrefix}-provider`} className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PROVIDERS.map((provider) => (
-                        <SelectItem key={provider} value={provider}>
-                          {Schemas.MODEL_PROVIDER_LABEL_MAP[provider]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              )}
-            </form.Field>
-          )}
-          <form.Field name="secret" validators={{ onChange: ({ value }) => secretIssue(value) }}>
-            {(field) => (
-              <Field data-invalid={field.state.meta.errors.length > 0 || refusal !== null}>
-                <FieldLabel htmlFor={`${idPrefix}-secret`}>Key</FieldLabel>
-                <Input
-                  id={`${idPrefix}-secret`}
-                  name={field.name}
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="font-mono"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => {
-                    setRefusal(null);
-                    field.handleChange(event.target.value);
-                  }}
-                  aria-invalid={field.state.meta.errors.length > 0 || refusal !== null}
-                />
-                <FieldDescription>
-                  Only the last four characters are shown after saving.
-                </FieldDescription>
-                <FieldError
-                  errors={
-                    refusal
-                      ? [{ message: MODEL_KEY_REFUSAL_COPY[refusal] }]
-                      : errorsOf(field.state.meta.errors)
-                  }
-                />
-              </Field>
-            )}
-          </form.Field>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={close}>
-              Cancel
+    <form
+      className="flex flex-col gap-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void form.handleSubmit();
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Add model key</DialogTitle>
+        <DialogDescription>
+          Paste a key from your provider. It's checked with the provider before it's saved, without
+          a billed call.
+        </DialogDescription>
+      </DialogHeader>
+      <form.Field name="provider">
+        {(field) => (
+          <Field>
+            <FieldLabel htmlFor="model-key-new-provider">Provider</FieldLabel>
+            <Select
+              value={field.state.value}
+              onValueChange={(value) => {
+                setRefusal(null);
+                field.handleChange(value as Schemas.ModelProviderEnum);
+              }}
+            >
+              <SelectTrigger id="model-key-new-provider" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PROVIDERS.map((provider) => (
+                  <SelectItem key={provider} value={provider}>
+                    {Schemas.MODEL_PROVIDER_LABEL_MAP[provider]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
+      </form.Field>
+      <form.Field name="secret" validators={{ onChange: ({ value }) => secretIssue(value) }}>
+        {(field) => (
+          <SecretField
+            id="model-key-new-secret"
+            value={field.state.value}
+            errors={field.state.meta.errors.map(String)}
+            refusal={refusal ? MODEL_KEY_REFUSAL_COPY[refusal] : null}
+            onBlur={field.handleBlur}
+            onChange={(value) => {
+              setRefusal(null);
+              field.handleChange(value);
+            }}
+          />
+        )}
+      </form.Field>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+          {([canSubmit, isSubmitting]) => (
+            <Button type="submit" disabled={!canSubmit || isSubmitting}>
+              {isSubmitting ? "Checking…" : "Check and add"}
             </Button>
-            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-              {([canSubmit, isSubmitting]) => (
-                <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? "Checking…" : modelKey ? "Check and rotate" : "Check and add"}
-                </Button>
-              )}
-            </form.Subscribe>
-          </DialogFooter>
-        </form>
+          )}
+        </form.Subscribe>
+      </DialogFooter>
+    </form>
+  );
+}
+
+// DEV_NOTE: Rotate: a new key for this key's provider, checked first; the old key stays in use until the new one saves
+function RotateModelKeyDialog({
+  modelKey,
+  isOpen,
+  onClose,
+}: Schemas.DashboardRotateModelKeyDialogProps) {
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        {isOpen && <RotateModelKeyForm modelKey={modelKey} onClose={onClose} />}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function RotateModelKeyForm({
+  modelKey,
+  onClose,
+}: Omit<Schemas.DashboardRotateModelKeyDialogProps, "isOpen">) {
+  const rotate = useRotateModelKey(modelKey.publicId);
+  const [refusal, setRefusal] = useState<Schemas.ModelKeyFailureEnum | null>(null);
+  const form = useForm({
+    defaultValues: { secret: "" },
+    onSubmit: async ({ value }) => {
+      setRefusal(null);
+      try {
+        await rotate.mutateAsync({ secret: value.secret });
+      } catch (error) {
+        setRefusal(modelKeyRefusalOf(error));
+        return;
+      }
+      onClose();
+    },
+  });
+
+  return (
+    <form
+      className="flex flex-col gap-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void form.handleSubmit();
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Rotate {modelKey.providerLabel} key</DialogTitle>
+        <DialogDescription>
+          Paste the new key. It's checked with the provider first; the old key stays in use until
+          the new one is saved.
+        </DialogDescription>
+      </DialogHeader>
+      <form.Field name="secret" validators={{ onChange: ({ value }) => secretIssue(value) }}>
+        {(field) => (
+          <SecretField
+            id={`model-key-${modelKey.publicId}-secret`}
+            value={field.state.value}
+            errors={field.state.meta.errors.map(String)}
+            refusal={refusal ? MODEL_KEY_REFUSAL_COPY[refusal] : null}
+            onBlur={field.handleBlur}
+            onChange={(value) => {
+              setRefusal(null);
+              field.handleChange(value);
+            }}
+          />
+        )}
+      </form.Field>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+          {([canSubmit, isSubmitting]) => (
+            <Button type="submit" disabled={!canSubmit || isSubmitting}>
+              {isSubmitting ? "Checking…" : "Check and rotate"}
+            </Button>
+          )}
+        </form.Subscribe>
+      </DialogFooter>
+    </form>
   );
 }

@@ -290,11 +290,15 @@ describe("Settings › Model keys API (M4-10)", { timeout: 60_000 }, () => {
     expect(row?.type).toBe(Schemas.CompanySecretTypeIntEnum.ModelKey);
     expect(Buffer.from(row!.encryptedSecret).toString("utf8")).not.toContain(ANTHROPIC_KEY);
 
+    const check = vi.mocked(AiGatewayProvider.checkModelKey);
+    check.mockClear();
     const again = await call("POST", "/dashboard/settings/model-keys", {
       as: adminA,
       body: { provider: Schemas.ModelProviderEnum.Anthropic, secret: ROTATED_KEY },
     });
     expect(again.status).toBe(409);
+    // DEV_NOTE: Refused before anything is sent to the provider
+    expect(check).not.toHaveBeenCalled();
     expect(again.body.failure).toBe(Schemas.ModelKeyFailureEnum.ProviderHasActiveKey);
     expect(await modelKeyRows(companyA)).toHaveLength(1);
 
@@ -366,6 +370,48 @@ describe("Settings › Model keys API (M4-10)", { timeout: 60_000 }, () => {
     ).toEqual([Schemas.AuditEntityActionEnum.Created, Schemas.AuditEntityActionEnum.Rotated]);
   });
 
+  it("refuses to rotate an invalid key back to Active while the provider has another Active key", async () => {
+    const [row] = await modelKeyRows(companyA);
+    const otherPublicId = Utility.generatePublicId();
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(companySecrets)
+        .set({ status: Schemas.CompanySecretStatusIntEnum.Invalid })
+        .where(eq(companySecrets.id, row!.id));
+      await ownerDb.insert(companySecrets).values({
+        publicId: otherPublicId,
+        companyId: companyA,
+        type: Schemas.CompanySecretTypeIntEnum.ModelKey,
+        provider: Schemas.ModelProviderEnum.Anthropic,
+        encryptedSecret: Buffer.from([1, 2, 3]),
+        iv: Buffer.from([4, 5, 6]),
+        encryptionKeyVersion: 1,
+        lastFourChars: "",
+      });
+    });
+    try {
+      mockKeyCheck(Schemas.ModelKeyCheckOutcomeEnum.Valid);
+      const refused = await call("POST", `/dashboard/settings/model-keys/${row!.publicId}/rotate`, {
+        as: adminA,
+        body: { secret: ROTATED_KEY },
+      });
+      expect(refused.status).toBe(409);
+      expect(refused.body.failure).toBe(Schemas.ModelKeyFailureEnum.ProviderHasActiveKey);
+      const after = await modelKeyRows(companyA);
+      expect(after.find((key) => key.id === row!.id)?.status).toBe(
+        Schemas.CompanySecretStatusIntEnum.Invalid,
+      );
+    } finally {
+      await withOwnerDb(async (ownerDb) => {
+        await ownerDb.delete(companySecrets).where(eq(companySecrets.publicId, otherPublicId));
+        await ownerDb
+          .update(companySecrets)
+          .set({ status: Schemas.CompanySecretStatusIntEnum.Active })
+          .where(eq(companySecrets.id, row!.id));
+      });
+    }
+  });
+
   it("never shows or rotates another company's key, and refuses an operator", async () => {
     const [row] = await modelKeyRows(companyA);
     const check = mockKeyCheck(Schemas.ModelKeyCheckOutcomeEnum.Valid);
@@ -435,7 +481,13 @@ describe("Settings › Budget API (M4-10)", { timeout: 60_000 }, () => {
   });
 
   it("saves a new budget once, records nothing for the amount in force", async () => {
-    for (const spendingBudgetUsd of [0, -5, 10.005, Schemas.SPENDING_BUDGET_MAX_USD + 1]) {
+    for (const spendingBudgetUsd of [
+      0,
+      -5,
+      10.005,
+      1_000_000,
+      Schemas.SPENDING_BUDGET_MAX_USD + 1,
+    ]) {
       const refused = await call("PUT", "/dashboard/settings/budget", {
         as: adminA,
         body: { spendingBudgetUsd },
@@ -485,6 +537,16 @@ describe("Settings › Budget API (M4-10)", { timeout: 60_000 }, () => {
         })
       ).status,
     ).toBe(403);
+  });
+
+  // DEV_NOTE: The largest amount the numeric(12, 6) column holds in whole cents: saved, not a 500
+  it("saves exactly the largest budget", async () => {
+    const saved = await call("PUT", "/dashboard/settings/budget", {
+      as: adminB,
+      body: { spendingBudgetUsd: Schemas.SPENDING_BUDGET_MAX_USD },
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.spendingBudget?.budgetUsd).toBe("999999.990000");
   });
 
   it("shows this page's writes in the audit log, in words", async () => {

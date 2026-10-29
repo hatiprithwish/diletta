@@ -270,11 +270,20 @@ function nameIssue(value: string): string | undefined {
     : "Give the bot a name.";
 }
 
-const errorsOf = (errors: unknown[]) => errors.map((message) => ({ message: String(message) }));
-
-// DEV_NOTE: New bot (chatbot null) or Rename. Awaits the write (mutateAsync) and closes on success; the toast says why
-// otherwise.
+// DEV_NOTE: New bot (chatbot null) or Rename. The form is mounted only while the dialog is open, so every opening starts
+// from the bot's current name (or empty), never from the last submit. Awaits the write (mutateAsync) and closes on
+// success; the toast says why otherwise.
 function BotNameDialog({ chatbot, isOpen, onClose }: Schemas.DashboardBotNameDialogProps) {
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        {isOpen && <BotNameForm chatbot={chatbot} isOpen={isOpen} onClose={onClose} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BotNameForm({ chatbot, onClose }: Schemas.DashboardBotNameDialogProps) {
   const create = useCreateBot();
   const update = useUpdateBot(chatbot?.publicId ?? "");
   const form = useForm({
@@ -290,62 +299,50 @@ function BotNameDialog({ chatbot, isOpen, onClose }: Schemas.DashboardBotNameDia
   });
 
   return (
-    <Dialog
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) {
-          form.reset();
-          onClose();
-        }
+    <form
+      className="flex flex-col gap-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void form.handleSubmit().catch(() => undefined);
       }}
     >
-      <DialogContent>
-        <form
-          className="flex flex-col gap-5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void form.handleSubmit().catch(() => undefined);
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>{chatbot ? "Rename bot" : "New bot"}</DialogTitle>
-            <DialogDescription>
-              {chatbot
-                ? "The new name shows in the widget header and on every page."
-                : "The bot starts with no versions. Write its first draft, then publish it."}
-            </DialogDescription>
-          </DialogHeader>
-          <form.Field name="name" validators={{ onChange: ({ value }) => nameIssue(value) }}>
-            {(field) => (
-              <Field data-invalid={field.state.meta.errors.length > 0}>
-                <FieldLabel htmlFor={`bot-name-${chatbot?.publicId ?? "new"}`}>Name</FieldLabel>
-                <Input
-                  id={`bot-name-${chatbot?.publicId ?? "new"}`}
-                  name={field.name}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  aria-invalid={field.state.meta.errors.length > 0}
-                />
-                <FieldError errors={errorsOf(field.state.meta.errors)} />
-              </Field>
-            )}
-          </form.Field>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
+      <DialogHeader>
+        <DialogTitle>{chatbot ? "Rename bot" : "New bot"}</DialogTitle>
+        <DialogDescription>
+          {chatbot
+            ? "The new name shows in the widget header and on every page."
+            : "The bot starts with no versions. Write its first draft, then publish it."}
+        </DialogDescription>
+      </DialogHeader>
+      <form.Field name="name" validators={{ onChange: ({ value }) => nameIssue(value) }}>
+        {(field) => (
+          <Field data-invalid={field.state.meta.errors.length > 0}>
+            <FieldLabel htmlFor={`bot-name-${chatbot?.publicId ?? "new"}`}>Name</FieldLabel>
+            <Input
+              id={`bot-name-${chatbot?.publicId ?? "new"}`}
+              name={field.name}
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(event) => field.handleChange(event.target.value)}
+              aria-invalid={field.state.meta.errors.length > 0}
+            />
+            <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
+          </Field>
+        )}
+      </form.Field>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+          {([canSubmit, isSubmitting]) => (
+            <Button type="submit" disabled={!canSubmit || isSubmitting}>
+              {isSubmitting ? "Saving…" : chatbot ? "Save name" : "Create bot"}
             </Button>
-            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-              {([canSubmit, isSubmitting]) => (
-                <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? "Saving…" : chatbot ? "Save name" : "Create bot"}
-                </Button>
-              )}
-            </form.Subscribe>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+          )}
+        </form.Subscribe>
+      </DialogFooter>
+    </form>
   );
 }
 

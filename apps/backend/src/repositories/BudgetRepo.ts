@@ -3,6 +3,7 @@ import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ModelCallsDAL from "@/data-access-layer/ModelCallsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
+import BudgetPeriodSpendProvider from "@/providers/budgetPeriodSpend";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
@@ -38,9 +39,9 @@ export default class BudgetRepo {
           return { isSuccess: true, message: "Budget fetched successfully", spendingBudgetUsd };
         }
 
-        const spent = await this.modelCallsDal.getModelCallCostSum(tx, {
+        const spent = await BudgetPeriodSpendProvider.getPeriodSpend(tx, {
           companyId: params.companyId,
-          from: params.periodStart,
+          periodStart: params.periodStart,
         });
         if (!spent.isSuccess || spent.totalCostUsd === undefined) {
           return { isSuccess: false, message: spent.message };

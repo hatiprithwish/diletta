@@ -28,7 +28,9 @@ vi.mock("@clerk/tanstack-react-start", () => ({
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
 
-const NEW_KEY = "sk-ant-api03-new-key-value-9921";
+// DEV_NOTE: Plainly fake values: a secret scanner must not mistake them for real keys
+const NEW_KEY = "test-anthropic-key-9921";
+const ROTATED_KEY = "test-google-key-7781";
 
 const GOOGLE_KEY: Schemas.ModelKey = {
   publicId: "key_google",
@@ -294,6 +296,8 @@ describe("Settings › Model keys", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // DEV_NOTE: Shown in the dialog only, not toasted as well
+    expect(toast.error).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole("button", { name: "Check and add" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -316,12 +320,12 @@ describe("Settings › Model keys", () => {
 
     await user.click(await screen.findByRole("button", { name: "Rotate Google key" }));
     const dialog = await screen.findByRole("dialog", { name: "Rotate Google key" });
-    await user.type(within(dialog).getByLabelText("Key"), "AIza-new-google-key-7781");
+    await user.type(within(dialog).getByLabelText("Key"), ROTATED_KEY);
     await user.click(within(dialog).getByRole("button", { name: "Check and rotate" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(JSON.parse(String(calls(fetchMock, "POST", "/rotate")[0]?.[1]?.body))).toEqual({
-      secret: "AIza-new-google-key-7781",
+      secret: ROTATED_KEY,
     });
     const keys = screen.getByRole("region", { name: "Model keys" });
     expect(await within(keys).findByText("…7781")).toBeInTheDocument();
@@ -361,6 +365,10 @@ describe("Settings › Budget", () => {
 
     const amount = await screen.findByLabelText("Budget per billing period (USD)");
     const save = screen.getByRole("button", { name: "Save budget" });
+    expect(save).toBeDisabled();
+    // DEV_NOTE: The saved amount typed another way isn't a change
+    await user.clear(amount);
+    await user.type(amount, "1000");
     expect(save).toBeDisabled();
 
     await user.clear(amount);

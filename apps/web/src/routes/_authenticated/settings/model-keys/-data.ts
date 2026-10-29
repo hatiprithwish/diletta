@@ -4,7 +4,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
-import { invalidateModelKeyViews } from "../../-invalidation";
+import { QUERY_KEY_ROOTS, invalidateModelKeyViews } from "../../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -13,7 +13,7 @@ type GetToken = Parameters<typeof apiClient>[1];
 // write, and never comes back.
 export class ModelKeysQueries {
   static keys = {
-    all: () => ["model-keys"] as const,
+    all: () => QUERY_KEY_ROOTS.modelKeys,
     list: () => [...ModelKeysQueries.keys.all(), "list"] as const,
   };
 
@@ -70,12 +70,10 @@ function applyModelKeyWrite(queryClient: QueryClient, response: Schemas.ModelKey
   invalidateModelKeyViews(queryClient);
 }
 
+// DEV_NOTE: A refusal (rejected key, unchecked key, provider already has one) is shown in the dialog, so it isn't toasted
+// too; anything else is
 function toastModelKeyError(queryClient: QueryClient, error: unknown, fallback: string) {
-  const refusal = modelKeyRefusalOf(error);
-  if (refusal) {
-    toast.error(MODEL_KEY_REFUSAL_COPY[refusal]);
-    return;
-  }
+  if (modelKeyRefusalOf(error)) return;
   if (error instanceof ApiError && error.status === 404) {
     void queryClient.invalidateQueries({ queryKey: ModelKeysQueries.keys.all() });
     toast.error("This key isn't available. It may have been removed.");

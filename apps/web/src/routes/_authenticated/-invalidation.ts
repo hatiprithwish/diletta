@@ -10,6 +10,8 @@ export const QUERY_KEY_ROOTS = {
   tests: ["tests"],
   security: ["security"],
   bots: ["bots"],
+  modelKeys: ["model-keys"],
+  budget: ["budget"],
   connections: ["connections"],
 } as const;
 
@@ -66,4 +68,10 @@ export function invalidateModelKeyViews(queryClient: QueryClient) {
   void queryClient.invalidateQueries({
     queryKey: [...QUERY_KEY_ROOTS.bots, BOTS_KEY_SEGMENTS.options],
   });
+}
+
+// DEV_NOTE: The spending budget changed (Settings › Budget, M4-10): Overview's spend card (spend against the budget)
+// refetches
+export function invalidateBudgetViews(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.overview });
 }
