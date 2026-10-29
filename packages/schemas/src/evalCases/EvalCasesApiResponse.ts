@@ -38,7 +38,8 @@ export interface GetEvalCaseApiResponse extends ApiResponse {
   evalCase?: EvalCaseDetail;
 }
 
-// DEV_NOTE: POST and PATCH: the case as it stands after. failure set (409) = the edit was refused (EvalCaseUpdateFailureEnum)
+// DEV_NOTE: POST and PATCH: the case as it stands after. failure set = the edit was refused (EvalCaseUpdateFailureEnum, status from
+// EVAL_CASE_UPDATE_FAILURE_HTTP_STATUS_MAP)
 export interface WriteEvalCaseApiResponse extends ApiResponse {
   evalCase?: EvalCaseDetail;
   failure?: EvalCaseUpdateFailureEnum;

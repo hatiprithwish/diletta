@@ -26,7 +26,8 @@ export type CreateEvalCaseApiRequest = z.infer<typeof ZCreateEvalCaseApiRequest>
 
 // DEV_NOTE: PATCH /dashboard/eval-cases/:publicId: the company's own case only (a platform case answers 404). An absent
 // field keeps its value; messages and rubric replace the stored body's part, its other checks are kept. rubric null =
-// no judge, refused (409 NothingToCheck) when the case has no other check. At least one field.
+// no judge, refused (409 NothingToCheck) when the case has no other check; a rubric that takes the expectations over
+// EVAL_CASE_EXPECTATIONS_MAX_CHARS is refused (400 TooLong). At least one field.
 export const ZUpdateEvalCaseApiRequest = z
   .object({
     name: ZEvalCaseName.optional(),

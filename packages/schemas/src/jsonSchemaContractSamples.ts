@@ -3,6 +3,7 @@ import { ApprovalRuleApprovalEnum, ModelTierEnum } from "./configSpec";
 import {
   EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
   EVAL_CASE_INPUT_SCHEMA_VERSION,
+  EVAL_CASE_MAX_VALUES,
   EVAL_CASE_TAG_PLACEHOLDER,
   EvalCaseMessageRoleEnum,
   EvalCaseRuleKindEnum,
@@ -19,8 +20,8 @@ import { ToolCallStatusIntEnum } from "./toolCalls";
 // bodies its Zod schema accepts (valid) and refuses (invalid). `schema:export` writes them to
 // evals/fixtures/contract-samples.json; jsonSchemaExports.test.ts holds them to Zod, and evals/tests/test_contract.py
 // to the generated Pydantic types, so both sides agree on the same bodies. Invalid bodies break the shape only (a
-// missing field, a wrong type or enum, a size or pattern): refinements have no JSON Schema form, so the Python types
-// can't refuse a body only a refinement does.
+// missing field, a wrong type or enum, a size, pattern or count): refinements have no JSON Schema form, so the Python
+// types can't refuse a body only a refinement does.
 export interface JsonSchemaContractSamples {
   valid: unknown[];
   invalid: unknown[];
@@ -172,6 +173,22 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
       { ...fullExpectations, forbiddenTools: ["9_not_a_tool_name"] },
       { ...fullExpectations, toolCalls: [{ toolName: "create_record" }] },
       { ...fullExpectations, readbacks: [{ toolName: "create_record", expect: "120" }] },
+      // DEV_NOTE: The value counts, exported as minProperties / maxProperties
+      { ...fullExpectations, readbacks: [{ toolName: "create_record", expect: {} }] },
+      {
+        ...fullExpectations,
+        toolCalls: [
+          {
+            toolName: "create_record",
+            args: Object.fromEntries(
+              Array.from({ length: EVAL_CASE_MAX_VALUES + 1 }, (_, index) => [
+                `arg${index}`,
+                index,
+              ]),
+            ),
+          },
+        ],
+      },
     ],
   },
   "eval-case-tag.schema.json": {

@@ -339,6 +339,11 @@ export interface DashboardEvalCaseFormProps {
   onCancel: () => void;
 }
 
+// DEV_NOTE: A case's checks besides its rubric, read-only in the case form (M5-1)
+export interface DashboardEvalCaseChecksProps {
+  checks: EvalCaseChecks;
+}
+
 // DEV_NOTE: The Tests page (M4-8): the metric strip, then Runs or Cases (tab and page in the URL)
 export interface DashboardTestsPageProps {
   search: TestsPageSearch;
@@ -853,9 +858,4 @@ export interface DashboardTeamInviteRowProps {
 export interface DashboardInviteDialogProps {
   isOpen: boolean;
   onClose: () => void;
-}
-
-// DEV_NOTE: A case's checks besides its rubric, read-only in the case form (M5-1)
-export interface DashboardEvalCaseChecksProps {
-  checks: EvalCaseChecks;
 }

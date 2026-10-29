@@ -52,15 +52,17 @@ class EvalCaseJsonValue(
 
 class ToolCall(BaseModel):
     toolName: Annotated[str, Field(pattern="^[A-Za-z][A-Za-z0-9_-]{0,63}$")]
-    args: dict[
-        Annotated[str, StringConstraints(min_length=1)], EvalCaseJsonValue | None
+    args: Annotated[
+        dict[Annotated[str, StringConstraints(min_length=1)], EvalCaseJsonValue | None],
+        Field(max_length=50),
     ]
 
 
 class Readback(BaseModel):
     toolName: Annotated[str, Field(pattern="^[A-Za-z][A-Za-z0-9_-]{0,63}$")]
-    expect: dict[
-        Annotated[str, StringConstraints(min_length=1)], EvalCaseJsonValue | None
+    expect: Annotated[
+        dict[Annotated[str, StringConstraints(min_length=1)], EvalCaseJsonValue | None],
+        Field(max_length=50, min_length=1),
     ]
 
 

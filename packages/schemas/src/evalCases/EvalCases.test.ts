@@ -10,6 +10,9 @@ import {
   loadEvalCaseExpectations,
   readEvalCaseBody,
   toEvalCase,
+  hasEvalCaseChecks,
+  EVAL_CASE_RUBRIC_MAX_CHARS,
+  EvalCaseWriteFailureEnum,
   type EvalCaseBody,
   type EvalCaseExpectationsV2,
 } from "./EvalCasesCommon";
@@ -138,10 +141,17 @@ describe("loadEvalCaseExpectations", () => {
 describe("readEvalCaseBody / toEvalCase", () => {
   const body: EvalCaseBody = { messages, rubric: "Says quarterly.", checks: EVAL_CASE_NO_CHECKS };
 
+  // DEV_NOTE: A body toEvalCase stores, or the test fails with its reason
+  const storedOf = (value: EvalCaseBody) => {
+    const stored = toEvalCase(value);
+    if (!stored.isSuccess) throw new Error(stored.message);
+    return stored;
+  };
+
   it("reads back what toEvalCase stores, at the current version", () => {
-    const stored = toEvalCase(body);
-    expect(stored?.expectations.schemaVersion).toBe(EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION);
-    expect(readEvalCaseBody(stored?.input, stored?.expectations)).toEqual(body);
+    const stored = storedOf(body);
+    expect(stored.expectations.schemaVersion).toBe(EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION);
+    expect(readEvalCaseBody(stored.input, stored.expectations)).toEqual(body);
   });
 
   it("reads a stored v1 case, and keeps a v2 case's checks", () => {
@@ -160,14 +170,42 @@ describe("readEvalCaseBody / toEvalCase", () => {
   });
 
   it("is null for a shape it can't edit", () => {
-    const stored = toEvalCase(body);
-    expect(
-      readEvalCaseBody({ ...stored?.input, schemaVersion: 2 }, stored?.expectations),
-    ).toBeNull();
-    expect(readEvalCaseBody(stored?.input, {})).toBeNull();
+    const stored = storedOf(body);
+    expect(readEvalCaseBody({ ...stored.input, schemaVersion: 2 }, stored.expectations)).toBeNull();
+    expect(readEvalCaseBody(stored.input, {})).toBeNull();
   });
 
-  it("stores nothing for a body that checks nothing", () => {
-    expect(toEvalCase({ ...body, rubric: null })).toBeNull();
+  it("says why it stores nothing: no check, too long, or another rule", () => {
+    expect(toEvalCase({ ...body, rubric: null })).toMatchObject({
+      isSuccess: false,
+      failure: EvalCaseWriteFailureEnum.NothingToCheck,
+    });
+
+    // DEV_NOTE: About 18k characters of checks, then a rubric within its own cap takes the body over the whole cap
+    const longValue = "x".repeat(1700);
+    const bigChecks = {
+      ...EVAL_CASE_NO_CHECKS,
+      toolCalls: Array.from({ length: 10 }, (_, index) => ({
+        toolName: `tool_${index}`,
+        args: { value: longValue },
+      })),
+    };
+    expect(toEvalCase({ messages, rubric: null, checks: bigChecks }).isSuccess).toBe(true);
+    expect(toEvalCase({ messages, rubric: "y".repeat(3000), checks: bigChecks })).toMatchObject({
+      isSuccess: false,
+      failure: EvalCaseWriteFailureEnum.TooLong,
+    });
+    expect("y".repeat(3000).length).toBeLessThanOrEqual(EVAL_CASE_RUBRIC_MAX_CHARS);
+
+    expect(
+      toEvalCase({ ...body, checks: { ...EVAL_CASE_NO_CHECKS, forbiddenTools: ["a", "a"] } }),
+    ).toMatchObject({ isSuccess: false, failure: EvalCaseWriteFailureEnum.Invalid });
+  });
+
+  it("decides whether a case checks anything besides its rubric", () => {
+    expect(hasEvalCaseChecks(EVAL_CASE_NO_CHECKS)).toBe(false);
+    expect(hasEvalCaseChecks({ ...EVAL_CASE_NO_CHECKS, forbiddenTools: ["delete_record"] })).toBe(
+      true,
+    );
   });
 });

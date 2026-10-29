@@ -155,19 +155,21 @@ export default class EvalCasesRepo {
           return { isSuccess: false, message: chatbot.message, isNotFound: chatbot.isNotFound };
         }
 
-        // DEV_NOTE: Never null: a rubric alone is a check, and the request held messages and rubric to their schemas
+        // DEV_NOTE: Can't fail: a rubric alone is a check, within the size cap, and the request held messages and
+        // rubric to their schemas. If it ever did, it is a server error (as Quality's convert)
         const stored = Schemas.toEvalCase({
           messages: params.messages,
           rubric: params.rubric,
           checks: Schemas.EVAL_CASE_NO_CHECKS,
         });
-        if (!stored) return { isSuccess: false, message: "The case checks nothing" };
+        if (!stored.isSuccess) throw new TenantRollbackError(stored.message);
 
         const created = await this.evalCasesDal.createEvalCase(tx, {
           companyId,
           chatbotId: chatbot.chatbot.id,
           name: params.name,
-          ...stored,
+          input: stored.input,
+          expectations: stored.expectations,
         });
         if (!created.isSuccess || !created.evalCase) {
           return { isSuccess: false, message: created.message, isNotFound: created.isNotFound };
@@ -197,8 +199,8 @@ export default class EvalCasesRepo {
   // DEV_NOTE: Edit or turn on / off the company's own case, under its row lock (a platform or another company's case →
   // 404). A new conversation or rubric is merged into the stored body (read through its upgrader, its other checks kept)
   // and written at the current version; a body this page can't read refuses a new conversation or rubric with
-  // NotEditable, and a cleared rubric with no other check left with NothingToCheck (409, nothing in the request is
-  // written); an isActive-only edit still works.
+  // NotEditable, a cleared rubric with no other check left with NothingToCheck, a rubric that makes the expectations
+  // too long with TooLong (nothing in the request is written); an isActive-only edit still works.
   async updateEvalCase(
     params: Schemas.UpdateEvalCaseApiRequest & {
       companyId: string;
@@ -221,7 +223,7 @@ export default class EvalCasesRepo {
         }
         const row = found.evalCase;
 
-        let stored: NonNullable<ReturnType<typeof Schemas.toEvalCase>> | undefined;
+        let stored: Pick<Schemas.UpdateEvalCaseDALRequest, "input" | "expectations"> | undefined;
         if (params.messages !== undefined || params.rubric !== undefined) {
           const current = Schemas.readEvalCaseBody(row.input, row.expectations);
           if (!current) {
@@ -240,14 +242,14 @@ export default class EvalCasesRepo {
           // not audited (a v1 row stays v1 until an edit changes it)
           if (Utility.stableStringify(merged) !== Utility.stableStringify(current)) {
             const written = Schemas.toEvalCase(merged);
-            if (!written) {
-              return {
-                isSuccess: false,
-                message: "The case would check nothing",
-                failure: Schemas.EvalCaseUpdateFailureEnum.NothingToCheck,
-              };
+            if (!written.isSuccess) {
+              const failure = Schemas.EVAL_CASE_UPDATE_FAILURE_BY_WRITE_FAILURE[written.failure];
+              // DEV_NOTE: Invalid can't happen here: the other checks come from a stored body the schema accepted, and
+              // the request held messages and rubric to their schemas. If it ever did, it is a server error
+              if (!failure) throw new TenantRollbackError(written.message);
+              return { isSuccess: false, message: written.message, failure };
             }
-            stored = written;
+            stored = { input: written.input, expectations: written.expectations };
           }
         }
 

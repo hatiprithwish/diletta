@@ -91,6 +91,26 @@ const TOOL_CHECKS: Schemas.EvalCaseChecks = {
     { toolName: "create_record", expect: { name: `Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` } },
   ],
 };
+// DEV_NOTE: About 18k characters of checks: a rubric within its own cap takes the expectations over the whole cap
+const BIG_BODY: Schemas.EvalCaseBody = {
+  messages: [{ role: User, text: "Run every check" }],
+  rubric: null,
+  checks: {
+    ...Schemas.EVAL_CASE_NO_CHECKS,
+    toolCalls: Array.from({ length: 10 }, (_, index) => ({
+      toolName: `tool_${index}`,
+      args: { value: "x".repeat(1700) },
+    })),
+  },
+};
+
+// DEV_NOTE: A body toEvalCase stores, as a fixture row holds it
+function storedBody(body: Schemas.EvalCaseBody) {
+  const stored = Schemas.toEvalCase(body);
+  if (!stored.isSuccess) throw new Error(stored.message);
+  return { input: stored.input, expectations: stored.expectations };
+}
+
 const TOOL_BODY: Schemas.EvalCaseBody = {
   messages: [
     { role: User, text: `Create a record named Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` },
@@ -155,6 +175,7 @@ let salesCase = "";
 let v2Case = "";
 let legacyCase = "";
 let toolCase = "";
+let bigCase = "";
 let platformCase = "";
 let otherCase = "";
 let goodTranscript = "";
@@ -346,7 +367,7 @@ beforeAll(async () => {
       .returning({ id: chatbotConfigs.id });
     const [supportLive, supportDraft, salesLive, otherLive] = configs;
 
-    const stored = Schemas.toEvalCase(FIRE_BODY)!;
+    const stored = storedBody(FIRE_BODY);
     const evalCase = (values: {
       companyId: string | null;
       chatbotId: string | null;
@@ -407,8 +428,9 @@ beforeAll(async () => {
     v2Case = v2!.publicId;
     // DEV_NOTE: A case stored before M5-1 (expectations v1, read through the upgrader) and one with tool checks, both on
     // Sales so the Support counts above stay as they are
-    const toolStored = Schemas.toEvalCase(TOOL_BODY)!;
-    const [legacy, tool] = await ownerDb
+    const toolStored = storedBody(TOOL_BODY);
+    const bigStored = storedBody(BIG_BODY);
+    const [legacy, tool, big] = await ownerDb
       .insert(evalCases)
       .values([
         {
@@ -425,10 +447,16 @@ beforeAll(async () => {
           input: toolStored.input,
           expectations: toolStored.expectations,
         },
+        {
+          ...evalCase({ companyId: companyA, chatbotId: sales!.id, name: "Big", minute: 9 }),
+          input: bigStored.input,
+          expectations: bigStored.expectations,
+        },
       ])
       .returning({ publicId: evalCases.publicId });
     legacyCase = legacy!.publicId;
     toolCase = tool!.publicId;
+    bigCase = big!.publicId;
 
     const run = (values: {
       companyId?: string;
@@ -1114,7 +1142,7 @@ describe("PATCH /dashboard/eval-cases/:publicId", () => {
       const [row] = await ownerDb.select().from(evalCases).where(eq(evalCases.publicId, v2Case));
       return row;
     });
-    expect(stored?.expectations).toEqual(Schemas.toEvalCase(FIRE_BODY)?.expectations);
+    expect(stored?.expectations).toEqual(storedBody(FIRE_BODY).expectations);
     expect((await patch(v2Case, { isActive: false })).status).toBe(200);
   });
 
@@ -1160,6 +1188,14 @@ describe("PATCH /dashboard/eval-cases/:publicId", () => {
     expect(refused.body.failure).toBe(Schemas.EvalCaseUpdateFailureEnum.NothingToCheck);
     const legacy = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${legacyCase}`);
     expect(legacy.body.evalCase?.body?.rubric).toBe("Says every three months.");
+  });
+
+  it("refuses a rubric that takes the case over its size cap as TooLong (400), writing nothing", async () => {
+    const refused = await patch(bigCase, { rubric: "y".repeat(3000) });
+    expect(refused.status).toBe(400);
+    expect(refused.body.failure).toBe(Schemas.EvalCaseUpdateFailureEnum.TooLong);
+    const big = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${bigCase}`);
+    expect(big.body.evalCase?.body).toEqual(BIG_BODY);
   });
 
   it("never edits a platform case or another company's, and refuses an empty edit", async () => {

@@ -261,6 +261,16 @@ export function useUpdateTestCase(publicId: string) {
         );
         return;
       }
+      if (
+        error instanceof ApiError &&
+        (error.body as Schemas.WriteEvalCaseApiResponse).failure ===
+          Schemas.EvalCaseUpdateFailureEnum.TooLong
+      ) {
+        toast.error(
+          "This case is too long to save. Shorten what a good reply does. Nothing changed.",
+        );
+        return;
+      }
       if (error instanceof ApiError && error.status === 404) {
         void queryClient.invalidateQueries({ queryKey: TestsQueries.keys.cases() });
         toast.error("This case isn't available. It may have been removed.");

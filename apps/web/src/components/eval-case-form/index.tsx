@@ -43,17 +43,6 @@ function rubricIssue(value: string, isOptional: boolean): string | undefined {
     : `Say what a good reply does, up to ${Utilities.formatCount(Schemas.EVAL_CASE_RUBRIC_MAX_CHARS)} characters.`;
 }
 
-function hasChecks(checks: Schemas.EvalCaseChecks | undefined): checks is Schemas.EvalCaseChecks {
-  if (!checks) return false;
-  return (
-    checks.rules.length +
-      checks.toolCalls.length +
-      checks.forbiddenTools.length +
-      checks.readbacks.length >
-    0
-  );
-}
-
 // DEV_NOTE: Expected values as the case stores them (JSON), name: value
 function valuesText(values: Record<string, Schemas.EvalCaseJsonValue>): string {
   return Object.entries(values)
@@ -74,7 +63,6 @@ function keyedByContent<T>(items: T[]): { key: string; item: T }[] {
 
 // DEV_NOTE: The case's checks besides the rubric, read-only (they're written with the case, never on this form)
 function EvalCaseChecksList({ checks }: Schemas.DashboardEvalCaseChecksProps) {
-  const usesTag = JSON.stringify(checks).includes(Schemas.EVAL_CASE_TAG_PLACEHOLDER);
   return (
     <div className="flex flex-col gap-2">
       <p className="text-body font-medium text-foreground">Also checks</p>
@@ -105,18 +93,12 @@ function EvalCaseChecksList({ checks }: Schemas.DashboardEvalCaseChecksProps) {
         ))}
         {checks.readbacks.map((readback) => (
           <li key={`readback-${readback.toolName}`} className="break-words">
-            After the run, the record{" "}
-            <span className="font-mono text-mono-value">{readback.toolName}</span> changed shows{" "}
+            After the run, the record saved by{" "}
+            <span className="font-mono text-mono-value">{readback.toolName}</span> shows{" "}
             <span className="font-mono text-mono-value">{valuesText(readback.expect)}</span>
           </li>
         ))}
       </ul>
-      {usesTag && (
-        <p className="text-caption text-muted-foreground">
-          <span className="font-mono text-mono-value">{Schemas.EVAL_CASE_TAG_PLACEHOLDER}</span>{" "}
-          becomes a new name in every attempt.
-        </p>
-      )}
     </div>
   );
 }
@@ -141,7 +123,11 @@ export function EvalCaseForm({
   const [messageKeys, setMessageKeys] = useState(() =>
     defaultValues.messages.map(() => crypto.randomUUID()),
   );
-  const isRubricOptional = hasChecks(checks);
+  // DEV_NOTE: The case's other checks, if it has any (listed read-only; with them the rubric may be blank)
+  const otherChecks = checks && Schemas.hasEvalCaseChecks(checks) ? checks : null;
+  const isRubricOptional = otherChecks !== null;
+  const isTagInChecks =
+    otherChecks !== null && JSON.stringify(otherChecks).includes(Schemas.EVAL_CASE_TAG_PLACEHOLDER);
   const form = useForm({
     defaultValues,
     onSubmit: async ({ value }) => {
@@ -256,6 +242,17 @@ export function EvalCaseForm({
                 </div>
               )}
               <FieldError errors={errorsOf(messagesField.state.meta.errors)} />
+              {(isTagInChecks ||
+                messages.some((message) =>
+                  message.text.includes(Schemas.EVAL_CASE_TAG_PLACEHOLDER),
+                )) && (
+                <p className="text-caption text-muted-foreground">
+                  <span className="font-mono text-mono-value">
+                    {Schemas.EVAL_CASE_TAG_PLACEHOLDER}
+                  </span>{" "}
+                  becomes a new name in every attempt.
+                </p>
+              )}
             </div>
           );
         }}
@@ -282,7 +279,7 @@ export function EvalCaseForm({
           </Field>
         )}
       </form.Field>
-      {hasChecks(checks) && <EvalCaseChecksList checks={checks} />}
+      {otherChecks && <EvalCaseChecksList checks={otherChecks} />}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel

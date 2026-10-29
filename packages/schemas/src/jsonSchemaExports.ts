@@ -23,8 +23,12 @@ import {
 // `pnpm evals:check` fails when it no longer matches them or the samples in jsonSchemaContractSamples.ts.
 // The JSON Schema is NOT the full contract: refinements (superRefine) have no JSON Schema form and are dropped.
 // For the config spec that is: no duplicate procedure / tool / knowledge source, approval rules name only pinned
-// tools; for eval case expectations: at least one check, the tool rules of ZEvalCaseExpectationsV2, a reserved tool
-// name. A body valid against the JSON Schema can still be rejected by loadConfigSpec / normalizeConfigBody.
+// tools; for eval case expectations: at least one check, forbidden tools unique and never expected, a readback per
+// tool at most and only of a tool expected exactly once, the whole body ≤ EVAL_CASE_EXPECTATIONS_MAX_CHARS as JSON,
+// and the reserved tool name (the counts of args / expect values, at most EVAL_CASE_MAX_VALUES and at least one
+// expect value, are exported as maxProperties / minProperties). Numbers are JSON numbers on both sides (float in
+// Python): when the harness compares an expected value with what it read, it must compare JSON types too, since in
+// Python True == 1 and 1 == 1.0. A body valid against the JSON Schema can still be rejected by loadConfigSpec / normalizeConfigBody.
 export interface JsonSchemaExport {
   fileName: string;
   title: string;

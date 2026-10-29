@@ -1,8 +1,12 @@
-"""The generated types refuse and accept exactly what packages/schemas does (M5-1).
+"""The generated types agree with packages/schemas on the contract samples (M5-1).
 
 evals/fixtures/contract-samples.json is written by `pnpm --filter @app/schemas schema:export` from
 packages/schemas/src/jsonSchemaContractSamples.ts, whose test holds the same bodies to the Zod schemas. Bodies are
 read as JSON in strict mode, the way the harness reads them: a "2" is never an int.
+
+Only the shape is shared: types, enums, required fields, sizes, patterns and counts. Zod's refinements have no JSON
+Schema form, so a body that only a refinement refuses passes here (see jsonSchemaExports.ts for the list); cases are
+only written through packages/schemas.
 """
 
 import importlib

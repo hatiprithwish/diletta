@@ -86,9 +86,10 @@ A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 bod
 ## Cases
 
 - **New case** saves `input = {schemaVersion: 1, messages}` and `expectations` at the current version (2) with the rubric and no other checks, for the `botId` chatbot, else the default one. It is active and never a safety case. Quality's Create test saves the same shape.
-- **Edit** locks the case and merges a new conversation or rubric into the stored body, read through `Schemas.readEvalCaseBody` (a v1 body is upgraded on read), and writes it with `toEvalCase` at the current version. Its other checks (rules, tool calls, forbidden tools, readbacks) are kept as stored and listed read-only under "Also checks". A save that changes nothing writes nothing, so a v1 row stays v1 until an edit changes it. Possible refusals (409, nothing written):
-  - `NotEditable`: the stored body can't be read.
-  - `NothingToCheck`: the rubric was cleared on a case with no other check.
+- **Edit** locks the case and merges a new conversation or rubric into the stored body, read through `Schemas.readEvalCaseBody` (a v1 body is upgraded on read), and writes it with `toEvalCase` at the current version. Its other checks (rules, tool calls, forbidden tools, readbacks) are kept as stored and listed read-only under "Also checks". A save that changes nothing writes nothing, so a v1 row stays v1 until an edit changes it. Possible refusals (nothing written):
+  - `NotEditable` (409): the stored body can't be read.
+  - `NothingToCheck` (409): the rubric was cleared on a case with no other check.
+  - `TooLong` (400): the new rubric takes the expectations over `EVAL_CASE_EXPECTATIONS_MAX_CHARS` (20 000 characters as JSON, rubric included).
   - Turning the case on or off still works either way.
 - **Platform cases** (`company_id` null) show on every company's list, marked Platform. They are read-only: an edit answers 404.
 - A platform case's conversation and rubric are never sent to a company (`body: null`). They include the safety cases that gate publishing (M5-4), and a company that could read the exact prompts and pass criteria could tune a config to the test instead of to the behaviour.
@@ -134,7 +135,8 @@ The `Evals Contract` workflow runs steps 2 to 4 as checks on every PR that touch
 Notes for the harness:
 
 - Read bodies with `model_validate_json(…, strict=True)`.
-- Refinements have no JSON Schema form, so the Python types don't enforce them. That covers "checks at least one thing", the readback / forbidden tool rules and the reserved tool name. Cases are only written through `packages/schemas`.
+- Numbers are floats in the generated types, as in JavaScript. When you compare an expected value with what the chatbot sent or the host returned, compare the JSON types too: in Python `True == 1` and `1 == 1.0`.
+- Refinements have no JSON Schema form, so the Python types don't enforce them. That covers "checks at least one thing", the readback / forbidden tool rules, the 20 000-character cap on the whole expectations body and the reserved tool name. The value counts (at most 50 args or expect values, at least one expect value) are enforced on both sides. Cases are only written through `packages/schemas`.
 - Cases reach the harness already upgraded to the current version.
 
 ## Troubleshooting

@@ -541,7 +541,7 @@ describe("Tests page, a case with tool checks", () => {
     expect(within(dialog).getByText("amount: 120")).toBeInTheDocument();
     expect(within(dialog).getByText(/Never calls/)).toHaveTextContent("Never calls delete_record");
     expect(within(dialog).getByText(/After the run/)).toHaveTextContent(
-      `create_record changed shows name: "Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}"`,
+      `After the run, the record saved by create_record shows name: "Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}"`,
     );
     expect(within(dialog).getByText(/becomes a new name in every attempt/)).toBeInTheDocument();
 
@@ -558,6 +558,52 @@ describe("Tests page, a case with tool checks", () => {
       messages: [{ role: User, text: `${TOOL_DETAIL.body!.messages[0]!.text} now` }],
       rubric: null,
     });
+  });
+});
+
+describe("Tests page, case form hints and refusals", () => {
+  it("explains the tag once a message uses it, though no check does", async () => {
+    mockApi(defaultApi);
+    renderPage("/tests?tab=cases");
+    await userEvent.click(
+      await screen.findByRole("button", { name: `Actions for ${OWN_CASE.name}` }),
+    );
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit case" });
+    await within(dialog).findByLabelText("What a good reply does");
+    expect(
+      within(dialog).queryByText(/becomes a new name in every attempt/),
+    ).not.toBeInTheDocument();
+    // DEV_NOTE: {{ types a literal {
+    await userEvent.type(within(dialog).getByLabelText("User"), " for Drill {{case.tag}");
+    expect(within(dialog).getByText(/becomes a new name in every attempt/)).toBeInTheDocument();
+  });
+
+  it("says a rubric that makes the case too long wasn't saved", async () => {
+    mockApi((url, init) =>
+      url.endsWith("/eval-cases/case_tool") && init?.method === "PATCH"
+        ? {
+            status: 400,
+            body: { isSuccess: false, failure: Schemas.EvalCaseUpdateFailureEnum.TooLong },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/tests?tab=cases");
+    await userEvent.click(
+      await screen.findByRole("button", { name: `Actions for ${TOOL_CASE.name}` }),
+    );
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit case" });
+    await userEvent.type(
+      await within(dialog).findByLabelText("What a good reply does (optional)"),
+      "Confirms it.",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save case" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "This case is too long to save. Shorten what a good reply does. Nothing changed.",
+      ),
+    );
   });
 });
 

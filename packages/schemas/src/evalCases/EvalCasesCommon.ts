@@ -105,12 +105,14 @@ const ZEvalCaseJsonValue: z.ZodType<EvalCaseJsonValue> = z
   .meta({ id: "EvalCaseJsonValue" });
 
 // DEV_NOTE: Arg name → the JSON value expected (an arg the tool's input_schema declares; a readback's keys are the
-// tool's readback_op.compare keys, which are arg names too)
+// tool's readback_op.compare keys, which are arg names too). The meta carries the count limits into the exported JSON
+// Schema (maxProperties / minProperties), so the Python types hold them too; the refinements hold them here.
 const ZEvalCaseValues = z
   .record(z.string().min(1), ZEvalCaseJsonValue)
   .refine((values) => Object.keys(values).length <= EVAL_CASE_MAX_VALUES, {
     message: `At most ${EVAL_CASE_MAX_VALUES} values`,
-  });
+  })
+  .meta({ maxProperties: EVAL_CASE_MAX_VALUES });
 
 // DEV_NOTE: A tool call the chatbot must make in the attempt (grader check kind tool_call). args is a partial match: each
 // listed arg must deep-equal the call's (after the tag is filled), unlisted args are ignored, {} = any args. Each
@@ -130,14 +132,36 @@ export const ZEvalCaseReadback = z.object({
   toolName: ZToolDefinitionName,
   expect: ZEvalCaseValues.refine((values) => Object.keys(values).length > 0, {
     message: "Expect at least one value",
-  }),
+  }).meta({ minProperties: 1, maxProperties: EVAL_CASE_MAX_VALUES }),
 });
 export type EvalCaseReadback = z.infer<typeof ZEvalCaseReadback>;
 
+// DEV_NOTE: Whether a case checks anything besides its rubric: the one test for it (the schema, toEvalCase, the case
+// form)
+export function hasEvalCaseChecks(checks: {
+  rules: unknown[];
+  toolCalls: unknown[];
+  forbiddenTools: unknown[];
+  readbacks: unknown[];
+}): boolean {
+  return (
+    checks.rules.length > 0 ||
+    checks.toolCalls.length > 0 ||
+    checks.forbiddenTools.length > 0 ||
+    checks.readbacks.length > 0
+  );
+}
+
+// DEV_NOTE: Whether an expectations body is over EVAL_CASE_EXPECTATIONS_MAX_CHARS as JSON (rubric included)
+export function isEvalCaseExpectationsTooLong(body: unknown): boolean {
+  return JSON.stringify(body).length > EVAL_CASE_EXPECTATIONS_MAX_CHARS;
+}
+
 // DEV_NOTE: v2 (M5-1). rubric = what the pinned LLM judge grades the reply on (check kind judge), null = no judge for
 // this case; rules, toolCalls, forbiddenTools (tools that must never run in the attempt, check kind forbidden_tool) and
-// readbacks are deterministic. A case checks at least one thing. The refinements below have no JSON Schema form, so
-// the Python types don't hold them: cases are only written through this schema.
+// readbacks are deterministic. A case checks at least one thing. The refinements below (at least one check, the
+// forbidden tool and readback rules, the whole-body cap, plus the reserved tool name) have no JSON Schema form, so the
+// Python types don't hold them: cases are only written through this schema.
 export const ZEvalCaseExpectationsV2 = z
   .object({
     schemaVersion: z.literal(EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION),
@@ -148,13 +172,8 @@ export const ZEvalCaseExpectationsV2 = z
     readbacks: z.array(ZEvalCaseReadback).max(EVAL_CASE_MAX_READBACKS),
   })
   .superRefine((body, ctx) => {
-    const isEmpty =
-      body.rubric === null &&
-      body.rules.length === 0 &&
-      body.toolCalls.length === 0 &&
-      body.forbiddenTools.length === 0 &&
-      body.readbacks.length === 0;
-    if (isEmpty) ctx.addIssue({ code: "custom", message: "The case checks nothing" });
+    if (body.rubric === null && !hasEvalCaseChecks(body))
+      ctx.addIssue({ code: "custom", message: "The case checks nothing" });
 
     if (new Set(body.forbiddenTools).size !== body.forbiddenTools.length) {
       ctx.addIssue({ code: "custom", path: ["forbiddenTools"], message: "A tool is listed twice" });
@@ -187,7 +206,7 @@ export const ZEvalCaseExpectationsV2 = z
         });
       }
     });
-    if (JSON.stringify(body).length > EVAL_CASE_EXPECTATIONS_MAX_CHARS) {
+    if (isEvalCaseExpectationsTooLong(body)) {
       ctx.addIssue({ code: "custom", message: "The expectations are too long" });
     }
   });
@@ -208,15 +227,18 @@ export const EVAL_CASE_NO_CHECKS: EvalCaseChecks = {
 // version it upgrades FROM, one per version below EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION (as ConfigSpecRegistry).
 // Bumping: add ZEvalCaseExpectationsV<n+1>, set EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION, register the upgrader from n,
 // add an upgrade test, run `pnpm --filter @app/schemas schema:export` and `pnpm evals:types`.
-type EvalCaseExpectationsUpgrader = (body: unknown) => unknown;
+type EvalCaseExpectationsUpgradeResult = { isSuccess: true; body: unknown } | { isSuccess: false };
+type EvalCaseExpectationsUpgrader = (body: unknown) => EvalCaseExpectationsUpgradeResult;
 
+// DEV_NOTE: The upgrade receives the stored body parsed by its own version's schema, so no upgrader handles an invalid
+// old body: one its version refuses is a failure
 function defineEvalCaseExpectationsUpgrader<TFrom extends z.ZodType>(
   fromSchema: TFrom,
   upgrade: (body: z.output<TFrom>) => unknown,
 ): EvalCaseExpectationsUpgrader {
   return (body) => {
     const parsed = fromSchema.safeParse(body);
-    return parsed.success ? upgrade(parsed.data) : null;
+    return parsed.success ? { isSuccess: true, body: upgrade(parsed.data) } : { isSuccess: false };
   };
 }
 
@@ -248,8 +270,9 @@ export function loadEvalCaseExpectations(value: unknown): EvalCaseExpectations |
   ) {
     const upgrade = EVAL_CASE_EXPECTATIONS_UPGRADERS[from];
     if (!upgrade) return null;
-    body = upgrade(body);
-    if (body === null) return null;
+    const upgraded = upgrade(body);
+    if (!upgraded.isSuccess) return null;
+    body = upgraded.body;
   }
   const parsed = ZEvalCaseExpectationsV2.safeParse(body);
   return parsed.success ? parsed.data : null;
@@ -302,18 +325,49 @@ export function readEvalCaseBody(input: unknown, expectations: unknown): EvalCas
   return { messages: parsedInput.data.messages, rubric, checks };
 }
 
-// DEV_NOTE: The input (v1) and expectations (current version) of a body, as they are stored. null = the body checks
-// nothing or breaks a rule of the expectations schema, so it is never stored.
-export function toEvalCase(
-  body: EvalCaseBody,
-): { input: EvalCaseInputV1; expectations: EvalCaseExpectations } | null {
-  const expectations = ZEvalCaseExpectationsV2.safeParse({
+// DEV_NOTE: Why toEvalCase stores nothing: NothingToCheck = no rubric and no other check; TooLong = the expectations
+// are over EVAL_CASE_EXPECTATIONS_MAX_CHARS as JSON; Invalid = any other rule of the expectations schema
+export enum EvalCaseWriteFailureEnum {
+  NothingToCheck = "NothingToCheck",
+  TooLong = "TooLong",
+  Invalid = "Invalid",
+}
+
+export type EvalCaseWriteResult =
+  | { isSuccess: true; input: EvalCaseInputV1; expectations: EvalCaseExpectations }
+  | { isSuccess: false; failure: EvalCaseWriteFailureEnum; message: string };
+
+// DEV_NOTE: The input (v1) and expectations (current version) of a body, as they are stored, or why it can't be
+export function toEvalCase(body: EvalCaseBody): EvalCaseWriteResult {
+  if (body.rubric === null && !hasEvalCaseChecks(body.checks)) {
+    return {
+      isSuccess: false,
+      failure: EvalCaseWriteFailureEnum.NothingToCheck,
+      message: "The case checks nothing",
+    };
+  }
+  const candidate = {
     schemaVersion: EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
     rubric: body.rubric,
     ...body.checks,
-  });
-  if (!expectations.success) return null;
+  };
+  if (isEvalCaseExpectationsTooLong(candidate)) {
+    return {
+      isSuccess: false,
+      failure: EvalCaseWriteFailureEnum.TooLong,
+      message: "The case's checks are too long",
+    };
+  }
+  const expectations = ZEvalCaseExpectationsV2.safeParse(candidate);
+  if (!expectations.success) {
+    return {
+      isSuccess: false,
+      failure: EvalCaseWriteFailureEnum.Invalid,
+      message: z.prettifyError(expectations.error),
+    };
+  }
   return {
+    isSuccess: true,
     input: { schemaVersion: EVAL_CASE_INPUT_SCHEMA_VERSION, messages: body.messages },
     expectations: expectations.data,
   };
@@ -329,10 +383,30 @@ export const ZEvalCaseSortColumn = z.enum(EvalCaseSortColumn);
 // DEV_NOTE: The Cases tab's rows per page
 export const EVAL_CASES_PAGE_SIZE = 25;
 
-// DEV_NOTE: Why an edit changed nothing (409): NotEditable = the stored conversation or rubric is a shape this page
-// can't rewrite (readEvalCaseBody null; turning the case on or off still works); NothingToCheck = the rubric was
-// cleared on a case with no other check left.
+// DEV_NOTE: Why an edit changed nothing (nothing in the request is written): NotEditable = the stored conversation or
+// rubric is a shape this page can't rewrite (readEvalCaseBody null; turning the case on or off still works);
+// NothingToCheck = the rubric was cleared on a case with no other check left; TooLong = the new rubric takes the case's
+// expectations over EVAL_CASE_EXPECTATIONS_MAX_CHARS (its other checks are kept, so a shorter rubric fits).
 export enum EvalCaseUpdateFailureEnum {
   NotEditable = "NotEditable",
   NothingToCheck = "NothingToCheck",
+  TooLong = "TooLong",
 }
+
+export const EVAL_CASE_UPDATE_FAILURE_HTTP_STATUS_MAP: Record<
+  EvalCaseUpdateFailureEnum,
+  400 | 409
+> = {
+  [EvalCaseUpdateFailureEnum.NotEditable]: 409,
+  [EvalCaseUpdateFailureEnum.NothingToCheck]: 409,
+  [EvalCaseUpdateFailureEnum.TooLong]: 400,
+};
+
+// DEV_NOTE: The edit refusal for each reason toEvalCase stores nothing; Invalid has none (on an edit the other checks
+// come from a stored body the schema accepted, so it would be a server error)
+export const EVAL_CASE_UPDATE_FAILURE_BY_WRITE_FAILURE: Partial<
+  Record<EvalCaseWriteFailureEnum, EvalCaseUpdateFailureEnum>
+> = {
+  [EvalCaseWriteFailureEnum.NothingToCheck]: EvalCaseUpdateFailureEnum.NothingToCheck,
+  [EvalCaseWriteFailureEnum.TooLong]: EvalCaseUpdateFailureEnum.TooLong,
+};

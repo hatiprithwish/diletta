@@ -440,19 +440,21 @@ export default class QualityIssuesRepo {
       if (!open.isSuccess) return open.response;
       const { row } = open;
 
-      // DEV_NOTE: Never null: a rubric alone is a check, and the request held the draft to its schema
+      // DEV_NOTE: Can't fail: a rubric alone is a check, within the size cap, and the request held the draft to its
+      // schema. If it ever did, it is a server error (as the Tests page's New case)
       const stored = Schemas.toEvalCase({
         messages: draft.messages,
         rubric: draft.rubric,
         checks: Schemas.EVAL_CASE_NO_CHECKS,
       });
-      if (!stored) throw new TenantRollbackError("The case checks nothing");
+      if (!stored.isSuccess) throw new TenantRollbackError(stored.message);
 
       const created = await this.evalCasesDal.createEvalCase(tx, {
         companyId,
         chatbotId: row.chatbotId,
         name: draft.name,
-        ...stored,
+        input: stored.input,
+        expectations: stored.expectations,
       });
       // DEV_NOTE: The chatbot was removed: nothing was written yet, so this is a refusal, not a rollback
       if (created.isNotFound) {

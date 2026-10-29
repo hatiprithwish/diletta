@@ -61,7 +61,8 @@
             },
             "additionalProperties": {
               "$ref": "#/$defs/EvalCaseJsonValue"
-            }
+            },
+            "maxProperties": 50
           }
         },
         "required": [
@@ -96,7 +97,9 @@
             },
             "additionalProperties": {
               "$ref": "#/$defs/EvalCaseJsonValue"
-            }
+            },
+            "maxProperties": 50,
+            "minProperties": 1
           }
         },
         "required": [
