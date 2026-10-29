@@ -178,6 +178,33 @@ export default class CompanyConnectionsRepo {
     };
   }
 
+  // DEV_NOTE: Settings › Connections (M4-10): the Security view plus the API address and the sign-in method in words
+  // (Schemas.companyConnectionSignInLabel). Never auth_config or a credential. Same order as Security.
+  async getSettingsConnections(params: {
+    companyId: string;
+  }): Promise<Schemas.GetSettingsConnectionsApiResponse> {
+    const listed = await withTenant(this.db, params.companyId, async (tx) => {
+      return await this.dal.getCompanyConnections(tx, params);
+    });
+    if (!listed.isSuccess || !("companyConnections" in listed) || !listed.companyConnections) {
+      return { isSuccess: false, message: listed.message };
+    }
+    const sorted = [...listed.companyConnections].sort(
+      (a, b) => a.environment - b.environment || a.createdAt.getTime() - b.createdAt.getTime(),
+    );
+    return {
+      isSuccess: true,
+      message: "Connections fetched successfully",
+      connections: await Promise.all(
+        sorted.map(async (row) => ({
+          ...(await this.toSecurityConnection(row)),
+          baseUrl: row.baseUrl,
+          signInLabel: Schemas.companyConnectionSignInLabel(row.authType),
+        })),
+      ),
+    };
+  }
+
   // DEV_NOTE: Edit allowed origins: the whole list, replacing the stored one, with its audit row (M4-9) labelled with the
   // environment. The same origins again, in any order (the gate checks membership only), change nothing and record
   // nothing; the row is locked first, so two saves of one new list record one row. The widget gate reads the new list at the next

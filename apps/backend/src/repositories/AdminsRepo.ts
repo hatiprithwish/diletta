@@ -1,4 +1,5 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import AdminInvitesDAL from "@/data-access-layer/AdminInvitesDAL";
 import AdminsDAL from "@/data-access-layer/AdminsDAL";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import getDbClient from "@/db/dbClient";
@@ -20,12 +21,14 @@ export default class AdminsRepo {
   private db: NodePgDatabase;
   private dal: AdminsDAL;
   private companiesDal: CompaniesDAL;
+  private adminInvitesDal: AdminInvitesDAL;
 
   constructor(env: Env) {
     this.env = env;
     this.db = getDbClient(env);
     this.dal = new AdminsDAL();
     this.companiesDal = new CompaniesDAL();
+    this.adminInvitesDal = new AdminInvitesDAL();
   }
 
   private toContext(admin: Schemas.Admin): Schemas.AdminContext {
@@ -141,7 +144,7 @@ export default class AdminsRepo {
       return { isSuccess: false, message: clerkProfile.message };
     }
 
-    const { companyPublicId, email, name } = clerkProfile.profile;
+    const { companyPublicId, adminInvitePublicId, email, name } = clerkProfile.profile;
     if (!companyPublicId) {
       return { isSuccess: true, message: NO_ACCESS_MESSAGE };
     }
@@ -161,8 +164,29 @@ export default class AdminsRepo {
     // DEV_NOTE: Transactional flow — the invite is consumed before the admin row commits, so a failed Clerk call
     // rolls the row back (the user retries on the next load). Without this, deleting the row later would not
     // revoke access: the next /dashboard/me would re-provision from the same metadata.
+    // A dashboard invite (Settings › Team, M4-10) names its admin_invites row, and that row decides: it is locked (so
+    // a revoke at the same moment waits) and must still be Pending in this company, else no access and nothing is
+    // written; it becomes Accepted in the admin row's transaction.
     const company = invitedCompany.company;
     const created: Schemas.AdminDALResponse = await withTenant(this.db, company.id, async (tx) => {
+      if (adminInvitePublicId) {
+        const invite = await this.adminInvitesDal.getAdminInviteDetails(tx, {
+          companyId: company.id,
+          publicId: adminInvitePublicId,
+          isForUpdate: true,
+        });
+        if (!invite.isSuccess && !invite.isNotFound) return invite;
+        if (invite.adminInvite?.status !== Schemas.AdminInviteStatusIntEnum.Pending) {
+          return { isSuccess: true, message: NO_ACCESS_MESSAGE };
+        }
+        const accepted = await this.adminInvitesDal.updateAdminInviteStatus(tx, {
+          companyId: company.id,
+          publicId: adminInvitePublicId,
+          status: Schemas.AdminInviteStatusIntEnum.Accepted,
+        });
+        if (!accepted.isSuccess) throw new TenantRollbackError(accepted.message);
+      }
+
       const result = await this.dal.createAdmin(tx, {
         clerkUserId,
         companyId: company.id,
@@ -170,6 +194,8 @@ export default class AdminsRepo {
         name,
       });
       if (!result.isSuccess) {
+        // DEV_NOTE: The invite was just accepted in this transaction: it must not commit without its admin
+        if (adminInvitePublicId) throw new TenantRollbackError(result.message);
         return result;
       }
 
@@ -179,6 +205,9 @@ export default class AdminsRepo {
       }
       return result;
     });
+    if (created.isSuccess && !created.admin) {
+      return { isSuccess: true, message: NO_ACCESS_MESSAGE };
+    }
     if (!created.isSuccess || !created.admin) {
       return { isSuccess: false, message: created.message };
     }

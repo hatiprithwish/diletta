@@ -13,6 +13,8 @@ import {
 import * as Schemas from "@app/schemas";
 import { Route as ModelKeysRoute } from "@/routes/_authenticated/settings/model-keys/index";
 import { Route as BudgetRoute } from "@/routes/_authenticated/settings/budget/index";
+import { Route as ConnectionsRoute } from "@/routes/_authenticated/settings/connections/index";
+import { Route as TeamRoute } from "@/routes/_authenticated/settings/team/index";
 
 vi.mock("@clerk/tanstack-react-start", () => ({
   useAuth: () => ({
@@ -58,6 +60,52 @@ const BUDGET: Schemas.SpendingBudget = {
   usedUsd: "412.800000",
   periodStart: "2026-10-01T00:00:00.000Z",
   periodEnd: "2026-11-01T00:00:00.000Z",
+};
+
+const CONNECTION: Schemas.SettingsConnection = {
+  publicId: "conn_prod",
+  environment: Schemas.CompanyConnectionEnvironmentIntEnum.Production,
+  environmentLabel: Schemas.CompanyConnectionEnvironmentLabelEnum.Production,
+  status: Schemas.CompanyConnectionStatusIntEnum.Active,
+  statusLabel: Schemas.CompanyConnectionStatusLabelEnum.Active,
+  jwtIssuer: "https://api.eregister.example",
+  allowedOrigins: ["https://app.eregister.example"],
+  signingKeysFetchedAt: null,
+  baseUrl: "https://api.eregister.example/v1",
+  signInLabel: "Forward the user's token",
+};
+
+const TEAM: Schemas.Team = {
+  members: [
+    {
+      clerkUserId: "user_ana",
+      name: "Ana Ruiz",
+      email: "ana@northfield.example",
+      isYou: true,
+      lastActiveAt: new Date().toISOString(),
+      createdAt: "2026-09-01T09:00:00.000Z",
+    },
+    {
+      clerkUserId: "user_marcus",
+      name: "Marcus Lee",
+      email: "marcus@northfield.example",
+      isYou: false,
+      lastActiveAt: null,
+      createdAt: "2026-09-02T09:00:00.000Z",
+    },
+  ],
+  invites: [
+    {
+      publicId: "inv_priya",
+      email: "priya@northfield.example",
+      status: Schemas.AdminInviteStatusIntEnum.Pending,
+      statusLabel: Schemas.AdminInviteStatusLabelEnum.Pending,
+      isEmailed: true,
+      invitedByName: "Ana Ruiz",
+      createdAt: "2026-10-28T09:00:00.000Z",
+    },
+  ],
+  isLastActiveKnown: true,
 };
 
 type Handler = (url: string, init?: RequestInit) => { status: number; body: unknown } | null;
@@ -108,6 +156,38 @@ function defaultApi(url: string, init: RequestInit | undefined): { status: numbe
       },
     };
   }
+  if (url.endsWith("/dashboard/settings/connections")) {
+    return { status: 200, body: { isSuccess: true, connections: [CONNECTION] } };
+  }
+  if (url.includes("/dashboard/security/connections/conn_prod/origins")) {
+    const { allowedOrigins } = JSON.parse(String(init?.body)) as { allowedOrigins: string[] };
+    return {
+      status: 200,
+      body: {
+        isSuccess: true,
+        connection: { ...CONNECTION, baseUrl: undefined, signInLabel: undefined, allowedOrigins },
+      },
+    };
+  }
+  if (url.endsWith("/dashboard/settings/team")) {
+    return { status: 200, body: { isSuccess: true, team: TEAM } };
+  }
+  if (url.endsWith("/dashboard/settings/team/invites")) {
+    const { email } = JSON.parse(String(init?.body)) as { email: string };
+    return {
+      status: 201,
+      body: {
+        isSuccess: true,
+        invite: { ...TEAM.invites[0], publicId: "inv_new", email, isEmailed: false },
+      },
+    };
+  }
+  if (url.includes("/dashboard/settings/team/invites/inv_priya/revoke")) {
+    return { status: 200, body: { isSuccess: true } };
+  }
+  if (url.includes("/dashboard/settings/team/admins/user_marcus") && method === "DELETE") {
+    return { status: 200, body: { isSuccess: true } };
+  }
   return { status: 404, body: { isSuccess: false, message: `Unhandled ${method} ${url}` } };
 }
 
@@ -124,6 +204,16 @@ function renderPage(path: string) {
         getParentRoute: () => rootRoute,
         path: "/settings/budget",
         component: BudgetRoute.options.component,
+      }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/settings/connections",
+        component: ConnectionsRoute.options.component,
+      }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/settings/team",
+        component: TeamRoute.options.component,
       }),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
@@ -290,5 +380,108 @@ describe("Settings › Budget", () => {
     ).toEqual({ spendingBudgetUsd: 1500.5 });
     expect(await screen.findByText(/28%/)).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Budget saved. It applies within a minute.");
+  });
+});
+
+describe("Settings › Connections", () => {
+  it("shows each connection's address, sign-in and origins, and edits the origins", async () => {
+    const fetchMock = mockApi();
+    renderPage("/settings/connections");
+    const user = userEvent.setup();
+
+    const card = await screen.findByRole("group", { name: "Production connection" });
+    expect(within(card).getByText("https://api.eregister.example/v1")).toBeInTheDocument();
+    expect(within(card).getByText("Forward the user's token")).toBeInTheDocument();
+    expect(within(card).getByText("app.eregister.example")).toBeInTheDocument();
+
+    await user.click(within(card).getByRole("button", { name: "Edit Production origins" }));
+    const dialog = await screen.findByRole("dialog");
+    const origins = within(dialog).getByLabelText("Origins");
+    await user.clear(origins);
+    await user.type(origins, "https://app.eregister.example{enter}https://help.eregister.example");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(JSON.parse(String(calls(fetchMock, "PUT", "/origins")[0]?.[1]?.body))).toEqual({
+      allowedOrigins: ["https://app.eregister.example", "https://help.eregister.example"],
+    });
+    expect(await within(card).findByText("help.eregister.example")).toBeInTheDocument();
+    // DEV_NOTE: The answer is the Security view: the card keeps its address
+    expect(within(card).getByText("https://api.eregister.example/v1")).toBeInTheDocument();
+  });
+});
+
+describe("Settings › Team", () => {
+  it("lists the admins and the pending invites", async () => {
+    mockApi();
+    renderPage("/settings/team");
+
+    const team = await screen.findByRole("region", { name: "Team" });
+    expect(await within(team).findByText("Ana Ruiz")).toBeInTheDocument();
+    expect(within(team).getByText("(you)")).toBeInTheDocument();
+    expect(within(team).getByText("Not yet")).toBeInTheDocument();
+    expect(within(team).getByText("priya@northfield.example")).toBeInTheDocument();
+    expect(within(team).getByText("Invited")).toBeInTheDocument();
+    // DEV_NOTE: No actions on your own row
+    expect(within(team).queryByRole("button", { name: "Actions for Ana Ruiz" })).toBeNull();
+  });
+
+  it("invites, showing a refusal inline, then says when no email was sent", async () => {
+    let isRefused = true;
+    const fetchMock = mockApi((url, init) => {
+      if (url.endsWith("/team/invites") && init?.method === "POST" && isRefused) {
+        isRefused = false;
+        return {
+          status: 409,
+          body: { isSuccess: false, failure: Schemas.TeamFailureEnum.AlreadyAdmin },
+        };
+      }
+      return null;
+    });
+    renderPage("/settings/team");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Invite" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Email"), "jo@northfield.example");
+    await user.click(within(dialog).getByRole("button", { name: "Send invite" }));
+    expect(
+      await within(dialog).findByText(
+        "This person is already an admin, here or for another company.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Send invite" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(JSON.parse(String(calls(fetchMock, "POST", "/team/invites")[1]?.[1]?.body))).toEqual({
+      email: "jo@northfield.example",
+    });
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringContaining("No email was sent, so let them know."),
+    );
+  });
+
+  it("revokes an invite and removes an admin after confirming", async () => {
+    const fetchMock = mockApi();
+    renderPage("/settings/team");
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Actions for priya@northfield.example" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Revoke invite" }));
+    await user.click(await screen.findByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(calls(fetchMock, "POST", "/inv_priya/revoke")).toHaveLength(1));
+
+    await user.click(screen.getByRole("button", { name: "Actions for Marcus Lee" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Remove from team" }));
+    expect(await screen.findByText("Remove Marcus Lee?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() =>
+      expect(calls(fetchMock, "DELETE", "/team/admins/user_marcus")).toHaveLength(1),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Admin removed. They lose access from their next page load.",
+    );
   });
 });

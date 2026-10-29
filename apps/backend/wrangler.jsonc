@@ -12,6 +12,8 @@
   // AI_GATEWAY_TOKEN comes from .dev.vars locally and from a Secrets Store binding in each env.
   "vars": {
     "ALLOWED_CORS_ORIGIN": "http://localhost:3000",
+    // DEV_NOTE: The dashboard, where a Team invite lands (Clerk redirect to /auth/sign-up, M4-10)
+    "DASHBOARD_URL": "http://localhost:3000",
     "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
     "AI_GATEWAY_NAME": "diletta-staging",
   },
@@ -141,6 +143,8 @@
       ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "http://localhost:3000,https://diletta-web-staging.hatiprithwish.workers.dev",
+        // DEV_NOTE: The dashboard, where a Team invite lands (Clerk redirect to /auth/sign-up, M4-10)
+        "DASHBOARD_URL": "https://diletta-web-staging.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-staging",
       },
@@ -211,6 +215,8 @@
       ],
       "vars": {
         "ALLOWED_CORS_ORIGIN": "https://diletta-web.hatiprithwish.workers.dev",
+        // DEV_NOTE: The dashboard, where a Team invite lands (Clerk redirect to /auth/sign-up, M4-10)
+        "DASHBOARD_URL": "https://diletta-web.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-production",
       },

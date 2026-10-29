@@ -66,6 +66,13 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Created]: "Added model key",
     [Schemas.AuditEntityActionEnum.Rotated]: "Rotated model key",
   },
+  [Schemas.AuditEntityTypeEnum.AdminInvite]: {
+    [Schemas.AuditEntityActionEnum.Created]: "Invited admin",
+    [Schemas.AuditEntityActionEnum.Revoked]: "Revoked invite",
+  },
+  [Schemas.AuditEntityTypeEnum.Admin]: {
+    [Schemas.AuditEntityActionEnum.Removed]: "Removed admin",
+  },
   [Schemas.AuditEntityTypeEnum.ChatbotConfig]: {
     [Schemas.AuditEntityActionEnum.Created]: "Started a draft version",
     [Schemas.AuditEntityActionEnum.Updated]: "Edited a draft version",

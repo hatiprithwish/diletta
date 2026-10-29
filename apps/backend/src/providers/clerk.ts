@@ -5,9 +5,11 @@ import AppLogger from "@/providers/logger";
 
 let clerkClient: ClerkClient | undefined;
 
-// DEV_NOTE: Key in the Clerk invite's publicMetadata naming the company the invitee administers (M4-10 sets it).
-// publicMetadata is writable only from the Clerk backend, so a user can't set it on themselves.
-const COMPANY_PUBLIC_ID_METADATA_KEY = "companyPublicId";
+// DEV_NOTE: Keys in the Clerk user's publicMetadata naming the company the invitee administers and the admin_invites row
+// (Settings › Team, M4-10; Schemas.ADMIN_INVITE_METADATA_KEYS). publicMetadata is writable only from the Clerk backend,
+// so a user can't set it on themselves.
+const COMPANY_PUBLIC_ID_METADATA_KEY = Schemas.ADMIN_INVITE_METADATA_KEYS.companyPublicId;
+const ADMIN_INVITE_METADATA_KEY = Schemas.ADMIN_INVITE_METADATA_KEYS.adminInvitePublicId;
 
 export default class ClerkProvider {
   static getClerkClient(env: Env): ClerkClient {
@@ -28,6 +30,7 @@ export default class ClerkProvider {
     try {
       const user = await ClerkProvider.getClerkClient(env).users.getUser(clerkUserId);
       const companyPublicId = user.publicMetadata[COMPANY_PUBLIC_ID_METADATA_KEY];
+      const adminInvitePublicId = user.publicMetadata[ADMIN_INVITE_METADATA_KEY];
 
       return {
         isSuccess: true,
@@ -36,6 +39,7 @@ export default class ClerkProvider {
             user.primaryEmailAddress?.emailAddress ?? user.emailAddresses[0]?.emailAddress ?? null,
           name: user.fullName,
           companyPublicId: typeof companyPublicId === "string" ? companyPublicId : null,
+          adminInvitePublicId: typeof adminInvitePublicId === "string" ? adminInvitePublicId : null,
         },
       };
     } catch (error) {
@@ -57,7 +61,10 @@ export default class ClerkProvider {
   static async consumeInvite(env: Env, clerkUserId: string): Promise<Schemas.ApiResponse> {
     try {
       await ClerkProvider.getClerkClient(env).users.updateUserMetadata(clerkUserId, {
-        publicMetadata: { [COMPANY_PUBLIC_ID_METADATA_KEY]: null },
+        publicMetadata: {
+          [COMPANY_PUBLIC_ID_METADATA_KEY]: null,
+          [ADMIN_INVITE_METADATA_KEY]: null,
+        },
       });
       return { isSuccess: true };
     } catch (error) {
@@ -68,6 +75,159 @@ export default class ClerkProvider {
         message,
         error,
         metadata: { clerkUserId },
+      });
+      return { isSuccess: false, message };
+    }
+  }
+
+  // ─── Settings › Team (M4-10). Every method never throws; emails stay out of the logs (PII).
+
+  // DEV_NOTE: The Clerk account that owns an email, or null when nobody has signed up with it
+  static async findUserByEmail(env: Env, email: string): Promise<Schemas.ClerkUserLookupResponse> {
+    try {
+      const { data } = await ClerkProvider.getClerkClient(env).users.getUserList({
+        emailAddress: [email],
+        limit: 1,
+      });
+      return { isSuccess: true, clerkUserId: data[0]?.id ?? null };
+    } catch (error) {
+      const message = "Unknown error in finding Clerk user by email";
+      AppLogger.error({
+        category: Schemas.LogCategory.Authz,
+        action: Schemas.LogAction.FindClerkUserByEmail,
+        message,
+        error,
+      });
+      return { isSuccess: false, message };
+    }
+  }
+
+  // DEV_NOTE: An emailed invitation for a new account. Accepting it signs the invitee up with the invite's metadata,
+  // which their first /dashboard/me reads (AdminsRepo.provisionAdmin). ignoreExisting: another company's pending
+  // invitation to the same email doesn't block this one (the admin_invites row decides which is honoured).
+  static async createInvitation(
+    env: Env,
+    params: { email: string; companyPublicId: string; adminInvitePublicId: string },
+  ): Promise<Schemas.ClerkInvitationResponse> {
+    try {
+      const invitation = await ClerkProvider.getClerkClient(env).invitations.createInvitation({
+        emailAddress: params.email,
+        redirectUrl: `${env.DASHBOARD_URL}/auth/sign-up`,
+        publicMetadata: {
+          [COMPANY_PUBLIC_ID_METADATA_KEY]: params.companyPublicId,
+          [ADMIN_INVITE_METADATA_KEY]: params.adminInvitePublicId,
+        },
+        notify: true,
+        ignoreExisting: true,
+      });
+      return { isSuccess: true, invitationId: invitation.id };
+    } catch (error) {
+      const message = "Unknown error in creating Clerk invitation";
+      AppLogger.error({
+        category: Schemas.LogCategory.Authz,
+        action: Schemas.LogAction.CreateClerkInvitation,
+        message,
+        error,
+        metadata: { adminInvitePublicId: params.adminInvitePublicId },
+      });
+      return { isSuccess: false, message };
+    }
+  }
+
+  // DEV_NOTE: An existing account gets the invite's metadata directly (Clerk won't invite an existing user); their next
+  // sign-in provisions them. No email is sent.
+  static async grantInvite(
+    env: Env,
+    params: { clerkUserId: string; companyPublicId: string; adminInvitePublicId: string },
+  ): Promise<Schemas.ApiResponse> {
+    try {
+      await ClerkProvider.getClerkClient(env).users.updateUserMetadata(params.clerkUserId, {
+        publicMetadata: {
+          [COMPANY_PUBLIC_ID_METADATA_KEY]: params.companyPublicId,
+          [ADMIN_INVITE_METADATA_KEY]: params.adminInvitePublicId,
+        },
+      });
+      return { isSuccess: true };
+    } catch (error) {
+      const message = "Unknown error in granting Clerk invite";
+      AppLogger.error({
+        category: Schemas.LogCategory.Authz,
+        action: Schemas.LogAction.GrantClerkInvite,
+        message,
+        error,
+        metadata: {
+          clerkUserId: params.clerkUserId,
+          adminInvitePublicId: params.adminInvitePublicId,
+        },
+      });
+      return { isSuccess: false, message };
+    }
+  }
+
+  // DEV_NOTE: Revoke invite: the emailed invitation is revoked; a granted account loses the metadata only while it
+  // still names this invite (a later invite from another company may have replaced it). Either way the admin_invites
+  // row, now Revoked, already refuses a sign-in.
+  static async revokeInvite(
+    env: Env,
+    params: {
+      clerkInvitationId: string | null;
+      clerkUserId: string | null;
+      adminInvitePublicId: string;
+    },
+  ): Promise<Schemas.ApiResponse> {
+    try {
+      const client = ClerkProvider.getClerkClient(env);
+      if (params.clerkInvitationId) {
+        await client.invitations.revokeInvitation(params.clerkInvitationId);
+      }
+      if (params.clerkUserId) {
+        const user = await client.users.getUser(params.clerkUserId);
+        if (user.publicMetadata[ADMIN_INVITE_METADATA_KEY] === params.adminInvitePublicId) {
+          await client.users.updateUserMetadata(params.clerkUserId, {
+            publicMetadata: {
+              [COMPANY_PUBLIC_ID_METADATA_KEY]: null,
+              [ADMIN_INVITE_METADATA_KEY]: null,
+            },
+          });
+        }
+      }
+      return { isSuccess: true };
+    } catch (error) {
+      const message = "Unknown error in revoking Clerk invite";
+      AppLogger.error({
+        category: Schemas.LogCategory.Authz,
+        action: Schemas.LogAction.RevokeClerkInvite,
+        message,
+        error,
+        metadata: { adminInvitePublicId: params.adminInvitePublicId },
+      });
+      return { isSuccess: false, message };
+    }
+  }
+
+  // DEV_NOTE: When each admin was last active, in one call (at most TEAM_ADMINS_MAX ids, under Clerk's page limit)
+  static async getLastActive(
+    env: Env,
+    clerkUserIds: string[],
+  ): Promise<Schemas.ClerkLastActiveResponse> {
+    if (clerkUserIds.length === 0) return { isSuccess: true, lastActiveAt: {} };
+    try {
+      const { data } = await ClerkProvider.getClerkClient(env).users.getUserList({
+        userId: clerkUserIds,
+        limit: clerkUserIds.length,
+      });
+      return {
+        isSuccess: true,
+        lastActiveAt: Object.fromEntries(data.map((user) => [user.id, user.lastActiveAt])),
+      };
+    } catch (error) {
+      const message = "Unknown error in reading Clerk last active";
+      AppLogger.error({
+        category: Schemas.LogCategory.Authz,
+        action: Schemas.LogAction.GetClerkLastActive,
+        message,
+        error,
+        metadata: { count: clerkUserIds.length },
       });
       return { isSuccess: false, message };
     }

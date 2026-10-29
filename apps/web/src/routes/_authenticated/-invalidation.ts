@@ -10,7 +10,11 @@ export const QUERY_KEY_ROOTS = {
   tests: ["tests"],
   security: ["security"],
   bots: ["bots"],
+  connections: ["connections"],
 } as const;
+
+// DEV_NOTE: The Security page's key segment that Settings › Connections refreshes (SecurityQueries.keys builds from it)
+export const SECURITY_KEY_SEGMENTS = { connections: "connections" } as const;
 
 // DEV_NOTE: The Bots page's key segments that another page refreshes (BotsQueries.keys builds its keys from them)
 export const BOTS_KEY_SEGMENTS = { options: "options" } as const;

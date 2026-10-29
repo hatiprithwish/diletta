@@ -7,14 +7,17 @@ import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import {
   activityLog,
+  adminInvites,
   admins,
   companies,
+  companyConnections,
   companyEncryptionKeys,
   companySecrets,
   eventOutbox,
   modelCalls,
 } from "@/db/tables";
 import AiGatewayProvider from "@/providers/aiGateway";
+import ClerkProvider from "@/providers/clerk";
 import AppLogger from "@/providers/logger";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
@@ -34,7 +37,8 @@ vi.mock("@/providers/logger", () => ({
 }));
 
 // DEV_NOTE: Clerk stand-in. "Authorization: Bearer <clerkUserId>" signs in as that Clerk user; no header is
-// signed out. Nobody here has invite metadata, so /dashboard/me never provisions.
+// signed out. Nobody here has invite metadata, so /dashboard/me never provisions. The Team methods (M4-10) answer as
+// for a new email with nobody active; a test spies on one to change its answer.
 vi.mock("@/providers/clerk", () => ({
   default: {
     getClerkClient: () => ({
@@ -54,6 +58,11 @@ vi.mock("@/providers/clerk", () => ({
       profile: { email: null, name: null, companyPublicId: null },
     }),
     consumeInvite: async () => ({ isSuccess: true }),
+    findUserByEmail: async () => ({ isSuccess: true, clerkUserId: null }),
+    createInvitation: async () => ({ isSuccess: true, invitationId: `inv_${crypto.randomUUID()}` }),
+    grantInvite: async () => ({ isSuccess: true }),
+    revokeInvite: async () => ({ isSuccess: true }),
+    getLastActive: async () => ({ isSuccess: true, lastActiveAt: {} }),
   },
 }));
 
@@ -66,12 +75,17 @@ const ownerDatabaseUrl =
 const operator = `user_op_${crypto.randomUUID()}`;
 const adminA = `user_a_${crypto.randomUUID()}`;
 const adminB = `user_b_${crypto.randomUUID()}`;
+const adminA2 = `user_a2_${crypto.randomUUID()}`;
+const existingClerkUser = `user_existing_${crypto.randomUUID()}`;
 const ANTHROPIC_KEY = `sk-ant-${crypto.randomUUID()}`;
 const ROTATED_KEY = `sk-ant-${crypto.randomUUID()}`;
 let companyA = "";
 let companyB = "";
 
 type Body = Record<string, unknown> &
+  Schemas.GetSettingsConnectionsApiResponse &
+  Schemas.GetTeamApiResponse &
+  Schemas.TeamWriteApiResponse &
   Schemas.GetModelKeysApiResponse &
   Schemas.ModelKeyWriteApiResponse &
   Schemas.GetSpendingBudgetApiResponse;
@@ -166,7 +180,39 @@ beforeAll(async () => {
       { clerkUserId: operator, companyId: null },
       { clerkUserId: adminA, companyId: companyA, name: "Ana Ruiz" },
       { clerkUserId: adminB, companyId: companyB },
+      {
+        clerkUserId: adminA2,
+        companyId: companyA,
+        name: "Marcus Lee",
+        email: "Marcus@Example.com",
+      },
     ]);
+    const connection = (
+      environment: Schemas.CompanyConnectionEnvironmentIntEnum,
+      baseUrl: string,
+    ) => ({
+      publicId: Utility.generatePublicId(),
+      companyId: companyA,
+      environment,
+      baseUrl,
+      authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
+      authConfig: {},
+      credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
+      jwtIssuer: `https://issuer-${crypto.randomUUID()}.example.com`,
+      allowedOrigins: ["https://app.example.com"],
+    });
+    await ownerDb
+      .insert(companyConnections)
+      .values([
+        connection(
+          Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+          "https://staging-api.example.com/v1",
+        ),
+        connection(
+          Schemas.CompanyConnectionEnvironmentIntEnum.Production,
+          "https://api.example.com/v1",
+        ),
+      ]);
   });
 });
 
@@ -176,13 +222,19 @@ afterEach(() => {
 
 afterAll(async () => {
   await withOwnerDb(async (ownerDb) => {
-    await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminA, adminB]));
+    await ownerDb
+      .delete(admins)
+      .where(inArray(admins.clerkUserId, [operator, adminA, adminB, adminA2]));
     const companyIds = [companyA, companyB].filter(Boolean);
     if (companyIds.length === 0) return;
     await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
     await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(modelCalls).where(inArray(modelCalls.companyId, companyIds));
     await ownerDb.delete(companySecrets).where(inArray(companySecrets.companyId, companyIds));
+    await ownerDb.delete(adminInvites).where(inArray(adminInvites.companyId, companyIds));
+    await ownerDb
+      .delete(companyConnections)
+      .where(inArray(companyConnections.companyId, companyIds));
     await ownerDb
       .delete(companyEncryptionKeys)
       .where(inArray(companyEncryptionKeys.companyId, companyIds));
@@ -447,6 +499,289 @@ describe("Settings › Budget API (M4-10)", { timeout: 60_000 }, () => {
       ["Ana Ruiz", "Changed spending budget", "$250.50"],
       ["Ana Ruiz", "Rotated model key", "Anthropic"],
       ["Ana Ruiz", "Added model key", "Anthropic"],
+    ]);
+  });
+});
+
+describe("Settings › Connections API (M4-10)", { timeout: 60_000 }, () => {
+  it("lists the connections production first, with their address and sign-in method", async () => {
+    const { status, body, text } = await call("GET", "/dashboard/settings/connections", {
+      as: adminA,
+    });
+    expect(status).toBe(200);
+    expect(
+      body.connections?.map((connection) => [
+        connection.environmentLabel,
+        connection.baseUrl,
+        connection.signInLabel,
+        connection.allowedOrigins,
+      ]),
+    ).toEqual([
+      [
+        "Production",
+        "https://api.example.com/v1",
+        "Forward the user's token",
+        ["https://app.example.com"],
+      ],
+      [
+        "Staging",
+        "https://staging-api.example.com/v1",
+        "Forward the user's token",
+        ["https://app.example.com"],
+      ],
+    ]);
+    expect(text).not.toContain("authConfig");
+
+    const other = await call("GET", "/dashboard/settings/connections", { as: adminB });
+    expect(other.body.connections).toEqual([]);
+    expect((await call("GET", "/dashboard/settings/connections", { as: operator })).status).toBe(
+      403,
+    );
+  });
+});
+
+describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
+  async function inviteRows(companyId: string) {
+    let rows: (typeof adminInvites.$inferSelect)[] = [];
+    await withOwnerDb(async (ownerDb) => {
+      rows = await ownerDb
+        .select()
+        .from(adminInvites)
+        .where(eq(adminInvites.companyId, companyId))
+        .orderBy(asc(adminInvites.id));
+    });
+    return rows;
+  }
+
+  it("lists the admins with when Clerk last saw them, and says so when it can't", async () => {
+    const seenAt = Date.parse("2026-10-28T09:30:00.000Z");
+    const lastActive = vi
+      .spyOn(ClerkProvider, "getLastActive")
+      .mockResolvedValue({ isSuccess: true, lastActiveAt: { [adminA]: seenAt, [adminA2]: null } });
+    const { status, body } = await call("GET", "/dashboard/settings/team", { as: adminA });
+    expect(status).toBe(200);
+    expect(lastActive).toHaveBeenCalledWith(expect.anything(), [adminA, adminA2]);
+    expect(
+      body.team?.members.map(({ clerkUserId, name, isYou, lastActiveAt }) => ({
+        clerkUserId,
+        name,
+        isYou,
+        lastActiveAt,
+      })),
+    ).toEqual([
+      {
+        clerkUserId: adminA,
+        name: "Ana Ruiz",
+        isYou: true,
+        lastActiveAt: new Date(seenAt).toISOString(),
+      },
+      { clerkUserId: adminA2, name: "Marcus Lee", isYou: false, lastActiveAt: null },
+    ]);
+    expect(body.team?.isLastActiveKnown).toBe(true);
+
+    vi.spyOn(ClerkProvider, "getLastActive").mockResolvedValue({ isSuccess: false });
+    const unknown = await call("GET", "/dashboard/settings/team", { as: adminA });
+    expect(unknown.status).toBe(200);
+    expect(unknown.body.team?.isLastActiveKnown).toBe(false);
+    expect(unknown.body.team?.members).toHaveLength(2);
+
+    expect((await call("GET", "/dashboard/settings/team", { as: operator })).status).toBe(403);
+  });
+
+  it("emails an invite to a new address once, and refuses an admin's email", async () => {
+    const invitation = vi
+      .spyOn(ClerkProvider, "createInvitation")
+      .mockResolvedValue({ isSuccess: true, invitationId: "inv_new" });
+    const invited = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "  Priya@Example.com " },
+    });
+    expect(invited.status).toBe(201);
+    expect(invited.body.invite).toMatchObject({
+      email: "priya@example.com",
+      status: Schemas.AdminInviteStatusIntEnum.Pending,
+      isEmailed: true,
+    });
+    const [row] = await inviteRows(companyA);
+    expect(row).toMatchObject({
+      email: "priya@example.com",
+      clerkInvitationId: "inv_new",
+      clerkUserId: null,
+    });
+    expect(invitation).toHaveBeenCalledWith(expect.anything(), {
+      email: "priya@example.com",
+      companyPublicId: expect.any(String),
+      adminInvitePublicId: row!.publicId,
+    });
+
+    const again = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "priya@example.com" },
+    });
+    expect(again.status).toBe(409);
+    expect(again.body.failure).toBe(Schemas.TeamFailureEnum.AlreadyInvited);
+    // DEV_NOTE: Marcus is an admin here: matched whatever the case of the stored email
+    const admin = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "marcus@example.com" },
+    });
+    expect(admin.status).toBe(409);
+    expect(admin.body.failure).toBe(Schemas.TeamFailureEnum.AlreadyAdmin);
+    expect(
+      (
+        await call("POST", "/dashboard/settings/team/invites", {
+          as: adminA,
+          body: { email: "nope" },
+        })
+      ).status,
+    ).toBe(400);
+
+    const listed = await call("GET", "/dashboard/settings/team", { as: adminA });
+    expect(listed.body.team?.invites.map((invite) => invite.email)).toEqual(["priya@example.com"]);
+    expect(listed.body.team?.invites[0]?.invitedByName).toBe("Ana Ruiz");
+    expect(await inviteRows(companyA)).toHaveLength(1);
+  });
+
+  it("grants an existing account without email, and refuses one that is an admin anywhere", async () => {
+    vi.spyOn(ClerkProvider, "findUserByEmail").mockResolvedValue({
+      isSuccess: true,
+      clerkUserId: existingClerkUser,
+    });
+    const grant = vi.spyOn(ClerkProvider, "grantInvite");
+    const invitation = vi.spyOn(ClerkProvider, "createInvitation");
+    const granted = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "returning@example.com" },
+    });
+    expect(granted.status).toBe(201);
+    expect(granted.body.invite?.isEmailed).toBe(false);
+    expect(grant).toHaveBeenCalledWith(expect.anything(), {
+      clerkUserId: existingClerkUser,
+      companyPublicId: expect.any(String),
+      adminInvitePublicId: granted.body.invite?.publicId,
+    });
+    expect(invitation).not.toHaveBeenCalled();
+
+    // DEV_NOTE: adminB administers company B: company A can't invite them
+    vi.spyOn(ClerkProvider, "findUserByEmail").mockResolvedValue({
+      isSuccess: true,
+      clerkUserId: adminB,
+    });
+    const elsewhere = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "b-admin@example.com" },
+    });
+    expect(elsewhere.status).toBe(409);
+    expect(elsewhere.body.failure).toBe(Schemas.TeamFailureEnum.AlreadyAdmin);
+  });
+
+  it("saves nothing when Clerk can't send the invite", async () => {
+    vi.spyOn(ClerkProvider, "createInvitation").mockResolvedValue({
+      isSuccess: false,
+      message: "Unknown error in creating Clerk invitation",
+    });
+    const before = await inviteRows(companyA);
+    const failed = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "later@example.com" },
+    });
+    expect(failed.status).toBe(502);
+    expect(failed.body.failure).toBe(Schemas.TeamFailureEnum.ClerkUnavailable);
+    expect(await inviteRows(companyA)).toHaveLength(before.length);
+  });
+
+  it("revokes a pending invite once, telling Clerk, never another company's", async () => {
+    const [row] = await inviteRows(companyA);
+    expect(
+      (
+        await call("POST", `/dashboard/settings/team/invites/${row!.publicId}/revoke`, {
+          as: adminB,
+        })
+      ).status,
+    ).toBe(404);
+
+    const revoke = vi.spyOn(ClerkProvider, "revokeInvite");
+    const revoked = await call("POST", `/dashboard/settings/team/invites/${row!.publicId}/revoke`, {
+      as: adminA,
+    });
+    expect(revoked.status).toBe(200);
+    expect(revoke).toHaveBeenCalledWith(expect.anything(), {
+      clerkInvitationId: "inv_new",
+      clerkUserId: null,
+      adminInvitePublicId: row!.publicId,
+    });
+    expect((await inviteRows(companyA))[0]?.status).toBe(Schemas.AdminInviteStatusIntEnum.Revoked);
+
+    const again = await call("POST", `/dashboard/settings/team/invites/${row!.publicId}/revoke`, {
+      as: adminA,
+    });
+    expect(again.status).toBe(409);
+    expect(again.body.failure).toBe(Schemas.TeamFailureEnum.NotPending);
+
+    // DEV_NOTE: A revoked invite frees the email for a new one
+    const reinvited = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "priya@example.com" },
+    });
+    expect(reinvited.status).toBe(201);
+  });
+
+  it("removes another admin, never yourself, and their next request is refused", async () => {
+    const self = await call("DELETE", `/dashboard/settings/team/admins/${adminA}`, { as: adminA });
+    expect(self.status).toBe(409);
+    expect(self.body.failure).toBe(Schemas.TeamFailureEnum.CannotRemoveSelf);
+    expect(
+      (await call("DELETE", `/dashboard/settings/team/admins/${adminA2}`, { as: adminB })).status,
+    ).toBe(404);
+
+    const removed = await call("DELETE", `/dashboard/settings/team/admins/${adminA2}`, {
+      as: adminA,
+    });
+    expect(removed.status).toBe(200);
+    expect((await call("GET", "/dashboard/settings/team", { as: adminA2 })).status).toBe(403);
+    expect(
+      (await call("DELETE", `/dashboard/settings/team/admins/${adminA2}`, { as: adminA })).status,
+    ).toBe(404);
+  });
+
+  it("records every team write in the audit log, in words", async () => {
+    expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.AdminInvite)).toEqual([
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Created,
+        detail: { label: "priya@example.com" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Created,
+        detail: { label: "returning@example.com" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Revoked,
+        detail: { label: "priya@example.com" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Created,
+        detail: { label: "priya@example.com" },
+      },
+    ]);
+    expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.Admin)).toEqual([
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Removed,
+        detail: { label: "Marcus Lee" },
+      },
+    ]);
+    const { body } = await call("GET", "/dashboard/audit-log", { as: adminA });
+    expect(
+      (body.auditLog as Schemas.AuditLogEntry[] | undefined)
+        ?.slice(0, 2)
+        .map((entry) => [entry.action, entry.on]),
+    ).toEqual([
+      ["Removed admin", "Marcus Lee"],
+      ["Invited admin", "priya@example.com"],
     ]);
   });
 });

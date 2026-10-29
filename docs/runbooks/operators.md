@@ -15,19 +15,19 @@ The app never creates an operator. An operator row can only be added by hand on 
 
 ## Add a company admin
 
-Company admins are created on their first sign-in, from their Clerk invite:
+Company admins invite each other from **Settings › Team** (M4-10, `docs/runbooks/team.md`): the invite is an `admin_invites` row plus a Clerk invitation (or, for someone who already has a Clerk account, the invite metadata set on that account). Operators only add the **first** admin of a new company, which has nobody to invite from yet:
 
-1. Send a Clerk invitation whose **public metadata** names the company:
+1. Send a Clerk invitation whose **public metadata** names the company, from the Clerk dashboard (Users › Invitations), using the Clerk instance for the environment (staging or production):
 
    ```json
    { "companyPublicId": "<companies.public_id>" }
    ```
 
-   Until the Settings › Team page (M4-10) sends invitations, send them from the Clerk dashboard (Users › Invitations), using the Clerk instance for the environment (staging or production).
+   This manual invite has no `admin_invites` row, so it doesn't show on the Team page and can't be revoked there; revoke it in the Clerk dashboard if needed.
 
-2. The invitee signs up and opens the dashboard. `GET /dashboard/me` reads the metadata and creates their `admins` row in that company. If the metadata is missing, or names a company that doesn't exist or has churned, they get 403 and no row is created.
+2. The invitee signs up and opens the dashboard. `GET /dashboard/me` reads the metadata and creates their `admins` row in that company. If the metadata is missing, or names a company that doesn't exist or has churned, they get 403 and no row is created. A dashboard invite also carries `adminInvitePublicId`: then that `admin_invites` row must still be Pending in the same company (it becomes Accepted in the same transaction), else 403 and nothing is created.
 
-3. In the same step the invite is **consumed**: `companyPublicId` is removed from the Clerk user's public metadata. An invite works once, so deleting the `admins` row later really revokes access. To give someone access again, send a new invite. If Clerk can't be reached, no row is created and the next page load tries again.
+3. In the same step the invite is **consumed**: both metadata keys are removed from the Clerk user. An invite works once, so deleting the `admins` row later really revokes access. To give someone access again, send a new invite. If Clerk can't be reached, no row is created and the next page load tries again.
 
 Public metadata can only be written from the Clerk backend or dashboard, so a user can't add themselves to a company.
 
@@ -51,7 +51,7 @@ Public metadata can only be written from the Clerk backend or dashboard, so a us
 
 ## Remove an operator or a company admin
 
-As the owner, on the right branch:
+A company admin is removed by another admin on Settings › Team (audited; never yourself, never the last admin). An operator, or a company's last admin, is removed as the owner, on the right branch:
 
 ```sql
 DELETE FROM admins WHERE clerk_user_id = 'user_…';

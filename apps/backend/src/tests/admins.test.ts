@@ -7,7 +7,7 @@ import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import AdminsDAL from "@/data-access-layer/AdminsDAL";
 import getDbClient from "@/db/dbClient";
-import { admins, companies } from "@/db/tables";
+import { adminInvites, admins, companies } from "@/db/tables";
 import withTenant from "@/db/withTenant";
 import ClerkProvider from "@/providers/clerk";
 import AdminsRepo from "@/repositories/AdminsRepo";
@@ -27,8 +27,10 @@ vi.mock("@/providers/logger", () => ({
 
 // DEV_NOTE: Clerk stand-in with state: invites maps a Clerk user to the companyPublicId in their publicMetadata.
 // getAdminProfile reads it and consumeInvite removes it, as the real provider does on the Clerk user.
+// inviteRows maps a Clerk user to the adminInvitePublicId a dashboard invite (Settings › Team, M4-10) put there too.
 const clerk = vi.hoisted(() => ({
   invites: new Map<string, string>(),
+  inviteRows: new Map<string, string>(),
   isConsumeFailing: false,
 }));
 
@@ -41,6 +43,7 @@ vi.mock("@/providers/clerk", () => ({
         email: "invitee@example.com",
         name: "Invited Admin",
         companyPublicId: clerk.invites.get(clerkUserId) ?? null,
+        adminInvitePublicId: clerk.inviteRows.get(clerkUserId) ?? null,
       },
     })),
     consumeInvite: vi.fn(async (_env: unknown, clerkUserId: string) => {
@@ -48,6 +51,7 @@ vi.mock("@/providers/clerk", () => ({
         return { isSuccess: false, message: "Unknown error in consuming Clerk invite" };
       }
       clerk.invites.delete(clerkUserId);
+      clerk.inviteRows.delete(clerkUserId);
       return { isSuccess: true };
     }),
   },
@@ -99,6 +103,32 @@ async function getMe(clerkUserId: string, sessionEmail = "") {
   return await new AdminsRepo(env).getMe({ clerkUserId, sessionEmail });
 }
 
+// DEV_NOTE: An admin_invites row as the Team page would leave it, inserted as the owner
+async function insertInvite(
+  companyId: string,
+  status: Schemas.AdminInviteStatusIntEnum,
+): Promise<string> {
+  const publicId = Utility.generatePublicId();
+  await withOwnerDb(async (ownerDb) => {
+    await ownerDb.insert(adminInvites).values({
+      publicId,
+      companyId,
+      email: `invitee-${crypto.randomUUID()}@example.com`,
+      status,
+      clerkInvitationId: `inv_${crypto.randomUUID()}`,
+    });
+  });
+  return publicId;
+}
+
+async function getInviteRows(publicId: string) {
+  let rows: (typeof adminInvites.$inferSelect)[] = [];
+  await withOwnerDb(async (ownerDb) => {
+    rows = await ownerDb.select().from(adminInvites).where(eq(adminInvites.publicId, publicId));
+  });
+  return rows;
+}
+
 beforeAll(async () => {
   await withOwnerDb(async (ownerDb) => {
     const created = await ownerDb
@@ -134,6 +164,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   clerk.invites.clear();
+  clerk.inviteRows.clear();
   clerk.isConsumeFailing = false;
   vi.mocked(ClerkProvider.getAdminProfile).mockClear();
   vi.mocked(ClerkProvider.consumeInvite).mockClear();
@@ -146,6 +177,7 @@ afterAll(async () => {
       Boolean,
     );
     if (companyIds.length > 0) {
+      await ownerDb.delete(adminInvites).where(inArray(adminInvites.companyId, companyIds));
       await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
     }
   });
@@ -241,6 +273,44 @@ describe("AdminsRepo.getMe", () => {
     const again = await getMe(clerkUserId);
     expect(again.admin?.company?.publicId).toBe(companyB.publicId);
     expect(ClerkProvider.getAdminProfile).not.toHaveBeenCalled();
+  });
+
+  // DEV_NOTE: Settings › Team (M4-10): a dashboard invite names its admin_invites row, which decides
+  it("accepts a Pending dashboard invite in the admin row's transaction", async () => {
+    const clerkUserId = newClerkUserId();
+    const invite = await insertInvite(companyB.id, Schemas.AdminInviteStatusIntEnum.Pending);
+    clerk.invites.set(clerkUserId, companyB.publicId);
+    clerk.inviteRows.set(clerkUserId, invite);
+
+    const result = await getMe(clerkUserId);
+    expect(result.admin?.company?.publicId).toBe(companyB.publicId);
+    const [row] = await getInviteRows(invite);
+    expect(row?.status).toBe(Schemas.AdminInviteStatusIntEnum.Accepted);
+    expect(row?.acceptedAt).not.toBeNull();
+  });
+
+  it("gives no access, and creates nothing, for a revoked or unknown dashboard invite", async () => {
+    const revoked = await insertInvite(companyB.id, Schemas.AdminInviteStatusIntEnum.Revoked);
+    for (const adminInvitePublicId of [revoked, Utility.generatePublicId()]) {
+      const clerkUserId = newClerkUserId();
+      clerk.invites.set(clerkUserId, companyB.publicId);
+      clerk.inviteRows.set(clerkUserId, adminInvitePublicId);
+
+      expect(await getMe(clerkUserId)).toEqual({ isSuccess: true, message: "No dashboard access" });
+      expect(await getAdminRows(clerkUserId)).toHaveLength(0);
+    }
+    const [row] = await getInviteRows(revoked);
+    expect(row?.status).toBe(Schemas.AdminInviteStatusIntEnum.Revoked);
+  });
+
+  it("never accepts another company's invite", async () => {
+    const clerkUserId = newClerkUserId();
+    const invite = await insertInvite(companyA.id, Schemas.AdminInviteStatusIntEnum.Pending);
+    clerk.invites.set(clerkUserId, companyB.publicId);
+    clerk.inviteRows.set(clerkUserId, invite);
+
+    expect(await getMe(clerkUserId)).toEqual({ isSuccess: true, message: "No dashboard access" });
+    expect((await getInviteRows(invite))[0]?.status).toBe(Schemas.AdminInviteStatusIntEnum.Pending);
   });
 
   it("really revokes access when the admins row is deleted", async () => {

@@ -22,6 +22,9 @@ export enum AuditEntityTypeEnum {
   ChatbotConfig = "chatbot_config",
   // DEV_NOTE: Settings › Model keys (M4-10): a model key (company_secrets of type model key)
   ModelKey = "model_key",
+  // DEV_NOTE: Settings › Team (M4-10): an invite (admin_invites) and a company admin (admins, addressed by clerk_user_id)
+  AdminInvite = "admin_invite",
+  Admin = "admin",
 }
 
 // DEV_NOTE: A status change is its own action (paused, resumed, turned on / off, activated, disabled), so the log says
@@ -48,6 +51,8 @@ export enum AuditEntityActionEnum {
   Discarded = "discarded",
   Published = "published",
   BudgetChanged = "budget_changed",
+  Revoked = "revoked",
+  Removed = "removed",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -101,6 +106,8 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.BudgetChanged,
   ],
   [AuditEntityTypeEnum.ModelKey]: [AuditEntityActionEnum.Created, AuditEntityActionEnum.Rotated],
+  [AuditEntityTypeEnum.AdminInvite]: [AuditEntityActionEnum.Created, AuditEntityActionEnum.Revoked],
+  [AuditEntityTypeEnum.Admin]: [AuditEntityActionEnum.Removed],
   [AuditEntityTypeEnum.ChatbotConfig]: [
     AuditEntityActionEnum.Created,
     AuditEntityActionEnum.Updated,

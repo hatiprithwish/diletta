@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { admins, companies } from "@/db/tables";
@@ -207,6 +207,162 @@ export default class AdminsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetAdminDetails,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Settings › Team (M4-10): the company's admins, oldest first
+  async getCompanyAdmins(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompanyAdminsDALRequest,
+  ) {
+    const response: Schemas.AdminsDALResponse = { isSuccess: false };
+
+    try {
+      const rows = await tx
+        .select()
+        .from(admins)
+        .where(eq(admins.companyId, params.companyId))
+        .orderBy(asc(admins.createdAt), asc(admins.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Company admins fetched successfully";
+      response.admins = rows;
+    } catch (error) {
+      const message = "Unknown error in listing company admins";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyAdmins,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A company admin by Clerk user id (Remove admin), locked when isForUpdate
+  async getCompanyAdminByClerkUserId(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindCompanyAdminByClerkUserIdDALRequest,
+  ) {
+    const response: Schemas.AdminDALResponse = { isSuccess: false };
+    const { isForUpdate: _isForUpdate, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(admins.clerkUserId, params.clerkUserId),
+        eq(admins.companyId, params.companyId),
+      ];
+      const query = tx
+        .select()
+        .from(admins)
+        .where(and(...conditions))
+        .limit(1);
+      const [admin] = params.isForUpdate ? await query.for("update") : await query;
+
+      if (!admin) {
+        response.message = "Admin not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Admin fetched successfully";
+      response.admin = admin;
+    } catch (error) {
+      const message = "Unknown error in fetching company admin";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyAdminByClerkUserId,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Is this email already an admin of the company (Invite)? Case-insensitive; isNotFound = no. The email stays
+  // out of the logs (PII).
+  async getCompanyAdminByEmail(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindCompanyAdminByEmailDALRequest,
+  ) {
+    const response: Schemas.AdminDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(admins.companyId, params.companyId),
+        eq(sql`lower(${admins.email})`, params.email.toLowerCase()),
+      ];
+      const [admin] = await tx
+        .select()
+        .from(admins)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!admin) {
+        response.message = "No admin with this email";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Admin fetched successfully";
+      response.admin = admin;
+    } catch (error) {
+      const message = "Unknown error in fetching company admin by email";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyAdminByEmail,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Remove admin (M4-10). Their next request gets 403: the auth middleware reads the row on every request, and
+  // the invite that created it was consumed, so /dashboard/me can't recreate it.
+  async deleteAdmin(tx: NodePgTransaction<EmptyRelations>, params: Schemas.DeleteAdminDALRequest) {
+    const response: Schemas.AdminDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(admins.id, params.adminId), eq(admins.companyId, params.companyId)];
+      const [admin] = await tx
+        .delete(admins)
+        .where(and(...conditions))
+        .returning();
+
+      if (!admin) {
+        response.message = "Admin not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Admin removed successfully";
+      response.admin = admin;
+    } catch (error) {
+      const message = "Unknown error in removing admin";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.DeleteAdmin,
         message,
         error,
         metadata: params,

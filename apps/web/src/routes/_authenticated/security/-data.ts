@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
 import Utilities from "@/utils";
-import { QUERY_KEY_ROOTS } from "../-invalidation";
+import { QUERY_KEY_ROOTS, SECURITY_KEY_SEGMENTS } from "../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -25,7 +25,7 @@ const LIVE_LIST_STALE_TIME_MS = 0;
 export class SecurityQueries {
   static keys = {
     all: () => QUERY_KEY_ROOTS.security,
-    connections: () => [...SecurityQueries.keys.all(), "connections"] as const,
+    connections: () => [...SecurityQueries.keys.all(), SECURITY_KEY_SEGMENTS.connections] as const,
     encryptionKeys: () => [...SecurityQueries.keys.all(), "encryption-keys"] as const,
     retention: () => [...SecurityQueries.keys.all(), "retention"] as const,
     injectionEvents: () => [...SecurityQueries.keys.all(), "injection-events"] as const,
@@ -201,6 +201,8 @@ export function useUpdateAllowedOrigins(publicId: string) {
         );
       }
       refreshAuditLog(queryClient);
+      // DEV_NOTE: Settings › Connections shows the same origins
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.connections });
       toast.success("Allowed origins saved.");
     },
     onError: (error) => {

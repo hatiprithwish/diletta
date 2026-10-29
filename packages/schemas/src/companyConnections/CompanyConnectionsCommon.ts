@@ -90,6 +90,22 @@ export enum CompanyConnectionAuthTypeEnum {
   HmacSigned = "hmac_signed",
 }
 
+// DEV_NOTE: How each auth type signs the assistant in, as Settings › Connections says it (DESIGN.md §8)
+export const COMPANY_CONNECTION_SIGN_IN_LABEL_MAP: Record<CompanyConnectionAuthTypeEnum, string> = {
+  [CompanyConnectionAuthTypeEnum.JwtForward]: "Forward the user's token",
+  [CompanyConnectionAuthTypeEnum.ApiKeyHeader]: "API key in a header",
+  [CompanyConnectionAuthTypeEnum.Oauth2Cc]: "OAuth client credentials",
+  [CompanyConnectionAuthTypeEnum.Oauth2Authcode]: "OAuth sign-in per user",
+  [CompanyConnectionAuthTypeEnum.HmacSigned]: "Signed requests",
+};
+
+// DEV_NOTE: auth_type is text: a value this build doesn't know reads as such, never as another method
+export function companyConnectionSignInLabel(authType: string): string {
+  return Object.hasOwn(COMPANY_CONNECTION_SIGN_IN_LABEL_MAP, authType)
+    ? COMPANY_CONNECTION_SIGN_IN_LABEL_MAP[authType as CompanyConnectionAuthTypeEnum]
+    : "Unknown sign-in method";
+}
+
 // DEV_NOTE: jwt_forward sends the chatbot user's host bearer token (held in DO memory) as Authorization: Bearer, so
 // the host applies its own permissions to every call. Nothing to configure and no stored credential.
 export const ZJwtForwardAuthConfig = z.strictObject({});

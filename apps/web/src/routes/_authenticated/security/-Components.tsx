@@ -15,15 +15,7 @@ import {
   AlertDialogTitle,
 } from "@app/ui/components/alert-dialog";
 import { Button } from "@app/ui/components/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@app/ui/components/dialog";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@app/ui/components/field";
+import { Field, FieldDescription, FieldLabel } from "@app/ui/components/field";
 import {
   Select,
   SelectContent,
@@ -40,8 +32,8 @@ import {
   TableHeader,
   TableRow,
 } from "@app/ui/components/table";
-import { Textarea } from "@app/ui/components/textarea";
 import { cn } from "@app/ui/lib/utils";
+import { OriginsDialog } from "@/components/origins-dialog";
 import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
 import { Pager, PastEndNote } from "@/components/pager";
@@ -162,6 +154,7 @@ function ConnectionRow({ label, children }: PropsWithChildren<Schemas.DashboardS
 
 function ConnectionCard({ connection }: Schemas.DashboardSecurityConnectionProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const update = useUpdateAllowedOrigins(connection.publicId);
   const isStaging = connection.environment === Schemas.CompanyConnectionEnvironmentIntEnum.Staging;
 
   return (
@@ -212,104 +205,9 @@ function ConnectionCard({ connection }: Schemas.DashboardSecurityConnectionProps
         connection={connection}
         isOpen={isEditing}
         onClose={() => setIsEditing(false)}
+        onSave={(allowedOrigins) => update.mutateAsync({ allowedOrigins })}
       />
     </div>
-  );
-}
-
-function OriginsDialog({
-  connection,
-  isOpen,
-  onClose,
-}: Schemas.DashboardSecurityOriginsDialogProps) {
-  return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        {isOpen && <OriginsForm connection={connection} onClose={onClose} />}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// DEV_NOTE: One origin per line; blank lines are ignored. Checked with the API's own schema before it is sent.
-function originsIssue(text: string): string | undefined {
-  const parsed = Schemas.ZUpdateAllowedOriginsApiRequest.safeParse({
-    allowedOrigins: toOrigins(text),
-  });
-  return parsed.success ? undefined : parsed.error.issues[0]?.message;
-}
-
-function toOrigins(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-function OriginsForm({
-  connection,
-  onClose,
-}: Pick<Schemas.DashboardSecurityOriginsDialogProps, "connection" | "onClose">) {
-  const update = useUpdateAllowedOrigins(connection.publicId);
-  const form = useForm({
-    defaultValues: { origins: connection.allowedOrigins.join("\n") },
-    onSubmit: async ({ value }) => {
-      await update.mutateAsync({ allowedOrigins: toOrigins(value.origins) });
-      onClose();
-    },
-  });
-
-  return (
-    <form
-      className="flex flex-col gap-5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void form.handleSubmit().catch(() => undefined);
-      }}
-    >
-      <DialogHeader>
-        <DialogTitle>Allowed origins · {connection.environmentLabel}</DialogTitle>
-        <DialogDescription>
-          The widget only opens on these sites. The sign-in issuer is set up with your Diletta
-          contact.
-        </DialogDescription>
-      </DialogHeader>
-      <form.Field name="origins" validators={{ onChange: ({ value }) => originsIssue(value) }}>
-        {(field) => (
-          <Field data-invalid={field.state.meta.errors.length > 0}>
-            <FieldLabel htmlFor="allowed-origins">Origins</FieldLabel>
-            <Textarea
-              id="allowed-origins"
-              name={field.name}
-              rows={5}
-              className="font-mono text-mono-value"
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(event) => field.handleChange(event.target.value)}
-              aria-invalid={field.state.meta.errors.length > 0}
-            />
-            <FieldDescription>
-              One per line, like https://app.example.com. No paths.
-            </FieldDescription>
-            <FieldError
-              errors={field.state.meta.errors.map((message) => ({ message: String(message) }))}
-            />
-          </Field>
-        )}
-      </form.Field>
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-          {([canSubmit, isSubmitting]) => (
-            <Button type="submit" disabled={!canSubmit || isSubmitting}>
-              {isSubmitting ? "Saving…" : "Save"}
-            </Button>
-          )}
-        </form.Subscribe>
-      </DialogFooter>
-    </form>
   );
 }
 

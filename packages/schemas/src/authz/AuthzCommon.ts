@@ -20,6 +20,14 @@ export enum AuthzActionEnum {
   BudgetRead = "budget.read",
   BudgetUpdate = "budget.update",
 
+  // Settings › Connections and Team (company-scoped, M4-10): read the connections (origins are edited through
+  // ConnectionOriginsUpdate); read the team, invite an admin, revoke an invite, remove an admin
+  ConnectionRead = "connection.read",
+  TeamRead = "team.read",
+  TeamInvite = "team.invite",
+  TeamInviteRevoke = "team.invite_revoke",
+  TeamAdminRemove = "team.admin_remove",
+
   // Knowledge sources and their documents (company-scoped)
   KnowledgeSourceRead = "knowledge_source.read",
   KnowledgeSourceCreate = "knowledge_source.create",
