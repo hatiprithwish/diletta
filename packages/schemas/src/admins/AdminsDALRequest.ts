@@ -30,4 +30,5 @@ export type FindCompanyAdminByClerkUserIdDALRequest = Pick<Admin, "clerkUserId">
 // DEV_NOTE: Matched case-insensitively (Clerk may store mixed case; invites store lowercase)
 export type FindCompanyAdminByEmailDALRequest = { companyId: string; email: string };
 
-export type DeleteAdminDALRequest = { companyId: string; adminId: Admin["id"] };
+// DEV_NOTE: Remove keeps the row (removed_at / removed_by set, clerk_user_id replaced by a removed_ token)
+export type RemoveAdminDALRequest = { companyId: string; adminId: Admin["id"]; removedBy: string };

@@ -34,6 +34,7 @@ import {
 } from "@app/ui/components/table";
 import { cn } from "@app/ui/lib/utils";
 import { OriginsDialog } from "@/components/origins-dialog";
+import { useUpdateAllowedOrigins } from "../-originsMutation";
 import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
 import { Pager, PastEndNote } from "@/components/pager";
@@ -50,7 +51,6 @@ import {
   useInjectionEventsCount,
   useRotateEncryptionKey,
   useSecurityConnections,
-  useUpdateAllowedOrigins,
   useUpdateContentRetention,
 } from "./-data";
 

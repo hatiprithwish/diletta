@@ -4,6 +4,7 @@ import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { admins, companies } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. getAdminByClerkUserId is the Clerk admin → company lookup: the Repo
 // runs it in withPlatform before any company is known, so it filters on clerk_user_id alone (pattern rule 3.15).
@@ -87,6 +88,7 @@ export default class AdminsDAL {
       const conditions = [
         eq(admins.clerkUserId, params.clerkUserId),
         eq(admins.companyId, params.companyId),
+        isNull(admins.removedAt),
       ];
       const [admin] = inserted
         ? [inserted]
@@ -225,10 +227,11 @@ export default class AdminsDAL {
     const response: Schemas.AdminsDALResponse = { isSuccess: false };
 
     try {
+      const conditions = [eq(admins.companyId, params.companyId), isNull(admins.removedAt)];
       const rows = await tx
         .select()
         .from(admins)
-        .where(eq(admins.companyId, params.companyId))
+        .where(and(...conditions))
         .orderBy(asc(admins.createdAt), asc(admins.id))
         .limit(params.limit);
 
@@ -262,6 +265,7 @@ export default class AdminsDAL {
       const conditions = [
         eq(admins.clerkUserId, params.clerkUserId),
         eq(admins.companyId, params.companyId),
+        isNull(admins.removedAt),
       ];
       const query = tx
         .select()
@@ -306,6 +310,7 @@ export default class AdminsDAL {
       const conditions = [
         eq(admins.companyId, params.companyId),
         eq(sql`lower(${admins.email})`, params.email.toLowerCase()),
+        isNull(admins.removedAt),
       ];
       const [admin] = await tx
         .select()
@@ -337,15 +342,27 @@ export default class AdminsDAL {
     return response;
   }
 
-  // DEV_NOTE: Remove admin (M4-10). Their next request gets 403: the auth middleware reads the row on every request, and
-  // the invite that created it was consumed, so /dashboard/me can't recreate it.
-  async deleteAdmin(tx: NodePgTransaction<EmptyRelations>, params: Schemas.DeleteAdminDALRequest) {
+  // DEV_NOTE: Remove admin (M4-10). The row stays, so the audit log, "edited by" and "invited by" keep naming the person:
+  // removed_at / removed_by are set and clerk_user_id becomes a removed_ token (as erasure does for chatbot users), so
+  // every sign-in lookup misses (their next request gets 403) and the Clerk account can be invited again later.
+  async removeAdmin(tx: NodePgTransaction<EmptyRelations>, params: Schemas.RemoveAdminDALRequest) {
     const response: Schemas.AdminDALResponse = { isSuccess: false };
 
     try {
-      const conditions = [eq(admins.id, params.adminId), eq(admins.companyId, params.companyId)];
+      const now = new Date();
+      const conditions = [
+        eq(admins.id, params.adminId),
+        eq(admins.companyId, params.companyId),
+        isNull(admins.removedAt),
+      ];
       const [admin] = await tx
-        .delete(admins)
+        .update(admins)
+        .set({
+          clerkUserId: `removed_${Utility.generateUlid()}`,
+          removedAt: now,
+          removedBy: params.removedBy,
+          updatedAt: now,
+        })
         .where(and(...conditions))
         .returning();
 
@@ -362,7 +379,7 @@ export default class AdminsDAL {
       const message = "Unknown error in removing admin";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.DeleteAdmin,
+        action: Schemas.LogAction.RemoveAdmin,
         message,
         error,
         metadata: params,

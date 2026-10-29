@@ -11,12 +11,12 @@ import * as Schemas from "@app/schemas";
 
 type TeamWrite = Schemas.WithOutboxIds<Schemas.TeamWriteApiResponse>;
 
-// DEV_NOTE: Settings › Team (M4-10). Tenant Repo: one withTenant per write, with the company row locked first, so
-// invites, revokes and removals in one company run one after the other (the last-admin check holds). Clerk is called
-// inside that transaction after the row it refers to exists: a failed Clerk call rolls the row back (502
-// ClerkUnavailable); a commit that fails after Clerk answered leaves Clerk pointing at an invite row that doesn't exist,
-// which AdminsRepo.provisionAdmin refuses. Emails are PII: never logged; the audit label is the invitee's email or the
-// removed admin's name.
+// DEV_NOTE: Settings › Team (M4-10). Tenant Repo: each write's checks run in a withTenant with the company row locked,
+// so invites, revokes and removals in one company run one after the other (the last-admin check holds). Clerk is never
+// called inside a transaction (no lock or pooled connection held across it): an invite commits its Pending row first,
+// then calls Clerk, then records the Clerk reference and its audit row; a revoke commits Revoked first, then tells Clerk.
+// The row decides access (AdminsRepo.provisionAdmin), so Clerk metadata always points at a committed row. Emails are
+// PII: never logged; the audit label is the invitee's email or the removed admin's name.
 export default class TeamRepo {
   private env: Env;
   private db: NodePgDatabase;
@@ -116,10 +116,14 @@ export default class TeamRepo {
     };
   }
 
-  // DEV_NOTE: Invite an admin by email. A new email gets an emailed Clerk invitation; an existing Clerk account that
-  // administers no company gets the invite metadata directly (no email: the page says so); an admin of any company, an
-  // admin of this one by email, or an email already invited here is 409. The account lookup (Clerk, then the admins
-  // row in withPlatform: the Clerk user → any company lookup, rule 3.15) runs before the transaction.
+  // DEV_NOTE: Invite an admin by email. Refused (409): an account that administers any company, or already carries
+  // another invite's metadata (HasPendingInvite: granting would silently replace it); an admin of this company by email
+  // (any case); a Pending invite for the email here. Otherwise:
+  // 1. the Pending row is committed (company row locked, clerk refs null; unused until Clerk points at it);
+  // 2. Clerk: an emailed invitation for a new email, or the invite metadata on the existing account (no email);
+  // 3. the Clerk reference and the Invited audit row, in one withTenant.
+  // A Clerk failure marks the row Revoked (nothing points at it) and answers 502; a failure at 3 revokes it on Clerk and
+  // the row too, best effort, and answers 500.
   async inviteAdmin(
     params: Schemas.CreateAdminInviteApiRequest & { companyId: string; adminId: string },
   ): Promise<TeamWrite> {
@@ -145,20 +149,28 @@ export default class TeamRepo {
       }
       if (!existing.isNotFound)
         return { isSuccess: false, message: existing.message, outboxIds: [] };
+      if (account.hasPendingInvite) {
+        return this.refused(
+          Schemas.TeamFailureEnum.HasPendingInvite,
+          "This person already has a pending invite",
+        );
+      }
     }
 
-    let failure: Schemas.TeamFailureEnum | undefined;
-    const result: TeamWrite = await withTenant(
+    // 1. The Pending row
+    let company: Schemas.Company | undefined;
+    const created: TeamWrite & { adminInvite?: Schemas.AdminInvite } = await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<TeamWrite> => {
-        const company = await this.companiesDal.getCompanyDetails(tx, {
+      async (tx): Promise<TeamWrite & { adminInvite?: Schemas.AdminInvite }> => {
+        const locked = await this.companiesDal.getCompanyDetails(tx, {
           companyId: params.companyId,
           isForUpdate: true,
         });
-        if (!company.isSuccess || !company.company) {
-          return { isSuccess: false, message: company.message, outboxIds: [] };
+        if (!locked.isSuccess || !locked.company) {
+          return { isSuccess: false, message: locked.message, outboxIds: [] };
         }
+        company = locked.company;
 
         const admin = await this.adminsDal.getCompanyAdminByEmail(tx, {
           companyId: params.companyId,
@@ -184,54 +196,59 @@ export default class TeamRepo {
         if (!pending.isNotFound)
           return { isSuccess: false, message: pending.message, outboxIds: [] };
 
-        const created = await this.adminInvitesDal.createAdminInvite(tx, {
+        const inserted = await this.adminInvitesDal.createAdminInvite(tx, {
           companyId: params.companyId,
           email: params.email,
           clerkInvitationId: null,
           clerkUserId: null,
           invitedBy: params.adminId,
         });
-        if (!created.isSuccess || !created.adminInvite) {
-          if (created.isEmailTaken) failure = Schemas.TeamFailureEnum.AlreadyInvited;
-          throw new TenantRollbackError(created.message ?? "Invite not created");
+        if (!inserted.isSuccess || !inserted.adminInvite) {
+          return inserted.isEmailTaken
+            ? this.refused(
+                Schemas.TeamFailureEnum.AlreadyInvited,
+                "This email already has an invite",
+              )
+            : { isSuccess: false, message: inserted.message, outboxIds: [] };
         }
-        const inviteRef = {
-          companyPublicId: company.company.publicId,
-          adminInvitePublicId: created.adminInvite.publicId,
-        };
+        return { isSuccess: true, adminInvite: inserted.adminInvite, outboxIds: [] };
+      },
+    );
+    if (!created.isSuccess || !created.adminInvite || !company) return created;
+    const invite = created.adminInvite;
+    const inviteRef = { companyPublicId: company.publicId, adminInvitePublicId: invite.publicId };
 
-        let clerkInvitationId: string | null = null;
-        if (existingClerkUserId) {
-          const granted = await ClerkProvider.grantInvite(this.env, {
-            ...inviteRef,
-            clerkUserId: existingClerkUserId,
-          });
-          if (!granted.isSuccess) {
-            failure = Schemas.TeamFailureEnum.ClerkUnavailable;
-            throw new TenantRollbackError(granted.message ?? "Clerk unavailable");
-          }
-        } else {
-          const invitation = await ClerkProvider.createInvitation(this.env, {
-            ...inviteRef,
-            email: params.email,
-          });
-          if (!invitation.isSuccess || !invitation.invitationId) {
-            failure = Schemas.TeamFailureEnum.ClerkUnavailable;
-            throw new TenantRollbackError(invitation.message ?? "Clerk unavailable");
-          }
-          clerkInvitationId = invitation.invitationId;
-        }
+    // 2. Clerk, outside any transaction
+    let clerkInvitationId: string | null = null;
+    const sent = existingClerkUserId
+      ? await ClerkProvider.grantInvite(this.env, {
+          ...inviteRef,
+          clerkUserId: existingClerkUserId,
+        })
+      : await ClerkProvider.createInvitation(this.env, { ...inviteRef, email: params.email });
+    if ("invitationId" in sent) clerkInvitationId = sent.invitationId ?? null;
+    if (!sent.isSuccess || (!existingClerkUserId && !clerkInvitationId)) {
+      await this.closeUnsentInvite(params.companyId, invite.publicId);
+      return this.refused(
+        Schemas.TeamFailureEnum.ClerkUnavailable,
+        sent.message ?? "Clerk unavailable",
+      );
+    }
 
+    // 3. The Clerk reference and the audit row
+    const recorded: TeamWrite = await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<TeamWrite> => {
         const updated = await this.adminInvitesDal.setAdminInviteClerkRef(tx, {
           companyId: params.companyId,
-          publicId: created.adminInvite.publicId,
+          publicId: invite.publicId,
           clerkInvitationId,
           clerkUserId: existingClerkUserId,
         });
         if (!updated.isSuccess || !updated.adminInvite) {
           throw new TenantRollbackError(updated.message ?? "Invite not saved");
         }
-
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
           actor: adminAuditActor(params.adminId),
@@ -248,21 +265,45 @@ export default class TeamRepo {
         };
       },
     );
-    return failure && !result.isSuccess ? { ...result, failure, outboxIds: [] } : result;
+    if (!recorded.isSuccess) {
+      await ClerkProvider.revokeInvite(this.env, {
+        clerkInvitationId,
+        clerkUserId: existingClerkUserId,
+        adminInvitePublicId: invite.publicId,
+      });
+      await this.closeUnsentInvite(params.companyId, invite.publicId);
+      return { ...recorded, outboxIds: [] };
+    }
+    return recorded;
   }
 
-  // DEV_NOTE: Revoke a Pending invite: the row locked, Clerk told (the invitation revoked, or a granted account's
-  // metadata cleared), the row Revoked, its audit row. Only from Pending (else 409 NotPending, nothing written).
+  // DEV_NOTE: An invite whose Clerk step failed: Revoked, so it isn't listed or honoured and the email can be invited
+  // again. Best effort (a failure is logged by the DAL); no audit row, since nothing was sent.
+  private async closeUnsentInvite(companyId: string, publicId: string): Promise<void> {
+    await withTenant(
+      this.db,
+      companyId,
+      async (tx) =>
+        await this.adminInvitesDal.updateAdminInviteStatus(tx, {
+          companyId,
+          publicId,
+          status: Schemas.AdminInviteStatusIntEnum.Revoked,
+        }),
+    );
+  }
+
+  // DEV_NOTE: Revoke a Pending invite (else 409 NotPending, nothing written): Revoked with its audit row, committed under
+  // the company and invite locks; then Clerk is told, best effort (ClerkProvider.revokeInvite skips an invitation that
+  // isn't pending any more). The row already refuses a sign-in, so a Clerk failure is logged, not answered.
   async revokeInvite(params: {
     companyId: string;
     adminId: string;
     publicId: string;
   }): Promise<TeamWrite> {
-    let failure: Schemas.TeamFailureEnum | undefined;
-    const result: TeamWrite = await withTenant(
+    const result: TeamWrite & { adminInvite?: Schemas.AdminInvite } = await withTenant(
       this.db,
       params.companyId,
-      async (tx): Promise<TeamWrite> => {
+      async (tx): Promise<TeamWrite & { adminInvite?: Schemas.AdminInvite }> => {
         const company = await this.companiesDal.getCompanyDetails(tx, {
           companyId: params.companyId,
           isForUpdate: true,
@@ -287,16 +328,6 @@ export default class TeamRepo {
           return this.refused(Schemas.TeamFailureEnum.NotPending, "This invite isn't pending");
         }
 
-        const revoked = await ClerkProvider.revokeInvite(this.env, {
-          clerkInvitationId: found.adminInvite.clerkInvitationId,
-          clerkUserId: found.adminInvite.clerkUserId,
-          adminInvitePublicId: found.adminInvite.publicId,
-        });
-        if (!revoked.isSuccess) {
-          failure = Schemas.TeamFailureEnum.ClerkUnavailable;
-          throw new TenantRollbackError(revoked.message ?? "Clerk unavailable");
-        }
-
         const updated = await this.adminInvitesDal.updateAdminInviteStatus(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
@@ -318,16 +349,25 @@ export default class TeamRepo {
           isSuccess: true,
           message: "Invite revoked successfully",
           invite: this.toTeamInvite(updated.adminInvite, null),
+          adminInvite: updated.adminInvite,
           outboxIds: [outboxId],
         };
       },
     );
-    return failure && !result.isSuccess ? { ...result, failure, outboxIds: [] } : result;
+    if (!result.isSuccess || !result.adminInvite) return result;
+
+    await ClerkProvider.revokeInvite(this.env, {
+      clerkInvitationId: result.adminInvite.clerkInvitationId,
+      clerkUserId: result.adminInvite.clerkUserId,
+      adminInvitePublicId: result.adminInvite.publicId,
+    });
+    const { adminInvite: _adminInvite, ...answer } = result;
+    return answer;
   }
 
   // DEV_NOTE: Remove a company admin (by Clerk user id). Never yourself (409 CannotRemoveSelf) and never the company's
-  // last admin (409 LastAdmin), counted under the company row's lock. The audit row's entity is the removed admins row
-  // (its client-facing id is the Clerk user id), labelled with their name, else email.
+  // last admin (409 LastAdmin), counted under the company row's lock. The row is kept (AdminsDAL.removeAdmin) so their
+  // name stays on what they did; the audit row's entity is that row, labelled with their name, else email.
   async removeAdmin(params: {
     companyId: string;
     adminId: string;
@@ -367,9 +407,10 @@ export default class TeamRepo {
         return this.refused(Schemas.TeamFailureEnum.LastAdmin, "The last admin can't be removed");
       }
 
-      const removed = await this.adminsDal.deleteAdmin(tx, {
+      const removed = await this.adminsDal.removeAdmin(tx, {
         companyId: params.companyId,
         adminId: found.admin.id,
+        removedBy: params.adminId,
       });
       if (!removed.isSuccess || !removed.admin) {
         throw new TenantRollbackError(removed.message ?? "Admin not removed");
@@ -380,8 +421,8 @@ export default class TeamRepo {
         actor: adminAuditActor(params.adminId),
         entityType: Schemas.AuditEntityTypeEnum.Admin,
         entityAction: Schemas.AuditEntityActionEnum.Removed,
-        entity: { id: removed.admin.id, publicId: removed.admin.clerkUserId },
-        label: removed.admin.name ?? removed.admin.email ?? "An admin",
+        entity: { id: found.admin.id, publicId: found.admin.clerkUserId },
+        label: found.admin.name ?? found.admin.email ?? "An admin",
       });
       return { isSuccess: true, message: "Admin removed successfully", outboxIds: [outboxId] };
     });

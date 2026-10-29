@@ -2088,14 +2088,14 @@ checkModelKey|spendingBudget:\s
 
 ### 3.49 An Admin Invite Is a Row, and the Row Decides Who Gets In [CRITICAL]
 
-**Rule:** Company admins are invited only through `TeamRepo.inviteAdmin` (Settings › Team, M4-10): an `admin_invites` row (Pending, one per company and email) is written first, in a `withTenant` holding the company row lock, then Clerk is called (an emailed invitation for a new email, or the invite metadata on an existing account that administers no company), and a Clerk failure rolls the row back. The Clerk metadata carries `{ companyPublicId, adminInvitePublicId }`; `AdminsRepo.provisionAdmin` creates an admin from it only while that invite row is Pending in the named company, locking it and marking it Accepted in the admin row's transaction (a failed admin insert rolls the acceptance back). A Revoked or unknown invite gives no access whatever Clerk still holds. Revoke and Remove admin run in `TeamRepo` with the company row locked: revoke only Pending; never remove yourself or the last admin. Every write has its audit row (rule 3.45). Emails never go into log metadata.
+**Rule:** Company admins are invited only through `TeamRepo.inviteAdmin` (Settings › Team, M4-10). Its checks and the `admin_invites` insert (Pending, one per company and email) run in a `withTenant` holding the company row lock and commit before Clerk is called; Clerk is never called inside a transaction. Then Clerk gets an emailed invitation (new email) or the invite metadata on an existing account that administers no company and holds no other invite metadata, and a second `withTenant` stores the Clerk reference and the audit row. A Clerk failure closes the row as Revoked. The Clerk metadata carries `{ companyPublicId, adminInvitePublicId }`; `AdminsRepo.provisionAdmin` creates an admin from it only while that invite row is Pending in the named company, locking it and marking it Accepted in the admin row's transaction (a failed admin insert rolls the acceptance back), and clears the metadata after refusing a Revoked or unknown invite. Revoke commits Revoked (Pending only) with its audit row, then tells Clerk, best effort. Remove admin never deletes the row: `removed_at` / `removed_by` are set and `clerk_user_id` is replaced by a `removed_` token, so the person stays named on what they did; never yourself or the last admin, under the company lock. Every write has its audit row (rule 3.45). Emails never go into log metadata.
 
 **Violations:**
 
 - Creating a Clerk invitation or setting `companyPublicId` metadata from code anywhere but `ClerkProvider.createInvitation` / `grantInvite`, called by `TeamRepo`
+- A Clerk call inside a `withTenant` / `withPlatform` callback
 - Provisioning an admin from `adminInvitePublicId` metadata without locking the invite row and checking it is Pending in the same company
-- Calling Clerk before the invite row exists, or outside the transaction that writes it
-- Deleting an `admins` row from a dashboard route without the self / last-admin checks under the company lock
+- Deleting an `admins` row from app code, or a removal without the self / last-admin checks under the company lock
 
 **Detection Pattern:**
 
@@ -2103,15 +2103,15 @@ checkModelKey|spendingBudget:\s
 createInvitation|updateUserMetadata|delete\(admins\)
 ```
 
-- `createInvitation` / `updateUserMetadata` should appear only in `providers/clerk.ts`; `delete(admins)` only in `AdminsDAL.deleteAdmin` (and test fixtures run as the owner).
+- `createInvitation` / `updateUserMetadata` should appear only in `providers/clerk.ts`; `delete(admins)` only in test fixtures run as the owner.
 
 **Examples:**
 
 ```
-- ❌ await clerk.invitations.createInvitation({ emailAddress, publicMetadata: { companyPublicId } })  // no row
-- ✅ const created = await this.adminInvitesDal.createAdminInvite(tx, …); const sent = await ClerkProvider.createInvitation(env, { …, adminInvitePublicId: created.adminInvite.publicId });
-- ❌ if (companyPublicId) await this.dal.createAdmin(tx, …)                 // ignores a revoked invite
-- ✅ const invite = await this.adminInvitesDal.getAdminInviteDetails(tx, { …, isForUpdate: true }); if (invite.adminInvite?.status !== Pending) return noAccess;
+- ❌ await withTenant(db, companyId, async (tx) => { …; await ClerkProvider.createInvitation(env, …) })   // Clerk under a lock
+- ✅ const created = await withTenant(…insert Pending…); const sent = await ClerkProvider.createInvitation(env, { …, adminInvitePublicId }); await withTenant(…ref + audit…)
+- ❌ await tx.delete(admins).where(eq(admins.id, adminId))                  // erases who did what
+- ✅ await this.adminsDal.removeAdmin(tx, { companyId, adminId, removedBy })
 ```
 
 **Fix:** Mirror `TeamRepo` and `AdminsRepo.provisionAdmin` (`docs/runbooks/team.md`).

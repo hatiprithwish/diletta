@@ -9,7 +9,8 @@ import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
 import { SectionHeader } from "@/components/section-header";
 import { StatusChip } from "@/components/status-chip";
-import { useConnections, useUpdateConnectionOrigins } from "./-data";
+import { useUpdateAllowedOrigins } from "../../-originsMutation";
+import { useConnections } from "./-data";
 
 // DEV_NOTE: The whole /settings/connections body (DESIGN.md dashboard-Connections): how the assistant reaches the host,
 // one card per connection, production first. Only the allowed origins are edited here; the address, sign-in method and
@@ -57,7 +58,7 @@ function ConnectionRow({ label, children }: PropsWithChildren<Schemas.DashboardS
 
 function ConnectionCard({ connection }: Schemas.DashboardSettingsConnectionCardProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const update = useUpdateConnectionOrigins(connection.publicId);
+  const update = useUpdateAllowedOrigins(connection.publicId);
   const isStaging = connection.environment === Schemas.CompanyConnectionEnvironmentIntEnum.Staging;
 
   return (

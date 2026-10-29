@@ -66,6 +66,7 @@ export const TEAM_PENDING_INVITES_MAX = 200;
 export enum TeamFailureEnum {
   AlreadyAdmin = "AlreadyAdmin",
   AlreadyInvited = "AlreadyInvited",
+  HasPendingInvite = "HasPendingInvite",
   NotPending = "NotPending",
   CannotRemoveSelf = "CannotRemoveSelf",
   LastAdmin = "LastAdmin",
@@ -75,6 +76,7 @@ export enum TeamFailureEnum {
 export const TEAM_FAILURE_HTTP_STATUS_MAP: Record<TeamFailureEnum, 409 | 502> = {
   [TeamFailureEnum.AlreadyAdmin]: 409,
   [TeamFailureEnum.AlreadyInvited]: 409,
+  [TeamFailureEnum.HasPendingInvite]: 409,
   [TeamFailureEnum.NotPending]: 409,
   [TeamFailureEnum.CannotRemoveSelf]: 409,
   [TeamFailureEnum.LastAdmin]: 409,

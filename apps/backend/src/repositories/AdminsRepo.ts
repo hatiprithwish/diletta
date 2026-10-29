@@ -41,7 +41,13 @@ export default class AdminsRepo {
     admin: Schemas.Admin,
     company: Schemas.Company | undefined,
   ): Schemas.AdminProfile {
-    const { id: _id, companyId: _companyId, ...rest } = admin;
+    const {
+      id: _id,
+      companyId: _companyId,
+      removedAt: _removedAt,
+      removedBy: _removedBy,
+      ...rest
+    } = admin;
     return {
       ...rest,
       role: this.toContext(admin).role,
@@ -168,6 +174,7 @@ export default class AdminsRepo {
     // a revoke at the same moment waits) and must still be Pending in this company, else no access and nothing is
     // written; it becomes Accepted in the admin row's transaction.
     const company = invitedCompany.company;
+    let isStaleInvite = false;
     const created: Schemas.AdminDALResponse = await withTenant(this.db, company.id, async (tx) => {
       if (adminInvitePublicId) {
         const invite = await this.adminInvitesDal.getAdminInviteDetails(tx, {
@@ -177,6 +184,7 @@ export default class AdminsRepo {
         });
         if (!invite.isSuccess && !invite.isNotFound) return invite;
         if (invite.adminInvite?.status !== Schemas.AdminInviteStatusIntEnum.Pending) {
+          isStaleInvite = true;
           return { isSuccess: true, message: NO_ACCESS_MESSAGE };
         }
         const accepted = await this.adminInvitesDal.updateAdminInviteStatus(tx, {
@@ -206,6 +214,9 @@ export default class AdminsRepo {
       return result;
     });
     if (created.isSuccess && !created.admin) {
+      // DEV_NOTE: A revoked or unknown invite: its metadata is cleared (best effort, logged on failure), so the next
+      // /dashboard/me answers 403 without asking Clerk again
+      if (isStaleInvite) await ClerkProvider.consumeInvite(this.env, clerkUserId);
       return { isSuccess: true, message: NO_ACCESS_MESSAGE };
     }
     if (!created.isSuccess || !created.admin) {

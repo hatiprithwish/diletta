@@ -298,6 +298,8 @@ describe("AdminsRepo.getMe", () => {
 
       expect(await getMe(clerkUserId)).toEqual({ isSuccess: true, message: "No dashboard access" });
       expect(await getAdminRows(clerkUserId)).toHaveLength(0);
+      // DEV_NOTE: The stale metadata is cleared, so the next load doesn't ask Clerk again
+      expect(clerk.inviteRows.has(clerkUserId)).toBe(false);
     }
     const [row] = await getInviteRows(revoked);
     expect(row?.status).toBe(Schemas.AdminInviteStatusIntEnum.Revoked);

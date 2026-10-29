@@ -393,7 +393,22 @@ describe("Settings › Budget", () => {
 
 describe("Settings › Connections", () => {
   it("shows each connection's address, sign-in and origins, and edits the origins", async () => {
-    const fetchMock = mockApi();
+    // DEV_NOTE: The list refetches after a save, so the stand-in answers with what was saved
+    let savedOrigins: string[] | null = null;
+    const fetchMock = mockApi((url, init) => {
+      if (url.includes("/origins") && init?.method === "PUT") {
+        savedOrigins = (JSON.parse(String(init.body)) as { allowedOrigins: string[] })
+          .allowedOrigins;
+        return null;
+      }
+      if (url.endsWith("/dashboard/settings/connections") && savedOrigins) {
+        return {
+          status: 200,
+          body: { isSuccess: true, connections: [{ ...CONNECTION, allowedOrigins: savedOrigins }] },
+        };
+      }
+      return null;
+    });
     renderPage("/settings/connections");
     const user = userEvent.setup();
 
@@ -458,6 +473,8 @@ describe("Settings › Team", () => {
         "This person is already an admin, here or for another company.",
       ),
     ).toBeInTheDocument();
+    // DEV_NOTE: Shown in the dialog only, not toasted as well
+    expect(toast.error).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole("button", { name: "Send invite" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

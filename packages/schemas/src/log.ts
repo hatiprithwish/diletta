@@ -266,7 +266,7 @@ export enum LogAction {
   GetCompanyAdmins = "GetCompanyAdmins",
   GetCompanyAdminByClerkUserId = "GetCompanyAdminByClerkUserId",
   GetCompanyAdminByEmail = "GetCompanyAdminByEmail",
-  DeleteAdmin = "DeleteAdmin",
+  RemoveAdmin = "RemoveAdmin",
   FindClerkUserByEmail = "FindClerkUserByEmail",
   CreateClerkInvitation = "CreateClerkInvitation",
   GrantClerkInvite = "GrantClerkInvite",

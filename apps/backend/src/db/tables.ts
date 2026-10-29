@@ -202,12 +202,18 @@ export const admins = table(
     companyId: t.bigint("company_id", { mode: "string" }), // → companies.id, null = operator
     email: t.text(),
     name: t.text(),
+    // DEV_NOTE: Settings › Team's Remove (M4-10) keeps the row, so audit history, "edited by" and "invited by" still name
+    // the person: removed_at / removed_by are set and clerk_user_id is replaced by a `removed_` token, which frees the
+    // Clerk account for a later invite and makes every sign-in lookup miss
+    removedAt: t.timestamp("removed_at", { withTimezone: true }),
+    removedBy: t.bigint("removed_by", { mode: "string" }), // → admins.id
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     t.uniqueIndex("UNQ_admins_clerk_user_id").on(table.clerkUserId),
     t.index("IDX_admins_company_id").on(table.companyId),
+    t.index("IDX_admins_removed_by").on(table.removedBy),
   ],
 );
 

@@ -51,7 +51,7 @@ Public metadata can only be written from the Clerk backend or dashboard, so a us
 
 ## Remove an operator or a company admin
 
-A company admin is removed by another admin on Settings › Team (audited; never yourself, never the last admin). An operator, or a company's last admin, is removed as the owner, on the right branch:
+A company admin is removed by another admin on Settings › Team (audited; never yourself, never the last admin). That keeps the row for attribution (`removed_at`, and `clerk_user_id` replaced by a `removed_` token). An operator, or a company's last admin, is removed as the owner, on the right branch:
 
 ```sql
 DELETE FROM admins WHERE clerk_user_id = 'user_…';

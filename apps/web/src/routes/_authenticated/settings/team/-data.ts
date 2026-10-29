@@ -4,6 +4,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
+import { QUERY_KEY_ROOTS } from "../../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -11,7 +12,7 @@ type GetToken = Parameters<typeof apiClient>[1];
 // (an invite, revoke or removal changes which rows show).
 export class TeamQueries {
   static keys = {
-    all: () => ["team"] as const,
+    all: () => QUERY_KEY_ROOTS.team,
     team: () => [...TeamQueries.keys.all(), "team"] as const,
   };
 
@@ -35,6 +36,8 @@ export const TEAM_REFUSAL_COPY: Record<Schemas.TeamFailureEnum, string> = {
     "This person is already an admin, here or for another company.",
   [Schemas.TeamFailureEnum.AlreadyInvited]:
     "This email already has an invite. Revoke it to send a new one.",
+  [Schemas.TeamFailureEnum.HasPendingInvite]:
+    "This person already has a pending invite. They can be invited once it's used or revoked.",
   [Schemas.TeamFailureEnum.NotPending]: "This invite was already accepted or revoked.",
   [Schemas.TeamFailureEnum.CannotRemoveSelf]: "You can't remove yourself. Ask another admin.",
   [Schemas.TeamFailureEnum.LastAdmin]: "The last admin can't be removed.",
@@ -47,11 +50,17 @@ export function teamRefusalOf(error: unknown): Schemas.TeamFailureEnum | null {
   return (error.body as Schemas.TeamWriteApiResponse).failure ?? null;
 }
 
-function toastTeamError(queryClient: QueryClient, error: unknown, fallback: string) {
+// DEV_NOTE: isRefusalShownInline: the invite dialog shows a refusal under the field, so it isn't toasted too
+function toastTeamError(
+  queryClient: QueryClient,
+  error: unknown,
+  fallback: string,
+  isRefusalShownInline = false,
+) {
   const refusal = teamRefusalOf(error);
   if (refusal) {
     void queryClient.invalidateQueries({ queryKey: TeamQueries.keys.all() });
-    toast.error(TEAM_REFUSAL_COPY[refusal]);
+    if (!isRefusalShownInline) toast.error(TEAM_REFUSAL_COPY[refusal]);
     return;
   }
   if (error instanceof ApiError && error.status === 404) {
@@ -80,7 +89,7 @@ export function useInviteAdmin() {
           : `Invite sent to ${response.invite?.email ?? "them"}.`,
       );
     },
-    onError: (error) => toastTeamError(queryClient, error, "The invite wasn't sent."),
+    onError: (error) => toastTeamError(queryClient, error, "The invite wasn't sent.", true),
   });
 }
 

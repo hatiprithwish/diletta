@@ -16,6 +16,9 @@ export const ZAdmin = z.object({
   companyId: z.string().nullable(),
   email: z.string().nullable(),
   name: z.string().nullable(),
+  // DEV_NOTE: Set when removed on Settings › Team (M4-10); the row stays for attribution. removedBy is an internal id.
+  removedAt: z.date().nullable(),
+  removedBy: z.string().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -29,7 +32,7 @@ export type AdminContext =
   | { adminId: Admin["id"]; role: AdminRoleEnum.CompanyAdmin; companyId: string };
 
 // API response shape — internal ids structurally omitted; the company is identified by its publicId
-export type AdminProfile = Omit<Admin, "id" | "companyId"> & {
+export type AdminProfile = Omit<Admin, "id" | "companyId" | "removedAt" | "removedBy"> & {
   role: AdminRoleEnum;
   company: { publicId: string; name: string } | null;
 };
@@ -44,11 +47,13 @@ export interface ClerkAdminProfile {
   adminInvitePublicId: string | null;
 }
 
-// DEV_NOTE: Server-side only. A Clerk user found by email (Settings › Team invite): null = no account yet
+// DEV_NOTE: Server-side only. A Clerk user found by email (Settings › Team invite): null = no account yet.
+// hasPendingInvite = the account already carries invite metadata (another dashboard invite not yet used).
 export interface ClerkUserLookupResponse {
   isSuccess: boolean;
   message?: string;
   clerkUserId?: string | null;
+  hasPendingInvite?: boolean;
 }
 
 // DEV_NOTE: Server-side only. When each Clerk user was last active (epoch ms, null = never)

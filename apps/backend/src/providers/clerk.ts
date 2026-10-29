@@ -89,7 +89,15 @@ export default class ClerkProvider {
         emailAddress: [email],
         limit: 1,
       });
-      return { isSuccess: true, clerkUserId: data[0]?.id ?? null };
+      const user = data[0];
+      return {
+        isSuccess: true,
+        clerkUserId: user?.id ?? null,
+        hasPendingInvite:
+          user !== undefined &&
+          (typeof user.publicMetadata[ADMIN_INVITE_METADATA_KEY] === "string" ||
+            typeof user.publicMetadata[COMPANY_PUBLIC_ID_METADATA_KEY] === "string"),
+      };
     } catch (error) {
       const message = "Unknown error in finding Clerk user by email";
       AppLogger.error({
@@ -164,9 +172,8 @@ export default class ClerkProvider {
     }
   }
 
-  // DEV_NOTE: Revoke invite: the emailed invitation is revoked; a granted account loses the metadata only while it
-  // still names this invite (a later invite from another company may have replaced it). Either way the admin_invites
-  // row, now Revoked, already refuses a sign-in.
+  // DEV_NOTE: Revoke invite, after the row is Revoked: a pending emailed invitation is revoked; a granted account loses
+  // the metadata only while it still names this invite. Best effort: the row already refuses a sign-in.
   static async revokeInvite(
     env: Env,
     params: {
@@ -178,7 +185,15 @@ export default class ClerkProvider {
     try {
       const client = ClerkProvider.getClerkClient(env);
       if (params.clerkInvitationId) {
-        await client.invitations.revokeInvitation(params.clerkInvitationId);
+        // DEV_NOTE: Clerk revokes only a pending invitation; one already accepted, expired or revoked (a retry) needs
+        // nothing more, since the admin_invites row decides access
+        const { data } = await client.invitations.getInvitationList({
+          query: params.clerkInvitationId,
+          status: "pending",
+        });
+        if (data.some((invitation) => invitation.id === params.clerkInvitationId)) {
+          await client.invitations.revokeInvitation(params.clerkInvitationId);
+        }
       }
       if (params.clerkUserId) {
         const user = await client.users.getUser(params.clerkUserId);

@@ -158,45 +158,54 @@ export default class CompanyConnectionsRepo {
     };
   }
 
-  // DEV_NOTE: Identity and origins: production first, then staging, oldest first within each
-  async getSecurityConnections(params: {
-    companyId: string;
-  }): Promise<Schemas.GetSecurityConnectionsApiResponse> {
-    const listed = await withTenant(this.db, params.companyId, async (tx) => {
-      return await this.dal.getCompanyConnections(tx, params);
+  // DEV_NOTE: The company's connections, production first, then staging, oldest first within each: the one order both
+  // the Security page and Settings › Connections show
+  private async listSortedConnections(
+    companyId: string,
+  ): Promise<Schemas.ApiResponse & { connections?: Schemas.CompanyConnection[] }> {
+    const listed = await withTenant(this.db, companyId, async (tx) => {
+      return await this.dal.getCompanyConnections(tx, { companyId });
     });
     if (!listed.isSuccess || !("companyConnections" in listed) || !listed.companyConnections) {
       return { isSuccess: false, message: listed.message };
     }
-    const sorted = [...listed.companyConnections].sort(
-      (a, b) => a.environment - b.environment || a.createdAt.getTime() - b.createdAt.getTime(),
-    );
     return {
       isSuccess: true,
-      message: "Connections fetched successfully",
-      connections: await Promise.all(sorted.map((row) => this.toSecurityConnection(row))),
+      connections: [...listed.companyConnections].sort(
+        (a, b) => a.environment - b.environment || a.createdAt.getTime() - b.createdAt.getTime(),
+      ),
     };
   }
 
-  // DEV_NOTE: Settings › Connections (M4-10): the Security view plus the API address and the sign-in method in words
-  // (Schemas.companyConnectionSignInLabel). Never auth_config or a credential. Same order as Security.
-  async getSettingsConnections(params: {
+  // DEV_NOTE: Identity and origins (the Security page)
+  async getSecurityConnections(params: {
     companyId: string;
-  }): Promise<Schemas.GetSettingsConnectionsApiResponse> {
-    const listed = await withTenant(this.db, params.companyId, async (tx) => {
-      return await this.dal.getCompanyConnections(tx, params);
-    });
-    if (!listed.isSuccess || !("companyConnections" in listed) || !listed.companyConnections) {
+  }): Promise<Schemas.GetSecurityConnectionsApiResponse> {
+    const listed = await this.listSortedConnections(params.companyId);
+    if (!listed.isSuccess || !listed.connections)
       return { isSuccess: false, message: listed.message };
-    }
-    const sorted = [...listed.companyConnections].sort(
-      (a, b) => a.environment - b.environment || a.createdAt.getTime() - b.createdAt.getTime(),
-    );
     return {
       isSuccess: true,
       message: "Connections fetched successfully",
       connections: await Promise.all(
-        sorted.map(async (row) => ({
+        listed.connections.map((row) => this.toSecurityConnection(row)),
+      ),
+    };
+  }
+
+  // DEV_NOTE: Settings › Connections (M4-10): the Security view plus the API address and the sign-in method in words
+  // (Schemas.companyConnectionSignInLabel). Never auth_config or a credential.
+  async getSettingsConnections(params: {
+    companyId: string;
+  }): Promise<Schemas.GetSettingsConnectionsApiResponse> {
+    const listed = await this.listSortedConnections(params.companyId);
+    if (!listed.isSuccess || !listed.connections)
+      return { isSuccess: false, message: listed.message };
+    return {
+      isSuccess: true,
+      message: "Connections fetched successfully",
+      connections: await Promise.all(
+        listed.connections.map(async (row) => ({
           ...(await this.toSecurityConnection(row)),
           baseUrl: row.baseUrl,
           signInLabel: Schemas.companyConnectionSignInLabel(row.authType),

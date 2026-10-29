@@ -250,8 +250,6 @@ function emailIssue(value: string): string | undefined {
   return Schemas.ZAdminInviteEmail.safeParse(value).success ? undefined : "Enter an email address.";
 }
 
-const errorsOf = (errors: unknown[]) => errors.map((message) => ({ message: String(message) }));
-
 // DEV_NOTE: Invite by email. Awaits the write (mutateAsync): closes on success, shows a refusal inline otherwise.
 function InviteDialog({ isOpen, onClose }: Schemas.DashboardInviteDialogProps) {
   const invite = useInviteAdmin();
@@ -316,7 +314,7 @@ function InviteDialog({ isOpen, onClose }: Schemas.DashboardInviteDialogProps) {
                   errors={
                     refusal
                       ? [{ message: TEAM_REFUSAL_COPY[refusal] }]
-                      : errorsOf(field.state.meta.errors)
+                      : Utilities.toFieldErrors(field.state.meta.errors)
                   }
                 />
               </Field>

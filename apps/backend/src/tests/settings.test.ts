@@ -232,6 +232,8 @@ afterAll(async () => {
     await ownerDb.delete(modelCalls).where(inArray(modelCalls.companyId, companyIds));
     await ownerDb.delete(companySecrets).where(inArray(companySecrets.companyId, companyIds));
     await ownerDb.delete(adminInvites).where(inArray(adminInvites.companyId, companyIds));
+    // DEV_NOTE: A removed admin's clerk_user_id was replaced, so their row is found by company
+    await ownerDb.delete(admins).where(inArray(admins.companyId, companyIds));
     await ownerDb
       .delete(companyConnections)
       .where(inArray(companyConnections.companyId, companyIds));
@@ -735,6 +737,22 @@ describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
     });
     expect(elsewhere.status).toBe(409);
     expect(elsewhere.body.failure).toBe(Schemas.TeamFailureEnum.AlreadyAdmin);
+
+    // DEV_NOTE: An account already holding another invite's metadata isn't overwritten
+    vi.spyOn(ClerkProvider, "findUserByEmail").mockResolvedValue({
+      isSuccess: true,
+      clerkUserId: `user_other_${crypto.randomUUID()}`,
+      hasPendingInvite: true,
+    });
+    const grantedElsewhere = vi.spyOn(ClerkProvider, "grantInvite");
+    grantedElsewhere.mockClear();
+    const pendingElsewhere = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "invited-elsewhere@example.com" },
+    });
+    expect(pendingElsewhere.status).toBe(409);
+    expect(pendingElsewhere.body.failure).toBe(Schemas.TeamFailureEnum.HasPendingInvite);
+    expect(grantedElsewhere).not.toHaveBeenCalled();
   });
 
   it("saves nothing when Clerk can't send the invite", async () => {
@@ -749,7 +767,39 @@ describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
     });
     expect(failed.status).toBe(502);
     expect(failed.body.failure).toBe(Schemas.TeamFailureEnum.ClerkUnavailable);
-    expect(await inviteRows(companyA)).toHaveLength(before.length);
+    // DEV_NOTE: The row committed before Clerk was called is closed: Revoked, not listed, no audit row
+    const after = await inviteRows(companyA);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.at(-1)).toMatchObject({
+      email: "later@example.com",
+      status: Schemas.AdminInviteStatusIntEnum.Revoked,
+    });
+    const listed = await call("GET", "/dashboard/settings/team", { as: adminA });
+    expect(listed.body.team?.invites.map((invite) => invite.email)).not.toContain(
+      "later@example.com",
+    );
+  });
+
+  it("revokes even when Clerk can't be told, since the row decides", async () => {
+    const invited = await call("POST", "/dashboard/settings/team/invites", {
+      as: adminA,
+      body: { email: "clerk-down@example.com" },
+    });
+    expect(invited.status).toBe(201);
+    vi.spyOn(ClerkProvider, "revokeInvite").mockResolvedValue({
+      isSuccess: false,
+      message: "Unknown error in revoking Clerk invite",
+    });
+    const revoked = await call(
+      "POST",
+      `/dashboard/settings/team/invites/${invited.body.invite!.publicId}/revoke`,
+      { as: adminA },
+    );
+    expect(revoked.status).toBe(200);
+    const row = (await inviteRows(companyA)).find(
+      (invite) => invite.publicId === invited.body.invite!.publicId,
+    );
+    expect(row?.status).toBe(Schemas.AdminInviteStatusIntEnum.Revoked);
   });
 
   it("revokes a pending invite once, telling Clerk, never another company's", async () => {
@@ -796,10 +846,22 @@ describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
       (await call("DELETE", `/dashboard/settings/team/admins/${adminA2}`, { as: adminB })).status,
     ).toBe(404);
 
+    // DEV_NOTE: Something Marcus did before being removed, whose audit row must keep his name
+    expect(
+      (
+        await call("POST", "/dashboard/settings/team/invites", {
+          as: adminA2,
+          body: { email: "by-marcus@example.com" },
+        })
+      ).status,
+    ).toBe(201);
+
     const removed = await call("DELETE", `/dashboard/settings/team/admins/${adminA2}`, {
       as: adminA,
     });
     expect(removed.status).toBe(200);
+    const listed = await call("GET", "/dashboard/settings/team", { as: adminA });
+    expect(listed.body.team?.members.map((member) => member.clerkUserId)).toEqual([adminA]);
     expect((await call("GET", "/dashboard/settings/team", { as: adminA2 })).status).toBe(403);
     expect(
       (await call("DELETE", `/dashboard/settings/team/admins/${adminA2}`, { as: adminA })).status,
@@ -820,6 +882,16 @@ describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
       },
       {
         actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Created,
+        detail: { label: "clerk-down@example.com" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Revoked,
+        detail: { label: "clerk-down@example.com" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
         entityAction: Schemas.AuditEntityActionEnum.Revoked,
         detail: { label: "priya@example.com" },
       },
@@ -827,6 +899,11 @@ describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
         actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
         entityAction: Schemas.AuditEntityActionEnum.Created,
         detail: { label: "priya@example.com" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Created,
+        detail: { label: "by-marcus@example.com" },
       },
     ]);
     expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.Admin)).toEqual([
@@ -840,10 +917,11 @@ describe("Settings › Team API (M4-10)", { timeout: 60_000 }, () => {
     expect(
       (body.auditLog as Schemas.AuditLogEntry[] | undefined)
         ?.slice(0, 2)
-        .map((entry) => [entry.action, entry.on]),
+        .map((entry) => [entry.actorName, entry.action, entry.on]),
     ).toEqual([
-      ["Removed admin", "Marcus Lee"],
-      ["Invited admin", "priya@example.com"],
+      ["Ana Ruiz", "Removed admin", "Marcus Lee"],
+      // DEV_NOTE: Removed, still named on what he did
+      ["Marcus Lee", "Invited admin", "by-marcus@example.com"],
     ]);
   });
 });

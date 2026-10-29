@@ -32,7 +32,7 @@ export class SecurityQueries {
     injectionEventList: (page: number) =>
       [...SecurityQueries.keys.injectionEvents(), "list", page] as const,
     injectionEventCount: () => [...SecurityQueries.keys.injectionEvents(), "count"] as const,
-    auditLog: () => [...SecurityQueries.keys.all(), "audit-log"] as const,
+    auditLog: () => [...SecurityQueries.keys.all(), SECURITY_KEY_SEGMENTS.auditLog] as const,
     auditLogList: (page: number) => [...SecurityQueries.keys.auditLog(), "list", page] as const,
     auditLogCount: () => [...SecurityQueries.keys.auditLog(), "count"] as const,
   };
@@ -173,47 +173,6 @@ export function useAuditLogCount() {
 
 function refreshAuditLog(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: SecurityQueries.keys.auditLog() });
-}
-
-// DEV_NOTE: Replaces a connection's allowed origins; the list shows the answer at once. The dialog awaits it
-// (mutateAsync) and closes on success.
-export function useUpdateAllowedOrigins(publicId: string) {
-  const { getToken } = useAuth();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Schemas.UpdateAllowedOriginsApiRequest) =>
-      apiClient<Schemas.UpdateAllowedOriginsApiResponse>(
-        `/dashboard/security/connections/${encodeURIComponent(publicId)}/origins`,
-        getToken,
-        { method: "PUT", body: JSON.stringify(body) },
-      ),
-    onSuccess: ({ connection }) => {
-      if (connection) {
-        queryClient.setQueryData<Schemas.GetSecurityConnectionsApiResponse>(
-          SecurityQueries.keys.connections(),
-          (current) =>
-            current && {
-              ...current,
-              connections: current.connections?.map((row) =>
-                row.publicId === connection.publicId ? connection : row,
-              ),
-            },
-        );
-      }
-      refreshAuditLog(queryClient);
-      // DEV_NOTE: Settings › Connections shows the same origins
-      void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.connections });
-      toast.success("Allowed origins saved.");
-    },
-    onError: (error) => {
-      if (error instanceof ApiError && error.status === 404) {
-        void queryClient.invalidateQueries({ queryKey: SecurityQueries.keys.connections() });
-        toast.error("This connection isn't available any more. Nothing changed.");
-        return;
-      }
-      toast.error("The origins weren't saved. Nothing changed, try again.");
-    },
-  });
 }
 
 // DEV_NOTE: Rotate key; the keys table shows the answer at once. A rotation still in progress (409) reloads the keys.
