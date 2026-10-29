@@ -13,6 +13,7 @@ import withPlatform from "@/db/withPlatform";
 import {
   activityLog,
   activityRollups,
+  adminInvites,
   admins,
   changeRequests,
   chatbotConfigs,
@@ -106,6 +107,14 @@ const FIXTURES: Fixture[] = [
         .insert(activityRollups)
         .values({ companyId, day: "2026-10-06", metric: `rls_${uid()}`, value: "1" })
         .returning({ id: activityRollups.id }),
+  },
+  {
+    name: "admin_invites",
+    insert: (client, companyId) =>
+      client
+        .insert(adminInvites)
+        .values({ publicId: pid(), companyId, email: `rls-${uid()}@example.com` })
+        .returning({ id: adminInvites.id }),
   },
   {
     name: "admins",

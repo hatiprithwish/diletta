@@ -259,6 +259,7 @@ describe("CompanySecretsRepo", () => {
       isSuccess: false,
       message: "Active model key already exists for this provider",
       companySecret: undefined,
+      isActiveKeyTaken: true,
     });
 
     await repo.updateCompanySecret({
@@ -390,7 +391,11 @@ describe("CompanySecretsRepo", () => {
       const read = await withTenant(db, companyB, (tx) =>
         dal.getCompanySecretDetails(tx, { companyId: companyA, publicId }),
       );
-      expect(read).toEqual({ isSuccess: false, message: "Company secret not found" });
+      expect(read).toEqual({
+        isSuccess: false,
+        message: "Company secret not found",
+        isNotFound: true,
+      });
     } finally {
       await db.$client.end();
     }

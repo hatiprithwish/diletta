@@ -103,6 +103,9 @@ export default class CompanySecretsDAL {
           encryptionKeyVersion: params.encryptionKeyVersion,
           lastFourChars: params.lastFourChars,
           expiresAt: params.expiresAt,
+          lastValidatedAt: params.lastValidatedAt ?? null,
+          createdBy: params.createdBy ?? null,
+          updatedBy: params.createdBy ?? null,
         })
         .returning();
 
@@ -114,6 +117,7 @@ export default class CompanySecretsDAL {
         error,
         "Unknown error in creating company secret",
       );
+      response.isActiveKeyTaken = Utility.isUniqueViolation(error, PROVIDER_ACTIVE_INDEX);
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateCompanySecret,
@@ -129,7 +133,7 @@ export default class CompanySecretsDAL {
 
   async getCompanySecretDetails(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindCompanySecretDALRequest,
+    params: Schemas.GetCompanySecretDetailsDALRequest,
   ) {
     const response: Schemas.CompanySecretDALResponse = { isSuccess: false };
 
@@ -138,11 +142,12 @@ export default class CompanySecretsDAL {
         eq(companySecrets.publicId, params.publicId),
         eq(companySecrets.companyId, params.companyId),
       ];
-      const [companySecret] = await tx
+      const query = tx
         .select()
         .from(companySecrets)
         .where(and(...conditions))
         .limit(1);
+      const [companySecret] = params.isForUpdate ? await query.for("update") : await query;
 
       if (!companySecret) {
         const message = "Company secret not found";
@@ -153,6 +158,7 @@ export default class CompanySecretsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -365,6 +371,8 @@ export default class CompanySecretsDAL {
           rotatedAt: params.encryptedSecret ? now : undefined,
           expiresAt: params.expiresAt ?? undefined,
           status: params.status ?? undefined,
+          lastValidatedAt: params.lastValidatedAt ?? undefined,
+          updatedBy: params.updatedBy ?? undefined,
           updatedAt: now,
         })
         .where(and(...conditions))
@@ -379,6 +387,7 @@ export default class CompanySecretsDAL {
           metadata,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -390,6 +399,7 @@ export default class CompanySecretsDAL {
         error,
         "Unknown error in updating company secret",
       );
+      response.isActiveKeyTaken = Utility.isUniqueViolation(error, PROVIDER_ACTIVE_INDEX);
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.UpdateCompanySecret,

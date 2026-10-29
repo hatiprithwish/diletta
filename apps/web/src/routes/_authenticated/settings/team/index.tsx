@@ -1,10 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/page-header";
+import { TeamPage } from "./-Components";
 
 export const Route = createFileRoute("/_authenticated/settings/team/")({
-  component: SettingsTeamPage,
+  component: TeamPage,
 });
-
-function SettingsTeamPage() {
-  return <PageHeader title="Team" description="People who can use this dashboard" />;
-}

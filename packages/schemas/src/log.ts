@@ -253,6 +253,25 @@ export enum LogAction {
   GetActiveToolDefinitionOptions = "GetActiveToolDefinitionOptions",
   GetKnowledgeSourceOptions = "GetKnowledgeSourceOptions",
   UpdateCompanyReadOnly = "UpdateCompanyReadOnly",
+  CheckModelKey = "CheckModelKey",
+  UpdateCompanySpendingBudget = "UpdateCompanySpendingBudget",
+
+  // Settings › Team (M4-10)
+  CreateAdminInvite = "CreateAdminInvite",
+  GetAdminInviteDetails = "GetAdminInviteDetails",
+  FindPendingAdminInviteByEmail = "FindPendingAdminInviteByEmail",
+  GetPendingAdminInvites = "GetPendingAdminInvites",
+  SetAdminInviteClerkRef = "SetAdminInviteClerkRef",
+  UpdateAdminInviteStatus = "UpdateAdminInviteStatus",
+  GetCompanyAdmins = "GetCompanyAdmins",
+  GetCompanyAdminByClerkUserId = "GetCompanyAdminByClerkUserId",
+  GetCompanyAdminByEmail = "GetCompanyAdminByEmail",
+  RemoveAdmin = "RemoveAdmin",
+  FindClerkUserByEmail = "FindClerkUserByEmail",
+  CreateClerkInvitation = "CreateClerkInvitation",
+  GrantClerkInvite = "GrantClerkInvite",
+  RevokeClerkInvite = "RevokeClerkInvite",
+  GetClerkLastActive = "GetClerkLastActive",
 
   // Conversations
   CreateConversation = "CreateConversation",

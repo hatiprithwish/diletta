@@ -202,12 +202,52 @@ export const admins = table(
     companyId: t.bigint("company_id", { mode: "string" }), // → companies.id, null = operator
     email: t.text(),
     name: t.text(),
+    // DEV_NOTE: Settings › Team's Remove (M4-10) keeps the row, so audit history, "edited by" and "invited by" still name
+    // the person: removed_at / removed_by are set and clerk_user_id is replaced by a `removed_` token, which frees the
+    // Clerk account for a later invite and makes every sign-in lookup miss
+    removedAt: t.timestamp("removed_at", { withTimezone: true }),
+    removedBy: t.bigint("removed_by", { mode: "string" }), // → admins.id
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     t.uniqueIndex("UNQ_admins_clerk_user_id").on(table.clerkUserId),
     t.index("IDX_admins_company_id").on(table.companyId),
+    t.index("IDX_admins_removed_by").on(table.removedBy),
+  ],
+);
+
+// DEV_NOTE: Settings › Team (M4-10): an invite to administer one company. Pending until the invitee's first sign-in
+// accepts it (in the admins row's transaction) or an admin revokes it; the row, not the Clerk metadata, decides. Exactly
+// one of clerk_invitation_id (an emailed Clerk invitation) and clerk_user_id (an existing Clerk account given the invite
+// metadata) is set once Clerk has answered. One Pending invite per company and email.
+export const adminInvites = table(
+  "admin_invites",
+  {
+    id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
+    publicId: t.text("public_id").notNull(),
+    companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    email: t.text().notNull(), // lowercased
+    status: t
+      .smallint()
+      .$type<Schemas.AdminInviteStatusIntEnum>()
+      .notNull()
+      .default(Schemas.AdminInviteStatusIntEnum.Pending),
+    clerkInvitationId: t.text("clerk_invitation_id"),
+    clerkUserId: t.text("clerk_user_id"),
+    invitedBy: t.bigint("invited_by", { mode: "string" }), // → admins.id
+    acceptedAt: t.timestamp("accepted_at", { withTimezone: true }),
+    createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    t.uniqueIndex("UNQ_admin_invites_public_id").on(table.publicId),
+    t
+      .uniqueIndex("UNQ_admin_invites_company_id_email_pending")
+      .on(table.companyId, table.email)
+      .where(sql`${table.status} = ${lit(Schemas.AdminInviteStatusIntEnum.Pending)}`),
+    t.index("IDX_admin_invites_company_id").on(table.companyId),
+    t.index("IDX_admin_invites_invited_by").on(table.invitedBy),
   ],
 );
 

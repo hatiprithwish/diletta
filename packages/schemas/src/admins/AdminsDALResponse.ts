@@ -5,3 +5,7 @@ import type { ApiResponse } from "../common";
 export interface AdminDALResponse extends ApiResponse {
   admin?: Admin;
 }
+
+export interface AdminsDALResponse extends ApiResponse {
+  admins?: Admin[];
+}

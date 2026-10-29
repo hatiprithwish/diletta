@@ -10,7 +10,20 @@ export const QUERY_KEY_ROOTS = {
   tests: ["tests"],
   security: ["security"],
   bots: ["bots"],
+  modelKeys: ["model-keys"],
+  budget: ["budget"],
+  connections: ["connections"],
+  team: ["team"],
 } as const;
+
+// DEV_NOTE: The Security page's key segment that Settings › Connections refreshes (SecurityQueries.keys builds from it)
+// DEV_NOTE: Settings › Connections' list key segment (ConnectionsQueries.keys builds from it)
+export const CONNECTIONS_LIST_SEGMENT = "list";
+
+export const SECURITY_KEY_SEGMENTS = { connections: "connections", auditLog: "audit-log" } as const;
+
+// DEV_NOTE: The Bots page's key segments that another page refreshes (BotsQueries.keys builds its keys from them)
+export const BOTS_KEY_SEGMENTS = { options: "options" } as const;
 
 // DEV_NOTE: The Tests page's key segments that another page refreshes (TestsQueries.keys builds its keys from them)
 export const TESTS_KEY_SEGMENTS = { cases: "cases", summary: "summary" } as const;
@@ -51,4 +64,18 @@ export function invalidateLiveConfigViews(queryClient: QueryClient) {
     queryKey: [...QUERY_KEY_ROOTS.tests, TESTS_KEY_SEGMENTS.summary],
   });
   void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.conversations });
+}
+
+// DEV_NOTE: A model key was added or rotated (Settings › Model keys, M4-10): the draft editor's pickers refetch, since they
+// list the providers with an Active key
+export function invalidateModelKeyViews(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({
+    queryKey: [...QUERY_KEY_ROOTS.bots, BOTS_KEY_SEGMENTS.options],
+  });
+}
+
+// DEV_NOTE: The spending budget changed (Settings › Budget, M4-10): Overview's spend card (spend against the budget)
+// refetches
+export function invalidateBudgetViews(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.overview });
 }

@@ -1,5 +1,6 @@
 export * from "./companies";
 export * from "./admins";
+export * from "./adminInvites";
 export * from "./authz";
 export * from "./chatbots";
 export * from "./crypto";

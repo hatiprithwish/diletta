@@ -314,6 +314,49 @@ export default class CompaniesDAL {
     return response;
   }
 
+  // DEV_NOTE: Settings › Budget (M4-10), by the admin, on the company's own row (withTenant). BudgetDO re-reads it
+  // within BUDGET_REFRESH_MS.
+  async updateCompanySpendingBudget(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanySpendingBudgetDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          spendingBudget: params.spendingBudget,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Spending budget updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating spending budget";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateCompanySpendingBudget,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: The Bots page's Read-only mode (M4-10), by the admin, on the company's own row (withTenant)
   async updateCompanyReadOnly(
     tx: NodePgTransaction<EmptyRelations>,

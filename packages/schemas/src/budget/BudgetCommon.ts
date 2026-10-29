@@ -67,6 +67,12 @@ export function budgetPeriodStart(periodKey: string): Date {
   return new Date(`${periodKey}-01T00:00:00.000Z`);
 }
 
+// First instant after the period a key names (UTC): the next month's start
+export function budgetPeriodEnd(periodKey: string): Date {
+  const start = budgetPeriodStart(periodKey);
+  return new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+}
+
 // DEV_NOTE: BudgetDO storage (SQLite kv), one key each. Internal ids only; nothing here leaves the worker.
 //   ledger: the company's billing period. spentMicros = settled spend (seeded from model_calls when the period
 //     starts), budgetMicros = spending_budget as last read (re-read every BUDGET_REFRESH_MS), dayKey = the UTC day
@@ -99,3 +105,20 @@ export const ZBudgetUserCounters = z.object({
   messageTimes: z.array(z.number().int()),
 });
 export type BudgetUserCounters = z.infer<typeof ZBudgetUserCounters>;
+
+// ─── Settings › Budget (M4-10)
+
+// DEV_NOTE: companies.spending_budget is numeric(12, 6): 6 digits before the point, so whole cents top out here
+export const SPENDING_BUDGET_MAX_USD = 999_999.99;
+
+// DEV_NOTE: The amount an admin saves: positive, at most SPENDING_BUDGET_MAX_USD, whole cents
+export const ZSpendingBudgetUsd = z
+  .number()
+  .positive("Enter an amount above $0")
+  .max(
+    SPENDING_BUDGET_MAX_USD,
+    `At most $${SPENDING_BUDGET_MAX_USD.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+  )
+  .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-6, {
+    message: "Whole cents only",
+  });

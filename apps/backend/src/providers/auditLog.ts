@@ -60,6 +60,18 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.RetentionChanged]: "Changed chat retention",
     [Schemas.AuditEntityActionEnum.TurnedOn]: "Turned on read-only mode",
     [Schemas.AuditEntityActionEnum.TurnedOff]: "Turned off read-only mode",
+    [Schemas.AuditEntityActionEnum.BudgetChanged]: "Changed spending budget",
+  },
+  [Schemas.AuditEntityTypeEnum.ModelKey]: {
+    [Schemas.AuditEntityActionEnum.Created]: "Added model key",
+    [Schemas.AuditEntityActionEnum.Rotated]: "Rotated model key",
+  },
+  [Schemas.AuditEntityTypeEnum.AdminInvite]: {
+    [Schemas.AuditEntityActionEnum.Created]: "Invited admin",
+    [Schemas.AuditEntityActionEnum.Revoked]: "Revoked invite",
+  },
+  [Schemas.AuditEntityTypeEnum.Admin]: {
+    [Schemas.AuditEntityActionEnum.Removed]: "Removed admin",
   },
   [Schemas.AuditEntityTypeEnum.ChatbotConfig]: {
     [Schemas.AuditEntityActionEnum.Created]: "Started a draft version",

@@ -1,9 +1,11 @@
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { EmptyRelations } from "drizzle-orm";
+import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import Constants from "@/config/Constants";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import BudgetPeriodSpendProvider from "@/providers/budgetPeriodSpend";
 import CompanyKeyProvider from "@/providers/companyKey";
 import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
@@ -279,6 +281,107 @@ export default class CompaniesRepo {
           isSuccess: true,
           message: "Read-only mode updated successfully",
           readOnlyMode: { isReadOnly: updated.company.isReadOnly },
+          outboxIds: [outboxId],
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Settings › Budget (M4-10): the budget in force and what this billing period has used so far, read from
+  // model_calls in Neon through BudgetPeriodSpendProvider (the sum BudgetDO is seeded from). It can trail BudgetDO's live
+  // count: Pending rows add 0 until backfilled, and holds in flight aren't rows yet.
+  private async readSpendingBudget(
+    tx: NodePgTransaction<EmptyRelations>,
+    company: Schemas.Company,
+  ): Promise<Schemas.GetSpendingBudgetApiResponse> {
+    const periodKey = Schemas.budgetPeriodKey(Date.now());
+    const periodStart = Schemas.budgetPeriodStart(periodKey);
+    const used = await BudgetPeriodSpendProvider.getPeriodSpend(tx, {
+      companyId: company.id,
+      periodStart,
+    });
+    if (!used.isSuccess || used.totalCostUsd === undefined) {
+      return { isSuccess: false, message: used.message };
+    }
+    return {
+      isSuccess: true,
+      message: "Spending budget fetched successfully",
+      spendingBudget: {
+        budgetUsd: company.spendingBudget ?? Schemas.DEFAULT_SPENDING_BUDGET_USD,
+        isDefault: company.spendingBudget === null,
+        usedUsd: used.totalCostUsd,
+        periodStart: periodStart.toISOString(),
+        periodEnd: Schemas.budgetPeriodEnd(periodKey).toISOString(),
+      },
+    };
+  }
+
+  async getSpendingBudget(params: {
+    companyId: string;
+  }): Promise<Schemas.GetSpendingBudgetApiResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetSpendingBudgetApiResponse> => {
+        const found = await this.dal.getCompanyDetails(tx, params);
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        return await this.readSpendingBudget(tx, found.company);
+      },
+    );
+  }
+
+  // DEV_NOTE: Save the spending budget, with its BudgetChanged audit row labelled with the amount. Compared in
+  // micro-dollars with the budget in force (NULL = DEFAULT_SPENDING_BUDGET_USD), under the row lock: the amount already
+  // in force, the default included, writes nothing and records nothing. BudgetDO picks it up within BUDGET_REFRESH_MS.
+  async updateSpendingBudget(
+    params: Schemas.UpdateSpendingBudgetApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateSpendingBudgetApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateSpendingBudgetApiResponse>> => {
+        const found = await this.dal.getCompanyDetails(tx, {
+          companyId: params.companyId,
+          isForUpdate: true,
+        });
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        const inForce = found.company.spendingBudget ?? Schemas.DEFAULT_SPENDING_BUDGET_USD;
+        if (Schemas.usdToMicros(inForce) === Schemas.usdToMicros(params.spendingBudgetUsd)) {
+          const unchanged = await this.readSpendingBudget(tx, found.company);
+          if (!unchanged.isSuccess) return { ...unchanged, outboxIds: [] };
+          return { ...unchanged, message: "Spending budget unchanged", outboxIds: [] };
+        }
+
+        const updated = await this.dal.updateCompanySpendingBudget(tx, {
+          companyId: params.companyId,
+          spendingBudget: params.spendingBudgetUsd.toFixed(6),
+          updatedBy: params.adminId,
+        });
+        if (!updated.isSuccess || !updated.company) {
+          return { isSuccess: false, message: updated.message, isNotFound: updated.isNotFound };
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: adminAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.Company,
+          entityAction: Schemas.AuditEntityActionEnum.BudgetChanged,
+          entity: updated.company,
+          label: `$${params.spendingBudgetUsd.toFixed(2)}`,
+        });
+        // DEV_NOTE: Read back in the same transaction; if that read fails, the save and its audit row roll back
+        // together, so an error answer never hides a saved change
+        const result = await this.readSpendingBudget(tx, updated.company);
+        if (!result.isSuccess) {
+          throw new TenantRollbackError(result.message ?? "Spending budget not read back");
+        }
+        return {
+          ...result,
+          message: "Spending budget updated successfully",
           outboxIds: [outboxId],
         };
       },

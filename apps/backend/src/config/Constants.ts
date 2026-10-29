@@ -93,6 +93,10 @@ export default class Constants {
   static readonly BUDGET_MESSAGE_WINDOW_MS = 60_000;
   static readonly BUDGET_TURN_WINDOW_MS = 60 * 60_000;
 
+  // DEV_NOTE: Settings › Model keys (M4-10): how long the provider's list-models check may take before the key counts
+  // as not checked (502, nothing saved)
+  static readonly MODEL_KEY_CHECK_TIMEOUT_MS = 10_000;
+
   // DEV_NOTE: The most activity rows read for one entity (an issue gathers a handful: opened, a provider per failing
   // key, triage events from M4)
   static readonly ACTIVITY_LOGS_BY_ENTITY_LIMIT = 100;

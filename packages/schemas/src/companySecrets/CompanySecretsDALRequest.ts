@@ -12,10 +12,21 @@ export type CreateCompanySecretDALRequest = Pick<
   | "encryptionKeyVersion"
   | "lastFourChars"
   | "expiresAt"
-> & { encryptedSecret: Uint8Array; iv: Uint8Array };
+> & {
+  encryptedSecret: Uint8Array;
+  iv: Uint8Array;
+  // DEV_NOTE: Settings › Model keys (M4-10): when the provider accepted the value, and who added it
+  lastValidatedAt?: Date | null;
+  createdBy?: string | null;
+};
 
 // Params to find a company secret by its public ID within one company
 export type FindCompanySecretDALRequest = Pick<CompanySecret, "publicId" | "companyId">;
+
+// DEV_NOTE: isForUpdate locks the row (a key rotation, M4-10), so two rotations of one key run one after the other
+export type GetCompanySecretDetailsDALRequest = FindCompanySecretDALRequest & {
+  isForUpdate?: boolean;
+};
 
 export type GetCompanySecretsDALRequest = Pick<CompanySecret, "companyId">;
 
@@ -27,7 +38,11 @@ export type UpdateCompanySecretDALRequest = FindCompanySecretDALRequest &
       encryptedSecret: Uint8Array;
       iv: Uint8Array;
     }
-  >;
+  > & {
+    // DEV_NOTE: Settings › Model keys (M4-10): when the provider accepted the new value, and who rotated it
+    lastValidatedAt?: Date | null;
+    updatedBy?: string | null;
+  };
 
 // Params to find a company's active model key for one provider (at most one: UNQ_company_secrets_company_id_provider_active)
 // DEV_NOTE: isForShare reads the row FOR SHARE (a publish, M4-10), so the key can't be invalidated, revoked or replaced

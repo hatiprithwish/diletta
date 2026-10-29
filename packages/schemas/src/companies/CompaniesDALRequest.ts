@@ -25,3 +25,9 @@ export type GetCompanyIdsByStatusDALRequest = { statuses: Company["status"][] };
 // DEV_NOTE: The Bots page's Read-only mode (M4-10), by the admin, on the company's own row (withTenant)
 export type UpdateCompanyReadOnlyDALRequest = FindCompanyDALRequest &
   Pick<Company, "isReadOnly"> & { updatedBy: string };
+
+// DEV_NOTE: Settings › Budget (M4-10), by the admin, on the company's own row (withTenant); a numeric(12,6) string
+export type UpdateCompanySpendingBudgetDALRequest = FindCompanyDALRequest & {
+  spendingBudget: string;
+  updatedBy: string;
+};

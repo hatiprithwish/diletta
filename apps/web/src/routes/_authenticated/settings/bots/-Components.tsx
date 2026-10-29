@@ -270,8 +270,6 @@ function nameIssue(value: string): string | undefined {
     : "Give the bot a name.";
 }
 
-const errorsOf = (errors: unknown[]) => errors.map((message) => ({ message: String(message) }));
-
 // DEV_NOTE: New bot (chatbot null) or Rename. The form is mounted only while the dialog is open, so every opening starts
 // from the bot's current name (or empty), never from the last submit. Awaits the write (mutateAsync) and closes on
 // success; the toast says why otherwise.
@@ -328,7 +326,7 @@ function BotNameForm({ chatbot, onClose }: Schemas.DashboardBotNameDialogProps) 
               onChange={(event) => field.handleChange(event.target.value)}
               aria-invalid={field.state.meta.errors.length > 0}
             />
-            <FieldError errors={errorsOf(field.state.meta.errors)} />
+            <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
           </Field>
         )}
       </form.Field>

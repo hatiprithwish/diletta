@@ -14,6 +14,21 @@ export enum AuthzActionEnum {
   ReadOnlyModeRead = "company.read_only_read",
   ReadOnlyModeUpdate = "company.read_only_update",
 
+  // Settings › Model keys and Budget (company-scoped, M4-10): read the model keys, add one or replace its value (checked
+  // with the provider first); read the spending budget and what's used, change the budget
+  ModelKeyRead = "model_key.read",
+  ModelKeyUpdate = "model_key.update",
+  BudgetRead = "budget.read",
+  BudgetUpdate = "budget.update",
+
+  // Settings › Connections and Team (company-scoped, M4-10): read the connections (origins are edited through
+  // ConnectionOriginsUpdate); read the team, invite an admin, revoke an invite, remove an admin
+  ConnectionRead = "connection.read",
+  TeamRead = "team.read",
+  TeamInvite = "team.invite",
+  TeamInviteRevoke = "team.invite_revoke",
+  TeamAdminRemove = "team.admin_remove",
+
   // Knowledge sources and their documents (company-scoped)
   KnowledgeSourceRead = "knowledge_source.read",
   KnowledgeSourceCreate = "knowledge_source.create",

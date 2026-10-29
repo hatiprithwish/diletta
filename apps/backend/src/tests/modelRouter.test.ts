@@ -24,6 +24,7 @@ import {
 } from "@/db/tables";
 import withTenant from "@/db/withTenant";
 import AiGatewayProvider from "@/providers/aiGateway";
+import AppLogger from "@/providers/logger";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ModelCallsRepo from "@/repositories/ModelCallsRepo";
@@ -1319,6 +1320,17 @@ describe("AiGatewayProvider.isRejectedKeyError", () => {
   it("ignores 403s, gateway errors, other statuses and non-HTTP errors", () => {
     expect(
       AiGatewayProvider.isRejectedKeyError(
+        Schemas.ModelProviderEnum.OpenAI,
+        apiError(401, {
+          error: {
+            message:
+              "You have insufficient permissions for this operation. Missing scopes: model.request.",
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      AiGatewayProvider.isRejectedKeyError(
         Schemas.ModelProviderEnum.Anthropic,
         apiError(403, { type: "error", error: { type: "permission_error" } }),
       ),
@@ -1348,5 +1360,114 @@ describe("AiGatewayProvider.isRejectedKeyError", () => {
         apiError(400, { error: { code: 400, status: "INVALID_ARGUMENT" } }),
       ),
     ).toBe(false);
+  });
+});
+
+// DEV_NOTE: Settings › Model keys (M4-10): the key check is a list-models GET through the gateway, with the key in the
+// provider's own header, judged by the router's rejected-key rule
+describe("AiGatewayProvider.checkModelKey", () => {
+  const KEY = "sk-test-check-key-0000";
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  it("asks each provider's list-models endpoint with the key in its own header", async () => {
+    mockCloudflare(() => json(200, { data: [] }));
+    for (const provider of [
+      Schemas.ModelProviderEnum.Anthropic,
+      Schemas.ModelProviderEnum.OpenAI,
+      Schemas.ModelProviderEnum.Google,
+    ]) {
+      expect(await AiGatewayProvider.checkModelKey(routerEnv(), { provider, apiKey: KEY })).toBe(
+        Schemas.ModelKeyCheckOutcomeEnum.Valid,
+      );
+    }
+
+    const [anthropic, openai, google] = gatewayRequests();
+    expect(anthropic?.method).toBe("GET");
+    expect(anthropic?.url).toBe(`${GATEWAY_URL}/anthropic/v1/models`);
+    expect(anthropic?.headers.get("x-api-key")).toBe(KEY);
+    expect(anthropic?.headers.get("anthropic-version")).toBe("2023-06-01");
+    expect(anthropic?.headers.get("cf-aig-authorization")).toBe(`Bearer ${GATEWAY_TOKEN}`);
+    expect(anthropic?.headers.get("cf-aig-skip-cache")).toBe("true");
+    expect(openai?.url).toBe(`${GATEWAY_URL}/openai/models`);
+    expect(openai?.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+    expect(google?.url).toBe(`${GATEWAY_URL}/google-ai-studio/v1beta/models`);
+    expect(google?.headers.get("x-goog-api-key")).toBe(KEY);
+  });
+
+  it("is Rejected only for the provider's own bad-key answer, never a 403 or a gateway error", async () => {
+    const answers: [Schemas.ModelProviderEnum, Response, Schemas.ModelKeyCheckOutcomeEnum][] = [
+      [
+        Schemas.ModelProviderEnum.Anthropic,
+        json(401, { type: "error", error: { type: "authentication_error", message: "bad" } }),
+        Schemas.ModelKeyCheckOutcomeEnum.Rejected,
+      ],
+      [
+        Schemas.ModelProviderEnum.Google,
+        json(400, { error: { code: 400, details: [{ reason: "API_KEY_INVALID" }] } }),
+        Schemas.ModelKeyCheckOutcomeEnum.Rejected,
+      ],
+      [
+        Schemas.ModelProviderEnum.Anthropic,
+        json(403, { type: "error", error: { type: "permission_error" } }),
+        Schemas.ModelKeyCheckOutcomeEnum.Unreachable,
+      ],
+      [
+        Schemas.ModelProviderEnum.OpenAI,
+        json(401, { success: false, error: [{ code: 2009, message: "Unauthorized" }] }),
+        Schemas.ModelKeyCheckOutcomeEnum.Unreachable,
+      ],
+      [
+        Schemas.ModelProviderEnum.OpenAI,
+        json(503, { error: { message: "overloaded" } }),
+        Schemas.ModelKeyCheckOutcomeEnum.Unreachable,
+      ],
+      [
+        Schemas.ModelProviderEnum.OpenAI,
+        json(401, { error: { message: "Incorrect API key provided", code: "invalid_api_key" } }),
+        Schemas.ModelKeyCheckOutcomeEnum.Rejected,
+      ],
+      // DEV_NOTE: A restricted key that can't list models authenticated fine: it is accepted
+      [
+        Schemas.ModelProviderEnum.OpenAI,
+        json(401, {
+          error: {
+            message:
+              "You have insufficient permissions for this operation. Missing scopes: api.model.read.",
+            code: null,
+          },
+        }),
+        Schemas.ModelKeyCheckOutcomeEnum.Valid,
+      ],
+    ];
+    for (const [provider, answer, outcome] of answers) {
+      mockCloudflare(() => answer);
+      expect(await AiGatewayProvider.checkModelKey(routerEnv(), { provider, apiKey: KEY })).toBe(
+        outcome,
+      );
+    }
+  });
+
+  it("is Unreachable when the gateway isn't configured or the request fails, and never logs the key", async () => {
+    mockCloudflare(() => {
+      throw new TypeError("Network connection lost");
+    });
+    expect(
+      await AiGatewayProvider.checkModelKey(routerEnv(), {
+        provider: Schemas.ModelProviderEnum.OpenAI,
+        apiKey: KEY,
+      }),
+    ).toBe(Schemas.ModelKeyCheckOutcomeEnum.Unreachable);
+    expect(
+      await AiGatewayProvider.checkModelKey(
+        { ...routerEnv(), AI_GATEWAY_TOKEN: "" },
+        { provider: Schemas.ModelProviderEnum.OpenAI, apiKey: KEY },
+      ),
+    ).toBe(Schemas.ModelKeyCheckOutcomeEnum.Unreachable);
+    expect(gatewayRequests()).toHaveLength(1);
+    expect(JSON.stringify(vi.mocked(AppLogger.error).mock.calls)).not.toContain(KEY);
   });
 });
