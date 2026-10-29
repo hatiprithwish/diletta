@@ -35,8 +35,8 @@ export interface ChatbotConfigVersionStateDALResponse extends ApiResponse {
   hasOpenVersion?: boolean;
 }
 
-export interface PublishedToolPinDALResponse extends ApiResponse {
-  isPinned?: boolean;
+export interface PublishedChatbotConfigBodiesDALResponse extends ApiResponse {
+  configs?: Pick<ChatbotConfig, "publicId" | "schemaVersion" | "body">[];
 }
 
 // DEV_NOTE: chatbotId is internal (the Repo matches it to its chatbots)

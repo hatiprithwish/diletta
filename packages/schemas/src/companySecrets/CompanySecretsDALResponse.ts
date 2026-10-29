@@ -12,3 +12,7 @@ export interface CompanySecretDALResponse extends ApiResponse {
 export interface CompanySecretsDALResponse extends ApiResponse {
   companySecrets?: CompanySecret[];
 }
+
+export interface ActiveModelKeyProvidersDALResponse extends ApiResponse {
+  providers?: string[];
+}

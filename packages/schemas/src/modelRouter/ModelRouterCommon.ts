@@ -190,8 +190,6 @@ export const MODEL_PRICES: Record<ModelProviderEnum, Record<string, ModelPrice>>
   },
 };
 
-// DEV_NOTE: Own-property lookup, so a model name like "constructor" or "__proto__" from a config body is never
-// mistaken for a listed model
 // DEV_NOTE: The models the Bots draft editor (M4-10) fills in when a provider is chosen for a tier: a starting point the
 // admin can change, never a runtime default (the router uses only the config's routing). Each must be in MODEL_PRICES
 // (test).
@@ -213,6 +211,8 @@ export const MODEL_TIER_SUGGESTIONS: Record<ModelProviderEnum, Record<ModelTierE
   },
 };
 
+// DEV_NOTE: Own-property lookup, so a model name like "constructor" or "__proto__" from a config body is never
+// mistaken for a listed model
 export function getModelPrice(provider: ModelProviderEnum, model: string): ModelPrice | null {
   const prices = MODEL_PRICES[provider];
   return Object.hasOwn(prices, model) ? (prices[model] ?? null) : null;

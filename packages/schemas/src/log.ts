@@ -100,6 +100,7 @@ export enum LogAction {
   ListCompanySecrets = "ListCompanySecrets",
   UpdateCompanySecret = "UpdateCompanySecret",
   GetActiveModelKey = "GetActiveModelKey",
+  GetActiveModelKeyProviders = "GetActiveModelKeyProviders",
   InvalidateModelKey = "InvalidateModelKey",
 
   // Chatbot user secrets
@@ -245,7 +246,7 @@ export enum LogAction {
   ArchiveChatbotConfigDraft = "ArchiveChatbotConfigDraft",
   ArchivePublishedChatbotConfig = "ArchivePublishedChatbotConfig",
   PublishChatbotConfig = "PublishChatbotConfig",
-  FindPublishedToolPin = "FindPublishedToolPin",
+  GetPublishedChatbotConfigBodies = "GetPublishedChatbotConfigBodies",
   GetChatbotConfigHeads = "GetChatbotConfigHeads",
   GetChatbotConversationCounts = "GetChatbotConversationCounts",
   GetLatestEvalRunsByConfig = "GetLatestEvalRunsByConfig",

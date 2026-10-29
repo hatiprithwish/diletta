@@ -566,15 +566,27 @@ export default class ToolDefinitionsRepo {
         }
 
         // DEV_NOTE: M4-10: a version a Published chatbot config pins stays Active until no Published config pins it (the
-        // publish reads its pins FOR SHARE, so the two can't cross)
+        // publish reads its pins FOR SHARE, so the two can't cross). Each Published body is read through the config spec
+        // (readConfigBody, then its publish needs' pins), never by its stored shape, so a body at a later schema version
+        // still guards; one that can't be read refuses the disable (it may pin this version).
         if (params.status === Schemas.ToolDefinitionStatusIntEnum.Disabled) {
-          const pinned = await this.chatbotConfigsDal.findPublishedToolPin(tx, {
+          const published = await this.chatbotConfigsDal.getPublishedChatbotConfigBodies(tx, {
             companyId: params.companyId,
-            name: row.name,
-            version: row.version,
           });
-          if (!pinned.isSuccess) return { isSuccess: false, message: pinned.message };
-          if (pinned.isPinned) {
+          if (!published.isSuccess || !published.configs) {
+            return { isSuccess: false, message: published.message };
+          }
+          const isPinned = published.configs.some((config) => {
+            const read = Schemas.readConfigBody({
+              schemaVersion: config.schemaVersion,
+              body: config.body,
+            });
+            if (!read.isSuccess || !read.body) return true;
+            return Schemas.getChatbotConfigPublishNeeds(read.body).pins.some(
+              (pin) => pin.name === row.name && pin.version === row.version,
+            );
+          });
+          if (isPinned) {
             return this.refuse(
               Schemas.ToolDefinitionFailureEnum.PinnedByPublishedConfig,
               "A published chatbot version uses this tool version; publish one without it first",

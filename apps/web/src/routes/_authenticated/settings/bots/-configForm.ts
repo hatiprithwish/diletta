@@ -79,6 +79,20 @@ export function toConfigFormValues(
   };
 }
 
+// DEV_NOTE: A rule's tools as saved. Names no longer pinned are dropped, but a rule that named only removed tools keeps
+// them: an empty list means every tool, so dropping them would silently widen an auto or blocked rule to every tool.
+// The config spec then refuses the save (an approval rule naming an unpinned tool) until the admin ticks a tool or
+// deletes the rule.
+export function ruleToolsForBody(ruleTools: string[], pinnedNames: string[]): string[] {
+  const kept = ruleTools.filter((name) => pinnedNames.includes(name));
+  return kept.length === 0 && ruleTools.length > 0 ? ruleTools : kept;
+}
+
+// DEV_NOTE: True when a rule named tools and none of them is pinned any more (the editor warns; the save is refused)
+export function isRuleOrphaned(ruleTools: string[], pinnedNames: string[]): boolean {
+  return ruleTools.length > 0 && !ruleTools.some((name) => pinnedNames.includes(name));
+}
+
 // DEV_NOTE: "" = omitted; anything else is sent as a number, so a typo reaches the schema check as NaN and is refused
 // there rather than dropped
 const numberOf = (text: string) => (text.trim() === "" ? undefined : Number(text.trim()));
@@ -107,7 +121,10 @@ export function toConfigBodyInput(
         .split(",")
         .map((role) => role.trim())
         .filter((role) => role !== ""),
-      tools: rule.tools.filter((name) => values.tools.some((tool) => tool.name === name)),
+      tools: ruleToolsForBody(
+        rule.tools,
+        values.tools.map((tool) => tool.name),
+      ),
       approval: rule.approval,
     })),
     routing: {

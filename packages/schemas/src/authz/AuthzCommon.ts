@@ -11,6 +11,7 @@ export enum AuthzActionEnum {
   ChatbotConfigRead = "chatbot_config.read",
   ChatbotConfigUpdate = "chatbot_config.update",
   ChatbotConfigPublish = "chatbot_config.publish",
+  ReadOnlyModeRead = "company.read_only_read",
   ReadOnlyModeUpdate = "company.read_only_update",
 
   // Settings › Model keys and Budget (company-scoped, M4-10): read the model keys, add one or replace its value (checked

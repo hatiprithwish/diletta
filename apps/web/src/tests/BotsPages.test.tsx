@@ -15,6 +15,7 @@ import { Route as BotsRoute } from "@/routes/_authenticated/settings/bots/index"
 import { Route as VersionRoute } from "@/routes/_authenticated/settings/bots/$id/versions/$versionId/index";
 import { Route as NewVersionRoute } from "@/routes/_authenticated/settings/bots/$id/versions/new/index";
 import {
+  checkConfigBody,
   toConfigBodyInput,
   toConfigFormValues,
 } from "@/routes/_authenticated/settings/bots/-configForm";
@@ -365,5 +366,46 @@ describe("Config form values", () => {
         Schemas.MODEL_TIER_SUGGESTIONS[Schemas.ModelProviderEnum.OpenAI][Schemas.ModelTierEnum.Mid],
     });
     expect(values.suggestions).toEqual(["", "", ""]);
+  });
+
+  // DEV_NOTE: An empty rule tools list means every tool, so unpinning a rule's only tool must not widen the rule
+  it("never turns a rule for removed tools into a rule for every tool", () => {
+    const values = toConfigFormValues(
+      Schemas.ZConfigSpecBody.parse({
+        ...BODY,
+        tools: [
+          { name: "get_record", version: 1 },
+          { name: "update_record", version: 1 },
+        ],
+        approvalRules: [
+          {
+            roles: ["support"],
+            tools: ["get_record"],
+            approval: Schemas.ApprovalRuleApprovalEnum.Auto,
+          },
+          {
+            roles: ["support"],
+            tools: ["get_record", "update_record"],
+            approval: Schemas.ApprovalRuleApprovalEnum.Required,
+          },
+        ],
+      }),
+      OPTIONS,
+    );
+    const unpinned = {
+      ...values,
+      tools: values.tools.filter((tool) => tool.name !== "get_record"),
+    };
+
+    const input = toConfigBodyInput(unpinned, BODY.attachments);
+    expect(input.approvalRules?.map((rule) => rule.tools)).toEqual([
+      ["get_record"],
+      ["update_record"],
+    ]);
+    const checked = checkConfigBody(input);
+    expect(checked.body).toBeNull();
+    expect(checked.issues).toEqual([
+      'Approval rules (#1 › tools › #1): Approval rule names tool "get_record", which is not pinned in tools',
+    ]);
   });
 });
