@@ -7,7 +7,9 @@ import AuthRoutes from "@/routes/AuthRoutes";
 import AdminsRoutes from "@/routes/AdminsRoutes";
 import ActivityRollupsRoutes from "@/routes/ActivityRollupsRoutes";
 import ChangeRequestsRoutes from "@/routes/ChangeRequestsRoutes";
+import ChatbotConfigsRoutes from "@/routes/ChatbotConfigsRoutes";
 import ChatbotsRoutes from "@/routes/ChatbotsRoutes";
+import SettingsRoutes from "@/routes/SettingsRoutes";
 import CompaniesRoutes from "@/routes/CompaniesRoutes";
 import ConversationsRoutes from "@/routes/ConversationsRoutes";
 import DocGapClustersRoutes from "@/routes/DocGapClustersRoutes";
@@ -86,6 +88,8 @@ app.use(
 app.route("/auth", AuthRoutes);
 app.route("/dashboard", AdminsRoutes);
 app.route("/dashboard/chatbots", ChatbotsRoutes);
+app.route("/dashboard/chatbots/:chatbotPublicId/configs", ChatbotConfigsRoutes);
+app.route("/dashboard/settings", SettingsRoutes);
 app.route("/dashboard/knowledge-sources", KnowledgeSourcesRoutes);
 app.route("/dashboard/doc-gap-clusters", DocGapClustersRoutes);
 app.route("/dashboard/insights", InsightsRoutes);

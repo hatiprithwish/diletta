@@ -20,3 +20,7 @@ export interface FailedKnowledgeSourcesSummaryDALResponse extends ApiResponse {
   failedCount?: number;
   lastFailedAt?: Date | null;
 }
+
+export interface KnowledgeSourceOptionsDALResponse extends ApiResponse {
+  options?: Pick<KnowledgeSource, "publicId" | "name">[];
+}

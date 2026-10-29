@@ -21,3 +21,7 @@ export type GetCompaniesDALRequest = PageDALRequest & { sortColumn: CompanySortC
 
 // DEV_NOTE: Cross-company sweep (withPlatform): every company whose status is one of these
 export type GetCompanyIdsByStatusDALRequest = { statuses: Company["status"][] };
+
+// DEV_NOTE: The Bots page's Read-only mode (M4-10), by the admin, on the company's own row (withTenant)
+export type UpdateCompanyReadOnlyDALRequest = FindCompanyDALRequest &
+  Pick<Company, "isReadOnly"> & { updatedBy: string };

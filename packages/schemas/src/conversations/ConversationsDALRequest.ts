@@ -50,3 +50,9 @@ export type CountDashboardConversationsDALRequest = Omit<ConversationsFilterDALR
 
 export type GetDashboardConversationsDALRequest = ConversationsFilterDALRequest &
   PageDALRequest & { sortColumn: ConversationSortColumn };
+
+// DEV_NOTE: Conversations started at or after since, per chatbot (Settings › Bots, M4-10): ranges on
+// IDX_conversations_company_id_created_at
+export type GetChatbotConversationCountsDALRequest = Pick<Conversation, "companyId"> & {
+  since: Date;
+};

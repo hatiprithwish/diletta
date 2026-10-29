@@ -317,7 +317,7 @@ eRegister goes live when every box below is ticked.
 - [ ] Cluster size that opens a Quality item (M5-6)
 - [ ] Budget alerts at 50 / 80 / 100% of `spending_budget` (Cron in the architecture): no task owns them after M2-4. Fold into M6-6, or a new task? (see `docs/runbooks/budget.md` › Known gaps)
 - [x] Tool args must be checked against the tool's `input_schema` before `renderToolOp` (types, enums, required; the renderer drops a missing arg's key). Needs a JSON Schema validator: zod `z.fromJSONSchema` if it covers the keywords used, else a new package (ask first) (M3-4) — zod's `fromJSONSchema` (`Schemas.validateToolArgs`); a schema it can't convert is refused on save and activation, and left out of a turn.
-- [ ] A pinned tool version that is Disabled: leave the tool out of the turn, or refuse the turn? And should disabling a version pinned by a published config be blocked? (M3-4, M4-10) — M3-4: left out of the turn and logged; blocking the disable stays with M4-10.
+- [x] A pinned tool version that is Disabled: leave the tool out of the turn, or refuse the turn? And should disabling a version pinned by a published config be blocked? (M3-4, M4-10) — M3-4: left out of the turn and logged. M4-10: disabling a version a Published config pins is refused (409 `PinnedByPublishedConfig`), and publish refuses a pin that isn't Active.
 - [x] Loop guard (same tool + same args twice in a turn → stop) left out of M2-4 because no tools exist yet: add with the first tool calls (M3-1 / M3-4), in `ConversationDO.beforeTurn` `stopWhen` — built in M3-4 for host tools (the repeat is refused as Blocked and ends the turn's loop).
 
 **Risks**

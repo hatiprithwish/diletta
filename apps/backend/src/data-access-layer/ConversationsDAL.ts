@@ -648,4 +648,40 @@ export default class ConversationsDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The Bots table's Conversations column (M4-10): started since, per chatbot, one grouped read
+  async getChatbotConversationCounts(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetChatbotConversationCountsDALRequest,
+  ) {
+    const response: Schemas.ChatbotConversationCountsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        gte(conversations.createdAt, params.since),
+      ];
+      const counts = await tx
+        .select({ chatbotId: conversations.chatbotId, conversationCount: count() })
+        .from(conversations)
+        .where(and(...conditions))
+        .groupBy(conversations.chatbotId);
+
+      response.isSuccess = true;
+      response.message = "Chatbot conversation counts fetched successfully";
+      response.counts = counts;
+    } catch (error) {
+      const message = "Unknown error in counting chatbot conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetChatbotConversationCounts,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

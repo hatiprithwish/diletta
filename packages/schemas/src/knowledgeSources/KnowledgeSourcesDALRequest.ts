@@ -64,3 +64,8 @@ export type GetDueKnowledgeSourcesDALRequest = {
 
 // Failed sources now (Overview's needs attention, M4-3)
 export type GetFailedKnowledgeSourcesSummaryDALRequest = Pick<KnowledgeSource, "companyId">;
+
+// DEV_NOTE: The Bots draft editor's source picker (M4-10): every source, any status, by name, capped
+export type GetKnowledgeSourceOptionsDALRequest = Pick<KnowledgeSource, "companyId"> & {
+  limit: number;
+};

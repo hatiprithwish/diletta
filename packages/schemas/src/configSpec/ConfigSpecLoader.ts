@@ -127,3 +127,12 @@ export function normalizeConfigBody(body: unknown): NormalizeConfigBodyResponse 
     schemaVersion: CURRENT_CONFIG_SCHEMA_VERSION,
   };
 }
+
+// DEV_NOTE: Editor path (Settings › Bots, M4-10). A stored body upgraded to the current version and validated, with no
+// platform defaults filled in, so the editor shows what the company set (an omitted limit stays empty) and a copy
+// into a new draft keeps defaults unfrozen. Saved back only through normalizeConfigBody.
+export function readConfigBody(
+  request: LoadConfigSpecRequest,
+): UpgradeConfigBodyResponse<ConfigSpecBody> {
+  return upgradeConfigBody(CONFIG_SPEC_REGISTRY, request);
+}

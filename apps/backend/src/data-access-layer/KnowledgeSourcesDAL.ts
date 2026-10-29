@@ -537,4 +537,37 @@ export default class KnowledgeSourcesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The Bots draft editor's source picker (M4-10): any status (Paused stops syncing, not search), by name
+  async getKnowledgeSourceOptions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetKnowledgeSourceOptionsDALRequest,
+  ) {
+    const response: Schemas.KnowledgeSourceOptionsDALResponse = { isSuccess: false };
+
+    try {
+      const options = await tx
+        .select({ publicId: knowledgeSources.publicId, name: knowledgeSources.name })
+        .from(knowledgeSources)
+        .where(eq(knowledgeSources.companyId, params.companyId))
+        .orderBy(asc(knowledgeSources.name), asc(knowledgeSources.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Knowledge source options fetched successfully";
+      response.options = options;
+    } catch (error) {
+      const message = "Unknown error in fetching knowledge source options";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetKnowledgeSourceOptions,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

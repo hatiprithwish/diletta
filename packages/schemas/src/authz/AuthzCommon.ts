@@ -6,6 +6,14 @@ export enum AuthzActionEnum {
   ChatbotCreate = "chatbot.create",
   ChatbotUpdate = "chatbot.update",
 
+  // Settings › Bots (company-scoped, M4-10): read a chatbot's versions; write, copy or discard its draft; publish one;
+  // turn the company's read-only mode on or off
+  ChatbotConfigRead = "chatbot_config.read",
+  ChatbotConfigUpdate = "chatbot_config.update",
+  ChatbotConfigPublish = "chatbot_config.publish",
+  ReadOnlyModeRead = "company.read_only_read",
+  ReadOnlyModeUpdate = "company.read_only_update",
+
   // Knowledge sources and their documents (company-scoped)
   KnowledgeSourceRead = "knowledge_source.read",
   KnowledgeSourceCreate = "knowledge_source.create",

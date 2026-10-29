@@ -86,6 +86,15 @@ export default class Utility {
     return JSON.stringify(sortKeys(value)) ?? "null";
   }
 
+  // DEV_NOTE: sha256 of the text, as lowercase hex. chatbot_configs.body_hash hashes the stableStringify of the normalised
+  // body, so it changes only when the company's own config does (M4-10).
+  static async sha256Hex(text: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+  }
+
   // DEV_NOTE: base64url without padding (RFC 4648 §5), as JWTs and JWKs encode their parts. null when the input
   // isn't base64url, so a malformed token is a rejection, not an exception.
   static decodeBase64Url(encoded: string): Uint8Array<ArrayBuffer> | null {

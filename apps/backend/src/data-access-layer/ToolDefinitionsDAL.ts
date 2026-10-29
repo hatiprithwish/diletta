@@ -596,12 +596,15 @@ export default class ToolDefinitionsDAL {
           params.pins.map((pin) => pin.name),
         ),
       ];
-      const selected = await tx
+      const query = tx
         .select(withConnectionSelection)
         .from(toolDefinitions)
         .leftJoin(companyConnections, and(...connectionJoinConditions))
         .where(and(...conditions))
         .orderBy(asc(toolDefinitions.name), asc(toolDefinitions.version));
+      const selected = params.isForShare
+        ? await query.for("share", { of: toolDefinitions })
+        : await query;
 
       const pinned = new Set(params.pins.map((pin) => `${pin.name}@${pin.version}`));
       response.isSuccess = true;
@@ -705,6 +708,48 @@ export default class ToolDefinitionsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetWriteToolSummaries,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The Bots draft editor's tool picker (M4-10): Active versions only, by name then version
+  async getActiveToolDefinitionOptions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActiveToolDefinitionOptionsDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionOptionsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolDefinitions.companyId, params.companyId),
+        eq(toolDefinitions.status, Schemas.ToolDefinitionStatusIntEnum.Active),
+      ];
+      const options = await tx
+        .select({
+          name: toolDefinitions.name,
+          version: toolDefinitions.version,
+          description: toolDefinitions.description,
+          risk: toolDefinitions.risk,
+        })
+        .from(toolDefinitions)
+        .where(and(...conditions))
+        .orderBy(asc(toolDefinitions.name), asc(toolDefinitions.version))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Active tool definition options fetched successfully";
+      response.options = options;
+    } catch (error) {
+      const message = "Unknown error in fetching active tool definition options";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActiveToolDefinitionOptions,
         message,
         error,
         metadata: params,
