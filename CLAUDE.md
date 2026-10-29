@@ -179,6 +179,7 @@ pnpm --filter backend db:generate         # generate migration after schema chan
 pnpm --filter backend db:generate:sql <n> # empty custom SQL migration (RLS, partitions, extensions)
 pnpm --filter backend db:migrate          # apply migrations to DATABASE_URL (apps/backend/.env = staging branch)
 pnpm --filter backend db:rollback [n]     # run down.sql of the last n applied migrations (default 1)
+pnpm evals:run --config <configPublicId> [--k 3]  # eval run on the staging connection (evals/.env, docs/runbooks/evals.md)
 ```
 
 ---
