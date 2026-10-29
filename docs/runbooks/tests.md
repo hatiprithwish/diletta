@@ -29,7 +29,7 @@ Every route sits behind `authorizeCompany`: `EvalRunRead` for runs, `EvalCaseRea
 
 ## What the harness must write (M5-2, M5-3)
 
-The page reads these shapes. Their JSON Schema lives in `evals/schemas/` (`eval-grader-output.schema.json`, `eval-transcript.schema.json`, from `pnpm --filter @app/schemas schema:export`).
+The page reads these shapes. Their JSON Schema lives in `evals/schemas/` (`eval-grader-output.schema.json`, `eval-transcript.schema.json`, from `pnpm --filter @app/schemas schema:export`), and their Python types in `evals/diletta_evals/types/`.
 
 **`eval_results.grader_output`** (`ZEvalGraderOutputV1`):
 
@@ -85,13 +85,57 @@ A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 bod
 
 ## Cases
 
-- **New case** saves a v1 case (`input = {schemaVersion: 1, messages}`, `expectations = {schemaVersion: 1, rubric}`) for the `botId` chatbot, else the default one. It is active and never a safety case.
-- **Edit** locks the case and merges a new conversation or rubric into the stored v1 body (`Schemas.readEvalCaseBody` / `toEvalCaseV1`). A body in another shape is refused with 409 `NotEditable`, and nothing is written. Turning it on or off still works.
+- **New case** saves `input = {schemaVersion: 1, messages}` and `expectations` at the current version (2) with the rubric and no other checks, for the `botId` chatbot, else the default one. It is active and never a safety case. Quality's Create test saves the same shape.
+- **Edit** locks the case and merges a new conversation or rubric into the stored body, read through `Schemas.readEvalCaseBody` (a v1 body is upgraded on read), and writes it with `toEvalCase` at the current version. Its other checks (rules, tool calls, forbidden tools, readbacks) are kept as stored and listed read-only under "Also checks". A save that changes nothing writes nothing, so a v1 row stays v1 until an edit changes it. Possible refusals (409, nothing written):
+  - `NotEditable`: the stored body can't be read.
+  - `NothingToCheck`: the rubric was cleared on a case with no other check.
+  - Turning the case on or off still works either way.
 - **Platform cases** (`company_id` null) show on every company's list, marked Platform. They are read-only: an edit answers 404.
 - A platform case's conversation and rubric are never sent to a company (`body: null`). They include the safety cases that gate publishing (M5-4), and a company that could read the exact prompts and pass criteria could tune a config to the test instead of to the behaviour.
 - With `botId`, a case's **Last result** comes only from that chatbot's runs, since a platform case runs against every chatbot.
 - Editing a case changes it for future runs only. Past results still point at the same row, so they show its current name.
 - Case text is never logged. Each case write records an audit row (M4-9) with the case's name only (`docs/runbooks/security.md`).
+
+## Case shape (M5-1)
+
+`eval_cases.expectations` v2 (`ZEvalCaseExpectationsV2`; read only through `Schemas.loadEvalCaseExpectations`, which upgrades v1):
+
+```json
+{
+  "schemaVersion": 2,
+  "rubric": null,
+  "rules": [{ "kind": "not_contains", "text": "error" }],
+  "toolCalls": [{ "toolName": "create_record", "args": { "name": "Drill {case.tag}" } }],
+  "forbiddenTools": ["delete_record"],
+  "readbacks": [{ "toolName": "create_record", "expect": { "name": "Drill {case.tag}" } }]
+}
+```
+
+- `rubric`: what the pinned judge grades the reply on (check kind `judge`). `null` means no judge.
+- `rules`: contains / doesn't contain, case-insensitive, checked on the chatbot's last reply (check kind `rubric`).
+- `toolCalls`: calls the chatbot must make (`tool_call`). `args` is a partial match: each listed arg must deep-equal the call's, and `{}` means any args. Each expected call is matched by a different call, in any order.
+- `forbiddenTools`: tools that must never run in the attempt (`forbidden_tool`).
+- `readbacks`: after the attempt, the chatbot's call matched to that tool's `toolCalls` entry is read again through the tool's `readback_op`, with that call's args and result, the same path as live verification. Each `expect` key (a `compare` key) is compared at its path (`readback`). So a readback names a write tool listed exactly once in `toolCalls`.
+- A case checks at least one thing.
+- `{case.tag}` may appear in message text, rule text and any string value. The harness replaces it with one unique token per attempt, so a case only creates and asserts on its own records (state-independent; `reset_op` cleans up after the run).
+
+## Python types (M5-1)
+
+The harness can't import TypeScript, so its types are generated: Zod → `evals/schemas/*.schema.json` → Pydantic v2 models in `evals/diletta_evals/types/`.
+
+1. Change the Zod schema (or a sample in `packages/schemas/src/jsonSchemaContractSamples.ts`).
+2. Run `pnpm --filter @app/schemas schema:export`. It writes `evals/schemas/` and `evals/fixtures/contract-samples.json`.
+3. Run `pnpm evals:types`. It regenerates `evals/diletta_evals/types/`. This needs `uv` (`brew install uv`); its first run installs the pinned toolchain from `evals/uv.lock`.
+4. Run `pnpm evals:check`. It fails if a module is stale, or if the Pydantic types don't accept and refuse the same samples as Zod.
+5. Commit all of it.
+
+The `Evals Contract` workflow runs steps 2 to 4 as checks on every PR that touches `packages/schemas/` or `evals/`.
+
+Notes for the harness:
+
+- Read bodies with `model_validate_json(…, strict=True)`.
+- Refinements have no JSON Schema form, so the Python types don't enforce them. That covers "checks at least one thing", the readback / forbidden tool rules and the reserved tool name. Cases are only written through `packages/schemas`.
+- Cases reach the harness already upgraded to the current version.
 
 ## Troubleshooting
 
@@ -101,4 +145,5 @@ A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 bod
 | "This transcript can't be read"                 | The object is over 1 MiB, not UTF-8 JSON, or fails `ZEvalTranscriptV1`. Validate it against `evals/schemas/eval-transcript.schema.json` |
 | "The grader's output can't be read"             | `grader_output` fails `ZEvalGraderOutputV1`. Validate it against `evals/schemas/eval-grader-output.schema.json`                         |
 | Runs on: "Not set up"                           | The company has no active staging connection with a base URL                                                                            |
-| "This case's conversation can't be edited here" | The case is stored in a shape the page doesn't edit (a later schema version)                                                            |
+| "This case's conversation can't be edited here" | The case is stored in a shape the page doesn't read (an unknown schema version, or a body its own version refuses)                      |
+| "This case needs something to check"            | The rubric was cleared on a case that has no rules, tool calls, forbidden tools or readbacks                                            |

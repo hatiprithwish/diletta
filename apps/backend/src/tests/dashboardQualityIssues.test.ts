@@ -737,7 +737,11 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
       isSafety: false,
       isActive: true,
       input: { schemaVersion: 1, messages: DRAFT.messages },
-      expectations: { schemaVersion: 1, rubric: DRAFT.rubric },
+      expectations: {
+        schemaVersion: Schemas.EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
+        rubric: DRAFT.rubric,
+        ...Schemas.EVAL_CASE_NO_CHECKS,
+      },
     });
     expect(Schemas.ZEvalCaseInputV1.safeParse(saved?.input).success).toBe(true);
     const events = await issueEvents(userIssueId);

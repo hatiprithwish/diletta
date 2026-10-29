@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  EvalCaseMessageRoleEnum,
-  readEvalCaseBody,
-  toEvalCaseV1,
-  type EvalCaseBody,
-} from "../evalCases";
+import { EvalCaseMessageRoleEnum } from "../evalCases";
 import { EvalRunStatusIntEnum, evalCaseRunResult } from "../evalRuns";
 import { ToolCallStatusIntEnum } from "../toolCalls";
 import {
@@ -95,24 +90,6 @@ describe("parseEvalTranscript", () => {
 
   it("refuses a file over EVAL_TRANSCRIPT_MAX_BYTES without parsing it", () => {
     expect(parseEvalTranscript(new Uint8Array(EVAL_TRANSCRIPT_MAX_BYTES + 1))).toBeNull();
-  });
-});
-
-describe("readEvalCaseBody", () => {
-  const body: EvalCaseBody = {
-    messages: [{ role: EvalCaseMessageRoleEnum.User, text: "How often are fire drills?" }],
-    rubric: "Says quarterly.",
-  };
-
-  it("reads back what toEvalCaseV1 stores", () => {
-    const stored = toEvalCaseV1(body);
-    expect(readEvalCaseBody(stored.input, stored.expectations)).toEqual(body);
-  });
-
-  it("is null for a shape it can't edit", () => {
-    const stored = toEvalCaseV1(body);
-    expect(readEvalCaseBody({ ...stored.input, schemaVersion: 2 }, stored.expectations)).toBeNull();
-    expect(readEvalCaseBody(stored.input, {})).toBeNull();
   });
 });
 

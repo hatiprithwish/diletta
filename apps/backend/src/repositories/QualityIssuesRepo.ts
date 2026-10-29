@@ -428,8 +428,8 @@ export default class QualityIssuesRepo {
     return { isSuccess: true, message: "Test draft written", draft: rewritten.draft };
   }
 
-  // DEV_NOTE: Create test, step 2: the reviewed draft saved as the conversation's chatbot's eval case (input and
-  // expectations v1), and the issue Open → Converted with its eval_case_id, in one withTenant. Else failure NotOpen,
+  // DEV_NOTE: Create test, step 2: the reviewed draft saved as the conversation's chatbot's eval case (input v1,
+  // expectations at the current version), and the issue Open → Converted with its eval_case_id, in one withTenant. Else failure NotOpen,
   // or ChatbotNotFound when the conversation's chatbot was removed (409, nothing written).
   async convertQualityIssue(
     params: Schemas.ConvertQualityIssueRequest,
@@ -440,18 +440,19 @@ export default class QualityIssuesRepo {
       if (!open.isSuccess) return open.response;
       const { row } = open;
 
+      // DEV_NOTE: Never null: a rubric alone is a check, and the request held the draft to its schema
+      const stored = Schemas.toEvalCase({
+        messages: draft.messages,
+        rubric: draft.rubric,
+        checks: Schemas.EVAL_CASE_NO_CHECKS,
+      });
+      if (!stored) throw new TenantRollbackError("The case checks nothing");
+
       const created = await this.evalCasesDal.createEvalCase(tx, {
         companyId,
         chatbotId: row.chatbotId,
         name: draft.name,
-        input: {
-          schemaVersion: Schemas.EVAL_CASE_INPUT_SCHEMA_VERSION,
-          messages: draft.messages,
-        },
-        expectations: {
-          schemaVersion: Schemas.EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
-          rubric: draft.rubric,
-        },
+        ...stored,
       });
       // DEV_NOTE: The chatbot was removed: nothing was written yet, so this is a refusal, not a rollback
       if (created.isNotFound) {

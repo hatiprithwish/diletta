@@ -22,7 +22,7 @@ export interface EvalCaseListItem {
   updatedAt: string;
 }
 
-// DEV_NOTE: GET /dashboard/eval-cases/:publicId: the list item with its conversation and rubric. body null = a platform
+// DEV_NOTE: GET /dashboard/eval-cases/:publicId: the list item with its conversation, rubric and other checks. body null = a platform
 // case (its prompts and pass criteria gate publishing, so a company never sees them) or a shape the page can't show or
 // edit (readEvalCaseBody).
 export interface EvalCaseDetail extends EvalCaseListItem {
@@ -38,7 +38,7 @@ export interface GetEvalCaseApiResponse extends ApiResponse {
   evalCase?: EvalCaseDetail;
 }
 
-// DEV_NOTE: POST and PATCH: the case as it stands after. failure set (409) = the edit was refused (NotEditable)
+// DEV_NOTE: POST and PATCH: the case as it stands after. failure set (409) = the edit was refused (EvalCaseUpdateFailureEnum)
 export interface WriteEvalCaseApiResponse extends ApiResponse {
   evalCase?: EvalCaseDetail;
   failure?: EvalCaseUpdateFailureEnum;

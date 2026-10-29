@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "string",
+  "const": "{case.tag}",
+  "title": "EvalCaseTag",
+  "description": "The placeholder an eval case's messages, rules and expected values carry; the harness fills it with one unique token per attempt"
+}

@@ -77,6 +77,26 @@ const { User, Assistant } = Schemas.EvalCaseMessageRoleEnum;
 const FIRE_BODY: Schemas.EvalCaseBody = {
   messages: [{ role: User, text: "How often do we need to run fire drills?" }],
   rubric: "Says quarterly, per the current policy.",
+  checks: Schemas.EVAL_CASE_NO_CHECKS,
+};
+
+// DEV_NOTE: A case with tool checks and no judge (M5-1): the dashboard edits its conversation, never its checks
+const TOOL_CHECKS: Schemas.EvalCaseChecks = {
+  rules: [{ kind: Schemas.EvalCaseRuleKindEnum.NotContains, text: "error" }],
+  toolCalls: [
+    { toolName: "create_record", args: { name: `Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` } },
+  ],
+  forbiddenTools: ["delete_record"],
+  readbacks: [
+    { toolName: "create_record", expect: { name: `Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` } },
+  ],
+};
+const TOOL_BODY: Schemas.EvalCaseBody = {
+  messages: [
+    { role: User, text: `Create a record named Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` },
+  ],
+  rubric: null,
+  checks: TOOL_CHECKS,
 };
 
 const GRADER_OUTPUT: Schemas.EvalGraderOutput = {
@@ -133,6 +153,8 @@ let fireCase = "";
 let offCase = "";
 let salesCase = "";
 let v2Case = "";
+let legacyCase = "";
+let toolCase = "";
 let platformCase = "";
 let otherCase = "";
 let goodTranscript = "";
@@ -324,7 +346,7 @@ beforeAll(async () => {
       .returning({ id: chatbotConfigs.id });
     const [supportLive, supportDraft, salesLive, otherLive] = configs;
 
-    const stored = Schemas.toEvalCaseV1(FIRE_BODY);
+    const stored = Schemas.toEvalCase(FIRE_BODY)!;
     const evalCase = (values: {
       companyId: string | null;
       chatbotId: string | null;
@@ -369,7 +391,7 @@ beforeAll(async () => {
     const [fire, off, salesC, platform, otherC] = cases;
     [fireCase, offCase, salesCase, platformCase, otherCase] = cases.map((row) => row.publicId);
     platformCaseId = platform!.id;
-    // DEV_NOTE: A case stored in a shape this page can't edit (as M5-1's v2 will be)
+    // DEV_NOTE: A case stored in a shape this page can't edit (an input version that doesn't exist)
     const [v2] = await ownerDb
       .insert(evalCases)
       .values({
@@ -383,6 +405,30 @@ beforeAll(async () => {
       })
       .returning({ publicId: evalCases.publicId });
     v2Case = v2!.publicId;
+    // DEV_NOTE: A case stored before M5-1 (expectations v1, read through the upgrader) and one with tool checks, both on
+    // Sales so the Support counts above stay as they are
+    const toolStored = Schemas.toEvalCase(TOOL_BODY)!;
+    const [legacy, tool] = await ownerDb
+      .insert(evalCases)
+      .values([
+        {
+          ...evalCase({ companyId: companyA, chatbotId: sales!.id, name: "Legacy", minute: 7 }),
+          expectations: { schemaVersion: 1, rubric: FIRE_BODY.rubric },
+        },
+        {
+          ...evalCase({
+            companyId: companyA,
+            chatbotId: sales!.id,
+            name: "Creates a record",
+            minute: 8,
+          }),
+          input: toolStored.input,
+          expectations: toolStored.expectations,
+        },
+      ])
+      .returning({ publicId: evalCases.publicId });
+    legacyCase = legacy!.publicId;
+    toolCase = tool!.publicId;
 
     const run = (values: {
       companyId?: string;
@@ -936,6 +982,11 @@ describe("GET /dashboard/eval-cases", () => {
     expect(platform.body.evalCase).toMatchObject({ isPlatform: true, body: null });
     const future = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${v2Case}`);
     expect(future.body.evalCase?.body).toBeNull();
+    // DEV_NOTE: A v1 case reads upgraded (its rubric, no other checks); a tool case with its checks
+    const legacy = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${legacyCase}`);
+    expect(legacy.body.evalCase?.body).toEqual(FIRE_BODY);
+    const tool = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${toolCase}`);
+    expect(tool.body.evalCase?.body).toEqual(TOOL_BODY);
     expect((await get(`eval-cases/${otherCase}`)).status).toBe(404);
   });
 });
@@ -951,7 +1002,7 @@ describe("POST /dashboard/eval-cases", () => {
     rubric: "Explains the reprint steps from the badge page.",
   };
 
-  it("saves a v1 case for the default chatbot, or botId's", async () => {
+  it("saves a rubric case at the current version for the default chatbot, or botId's", async () => {
     const { status, body } = await call<Schemas.WriteEvalCaseApiResponse>(
       "POST",
       "/dashboard/eval-cases",
@@ -965,7 +1016,19 @@ describe("POST /dashboard/eval-cases", () => {
       isSafety: false,
       isPlatform: false,
       latestResult: null,
-      body: { messages: draft.messages, rubric: draft.rubric },
+      body: { messages: draft.messages, rubric: draft.rubric, checks: Schemas.EVAL_CASE_NO_CHECKS },
+    });
+    const saved = await withOwnerDb(async (ownerDb) => {
+      const [row] = await ownerDb
+        .select()
+        .from(evalCases)
+        .where(eq(evalCases.publicId, body.evalCase!.publicId));
+      return row;
+    });
+    expect(saved?.expectations).toEqual({
+      schemaVersion: Schemas.EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
+      rubric: draft.rubric,
+      ...Schemas.EVAL_CASE_NO_CHECKS,
     });
 
     const sales = await call<Schemas.WriteEvalCaseApiResponse>("POST", "/dashboard/eval-cases", {
@@ -1051,8 +1114,52 @@ describe("PATCH /dashboard/eval-cases/:publicId", () => {
       const [row] = await ownerDb.select().from(evalCases).where(eq(evalCases.publicId, v2Case));
       return row;
     });
-    expect(stored?.expectations).toEqual(Schemas.toEvalCaseV1(FIRE_BODY).expectations);
+    expect(stored?.expectations).toEqual(Schemas.toEvalCase(FIRE_BODY)?.expectations);
     expect((await patch(v2Case, { isActive: false })).status).toBe(200);
+  });
+
+  it("rewrites a v1 case at the current version only when an edit changes it", async () => {
+    const storedOf = async () =>
+      await withOwnerDb(async (ownerDb) => {
+        const [row] = await ownerDb
+          .select()
+          .from(evalCases)
+          .where(eq(evalCases.publicId, legacyCase));
+        return row?.expectations;
+      });
+    const same = await patch(legacyCase, {
+      messages: FIRE_BODY.messages,
+      rubric: FIRE_BODY.rubric,
+    });
+    expect(same.status).toBe(200);
+    expect(await storedOf()).toEqual({ schemaVersion: 1, rubric: FIRE_BODY.rubric });
+
+    const edited = await patch(legacyCase, { rubric: "Says every three months." });
+    expect(edited.status).toBe(200);
+    expect(await storedOf()).toEqual({
+      schemaVersion: Schemas.EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
+      rubric: "Says every three months.",
+      ...Schemas.EVAL_CASE_NO_CHECKS,
+    });
+  });
+
+  it("keeps a case's tool checks through an edit, and clears its rubric only while another check is left", async () => {
+    const withRubric = await patch(toolCase, { rubric: "Confirms the record was created." });
+    expect(withRubric.status).toBe(200);
+    expect(withRubric.body.evalCase?.body).toEqual({
+      ...TOOL_BODY,
+      rubric: "Confirms the record was created.",
+    });
+    const cleared = await patch(toolCase, { rubric: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.evalCase?.body).toEqual(TOOL_BODY);
+
+    // DEV_NOTE: A rubric-only case can't lose its rubric: nothing would be checked
+    const refused = await patch(legacyCase, { rubric: null });
+    expect(refused.status).toBe(409);
+    expect(refused.body.failure).toBe(Schemas.EvalCaseUpdateFailureEnum.NothingToCheck);
+    const legacy = await get<Schemas.GetEvalCaseApiResponse>(`eval-cases/${legacyCase}`);
+    expect(legacy.body.evalCase?.body?.rubric).toBe("Says every three months.");
   });
 
   it("never edits a platform case or another company's, and refuses an empty edit", async () => {

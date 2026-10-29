@@ -119,6 +119,36 @@ const OWN_DETAIL: Schemas.EvalCaseDetail = {
   body: {
     messages: [{ role: User, text: "How often do we need to run fire drills?" }],
     rubric: "Says quarterly.",
+    checks: Schemas.EVAL_CASE_NO_CHECKS,
+  },
+};
+
+// DEV_NOTE: A case with tool checks and no judge (M5-1): the dialog lists them and lets the rubric stay blank
+const TOOL_CASE: Schemas.EvalCaseListItem = {
+  ...OWN_CASE,
+  publicId: "case_tool",
+  name: "Creates a record",
+  latestResult: null,
+};
+
+const TOOL_DETAIL: Schemas.EvalCaseDetail = {
+  ...TOOL_CASE,
+  body: {
+    messages: [
+      { role: User, text: `Create a record named Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` },
+    ],
+    rubric: null,
+    checks: {
+      rules: [{ kind: Schemas.EvalCaseRuleKindEnum.NotContains, text: "error" }],
+      toolCalls: [{ toolName: "create_record", args: { amount: 120 } }],
+      forbiddenTools: ["delete_record"],
+      readbacks: [
+        {
+          toolName: "create_record",
+          expect: { name: `Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}` },
+        },
+      ],
+    },
   },
 };
 
@@ -273,7 +303,11 @@ function defaultApi(url: string, init?: RequestInit) {
           publicId: "case_new",
           name: body.name,
           latestResult: null,
-          body: { messages: body.messages, rubric: body.rubric },
+          body: {
+            messages: body.messages,
+            rubric: body.rubric,
+            checks: Schemas.EVAL_CASE_NO_CHECKS,
+          },
         },
       },
     };
@@ -281,7 +315,11 @@ function defaultApi(url: string, init?: RequestInit) {
   if (path.endsWith("/eval-cases")) {
     return {
       status: 200,
-      body: { isSuccess: true, evalCases: [OWN_CASE, PLATFORM_CASE, FUTURE_CASE], totalRecords: 3 },
+      body: {
+        isSuccess: true,
+        evalCases: [OWN_CASE, PLATFORM_CASE, FUTURE_CASE, TOOL_CASE],
+        totalRecords: 4,
+      },
     };
   }
   if (path.endsWith("/eval-cases/case_future")) {
@@ -292,6 +330,12 @@ function defaultApi(url: string, init?: RequestInit) {
       };
     }
     return { status: 200, body: { isSuccess: true, evalCase: FUTURE_DETAIL } };
+  }
+  if (path.endsWith("/eval-cases/case_tool")) {
+    if (init?.method === "PATCH") {
+      return { status: 200, body: { isSuccess: true, evalCase: TOOL_DETAIL } };
+    }
+    return { status: 200, body: { isSuccess: true, evalCase: TOOL_DETAIL } };
   }
   if (path.endsWith("/eval-cases/case_own")) {
     if (init?.method === "PATCH") {
@@ -475,6 +519,44 @@ describe("Tests page", () => {
       name: OWN_CASE.name,
       messages: OWN_DETAIL.body!.messages,
       rubric: "Says quarterly, never every 6 months.",
+    });
+  });
+});
+
+describe("Tests page, a case with tool checks", () => {
+  it("lists its checks read-only and saves a blank rubric as no judge", async () => {
+    const fetchMock = mockApi(defaultApi);
+    renderPage("/tests?tab=cases");
+    await userEvent.click(
+      await screen.findByRole("button", { name: `Actions for ${TOOL_CASE.name}` }),
+    );
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit case" });
+    const rubric = await within(dialog).findByLabelText("What a good reply does (optional)");
+    expect(rubric).toHaveValue("");
+    expect(within(dialog).getByText("Also checks")).toBeInTheDocument();
+    expect(within(dialog).getByText(/The reply never includes/)).toHaveTextContent(
+      "The reply never includes “error”",
+    );
+    expect(within(dialog).getByText("amount: 120")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Never calls/)).toHaveTextContent("Never calls delete_record");
+    expect(within(dialog).getByText(/After the run/)).toHaveTextContent(
+      `create_record changed shows name: "Drill ${Schemas.EVAL_CASE_TAG_PLACEHOLDER}"`,
+    );
+    expect(within(dialog).getByText(/becomes a new name in every attempt/)).toBeInTheDocument();
+
+    await userEvent.type(within(dialog).getByLabelText("User"), " now");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save case" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit case" })).not.toBeInTheDocument(),
+    );
+    const patch = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toEqual({
+      name: TOOL_CASE.name,
+      messages: [{ role: User, text: `${TOOL_DETAIL.body!.messages[0]!.text} now` }],
+      rubric: null,
     });
   });
 });

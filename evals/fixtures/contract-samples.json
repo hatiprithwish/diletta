@@ -1,0 +1,587 @@
+{
+  "config-spec.schema.json": {
+    "valid": [
+      {
+        "persona": {
+          "instructions": "You help facility managers with their registers."
+        },
+        "procedures": [
+          {
+            "name": "Close inspection",
+            "whenToUse": "The user asks to close an inspection",
+            "steps": "Read the record, show the change, wait for approval."
+          }
+        ],
+        "tools": [
+          {
+            "name": "update_record",
+            "version": 2
+          }
+        ],
+        "approvalRules": [
+          {
+            "roles": [
+              "admin"
+            ],
+            "tools": [
+              "update_record"
+            ],
+            "approval": "auto"
+          }
+        ],
+        "routing": {
+          "small": {
+            "provider": "google",
+            "model": "gemini-flash-lite"
+          },
+          "mid": {
+            "provider": "google",
+            "model": "gemini-flash"
+          },
+          "top": {
+            "provider": "anthropic",
+            "model": "claude-sonnet"
+          },
+          "defaultTier": "mid"
+        },
+        "knowledge": {
+          "sourceIds": [
+            "ks_a1"
+          ],
+          "topK": 8
+        },
+        "widget": {
+          "greeting": "Hi, what do you need?",
+          "suggestions": [
+            "Which inspections are overdue?"
+          ]
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "procedures": [
+          {
+            "name": "Close inspection",
+            "whenToUse": "The user asks to close an inspection",
+            "steps": "Read the record, show the change, wait for approval."
+          }
+        ],
+        "tools": [
+          {
+            "name": "update_record",
+            "version": 2
+          }
+        ],
+        "approvalRules": [
+          {
+            "roles": [
+              "admin"
+            ],
+            "tools": [
+              "update_record"
+            ],
+            "approval": "auto"
+          }
+        ],
+        "routing": {
+          "small": {
+            "provider": "google",
+            "model": "gemini-flash-lite"
+          },
+          "mid": {
+            "provider": "google",
+            "model": "gemini-flash"
+          },
+          "top": {
+            "provider": "anthropic",
+            "model": "claude-sonnet"
+          },
+          "defaultTier": "mid"
+        },
+        "knowledge": {
+          "sourceIds": [
+            "ks_a1"
+          ],
+          "topK": 8
+        },
+        "widget": {
+          "greeting": "Hi, what do you need?",
+          "suggestions": [
+            "Which inspections are overdue?"
+          ]
+        }
+      },
+      {
+        "persona": {
+          "instructions": "You help facility managers with their registers."
+        },
+        "procedures": [
+          {
+            "name": "Close inspection",
+            "whenToUse": "The user asks to close an inspection",
+            "steps": "Read the record, show the change, wait for approval."
+          }
+        ],
+        "tools": [
+          {
+            "name": "update_record",
+            "version": 2
+          }
+        ],
+        "approvalRules": [
+          {
+            "roles": [
+              "admin"
+            ],
+            "tools": [
+              "update_record"
+            ],
+            "approval": "auto"
+          }
+        ],
+        "routing": {
+          "small": {
+            "provider": "google",
+            "model": "gemini-flash-lite"
+          },
+          "mid": {
+            "provider": "google",
+            "model": "gemini-flash"
+          },
+          "top": {
+            "provider": "anthropic",
+            "model": "claude-sonnet"
+          },
+          "defaultTier": "huge"
+        },
+        "knowledge": {
+          "sourceIds": [
+            "ks_a1"
+          ],
+          "topK": 8
+        },
+        "widget": {
+          "greeting": "Hi, what do you need?",
+          "suggestions": [
+            "Which inspections are overdue?"
+          ]
+        }
+      },
+      {
+        "persona": {
+          "instructions": "You help facility managers with their registers."
+        },
+        "procedures": [
+          {
+            "name": "Close inspection",
+            "whenToUse": "The user asks to close an inspection",
+            "steps": "Read the record, show the change, wait for approval."
+          }
+        ],
+        "tools": [
+          {
+            "name": "update_record",
+            "version": "2"
+          }
+        ],
+        "approvalRules": [
+          {
+            "roles": [
+              "admin"
+            ],
+            "tools": [
+              "update_record"
+            ],
+            "approval": "auto"
+          }
+        ],
+        "routing": {
+          "small": {
+            "provider": "google",
+            "model": "gemini-flash-lite"
+          },
+          "mid": {
+            "provider": "google",
+            "model": "gemini-flash"
+          },
+          "top": {
+            "provider": "anthropic",
+            "model": "claude-sonnet"
+          },
+          "defaultTier": "mid"
+        },
+        "knowledge": {
+          "sourceIds": [
+            "ks_a1"
+          ],
+          "topK": 8
+        },
+        "widget": {
+          "greeting": "Hi, what do you need?",
+          "suggestions": [
+            "Which inspections are overdue?"
+          ]
+        }
+      }
+    ]
+  },
+  "eval-grader-output.schema.json": {
+    "valid": [
+      {
+        "schemaVersion": 1,
+        "checks": [
+          {
+            "kind": "forbidden_tool",
+            "hasPassed": true,
+            "label": "Never called delete_record",
+            "detail": null
+          }
+        ],
+        "error": null
+      }
+    ],
+    "invalid": [
+      {
+        "schemaVersion": 1,
+        "checks": [],
+        "error": ""
+      },
+      {
+        "schemaVersion": 1,
+        "checks": [
+          {
+            "kind": "vibes",
+            "hasPassed": true,
+            "label": "x",
+            "detail": null
+          }
+        ],
+        "error": null
+      }
+    ]
+  },
+  "eval-transcript.schema.json": {
+    "valid": [
+      {
+        "schemaVersion": 1,
+        "entries": [
+          {
+            "kind": "message",
+            "role": "user",
+            "text": "Hi"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "create_record",
+            "toolVersion": 1,
+            "status": 1,
+            "summary": null
+          }
+        ]
+      }
+    ],
+    "invalid": [
+      {
+        "schemaVersion": 1,
+        "entries": [
+          {
+            "kind": "tool_call",
+            "toolName": "create_record"
+          }
+        ]
+      },
+      {
+        "schemaVersion": 2,
+        "entries": []
+      }
+    ]
+  },
+  "eval-case-input.schema.json": {
+    "valid": [
+      {
+        "schemaVersion": 1,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Hi"
+          },
+          {
+            "role": "assistant",
+            "text": "Hi, what do you need?"
+          },
+          {
+            "role": "user",
+            "text": "Create a record named Drill {case.tag} for 120"
+          }
+        ]
+      }
+    ],
+    "invalid": [
+      {
+        "schemaVersion": 1,
+        "messages": []
+      },
+      {
+        "schemaVersion": 1,
+        "messages": [
+          {
+            "role": "system",
+            "text": "Hi"
+          }
+        ]
+      },
+      {
+        "schemaVersion": 2,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Hi"
+          },
+          {
+            "role": "assistant",
+            "text": "Hi, what do you need?"
+          },
+          {
+            "role": "user",
+            "text": "Create a record named Drill {case.tag} for 120"
+          }
+        ]
+      }
+    ]
+  },
+  "eval-case-expectations.schema.json": {
+    "valid": [
+      {
+        "schemaVersion": 2,
+        "rubric": "Says fire drills are quarterly.",
+        "rules": [],
+        "toolCalls": [],
+        "forbiddenTools": [],
+        "readbacks": []
+      },
+      {
+        "schemaVersion": 2,
+        "rubric": null,
+        "rules": [
+          {
+            "kind": "contains",
+            "text": "Drill {case.tag}"
+          },
+          {
+            "kind": "not_contains",
+            "text": "error"
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "create_record",
+            "args": {
+              "name": "Drill {case.tag}",
+              "amount": 120,
+              "tags": [
+                "a"
+              ],
+              "meta": null
+            }
+          },
+          {
+            "toolName": "list_records",
+            "args": {}
+          }
+        ],
+        "forbiddenTools": [
+          "delete_record"
+        ],
+        "readbacks": [
+          {
+            "toolName": "create_record",
+            "expect": {
+              "name": "Drill {case.tag}",
+              "amount": 120
+            }
+          }
+        ]
+      }
+    ],
+    "invalid": [
+      {
+        "schemaVersion": 1,
+        "rubric": "Says fire drills are quarterly.",
+        "rules": [],
+        "toolCalls": [],
+        "forbiddenTools": [],
+        "readbacks": []
+      },
+      {
+        "schemaVersion": 2,
+        "rubric": "Says fire drills are quarterly.",
+        "toolCalls": [],
+        "forbiddenTools": [],
+        "readbacks": []
+      },
+      {
+        "schemaVersion": 2,
+        "rubric": null,
+        "rules": [
+          {
+            "kind": "matches",
+            "text": "x"
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "create_record",
+            "args": {
+              "name": "Drill {case.tag}",
+              "amount": 120,
+              "tags": [
+                "a"
+              ],
+              "meta": null
+            }
+          },
+          {
+            "toolName": "list_records",
+            "args": {}
+          }
+        ],
+        "forbiddenTools": [
+          "delete_record"
+        ],
+        "readbacks": [
+          {
+            "toolName": "create_record",
+            "expect": {
+              "name": "Drill {case.tag}",
+              "amount": 120
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 2,
+        "rubric": null,
+        "rules": [
+          {
+            "kind": "contains",
+            "text": "Drill {case.tag}"
+          },
+          {
+            "kind": "not_contains",
+            "text": "error"
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "create_record",
+            "args": {
+              "name": "Drill {case.tag}",
+              "amount": 120,
+              "tags": [
+                "a"
+              ],
+              "meta": null
+            }
+          },
+          {
+            "toolName": "list_records",
+            "args": {}
+          }
+        ],
+        "forbiddenTools": [
+          "9_not_a_tool_name"
+        ],
+        "readbacks": [
+          {
+            "toolName": "create_record",
+            "expect": {
+              "name": "Drill {case.tag}",
+              "amount": 120
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 2,
+        "rubric": null,
+        "rules": [
+          {
+            "kind": "contains",
+            "text": "Drill {case.tag}"
+          },
+          {
+            "kind": "not_contains",
+            "text": "error"
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "create_record"
+          }
+        ],
+        "forbiddenTools": [
+          "delete_record"
+        ],
+        "readbacks": [
+          {
+            "toolName": "create_record",
+            "expect": {
+              "name": "Drill {case.tag}",
+              "amount": 120
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 2,
+        "rubric": null,
+        "rules": [
+          {
+            "kind": "contains",
+            "text": "Drill {case.tag}"
+          },
+          {
+            "kind": "not_contains",
+            "text": "error"
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "create_record",
+            "args": {
+              "name": "Drill {case.tag}",
+              "amount": 120,
+              "tags": [
+                "a"
+              ],
+              "meta": null
+            }
+          },
+          {
+            "toolName": "list_records",
+            "args": {}
+          }
+        ],
+        "forbiddenTools": [
+          "delete_record"
+        ],
+        "readbacks": [
+          {
+            "toolName": "create_record",
+            "expect": "120"
+          }
+        ]
+      }
+    ]
+  },
+  "eval-case-tag.schema.json": {
+    "valid": [
+      "{case.tag}"
+    ],
+    "invalid": [
+      "{case.id}",
+      1
+    ]
+  }
+}

@@ -253,7 +253,12 @@ export function useUpdateTestCase(publicId: string) {
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
-        toast.error("This case's conversation can't be edited here. Nothing changed.");
+        const failure = (error.body as Schemas.WriteEvalCaseApiResponse).failure;
+        toast.error(
+          failure === Schemas.EvalCaseUpdateFailureEnum.NothingToCheck
+            ? "This case needs something to check. Say what a good reply does. Nothing changed."
+            : "This case's conversation can't be edited here. Nothing changed.",
+        );
         return;
       }
       if (error instanceof ApiError && error.status === 404) {

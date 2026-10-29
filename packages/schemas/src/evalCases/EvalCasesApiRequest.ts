@@ -17,7 +17,7 @@ export const ZGetEvalCasesApiRequest = ZPageApiRequest.extend({
 });
 export type GetEvalCasesApiRequest = z.infer<typeof ZGetEvalCasesApiRequest>;
 
-// DEV_NOTE: POST /dashboard/eval-cases: a v1 case for botId's chatbot, else the company's default one. Saved active
+// DEV_NOTE: POST /dashboard/eval-cases: a case (its rubric, no other checks) for botId's chatbot, else the company's default one. Saved active
 // and never a safety case (those are the platform's).
 export const ZCreateEvalCaseApiRequest = ZEvalCaseDraft.extend({
   botId: z.string().min(1).optional(),
@@ -25,12 +25,13 @@ export const ZCreateEvalCaseApiRequest = ZEvalCaseDraft.extend({
 export type CreateEvalCaseApiRequest = z.infer<typeof ZCreateEvalCaseApiRequest>;
 
 // DEV_NOTE: PATCH /dashboard/eval-cases/:publicId: the company's own case only (a platform case answers 404). An absent
-// field keeps its value; messages and rubric replace the stored v1 body's part. At least one field.
+// field keeps its value; messages and rubric replace the stored body's part, its other checks are kept. rubric null =
+// no judge, refused (409 NothingToCheck) when the case has no other check. At least one field.
 export const ZUpdateEvalCaseApiRequest = z
   .object({
     name: ZEvalCaseName.optional(),
     messages: ZEvalCaseMessages.optional(),
-    rubric: ZEvalCaseRubric.optional(),
+    rubric: ZEvalCaseRubric.nullable().optional(),
     isActive: z.boolean().optional(),
   })
   .refine(

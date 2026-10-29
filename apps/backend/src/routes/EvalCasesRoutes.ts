@@ -62,7 +62,8 @@ EvalCasesRoutes.post(
   },
 );
 
-// DEV_NOTE: 409 = a refused edit (failure NotEditable: the stored conversation is a shape this page can't rewrite)
+// DEV_NOTE: 409 = a refused edit (failure NotEditable: the stored conversation is a shape this page can't rewrite;
+// NothingToCheck: the rubric was cleared on a case with no other check)
 EvalCasesRoutes.patch(
   "/:publicId",
   checkAuth,
