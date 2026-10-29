@@ -35,19 +35,83 @@ function messagesIssue(messages: Schemas.EvalCaseMessage[]): string | undefined 
   return undefined;
 }
 
-function rubricIssue(value: string): string | undefined {
+// DEV_NOTE: isOptional = the case has other checks, so a blank rubric (no judge) still leaves something to check
+function rubricIssue(value: string, isOptional: boolean): string | undefined {
+  if (isOptional && value.trim() === "") return undefined;
   return Schemas.ZEvalCaseRubric.safeParse(value).success
     ? undefined
     : `Say what a good reply does, up to ${Utilities.formatCount(Schemas.EVAL_CASE_RUBRIC_MAX_CHARS)} characters.`;
+}
+
+// DEV_NOTE: Expected values as the case stores them (JSON), name: value
+function valuesText(values: Record<string, Schemas.EvalCaseJsonValue>): string {
+  return Object.entries(values)
+    .map(([name, value]) => `${name}: ${JSON.stringify(value)}`)
+    .join(", ");
+}
+
+// DEV_NOTE: Stable keys from content for a list that never changes while shown; a repeat gets its count added
+function keyedByContent<T>(items: T[]): { key: string; item: T }[] {
+  const seen = new Map<string, number>();
+  return items.map((item) => {
+    const content = JSON.stringify(item);
+    const count = seen.get(content) ?? 0;
+    seen.set(content, count + 1);
+    return { key: `${content}#${count}`, item };
+  });
+}
+
+// DEV_NOTE: The case's checks besides the rubric, read-only (they're written with the case, never on this form)
+function EvalCaseChecksList({ checks }: Schemas.DashboardEvalCaseChecksProps) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-body font-medium text-foreground">Also checks</p>
+      <ul className="flex flex-col gap-1.5 text-body text-foreground">
+        {keyedByContent(checks.rules).map(({ key, item: rule }) => (
+          <li key={key} className="break-words">
+            {rule.kind === Schemas.EvalCaseRuleKindEnum.Contains
+              ? "The reply includes "
+              : "The reply never includes "}
+            “{rule.text}”
+          </li>
+        ))}
+        {keyedByContent(checks.toolCalls).map(({ key, item: call }) => (
+          <li key={key} className="break-words">
+            Calls <span className="font-mono text-mono-value">{call.toolName}</span>
+            {Object.keys(call.args).length > 0 && (
+              <>
+                {" with "}
+                <span className="font-mono text-mono-value">{valuesText(call.args)}</span>
+              </>
+            )}
+          </li>
+        ))}
+        {checks.forbiddenTools.map((toolName) => (
+          <li key={`forbidden-${toolName}`}>
+            Never calls <span className="font-mono text-mono-value">{toolName}</span>
+          </li>
+        ))}
+        {checks.readbacks.map((readback) => (
+          <li key={`readback-${readback.toolName}`} className="break-words">
+            After the run, the record saved by{" "}
+            <span className="font-mono text-mono-value">{readback.toolName}</span> shows{" "}
+            <span className="font-mono text-mono-value">{valuesText(readback.expect)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 const errorsOf = (errors: unknown[]) => errors.map((message) => ({ message: String(message) }));
 
 // DEV_NOTE: A test case's form, inside a Dialog: name, the conversation (oldest first, ending with the user's question)
 // and what a good reply does. canEditMessages adds and removes messages (New case, Edit); off, the messages are only
-// edited in place (Quality's review of a rewrite). The case is saved as the admin sees it.
+// edited in place (Quality's review of a rewrite). The case is saved as the admin sees it; its other checks (checks)
+// are only listed, and make the rubric optional.
 export function EvalCaseForm({
   defaultValues,
+  checks,
   canEditMessages,
   title,
   description,
@@ -59,6 +123,11 @@ export function EvalCaseForm({
   const [messageKeys, setMessageKeys] = useState(() =>
     defaultValues.messages.map(() => crypto.randomUUID()),
   );
+  // DEV_NOTE: The case's other checks, if it has any (listed read-only; with them the rubric may be blank)
+  const otherChecks = checks && Schemas.hasEvalCaseChecks(checks) ? checks : null;
+  const isRubricOptional = otherChecks !== null;
+  const isTagInChecks =
+    otherChecks !== null && JSON.stringify(otherChecks).includes(Schemas.EVAL_CASE_TAG_PLACEHOLDER);
   const form = useForm({
     defaultValues,
     onSubmit: async ({ value }) => {
@@ -173,14 +242,30 @@ export function EvalCaseForm({
                 </div>
               )}
               <FieldError errors={errorsOf(messagesField.state.meta.errors)} />
+              {(isTagInChecks ||
+                messages.some((message) =>
+                  message.text.includes(Schemas.EVAL_CASE_TAG_PLACEHOLDER),
+                )) && (
+                <p className="text-caption text-muted-foreground">
+                  <span className="font-mono text-mono-value">
+                    {Schemas.EVAL_CASE_TAG_PLACEHOLDER}
+                  </span>{" "}
+                  becomes a new name in every attempt.
+                </p>
+              )}
             </div>
           );
         }}
       </form.Field>
-      <form.Field name="rubric" validators={{ onChange: ({ value }) => rubricIssue(value) }}>
+      <form.Field
+        name="rubric"
+        validators={{ onChange: ({ value }) => rubricIssue(value, isRubricOptional) }}
+      >
         {(field) => (
           <Field data-invalid={field.state.meta.errors.length > 0}>
-            <FieldLabel htmlFor="test-rubric">What a good reply does</FieldLabel>
+            <FieldLabel htmlFor="test-rubric">
+              {isRubricOptional ? "What a good reply does (optional)" : "What a good reply does"}
+            </FieldLabel>
             <Textarea
               id="test-rubric"
               name={field.name}
@@ -194,6 +279,7 @@ export function EvalCaseForm({
           </Field>
         )}
       </form.Field>
+      {otherChecks && <EvalCaseChecksList checks={otherChecks} />}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel

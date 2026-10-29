@@ -62,7 +62,8 @@ EvalCasesRoutes.post(
   },
 );
 
-// DEV_NOTE: 409 = a refused edit (failure NotEditable: the stored conversation is a shape this page can't rewrite)
+// DEV_NOTE: A refused edit answers its failure's status (EVAL_CASE_UPDATE_FAILURE_HTTP_STATUS_MAP: 409 NotEditable /
+// NothingToCheck, 400 TooLong)
 EvalCasesRoutes.patch(
   "/:publicId",
   checkAuth,
@@ -81,7 +82,10 @@ EvalCasesRoutes.patch(
 
     if (response.isSuccess) return c.json(response, 200);
     if (response.isNotFound) return c.json(response, 404);
-    return c.json(response, response.failure ? 409 : 500);
+    return c.json(
+      response,
+      response.failure ? Schemas.EVAL_CASE_UPDATE_FAILURE_HTTP_STATUS_MAP[response.failure] : 500,
+    );
   },
 );
 

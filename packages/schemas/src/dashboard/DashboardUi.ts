@@ -21,7 +21,7 @@ import type {
   DocGapClusterListTabEnum,
   KnowledgePageSearch,
 } from "../docGapClusters";
-import type { EvalCaseDetail, EvalCaseDraft, EvalCaseListItem } from "../evalCases";
+import type { EvalCaseChecks, EvalCaseDetail, EvalCaseDraft, EvalCaseListItem } from "../evalCases";
 import type { EvalAttempt, EvalTranscriptEntryView } from "../evalResults";
 import type {
   EvalRunCaseItem,
@@ -326,15 +326,22 @@ export interface DashboardQualityTestDialogProps {
 
 // DEV_NOTE: A test case's form (apps/web components/eval-case-form): Quality's Create test review (messages fixed, as
 // rewritten) and the Tests page's New case / Edit (messages added and removed). onSubmit resolves once saved; the
-// caller closes the dialog.
+// caller closes the dialog. checks = the case's other checks (Edit of a case that has them, M5-1): listed read-only, and
+// while there are any the rubric may be left blank (submitted as ""; the caller sends null).
 export interface DashboardEvalCaseFormProps {
   defaultValues: EvalCaseDraft;
+  checks?: EvalCaseChecks;
   canEditMessages: boolean;
   title: string;
   description: string;
   submitLabel: string;
   onSubmit: (value: EvalCaseDraft) => Promise<void>;
   onCancel: () => void;
+}
+
+// DEV_NOTE: A case's checks besides its rubric, read-only in the case form (M5-1)
+export interface DashboardEvalCaseChecksProps {
+  checks: EvalCaseChecks;
 }
 
 // DEV_NOTE: The Tests page (M4-8): the metric strip, then Runs or Cases (tab and page in the URL)
@@ -386,7 +393,7 @@ export interface DashboardTestCaseResultProps {
   hasPassed: boolean | null;
 }
 
-// DEV_NOTE: Edit of one case: its conversation and rubric load first
+// DEV_NOTE: Edit of one case: its conversation, rubric and other checks load first
 export interface DashboardTestCaseEditDialogProps {
   publicId: string;
   onClose: () => void;

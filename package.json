@@ -14,6 +14,8 @@
     "lint:fix": "pnpm -r lint:fix",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "evals:types": "uv run --project evals python evals/scripts/generate_types.py",
+    "evals:check": "uv run --project evals python evals/scripts/generate_types.py --check && uv run --project evals pytest evals",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "prepare": "husky"

@@ -13,8 +13,8 @@ import * as Schemas from "@app/schemas";
 type Tx = NodePgTransaction<EmptyRelations>;
 
 // DEV_NOTE: Tenant Repo — test cases as the Tests page works them (M4-8): the Cases tab (the company's cases and the
-// platform's, with each one's newest result), one case with its conversation and rubric, New case and Edit (v1 bodies:
-// Schemas.readEvalCaseBody / toEvalCaseV1), and turning a case on or off. Only the company's own cases change: a
+// platform's, with each one's newest result), one case with its conversation and rubric, New case and Edit (bodies read
+// through Schemas.readEvalCaseBody, written through toEvalCase), and turning a case on or off. Only the company's own cases change: a
 // platform case reads, and an edit of one answers 404. Case text never reaches a log, nor the audit row each write
 // records (M4-9: the case's name only).
 export default class EvalCasesRepo {
@@ -137,7 +137,7 @@ export default class EvalCasesRepo {
     });
   }
 
-  // DEV_NOTE: New case: a v1 case for botId's chatbot, else the company's default one (unknown, or no default → 404).
+  // DEV_NOTE: New case: a case judged on its rubric (no other checks) for botId's chatbot, else the company's default one (unknown, or no default → 404).
   // Saved active, never a safety case.
   async createEvalCase(
     params: Schemas.CreateEvalCaseApiRequest & { companyId: string; adminId: string },
@@ -155,11 +155,21 @@ export default class EvalCasesRepo {
           return { isSuccess: false, message: chatbot.message, isNotFound: chatbot.isNotFound };
         }
 
+        // DEV_NOTE: Can't fail: a rubric alone is a check, within the size cap, and the request held messages and
+        // rubric to their schemas. If it ever did, it is a server error (as Quality's convert)
+        const stored = Schemas.toEvalCase({
+          messages: params.messages,
+          rubric: params.rubric,
+          checks: Schemas.EVAL_CASE_NO_CHECKS,
+        });
+        if (!stored.isSuccess) throw new TenantRollbackError(stored.message);
+
         const created = await this.evalCasesDal.createEvalCase(tx, {
           companyId,
           chatbotId: chatbot.chatbot.id,
           name: params.name,
-          ...Schemas.toEvalCaseV1({ messages: params.messages, rubric: params.rubric }),
+          input: stored.input,
+          expectations: stored.expectations,
         });
         if (!created.isSuccess || !created.evalCase) {
           return { isSuccess: false, message: created.message, isNotFound: created.isNotFound };
@@ -187,8 +197,10 @@ export default class EvalCasesRepo {
   }
 
   // DEV_NOTE: Edit or turn on / off the company's own case, under its row lock (a platform or another company's case →
-  // 404). A new conversation or rubric is merged into the stored v1 body; a body this page can't read refuses a new
-  // conversation or rubric with NotEditable (409, nothing in the request is written); an isActive-only edit still works.
+  // 404). A new conversation or rubric is merged into the stored body (read through its upgrader, its other checks kept)
+  // and written at the current version; a body this page can't read refuses a new conversation or rubric with
+  // NotEditable, a cleared rubric with no other check left with NothingToCheck, a rubric that makes the expectations
+  // too long with TooLong (nothing in the request is written); an isActive-only edit still works.
   async updateEvalCase(
     params: Schemas.UpdateEvalCaseApiRequest & {
       companyId: string;
@@ -211,10 +223,10 @@ export default class EvalCasesRepo {
         }
         const row = found.evalCase;
 
-        let body: Schemas.EvalCaseBody | undefined;
+        let stored: Pick<Schemas.UpdateEvalCaseDALRequest, "input" | "expectations"> | undefined;
         if (params.messages !== undefined || params.rubric !== undefined) {
-          const stored = Schemas.readEvalCaseBody(row.input, row.expectations);
-          if (!stored) {
+          const current = Schemas.readEvalCaseBody(row.input, row.expectations);
+          if (!current) {
             return {
               isSuccess: false,
               message: "This case's conversation can't be edited here",
@@ -222,12 +234,23 @@ export default class EvalCasesRepo {
             };
           }
           const merged: Schemas.EvalCaseBody = {
-            messages: params.messages ?? stored.messages,
-            rubric: params.rubric ?? stored.rubric,
+            messages: params.messages ?? current.messages,
+            rubric: params.rubric === undefined ? current.rubric : params.rubric,
+            checks: current.checks,
           };
           // DEV_NOTE: The Edit form sends the whole case, so a body equal to the stored one is no change: not written,
-          // not audited
-          if (Utility.stableStringify(merged) !== Utility.stableStringify(stored)) body = merged;
+          // not audited (a v1 row stays v1 until an edit changes it)
+          if (Utility.stableStringify(merged) !== Utility.stableStringify(current)) {
+            const written = Schemas.toEvalCase(merged);
+            if (!written.isSuccess) {
+              const failure = Schemas.EVAL_CASE_UPDATE_FAILURE_BY_WRITE_FAILURE[written.failure];
+              // DEV_NOTE: Invalid can't happen here: the other checks come from a stored body the schema accepted, and
+              // the request held messages and rubric to their schemas. If it ever did, it is a server error
+              if (!failure) throw new TenantRollbackError(written.message);
+              return { isSuccess: false, message: written.message, failure };
+            }
+            stored = { input: written.input, expectations: written.expectations };
+          }
         }
 
         const updated = await this.evalCasesDal.updateEvalCase(tx, {
@@ -235,7 +258,7 @@ export default class EvalCasesRepo {
           id: row.id,
           name: params.name,
           isActive: params.isActive,
-          ...(body ? Schemas.toEvalCaseV1(body) : {}),
+          ...(stored ?? {}),
         });
         if (!updated.isSuccess || !updated.evalCase) {
           throw new TenantRollbackError(updated.message ?? "Eval case not updated");
@@ -252,7 +275,7 @@ export default class EvalCasesRepo {
 
         // DEV_NOTE: Audited by what changed: a new name, conversation or rubric is Updated, on / off its own row
         const actions: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.EvalCase>[] = [];
-        if (after.name !== row.name || body !== undefined) {
+        if (after.name !== row.name || stored !== undefined) {
           actions.push(Schemas.AuditEntityActionEnum.Updated);
         }
         if (after.isActive !== row.isActive) {

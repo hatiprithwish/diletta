@@ -556,7 +556,7 @@ function NewTestCaseDialog({ open, onClose }: Schemas.DashboardNewTestCaseDialog
   );
 }
 
-// DEV_NOTE: Edit loads the case's conversation and rubric first
+// DEV_NOTE: Edit loads the case's conversation, rubric and other checks first
 function TestCaseEditDialog({ publicId, onClose }: Schemas.DashboardTestCaseEditDialogProps) {
   const query = useTestCase(publicId);
   const evalCase = query.data?.evalCase;
@@ -615,13 +615,18 @@ function TestCaseEditForm({ evalCase, onClose }: Schemas.DashboardTestCaseEditFo
     );
   }
 
+  // DEV_NOTE: A blank rubric is allowed only beside other checks (the form checks it): sent as null, no judge
   const save = async (value: Schemas.EvalCaseDraft) => {
-    await update.mutateAsync(value);
+    await update.mutateAsync({
+      ...value,
+      rubric: value.rubric.trim() === "" ? null : value.rubric,
+    });
     onClose();
   };
   return (
     <EvalCaseForm
-      defaultValues={{ name: evalCase.name, ...body }}
+      defaultValues={{ name: evalCase.name, messages: body.messages, rubric: body.rubric ?? "" }}
+      checks={body.checks}
       canEditMessages
       title="Edit case"
       description={CASE_FORM_DESCRIPTION}

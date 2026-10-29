@@ -6,3 +6,5 @@ build
 pnpm-lock.yaml
 docs/design/pages
 evals/schemas
+evals/fixtures
+evals/.venv

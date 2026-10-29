@@ -1,7 +1,7 @@
 import type { PageDALRequest } from "../common";
 import type {
   EvalCase,
-  EvalCaseExpectationsV1,
+  EvalCaseExpectations,
   EvalCaseInputV1,
   EvalCaseSortColumn,
 } from "./EvalCasesCommon";
@@ -12,7 +12,7 @@ export type CreateEvalCaseDALRequest = Pick<EvalCase, "name"> & {
   companyId: string;
   chatbotId: string;
   input: EvalCaseInputV1;
-  expectations: EvalCaseExpectationsV1;
+  expectations: EvalCaseExpectations;
 };
 
 // DEV_NOTE: The Cases tab's filter (M4-8), resolved by the Repo: chatbotId = the internal id of the botId the client
@@ -30,12 +30,12 @@ export type FindEvalCaseDALRequest = Pick<EvalCase, "publicId"> & {
 };
 
 // DEV_NOTE: An edit of the company's own case (M4-8): an absent field keeps its value. input / expectations are whole
-// v1 bodies (the Repo merges the edit into the stored one).
+// bodies at the current version (the Repo merges the edit into the stored one, read through its upgrader).
 export type UpdateEvalCaseDALRequest = Pick<EvalCase, "id"> & {
   companyId: string;
   name?: string;
   input?: EvalCaseInputV1;
-  expectations?: EvalCaseExpectationsV1;
+  expectations?: EvalCaseExpectations;
   isActive?: boolean;
 };
 
