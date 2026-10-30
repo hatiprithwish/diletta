@@ -70,7 +70,9 @@ export default class ChatbotsDAL {
 
     try {
       const conditions = [
-        eq(chatbots.publicId, params.publicId),
+        params.id !== undefined
+          ? eq(chatbots.id, params.id)
+          : eq(chatbots.publicId, params.publicId),
         eq(chatbots.companyId, params.companyId),
       ];
       const query = tx
@@ -101,51 +103,6 @@ export default class ChatbotsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetChatbotDetails,
-        message,
-        error,
-        metadata: params,
-      });
-      response.message = message;
-    }
-
-    return response;
-  }
-
-  async getChatbotById(
-    tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindChatbotByIdDALRequest,
-  ) {
-    const response: Schemas.ChatbotDALResponse = { isSuccess: false };
-
-    try {
-      const conditions = [eq(chatbots.id, params.id), eq(chatbots.companyId, params.companyId)];
-      const [chatbot] = await tx
-        .select()
-        .from(chatbots)
-        .where(and(...conditions))
-        .limit(1);
-
-      if (!chatbot) {
-        const message = "Chatbot not found";
-        AppLogger.warn({
-          category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.GetChatbotById,
-          message,
-          metadata: params,
-        });
-        response.message = message;
-        response.isNotFound = true;
-        return response;
-      }
-
-      response.isSuccess = true;
-      response.message = "Chatbot fetched successfully";
-      response.chatbot = chatbot;
-    } catch (error) {
-      const message = "Unknown error in fetching chatbot";
-      AppLogger.error({
-        category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.GetChatbotById,
         message,
         error,
         metadata: params,

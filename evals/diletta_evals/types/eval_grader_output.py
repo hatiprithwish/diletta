@@ -37,5 +37,5 @@ class EvalGraderOutput(BaseModel):
     """
 
     schemaVersion: Literal[1]
-    checks: Annotated[list[Check], Field(max_length=50)]
+    checks: Annotated[list[Check], Field(max_length=61)]
     error: Error | None

@@ -2,7 +2,11 @@ import { z } from "zod";
 import { ZEvalCaseMessages, ZEvalCaseReadback } from "../evalCases/EvalCasesCommon";
 import { EvalRunTriggerIntEnum } from "../evalRuns/EvalRunsCommon";
 import { ZEvalGraderOutputV1 } from "../evalResults/EvalResultsCommon";
-import { EVAL_HARNESS_VERSION_MAX_CHARS, EVAL_RUN_MAX_K } from "./EvalHarnessCommon";
+import {
+  EVAL_HARNESS_VERSION_MAX_CHARS,
+  EVAL_RESULT_MAX_LATENCY_MS,
+  EVAL_RUN_MAX_K,
+} from "./EvalHarnessCommon";
 
 // DEV_NOTE: Bodies the harness sends to /eval/* (M5-2). Every id is a public id; the company and the staging
 // connection come from the eval JWT, never from a body. Exported to evals/schemas/eval-api.schema.json.
@@ -20,7 +24,8 @@ export const ZCreateEvalRunApiRequest = z
 export type CreateEvalRunApiRequest = z.infer<typeof ZCreateEvalRunApiRequest>;
 
 // DEV_NOTE: One attempt of one case: a new conversation (pinned to the run's config) that holds the case's messages,
-// the {case.tag} already filled by the harness, and answers the last one in one turn. attempt is 1..k.
+// the {case.tag} already filled by the harness, and answers the last one in one turn. attempt is 1..k, once: a repeat
+// of (run, case, attempt) is Duplicate before anything runs, so the harness never retries it.
 export const ZRunEvalAttemptApiRequest = z
   .object({
     caseId: z.string().min(1).max(64),
@@ -48,7 +53,7 @@ export const ZRecordEvalResultApiRequest = z
     attempt: z.number().int().min(1).max(EVAL_RUN_MAX_K),
     hasPassed: z.boolean(),
     graderOutput: ZEvalGraderOutputV1,
-    latencyMs: z.number().int().min(0).nullable(),
+    latencyMs: z.number().int().min(0).max(EVAL_RESULT_MAX_LATENCY_MS).nullable(),
   })
   .refine((body) => !body.hasPassed || body.graderOutput.error === null, {
     message: "An attempt whose grading stopped can't pass",
@@ -57,8 +62,9 @@ export const ZRecordEvalResultApiRequest = z
   .meta({ id: "RecordEvalResultApiRequest" });
 export type RecordEvalResultApiRequest = z.infer<typeof ZRecordEvalResultApiRequest>;
 
-// DEV_NOTE: Ends the run. isComplete true = every case ran its k attempts (Done; refused while one is missing);
-// false = the harness stopped early (Failed: the page says "Didn't finish").
+// DEV_NOTE: Ends the run. isComplete true = every case of the run ran its k attempts and the staging data was reset
+// (Done; refused while an attempt or the reset is missing); false = the harness stopped early (Failed: the page says
+// "Didn't finish").
 export const ZFinishEvalRunApiRequest = z
   .object({
     isComplete: z.boolean(),

@@ -30,6 +30,8 @@ import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import DashboardConversationsRepo from "@/repositories/DashboardConversationsRepo";
 import EvalJwtProvider from "@/providers/evalJwt";
+import ChangeRequestsRepo from "@/repositories/ChangeRequestsRepo";
+import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EvalAuthRepo from "@/repositories/EvalAuthRepo";
 import Utility from "@/utils/Utility";
@@ -507,6 +509,60 @@ describe("Eval auth", { timeout: END_TO_END_TIMEOUT_MS }, () => {
       400,
     );
   });
+
+  it("refuses an unknown kid, a tampered token, an inactive company or connection, and fails closed without a JWKS", async () => {
+    const tenant = await createTenant();
+    const auth = new EvalAuthRepo(evalEnv);
+
+    const unknownKid = await createKey(
+      Schemas.WidgetJwtAlgorithmEnum.ES256,
+      `other-${crypto.randomUUID()}`,
+    );
+    const byUnknownKid = await auth.authenticate(await signToken(unknownKid, evalClaims(tenant)));
+    expect(byUnknownKid).toMatchObject({ failure: Schemas.EvalAuthFailureEnum.Unauthorized });
+
+    // DEV_NOTE: The platform's signature over other claims: another company's id swapped into the payload
+    const [header, , signature] = (await tokenFor(tenant)).split(".");
+    const forgedClaims = btoa(
+      JSON.stringify(evalClaims(tenant, { company: Utility.generatePublicId() })),
+    )
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const tampered = await auth.authenticate(`${header}.${forgedClaims}.${signature}`);
+    expect(tampered).toMatchObject({ failure: Schemas.EvalAuthFailureEnum.Unauthorized });
+
+    const noJwks = await new EvalAuthRepo({
+      ...env,
+      EVAL_JWT_PUBLIC_JWKS: "not a jwks",
+    }).authenticate(await tokenFor(tenant));
+    expect(noJwks).toMatchObject({ failure: Schemas.EvalAuthFailureEnum.ServerError });
+
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(companyConnections)
+        .set({ status: Schemas.CompanyConnectionStatusIntEnum.Disabled })
+        .where(eq(companyConnections.publicId, tenant.stagingPublicId)),
+    );
+    expect(await auth.authenticate(await tokenFor(tenant))).toMatchObject({
+      failure: Schemas.EvalAuthFailureEnum.Forbidden,
+    });
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(companyConnections)
+        .set({ status: Schemas.CompanyConnectionStatusIntEnum.Active })
+        .where(eq(companyConnections.publicId, tenant.stagingPublicId)),
+    );
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(companies)
+        .set({ status: Schemas.CompanyStatusIntEnum.Paused })
+        .where(eq(companies.id, tenant.companyId)),
+    );
+    expect(await auth.authenticate(await tokenFor(tenant))).toMatchObject({
+      failure: Schemas.EvalAuthFailureEnum.Forbidden,
+    });
+  });
 });
 
 describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => {
@@ -532,10 +588,12 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     // production, reaches nothing)
     expect(attempt.toolCalls).toHaveLength(1);
     const [write] = attempt.toolCalls;
+    // DEV_NOTE: update_record's approval is Policy with no rule: Required, approved by the eval on the user's behalf
     expect(write).toMatchObject({
       toolName: "update_record",
       args: { recordId: "rec_alpha", amount: 300 },
       status: Schemas.HostToolStatusEnum.Verified,
+      wasApprovalRequired: true,
     });
     expect(write?.changeRequestId).toEqual(expect.any(String));
     expect((await readAlpha(tenant.hostToken))?.amount).toBe(300);
@@ -557,13 +615,26 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     );
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every((row) => row.evalRunId === run?.id)).toBe(true);
+    // DEV_NOTE: Held to the company's budget only, never to the test user's caps
+    expect(calls.every((row) => row.chatbotUserId === null)).toBe(true);
+
+    // DEV_NOTE: An attempt runs once: a repeat is refused before any model call
+    const repeated = await runAttempt(tenant, runId);
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({
+      failure: Schemas.EvalRunStepFailureEnum.Duplicate,
+    });
     expect(gatewayRequests()[0]?.headers.get("cf-aig-metadata")).toContain(run?.id ?? "");
 
-    // DEV_NOTE: An eval chat is never on the dashboard
+    // DEV_NOTE: An eval chat and its change request are never on the dashboard
     const listed = await new DashboardConversationsRepo(env).getConversations({
       companyId: tenant.companyId,
     });
     expect(listed.totalRecords).toBe(0);
+    const changes = await new ChangeRequestsRepo(env).getChangeRequests({
+      companyId: tenant.companyId,
+    });
+    expect(changes.totalRecords).toBe(0);
 
     const readbackBody = (amount: number) => ({
       conversationId: attempt.conversationId,
@@ -623,6 +694,18 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       body: { ...result(1), graderOutput: { ...graderOutput(true), error: "Judge unreachable" } },
     });
     expect(stoppedButPassed.status).toBe(400);
+    const tooSlow = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: { ...result(1), latencyMs: 2 ** 31 },
+    });
+    expect(tooSlow.status).toBe(400);
+
+    // DEV_NOTE: Every attempt is in, but the staging data isn't back yet: not Done
+    const notReset = await call(`/runs/${runId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: true },
+    });
+    expect(notReset.status).toBe(409);
 
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
@@ -638,6 +721,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     expect(finished.status).toBe(200);
     expect(Schemas.ZFinishEvalRunApiResponse.parse(await finished.json())).toMatchObject({
       status: Schemas.EvalRunStatusIntEnum.Done,
+      statusLabel: Schemas.EvalRunStatusLabelEnum.Done,
       caseCount: started.cases.length,
       passAllKCount: started.cases.length,
       hasPassed: true,
@@ -752,6 +836,11 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       started,
       started.cases.map((evalCase) => evalCase.publicId).filter((id) => id !== skipped),
     );
+    const reset = await call(`/runs/${runId}/reset`, {
+      token: await tokenFor(tenant),
+      hostToken: tenant.hostToken,
+    });
+    expect(reset.status).toBe(200);
     const finished = await call(`/runs/${runId}/finish`, {
       token: await tokenFor(tenant),
       body: { isComplete: true },
@@ -771,10 +860,15 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     const [run] = await withOwnerDb((ownerDb) =>
       ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, started.run.publicId)),
     );
+    const [evalCase] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalCases).where(eq(evalCases.publicId, tenant.casePublicId)),
+    );
     const conversationsRepo = new ConversationsRepo(env);
     const evalConversation = await conversationsRepo.startEvalConversation({
       identity: authenticated.identity,
       evalRunId: run?.id ?? "",
+      evalCaseId: evalCase?.id ?? "",
+      evalAttempt: 1,
       chatbotConfigId: tenant.configId,
       chatbot: { id: tenant.chatbotId, publicId: tenant.chatbotPublicId, name: "Records bot" },
     });
@@ -813,6 +907,44 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       body: { isComplete: false },
     });
     expect(asOther.status).toBe(404);
+    const attemptAsOther = await call(`/runs/${runId}/attempts`, {
+      token: await tokenFor(other),
+      hostToken: other.hostToken,
+      body: {
+        caseId: owner.casePublicId,
+        attempt: 1,
+        messages: [{ role: "user", text: "Hello" }],
+      },
+    });
+    expect(attemptAsOther.status).toBe(404);
+    const readbackAsOther = await call(`/runs/${runId}/readbacks`, {
+      token: await tokenFor(other),
+      hostToken: other.hostToken,
+      body: {
+        conversationId: Utility.generatePublicId(),
+        changeRequestId: Utility.generatePublicId(),
+        readback: { toolName: "update_record", expect: { amount: 300 } },
+      },
+    });
+    expect(readbackAsOther.status).toBe(404);
+    const resetAsOther = await call(`/runs/${runId}/reset`, {
+      token: await tokenFor(other),
+      hostToken: other.hostToken,
+    });
+    expect(resetAsOther.status).toBe(404);
+
+    // DEV_NOTE: A conversation that isn't this run's can't be read back through it
+    const otherRun = await startRun(owner);
+    const notThisRun = await call(`/runs/${otherRun.run.publicId}/readbacks`, {
+      token: await tokenFor(owner),
+      hostToken: owner.hostToken,
+      body: {
+        conversationId: Utility.generatePublicId(),
+        changeRequestId: Utility.generatePublicId(),
+        readback: { toolName: "update_record", expect: { amount: 300 } },
+      },
+    });
+    expect(notThisRun.status).toBe(404);
     const otherCase = await call(`/runs/${runId}/results`, {
       token: await tokenFor(owner),
       body: {
@@ -834,5 +966,56 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       },
     });
     expect(otherConfig.status).toBe(404);
+  });
+
+  it("marks a run reset with no reset op, refuses an invalid one, and keeps reset ops on staging", async () => {
+    const tenant = await createTenant();
+    const connections = new CompanyConnectionsRepo(env);
+    const scope = { companyId: tenant.companyId, publicId: tenant.stagingPublicId };
+
+    const cleared = await connections.updateCompanyConnection({
+      ...scope,
+      companyConnection: { resetOp: null },
+    });
+    expect(cleared.isSuccess).toBe(true);
+    const started = await startRun(tenant);
+    const noOp = await call(`/runs/${started.run.publicId}/reset`, {
+      token: await tokenFor(tenant),
+      hostToken: tenant.hostToken,
+    });
+    expect(Schemas.ZResetEvalRunApiResponse.parse(await noOp.json()).isReset).toBe(false);
+    const [marked] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, started.run.publicId)),
+    );
+    expect(marked?.resetAt).not.toBeNull();
+
+    // DEV_NOTE: A stored reset op that no longer parses (written around the Repo) is the host's failure, 502
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(companyConnections)
+        .set({ resetOp: { method: Schemas.ToolOpMethodEnum.Post, path: "/reset/{args.id}" } })
+        .where(eq(companyConnections.publicId, tenant.stagingPublicId)),
+    );
+    const another = await startRun(tenant);
+    const invalid = await call(`/runs/${another.run.publicId}/reset`, {
+      token: await tokenFor(tenant),
+      hostToken: tenant.hostToken,
+    });
+    expect(invalid.status).toBe(502);
+
+    const restored = await connections.updateCompanyConnection({
+      ...scope,
+      companyConnection: { resetOp: Schemas.TEST_HOST_RESET_OP },
+    });
+    expect(restored.isSuccess).toBe(true);
+    const onProduction = await connections.updateCompanyConnection({
+      companyId: tenant.companyId,
+      publicId: tenant.productionPublicId,
+      companyConnection: { resetOp: Schemas.TEST_HOST_RESET_OP },
+    });
+    expect(onProduction).toMatchObject({
+      isSuccess: false,
+      message: "Only a staging connection has a reset op",
+    });
   });
 });

@@ -103,6 +103,10 @@ export const EVAL_HOST_TOKEN_MAX_LENGTH = 8192;
 // DEV_NOTE: pass^k: each case runs k times and passes only when every attempt does
 export const EVAL_RUN_MAX_K = 10;
 export const EVAL_HARNESS_VERSION_MAX_CHARS = 64;
+// DEV_NOTE: The most cases one run takes (the chatbot's active ones and the platform's): more refuses the run (Invalid)
+export const EVAL_RUN_MAX_CASES = 500;
+// DEV_NOTE: An attempt's latency as the harness records it: up to an hour (a turn is far shorter)
+export const EVAL_RESULT_MAX_LATENCY_MS = 3_600_000;
 
 // DEV_NOTE: A case as the harness runs it: input and expectations already upgraded to the current versions (the
 // harness never sees an older shape)
@@ -152,6 +156,9 @@ export const ZEvalAttemptToolCall = z
     args: ZEvalToolArgs.nullable(),
     status: z.enum(HostToolStatusEnum).nullable(),
     changeRequestId: z.string().nullable(),
+    // DEV_NOTE: The approval rules asked a user to approve this write (Required: the rule, the tool, a destructive write
+    // or untrusted input). The eval approved it as that user would; a case can assert the policy with it.
+    wasApprovalRequired: z.boolean(),
   })
   .meta({ id: "EvalAttemptToolCall" });
 export type EvalAttemptToolCall = z.infer<typeof ZEvalAttemptToolCall>;
@@ -172,8 +179,9 @@ export const EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP: Record<EvalAttemptFailureEnum
 
 // DEV_NOTE: What a run step refuses with: the run, config, case or conversation isn't the token company's or this run's
 // (NotFound), the run isn't Running any more (NotRunning), a body that doesn't fit the run (Invalid: an attempt past
-// k, a readback of another tool, a config that doesn't load, no case to run), an attempt already graded (Duplicate), a
-// Done run still missing attempts (Incomplete), the host reset failed (HostFailed)
+// k, a readback of another tool, a config that doesn't load, no case or too many to run), an attempt already started
+// or graded (Duplicate), a Done run still missing an attempt or its reset (Incomplete), the host reset failed
+// (HostFailed)
 export enum EvalRunStepFailureEnum {
   NotFound = "NotFound",
   NotRunning = "NotRunning",
@@ -196,6 +204,15 @@ export const EVAL_RUN_STEP_FAILURE_HTTP_STATUS_MAP: Record<
   [EvalRunStepFailureEnum.HostFailed]: 502,
   [EvalRunStepFailureEnum.ServerError]: 500,
 };
+
+// DEV_NOTE: Every failure an /eval/* refusal can name (auth, attempt, run step), one value each
+export const EVAL_REFUSAL_FAILURES = [
+  ...new Set<string>([
+    ...Object.values(EvalAuthFailureEnum),
+    ...Object.values(EvalAttemptFailureEnum),
+    ...Object.values(EvalRunStepFailureEnum),
+  ]),
+] as [string, ...string[]];
 
 // ─── Readbacks ──────────────────────────────────────────────────────────────
 

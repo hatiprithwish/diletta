@@ -425,14 +425,13 @@ export enum LogAction {
   DispatchCron = "DispatchCron",
 
   // Eval harness (M5-2)
-  GetChatbotConfig = "GetChatbotConfig",
-  GetChatbotById = "GetChatbotById",
   GetRunnableEvalCases = "GetRunnableEvalCases",
   CreateEvalRun = "CreateEvalRun",
   FinishEvalRun = "FinishEvalRun",
   CreateEvalResult = "CreateEvalResult",
   GetEvalRunTallies = "GetEvalRunTallies",
   AddEvalRunCost = "AddEvalRunCost",
+  MarkEvalRunReset = "MarkEvalRunReset",
   DecodeEvalJwt = "DecodeEvalJwt",
   VerifyEvalJwt = "VerifyEvalJwt",
   AuthenticateEval = "AuthenticateEval",

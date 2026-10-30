@@ -114,6 +114,7 @@ export default class ConversationsRepo {
           },
           detail: { chatbotId: identity.chatbotId, connectionId: identity.connectionId },
         });
+        if (started === null) throw new TenantRollbackError("Conversation not created");
         return {
           isSuccess: true,
           message: "Conversation started",
@@ -143,6 +144,8 @@ export default class ConversationsRepo {
   async startEvalConversation(params: {
     identity: Schemas.EvalIdentity;
     evalRunId: string;
+    evalCaseId: string;
+    evalAttempt: number;
     chatbotConfigId: string;
     chatbot: Pick<Schemas.Chatbot, "id" | "publicId" | "name">;
   }): Promise<Schemas.StartEvalConversationResponse> {
@@ -172,8 +175,12 @@ export default class ConversationsRepo {
             companyId: identity.companyId,
             chatbotId: chatbot.id,
             chatbotUserId,
-            evalRunId: params.evalRunId,
-            chatbotConfigId: params.chatbotConfigId,
+            eval: {
+              evalRunId: params.evalRunId,
+              evalCaseId: params.evalCaseId,
+              evalAttempt: params.evalAttempt,
+              chatbotConfigId: params.chatbotConfigId,
+            },
           },
           detail: {
             chatbotId: chatbot.id,
@@ -181,6 +188,9 @@ export default class ConversationsRepo {
             evalRunId: params.evalRunId,
           },
         });
+        if (started === null) {
+          return { isSuccess: false, message: "This eval attempt already ran", isDuplicate: true };
+        }
         return {
           isSuccess: true,
           message: "Eval conversation started",
@@ -193,6 +203,7 @@ export default class ConversationsRepo {
         };
       },
     );
+    if (result.isDuplicate) return result;
     if (!result.isSuccess) return this.rejectEval(result.message, identity.companyId);
     return result;
   }
@@ -221,7 +232,7 @@ export default class ConversationsRepo {
 
       // DEV_NOTE: An eval attempt (M5-2) runs the config under test, whatever its status, and never follows a publish
       const found = session.eval
-        ? await this.chatbotConfigsDal.getChatbotConfig(tx, {
+        ? await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
             companyId: session.companyId,
             id: session.eval.chatbotConfigId,
           })
@@ -331,16 +342,18 @@ export default class ConversationsRepo {
   }
 
   // DEV_NOTE: A new conversation (a widget's or an eval attempt's) with its conversation.started critical event as the
-  // activity root, in the caller's transaction; any failed step throws TenantRollbackError
+  // activity root, in the caller's transaction; any failed step throws TenantRollbackError. null = an eval attempt that
+  // already has its conversation (nothing written).
   private async createStartedConversation(
     tx: NodePgTransaction<EmptyRelations>,
     params: {
       conversation: Schemas.CreateConversationDALRequest;
       detail: Schemas.CriticalEventBase["detail"];
     },
-  ): Promise<{ conversation: Schemas.Conversation; outboxId: string }> {
+  ): Promise<{ conversation: Schemas.Conversation; outboxId: string } | null> {
     const { companyId, chatbotUserId } = params.conversation;
     const created = await this.conversationsDal.createConversation(tx, params.conversation);
+    if (created.isConflict) return null;
     if (!created.isSuccess || !created.conversation) {
       throw new TenantRollbackError(created.message);
     }

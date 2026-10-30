@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "be987655-b5b2-4465-9a39-545c8df74fe4",
+  "id": "9a72f5e0-e070-4579-9bd8-d331b5f04ec7",
   "prevIds": ["4464a671-34f0-49cc-9bd1-170b2c62dbcd"],
   "ddl": [
     {
@@ -2475,6 +2475,32 @@
       "table": "conversations"
     },
     {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "eval_case_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "conversations"
+    },
+    {
+      "type": "smallint",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "eval_attempt",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "conversations"
+    },
+    {
       "type": "smallint",
       "typeSchema": null,
       "notNull": true,
@@ -3243,6 +3269,19 @@
       "generated": null,
       "identity": null,
       "name": "eval_case_ids",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "eval_runs"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "reset_at",
       "entityType": "columns",
       "schema": "public",
       "table": "eval_runs"
@@ -6995,6 +7034,62 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "eval_case_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "IDX_conversations_eval_case_id",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "conversations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "eval_run_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "eval_case_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "eval_attempt",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "conversations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "public_id",
           "isExpression": false,
           "asc": true,
@@ -8944,6 +9039,13 @@
       "entityType": "checks",
       "schema": "public",
       "table": "company_secrets"
+    },
+    {
+      "value": "(\"eval_run_id\" IS NULL) = (\"eval_case_id\" IS NULL) AND (\"eval_run_id\" IS NULL) = (\"eval_attempt\" IS NULL)",
+      "name": "CHK_conversations_eval_attempt",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "conversations"
     },
     {
       "value": "(\"company_id\" IS NULL) = (\"chatbot_id\" IS NULL)",

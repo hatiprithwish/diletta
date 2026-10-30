@@ -5,6 +5,7 @@ import type { ConversationTabCounts } from "./ConversationsApiResponse";
 // DAL results carry the raw DB row (internal ids). The Repo maps them to API responses.
 export interface ConversationDALResponse extends ApiResponse {
   conversation?: Conversation;
+  isConflict?: boolean;
 }
 
 // DEV_NOTE: The dashboard's rows (M4-4), with internal ids the Repo drops

@@ -44,7 +44,10 @@ export default class EvalHarnessRepo {
   private evalCasesDal: EvalCasesDAL;
   private evalRunsDal: EvalRunsDAL;
   private conversationsDal: ConversationsDAL;
+  private conversationsRepo: ConversationsRepo;
+  private actionEngineRepo: ActionEngineRepo;
 
+  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan) are built once, here
   constructor(env: Env) {
     this.env = env;
     this.db = getDbClient(env);
@@ -53,6 +56,8 @@ export default class EvalHarnessRepo {
     this.evalCasesDal = new EvalCasesDAL();
     this.evalRunsDal = new EvalRunsDAL();
     this.conversationsDal = new ConversationsDAL();
+    this.conversationsRepo = new ConversationsRepo(env);
+    this.actionEngineRepo = new ActionEngineRepo(env);
   }
 
   // DEV_NOTE: A Running run of the config, and the cases it runs. The config's chatbot must be active and the config
@@ -71,7 +76,7 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx) => {
-        const config = await this.chatbotConfigsDal.getChatbotConfig(tx, {
+        const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
           companyId,
           publicId: request.chatbotConfigId,
         });
@@ -93,12 +98,21 @@ export default class EvalHarnessRepo {
         const chatbot = await this.activeChatbot(tx, companyId, chatbotConfig.chatbotId);
         if (!chatbot.isSuccess || !chatbot.chatbot) return chatbot;
 
+        // DEV_NOTE: One over the limit, so a run with too many cases is refused instead of cut short
         const runnable = await this.evalCasesDal.getRunnableEvalCases(tx, {
           companyId,
           chatbotId: chatbotConfig.chatbotId,
+          limit: Schemas.EVAL_RUN_MAX_CASES + 1,
         });
         if (!runnable.isSuccess || !runnable.evalCases) {
           return this.stepFailure(false, runnable.message);
+        }
+        if (runnable.evalCases.length > Schemas.EVAL_RUN_MAX_CASES) {
+          return {
+            isSuccess: false,
+            message: `The chatbot has more than ${Schemas.EVAL_RUN_MAX_CASES} active eval cases`,
+            failure: Schemas.EvalRunStepFailureEnum.Invalid,
+          };
         }
         const cases: Schemas.EvalHarnessCase[] = [];
         const evalCaseIds: string[] = [];
@@ -163,9 +177,12 @@ export default class EvalHarnessRepo {
     return result;
   }
 
-  // DEV_NOTE: The run, case and attempt are checked first (one withTenant), then the conversation is started
-  // (ConversationsRepo.startEvalConversation) and run by its DO. The DO answers the turn's outcome; a turn that
-  // couldn't start (paused chatbot, no model key, a budget) is attemptFailure. outboxIds are relayed by the route.
+  // DEV_NOTE: The run, case and attempt are checked first (one withTenant, the run row locked so a finish can't slip
+  // in), then the conversation is started (ConversationsRepo.startEvalConversation) and run by its DO. The attempt's
+  // conversation is unique per run: a repeat is Duplicate before any model call. The DO answers the turn's outcome; a
+  // turn that couldn't start (paused chatbot, no model key, a budget) is an attempt failure. An attempt that started
+  // runs to its end even if the run is finished meanwhile; its result can't be recorded then. outboxIds are relayed by
+  // the route.
   async runAttempt(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -180,7 +197,7 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx): Promise<Schemas.EvalAttemptCheckResponse> => {
-        const running = await this.runningRun(tx, identity, params.runPublicId);
+        const running = await this.runningRun(tx, identity, params.runPublicId, true);
         if (!running.isSuccess || !running.run || !running.chatbotId) return running;
         if (request.attempt > running.run.k) {
           return {
@@ -193,28 +210,48 @@ export default class EvalHarnessRepo {
         if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
         const chatbot = await this.activeChatbot(tx, companyId, running.chatbotId);
         if (!chatbot.isSuccess || !chatbot.chatbot) return chatbot;
-        return { isSuccess: true, run: running.run, chatbot: chatbot.chatbot };
+        return {
+          isSuccess: true,
+          run: running.run,
+          chatbot: chatbot.chatbot,
+          evalCaseId: evalCase.evalCaseId,
+        };
       },
     );
-    if (!checked.isSuccess || !checked.run || !checked.chatbot) {
+    if (!checked.isSuccess || !checked.run || !checked.chatbot || !checked.evalCaseId) {
       const failure = checked.failure ?? Schemas.EvalRunStepFailureEnum.ServerError;
       return {
         ...this.refuseStep(Schemas.LogAction.RunEvalAttempt, failure, checked.message, metadata),
-        stepFailure: failure,
+        kind: "step",
       };
     }
 
-    const started = await new ConversationsRepo(this.env).startEvalConversation({
+    const started = await this.conversationsRepo.startEvalConversation({
       identity,
       evalRunId: checked.run.id,
+      evalCaseId: checked.evalCaseId,
+      evalAttempt: request.attempt,
       chatbotConfigId: checked.run.chatbotConfigId,
       chatbot: checked.chatbot,
     });
+    if (started.isDuplicate) {
+      return {
+        ...this.refuseStep(
+          Schemas.LogAction.RunEvalAttempt,
+          Schemas.EvalRunStepFailureEnum.Duplicate,
+          started.message,
+          metadata,
+        ),
+        kind: "step",
+      };
+    }
     if (!started.isSuccess || !started.session) {
       return {
         isSuccess: false,
-        message: started.message,
-        attemptFailure: started.failure ?? Schemas.EvalAttemptFailureEnum.ServerError,
+        message: started.message ?? "Eval conversation not started",
+        kind: "attempt",
+        failure: started.failure ?? Schemas.EvalAttemptFailureEnum.ServerError,
+        outboxIds: [],
       };
     }
     const { session } = started;
@@ -264,8 +301,9 @@ export default class EvalHarnessRepo {
       });
       return {
         isSuccess: false,
-        message: ran.message,
-        attemptFailure: ran.failure ?? Schemas.EvalAttemptFailureEnum.ServerError,
+        message: ran.message ?? "Eval attempt didn't run",
+        kind: "attempt",
+        failure: ran.failure ?? Schemas.EvalAttemptFailureEnum.ServerError,
         outboxIds,
       };
     }
@@ -326,7 +364,7 @@ export default class EvalHarnessRepo {
       );
     }
 
-    const planned = await new ActionEngineRepo(this.env).getEvalReadbackPlan({
+    const planned = await this.actionEngineRepo.getEvalReadbackPlan({
       companyId,
       conversationId: conversation.conversationId,
       evalConnectionId: identity.connectionId,
@@ -380,7 +418,7 @@ export default class EvalHarnessRepo {
     const metadata = { companyId, runPublicId: params.runPublicId, attempt: request.attempt };
 
     const result: Schemas.EvalRunStepResponse = await withTenant(this.db, companyId, async (tx) => {
-      const running = await this.runningRun(tx, identity, params.runPublicId);
+      const running = await this.runningRun(tx, identity, params.runPublicId, true);
       if (!running.isSuccess || !running.run) return running;
       if (request.attempt > running.run.k) {
         return {
@@ -422,8 +460,11 @@ export default class EvalHarnessRepo {
     return result;
   }
 
-  // DEV_NOTE: The staging connection's reset_op, as the host test user, under one key per run. No reset_op = nothing to
-  // put back (isReset false). A reset_op that no longer parses, or a host that didn't answer 2xx, is HostFailed.
+  // DEV_NOTE: The staging connection's reset_op, once per run after its attempts (cases are state-independent: each
+  // names its own records with {case.tag}, so attempts within a run don't need a reset between them), as the host test
+  // user, under one key per run. No reset_op = nothing to put back (isReset false). A reset_op that no longer parses,
+  // or a host that didn't answer 2xx, is HostFailed. Either way that went through marks the run reset (reset_at), which
+  // a Done finish needs.
   async reset(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -445,6 +486,8 @@ export default class EvalHarnessRepo {
       return refuse(running.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, running.message);
     }
     if (identity.resetOp === null) {
+      const marked = await this.markReset(companyId, running.run.id);
+      if (!marked.isSuccess) return refuse(marked.failure, marked.message);
       return { isSuccess: true, message: "The connection has no reset op", isReset: false };
     }
     const op = Schemas.ZConnectionResetOp.safeParse(identity.resetOp);
@@ -474,11 +517,35 @@ export default class EvalHarnessRepo {
         failure: Schemas.EvalRunStepFailureEnum.HostFailed,
       };
     }
+    const marked = await this.markReset(companyId, running.run.id);
+    if (!marked.isSuccess) return refuse(marked.failure, marked.message);
     return { isSuccess: true, message: "Staging data reset", isReset: true };
   }
 
-  // DEV_NOTE: Ends a Running run. isComplete: every case of the run's set has all k attempts (else Incomplete, nothing
-  // written) → Done; otherwise Failed. pass^k: a case passes when all k attempts did; the run passes when it is Done
+  // DEV_NOTE: reset_at on the run, only while it is still Running (a finish meanwhile is NotRunning)
+  private async markReset(
+    companyId: string,
+    evalRunId: string,
+  ): Promise<
+    | { isSuccess: true }
+    | { isSuccess: false; message?: string; failure: Schemas.EvalRunStepFailureEnum }
+  > {
+    const marked: Schemas.EvalRunDALResponse = await withTenant(this.db, companyId, async (tx) => {
+      return await this.evalRunsDal.markEvalRunReset(tx, { companyId, id: evalRunId });
+    });
+    if (marked.isSuccess) return { isSuccess: true };
+    return {
+      isSuccess: false,
+      message: marked.message,
+      failure: marked.isNotFound
+        ? Schemas.EvalRunStepFailureEnum.NotRunning
+        : Schemas.EvalRunStepFailureEnum.ServerError,
+    };
+  }
+
+  // DEV_NOTE: Ends a Running run (its row locked, so no result lands after the tally). isComplete: every case of the
+  // run's set has all k attempts and the reset went through (else Incomplete, nothing written) → Done; otherwise
+  // Failed. pass^k: a case passes when all k attempts did; the run passes when it is Done
   // and every case of the set passed (the safety hard gate on top is M5-4's). case_count = the set's size. cost_usd is
   // already the run's (every model call adds to it, ModelCallsRepo) and keeps settling after the finish.
   async finish(params: {
@@ -494,7 +561,7 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx) => {
-        const running = await this.runningRun(tx, identity, params.runPublicId);
+        const running = await this.runningRun(tx, identity, params.runPublicId, true);
         if (!running.isSuccess || !running.run) return running;
         const { run } = running;
 
@@ -512,6 +579,13 @@ export default class EvalHarnessRepo {
           return {
             isSuccess: false,
             message: "Some cases haven't run all their attempts",
+            failure: Schemas.EvalRunStepFailureEnum.Incomplete,
+          };
+        }
+        if (request.isComplete && run.resetAt === null) {
+          return {
+            isSuccess: false,
+            message: "The run's staging data wasn't reset",
             failure: Schemas.EvalRunStepFailureEnum.Incomplete,
           };
         }
@@ -569,15 +643,21 @@ export default class EvalHarnessRepo {
     return result;
   }
 
-  // DEV_NOTE: The token company's run by public id, started on the token's connection (another connection's run is
+  // DEV_NOTE: isLocked: the run row FOR UPDATE for the rest of the step's transaction (results, attempt starts and the
+  // finish take turns). The token company's run by public id, started on the token's connection (another connection's run is
   // NotFound, so one run's attempts and reset never go to two hosts), still Running, with its config's chatbot
   private async runningRun(
     tx: Tx,
     identity: Schemas.EvalIdentity,
     runPublicId: string,
+    isLocked = false,
   ): Promise<Schemas.EvalRunningRunResponse> {
     const { companyId } = identity;
-    const found = await this.evalRunsDal.getEvalRun(tx, { companyId, publicId: runPublicId });
+    const found = await this.evalRunsDal.getEvalRun(tx, {
+      companyId,
+      publicId: runPublicId,
+      isLocked,
+    });
     if (!found.isSuccess || !found.evalRun) {
       return this.stepFailure(found.isNotFound, found.message);
     }
@@ -591,7 +671,7 @@ export default class EvalHarnessRepo {
         failure: Schemas.EvalRunStepFailureEnum.NotRunning,
       };
     }
-    const config = await this.chatbotConfigsDal.getChatbotConfig(tx, {
+    const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
       companyId,
       id: found.evalRun.chatbotConfigId,
     });
@@ -625,7 +705,7 @@ export default class EvalHarnessRepo {
     companyId: string,
     chatbotId: string,
   ): Promise<Schemas.EvalRunChatbotResponse> {
-    const found = await this.chatbotsDal.getChatbotById(tx, { companyId, id: chatbotId });
+    const found = await this.chatbotsDal.getChatbotDetails(tx, { companyId, id: chatbotId });
     if (!found.isSuccess || !found.chatbot)
       return this.stepFailure(found.isNotFound, found.message);
     if (found.chatbot.status !== Schemas.ChatbotStatusIntEnum.Active) {

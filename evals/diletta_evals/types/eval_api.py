@@ -120,6 +120,7 @@ class EvalAttemptToolCall(BaseModel):
     args: dict[str, EvalCaseJsonValue | None] | None
     status: Status | None
     changeRequestId: str | None
+    wasApprovalRequired: bool
 
 
 class Readback(BaseModel):
@@ -175,12 +176,12 @@ class Error(RootModel[str]):
 
 class GraderOutput(BaseModel):
     schemaVersion: Literal[1]
-    checks: Annotated[list[Check], Field(max_length=50)]
+    checks: Annotated[list[Check], Field(max_length=61)]
     error: Error | None
 
 
 class LatencyMs(RootModel[int]):
-    root: Annotated[int, Field(ge=0, le=9007199254740991)]
+    root: Annotated[int, Field(ge=0, le=3600000)]
 
 
 class RecordEvalResultApiRequest(BaseModel):
@@ -213,20 +214,42 @@ class Status1(Enum):
     number_4 = 4
 
 
+class StatusLabel(StrEnum):
+    Queued = "Queued"
+    Running = "Running"
+    Done = "Done"
+    Failed = "Failed"
+
+
 class FinishEvalRunApiResponse(BaseModel):
     isSuccess: Literal[True]
     message: str
     status: Status1
+    statusLabel: StatusLabel
     caseCount: Annotated[int, Field(ge=0, le=9007199254740991)]
     passAllKCount: Annotated[int, Field(ge=0, le=9007199254740991)]
     hasPassed: bool
     costUsd: str
 
 
+class Failure(StrEnum):
+    Unauthorized = "Unauthorized"
+    Forbidden = "Forbidden"
+    ServerError = "ServerError"
+    ChatbotUnavailable = "ChatbotUnavailable"
+    BudgetRefused = "BudgetRefused"
+    NotFound = "NotFound"
+    NotRunning = "NotRunning"
+    Invalid = "Invalid"
+    Duplicate = "Duplicate"
+    Incomplete = "Incomplete"
+    HostFailed = "HostFailed"
+
+
 class EvalRefusalApiResponse(BaseModel):
     isSuccess: Literal[False]
     message: str
-    failure: str | None = None
+    failure: Failure | None = None
 
 
 class ToolCall(BaseModel):

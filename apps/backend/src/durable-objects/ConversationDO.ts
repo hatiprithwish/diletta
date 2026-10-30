@@ -234,6 +234,9 @@ export class ConversationDO extends Think<Env> {
   // DEV_NOTE: A write call that ended in its approval hook without a change to make (refused, nothing to change): the
   // output its execute returns right after, by Think tool call id
   private settledCalls = new Map<string, Schemas.HostToolOutput>();
+  // DEV_NOTE: An eval attempt's change requests (public ids) the rules wanted a user to approve and the eval approved
+  // on its test user's behalf (M5-2): the attempt answers them as wasApprovalRequired. Memory only, one attempt.
+  private approvedByEval = new Set<string>();
   // DEV_NOTE: An approved change committed before its pause was resolved (an answer commits first, then resolves the
   // batch's pauses together): the outcome its execute returns, by Think tool call id
   private approvedOutputs = new Map<string, Schemas.HostToolOutput>();
@@ -638,12 +641,7 @@ export class ConversationDO extends Think<Env> {
     this.configure(ConversationDO.initialRuntimeState(session, { roles: [], expiresAt: 0 }));
     await this.armAutoClose();
 
-    const saved = EvalAttemptProvider.toUIMessages(messages.data);
-    const firstId = saved[0]?.id;
-    const userMessageId = saved.at(-1)?.id;
-    if (!firstId || !userMessageId) {
-      return fail(Schemas.EvalAttemptFailureEnum.ServerError, "The case has no message");
-    }
+    const { saved, userMessageId } = EvalAttemptProvider.toTurnMessages(messages.data);
     const turnId = Utility.generateUlid();
     const requestId = `eval:${turnId}`;
     const turn = { requestId, turnId, userMessageId, isEval: true };
@@ -675,16 +673,17 @@ export class ConversationDO extends Think<Env> {
       });
       status = Schemas.EvalTurnStatusEnum.Error;
     } finally {
-      // DEV_NOTE: A turn Think ended without onChatResponse is ended here; one that did end is already released
+      // DEV_NOTE: A turn Think ended without onChatResponse is ended here; one that did end is already released. The
+      // host token stays in memory (never stored), like a widget's: a commit or verify retry scheduled by the turn
+      // still has it until it expires or the DO is evicted.
       await this.finishTurn(requestId, "error", null, true);
-      this.hostToken = null;
     }
 
     return {
       isSuccess: true,
       message: "Eval attempt ran",
       turnStatus: status,
-      ...EvalAttemptProvider.summarize(this.messages, firstId),
+      ...EvalAttemptProvider.summarize(this.messages, userMessageId, this.approvedByEval),
     };
   }
 
@@ -960,10 +959,13 @@ export class ConversationDO extends Think<Env> {
         });
       },
     });
+    // DEV_NOTE: An eval attempt (M5-2) is held to the company's budget on every call, never to a user's: its host test
+    // user isn't a person, and per-user caps (messages per minute, daily cost) would fail a big run's attempts
+    const isEval = session.eval !== null;
     const routed = await new ModelRouterRepo(this.env, this.ctx).getModel({
       companyId: session.companyId,
       chatbotId: session.chatbotId,
-      chatbotUserId: session.chatbotUserId,
+      chatbotUserId: isEval ? null : session.chatbotUserId,
       conversationId: session.conversationId,
       // DEV_NOTE: An eval attempt's calls are its run's (M5-2): eval_runs.cost_usd sums them
       evalRunId: session.eval?.evalRunId ?? null,
@@ -975,7 +977,7 @@ export class ConversationDO extends Think<Env> {
     });
     if (!routed.isSuccess) return { isSuccess: false, isClosed: false, refusal: null };
 
-    const budgetRefusal = await this.admitTurnBudget(session, limits);
+    const budgetRefusal = isEval ? null : await this.admitTurnBudget(session, limits);
     if (budgetRefusal) return this.refuseTurn(turnId, budgetRefusal);
     return { isSuccess: true, spec: config.spec, model: routed.model, caps, tools };
   }
@@ -1608,10 +1610,13 @@ export class ConversationDO extends Think<Env> {
         );
       }
 
-      // DEV_NOTE: An eval attempt has no user to answer (M5-2): every write the rules let through is approved as
-      // proposed and committed in the turn, then verified like any other; a Blocked one stays blocked
-      const isApprovalRequired =
-        approval === Schemas.ApprovalRuleApprovalEnum.Required && state.session.eval === null;
+      // DEV_NOTE: The rules' answer stands (decideApproval). An eval attempt has no user to answer (M5-2): a write that
+      // needs approval is approved on its test user's behalf (logged as an eval approval, never as automatic, and
+      // answered as wasApprovalRequired so a case can assert the policy), committed in the turn and verified like
+      // any other; a Blocked one stays blocked
+      const isApprovalRequired = approval === Schemas.ApprovalRuleApprovalEnum.Required;
+      const isApprovedByEval = isApprovalRequired && state.session.eval !== null;
+      const isAwaitingUser = isApprovalRequired && !isApprovedByEval;
       const proposed = await this.actionEngineRepo().proposeChange({
         session: state.session,
         turnId: turn.turnId,
@@ -1621,6 +1626,7 @@ export class ConversationDO extends Think<Env> {
         before,
         changes,
         isApprovalRequired,
+        isApprovedByEval,
         hasUntrustedContext: turn.isUntrusted,
         latencyMs: Date.now() - startedAt,
       });
@@ -1644,6 +1650,7 @@ export class ConversationDO extends Think<Env> {
       }
       const { changeRequest } = proposed;
       this.relayEvents(proposed.outboxIds);
+      if (isApprovedByEval) this.approvedByEval.add(changeRequest.publicId);
 
       const expiresAt =
         changeRequest.expiresAt ?? Date.now() + Schemas.CHANGE_REQUEST_APPROVAL_EXPIRY_MS;
@@ -1652,7 +1659,7 @@ export class ConversationDO extends Think<Env> {
         publicId: changeRequest.publicId,
         toolName,
         turnId: turn.turnId,
-        stage: isApprovalRequired
+        stage: isAwaitingUser
           ? Schemas.ConversationChangeRequestStageEnum.Pending
           : Schemas.ConversationChangeRequestStageEnum.Approved,
         expiresAt,
@@ -1664,7 +1671,7 @@ export class ConversationDO extends Think<Env> {
       this.patchRuntimeState({ changeRequests });
       this.broadcastChangeRequest(changeRequest);
 
-      if (!isApprovalRequired) return false;
+      if (!isAwaitingUser) return false;
       await this.scheduleExpiry(toolCallId, expiresAt);
       return true;
     } finally {

@@ -439,8 +439,9 @@ export const roiAssumptions = table(
 // Pass threshold, judge model and safety rule are pinned by harness_version.
 // The harness (M5-2) starts a run Running with the cases it handed out (eval_case_ids, the set Done is checked
 // against) and the staging connection its token named (company_connection_id, the only one its steps may use); both
-// are null only on a run that never started. cost_usd is added to by every model call of the run as it is recorded
-// or backfilled, so it settles after the run ends.
+// are null only on a run that never started. reset_at: the harness's reset (once, after the attempts) went through;
+// Done needs it. cost_usd is added to by every model call of the run as it is recorded or backfilled, so it settles
+// after the run ends.
 export const evalRuns = table(
   "eval_runs",
   {
@@ -450,6 +451,7 @@ export const evalRuns = table(
     chatbotConfigId: t.bigint("chatbot_config_id", { mode: "string" }).notNull(), // → chatbot_configs.id
     companyConnectionId: t.bigint("company_connection_id", { mode: "string" }), // → company_connections.id
     evalCaseIds: t.bigint("eval_case_ids", { mode: "string" }).array(), // → eval_cases.id
+    resetAt: t.timestamp("reset_at", { withTimezone: true }), // the harness's reset went through
     trigger: t.smallint().$type<Schemas.EvalRunTriggerIntEnum>().notNull(),
     harnessVersion: t.text("harness_version").notNull(),
     k: t.smallint().notNull(),
@@ -583,7 +585,8 @@ export const qualityIssues = table(
 
 // DEV_NOTE: Index of one chat. The live transcript lives in the Think session; public_id = the DO name.
 // Content expiry = last_activity_at + companies.content_retention_days. eval_run_id set = an eval attempt's chat
-// (M5-2): it runs that run's config on the staging connection and never shows on the dashboard.
+// (M5-2): it runs that run's config on the staging connection and never shows on the dashboard; eval_case_id +
+// eval_attempt name the attempt, once per run (the unique index refuses a repeat before anything runs).
 export const conversations = table(
   "conversations",
   {
@@ -594,6 +597,8 @@ export const conversations = table(
     chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     chatbotConfigId: t.bigint("chatbot_config_id", { mode: "string" }), // → chatbot_configs.id (current)
     evalRunId: t.bigint("eval_run_id", { mode: "string" }), // → eval_runs.id, null = a widget chat
+    evalCaseId: t.bigint("eval_case_id", { mode: "string" }), // → eval_cases.id
+    evalAttempt: t.smallint("eval_attempt"), // 1..k
     status: t
       .smallint()
       .$type<Schemas.ConversationStatusIntEnum>()
@@ -616,6 +621,14 @@ export const conversations = table(
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),
     t.index("IDX_conversations_eval_run_id").on(table.evalRunId),
+    t.index("IDX_conversations_eval_case_id").on(table.evalCaseId),
+    t
+      .uniqueIndex("UNQ_conversations_eval_run_id_eval_case_id_eval_attempt")
+      .on(table.evalRunId, table.evalCaseId, table.evalAttempt),
+    t.check(
+      "CHK_conversations_eval_attempt",
+      sql`(${table.evalRunId} IS NULL) = (${table.evalCaseId} IS NULL) AND (${table.evalRunId} IS NULL) = (${table.evalAttempt} IS NULL)`,
+    ),
   ],
 );
 

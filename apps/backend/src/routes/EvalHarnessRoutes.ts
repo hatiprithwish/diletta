@@ -72,26 +72,22 @@ EvalHarnessRoutes.post(
       request: c.req.valid("json"),
       hostToken,
     });
-    if (result.outboxIds && result.outboxIds.length > 0) {
+    const outboxIds = result.isSuccess || result.kind === "attempt" ? result.outboxIds : [];
+    if (outboxIds.length > 0) {
       c.executionCtx.waitUntil(
-        new EventOutboxRepo(c.env).relayEvents({
-          companyId: identity.companyId,
-          outboxIds: result.outboxIds,
-        }),
+        new EventOutboxRepo(c.env).relayEvents({ companyId: identity.companyId, outboxIds }),
       );
     }
-    if (!result.isSuccess || !result.attempt) {
-      const failure = result.stepFailure ?? result.attemptFailure;
-      const status = result.stepFailure
-        ? stepStatus(result.stepFailure)
-        : Schemas.EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP[
-            result.attemptFailure ?? Schemas.EvalAttemptFailureEnum.ServerError
-          ];
-      return c.json({ isSuccess: false, message: result.message, failure }, status);
+    if (!result.isSuccess) {
+      const status =
+        result.kind === "step"
+          ? stepStatus(result.failure)
+          : Schemas.EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP[result.failure];
+      return c.json({ isSuccess: false, message: result.message, failure: result.failure }, status);
     }
     const response: Schemas.RunEvalAttemptApiResponse = {
       isSuccess: true,
-      message: result.message ?? "Eval attempt ran",
+      message: result.message,
       ...result.attempt,
     };
     return c.json(response, 200);
@@ -201,6 +197,7 @@ EvalHarnessRoutes.post(
       isSuccess: true,
       message: result.message ?? "Eval run finished",
       status: run.status,
+      statusLabel: Schemas.EVAL_RUN_STATUS_LABEL_MAP[run.status],
       caseCount: run.caseCount ?? 0,
       passAllKCount: run.passAllKCount ?? 0,
       hasPassed: run.hasPassed ?? false,
