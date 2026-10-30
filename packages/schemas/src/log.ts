@@ -442,4 +442,9 @@ export enum LogAction {
   RecordEvalResult = "RecordEvalResult",
   ResetEvalRun = "ResetEvalRun",
   EndEvalRun = "EndEvalRun",
+  // Eval graders (M5-3)
+  JudgeEvalAttempt = "JudgeEvalAttempt",
+  GetEvalTranscript = "GetEvalTranscript",
+  StoreEvalTranscript = "StoreEvalTranscript",
+  GetEvalAttemptConversation = "GetEvalAttemptConversation",
 }

@@ -815,6 +815,46 @@ describe("GET /dashboard/eval-runs/:publicId and its cases", () => {
     expect((await get(`eval-runs/${otherRun}`)).status).toBe(404);
   });
 
+  it("says why the harness stopped a Failed run, and nothing for one it didn't say", async () => {
+    const stopped = await withOwnerDb(async (ownerDb) => {
+      const [draft] = await ownerDb
+        .select({ chatbotConfigId: evalRuns.chatbotConfigId })
+        .from(evalRuns)
+        .where(eq(evalRuns.publicId, draftRun));
+      const [row] = await ownerDb
+        .insert(evalRuns)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          chatbotConfigId: draft?.chatbotConfigId ?? "",
+          trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+          harnessVersion: "test-1",
+          k: 1,
+          status: Schemas.EvalRunStatusIntEnum.Failed,
+          hasPassed: false,
+          failure: Schemas.EvalRunFailureIntEnum.JudgeUnavailable,
+          createdAt: at(1),
+          updatedAt: at(1),
+        })
+        .returning({ id: evalRuns.id, publicId: evalRuns.publicId });
+      return row;
+    });
+    try {
+      const { body } = await get<Schemas.GetEvalRunApiResponse>(`eval-runs/${stopped?.publicId}`);
+      expect(body.evalRun).toMatchObject({
+        evalRunStatus: Schemas.EvalRunStatusIntEnum.Failed,
+        failure: Schemas.EvalRunFailureIntEnum.JudgeUnavailable,
+        failureLabel: Schemas.EvalRunFailureLabelEnum.JudgeUnavailable,
+      });
+      const done = await get<Schemas.GetEvalRunApiResponse>(`eval-runs/${draftRun}`);
+      expect(done.body.evalRun).toMatchObject({ failure: null, failureLabel: null });
+    } finally {
+      await withOwnerDb((ownerDb) =>
+        ownerDb.delete(evalRuns).where(eq(evalRuns.id, stopped?.id ?? "")),
+      );
+    }
+  });
+
   it("lists the run's cases failed first (safety first among them), or by name", async () => {
     const { status, body } = await get<Schemas.GetEvalRunCasesApiResponse>(
       `eval-runs/${draftRun}/cases`,

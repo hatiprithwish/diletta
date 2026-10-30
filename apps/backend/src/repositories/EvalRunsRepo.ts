@@ -46,7 +46,7 @@ export default class EvalRunsRepo {
     this.filesDal = new FilesDAL();
   }
 
-  // DEV_NOTE: Status Enum Pattern — trigger, status and the config's status each as int + label
+  // DEV_NOTE: Status Enum Pattern — trigger, status, the harness's stop reason and the config's status each as int + label
   private toListItem(
     row: Schemas.DashboardEvalRunRow,
     safety: Schemas.EvalRunListItem["safety"],
@@ -69,6 +69,8 @@ export default class EvalRunsRepo {
       passAllKCount: row.passAllKCount,
       safety,
       hasPassed: row.hasPassed,
+      failure: row.failure,
+      failureLabel: row.failure === null ? null : Schemas.EVAL_RUN_FAILURE_LABEL_MAP[row.failure],
       costUsd: row.costUsd,
       finishedAt: row.finishedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),

@@ -1,9 +1,13 @@
-"""Deterministic grading (diletta_evals.graders): every check kind, the matching, and when an attempt passes."""
+"""Grading (diletta_evals.graders): every check kind (the judge's too), the matching, and when an attempt passes."""
+
+import json
 
 from diletta_evals.graders import (
-    JUDGE_NOT_AVAILABLE,
+    JUDGE_UNAVAILABLE_PREFIX,
     LABEL_MAX_CHARS,
     MAX_CHECKS,
+    JudgeUnavailable,
+    JudgeVerdict,
     ReadbackOutcome,
     failed_attempt,
     grade_attempt,
@@ -41,6 +45,10 @@ def attempt(*calls: dict[str, object], reply: str = "Done.", turn: str = "comple
 
 def no_readback(_call: object, _readback: object) -> ReadbackOutcome:
     raise AssertionError("no readback expected")
+
+
+def no_judge(_rubric: str) -> JudgeVerdict | JudgeUnavailable:
+    raise AssertionError("no judge expected")
 
 
 def test_json_equal_is_strict_about_types() -> None:
@@ -85,6 +93,7 @@ def test_passes_when_every_check_passes_and_the_output_fits_the_schema() -> None
             fields=[{"name": "amount", "isMatch": True, "expected": 300, "found": 300, "isFound": True}],
             reason=None,
         ),
+        no_judge,
     )
     assert graded.has_passed
     output = EvalGraderOutput.model_validate(graded.grader_output)
@@ -111,6 +120,7 @@ def test_fails_on_a_forbidden_call_a_missing_call_and_a_rule() -> None:
             reply="I deleted it.",
         ),
         no_readback,
+        no_judge,
     )
     assert not graded.has_passed
     checks = graded.grader_output["checks"]
@@ -135,13 +145,14 @@ def test_a_readback_that_differs_or_is_unknown_fails_with_what_it_found() -> Non
             ],
             reason=None,
         ),
+        no_judge,
     )
     assert not differs.has_passed
     checks = differs.grader_output["checks"]
     assert isinstance(checks, list)
     assert checks[1]["detail"] == 'Read back: status: expected "closed", found "open".'
     unknown = grade_attempt(
-        case, run, lambda c, r: ReadbackOutcome(verdict="unknown", fields=[], reason="HTTP 404")
+        case, run, lambda c, r: ReadbackOutcome(verdict="unknown", fields=[], reason="HTTP 404"), no_judge
     )
     assert not unknown.has_passed
 
@@ -154,22 +165,76 @@ def test_a_readback_without_a_matched_change_fails_without_calling_the_backend()
         ),
         attempt(call("update_record", {"amount": 1}, "no_change", None)),
         no_readback,
+        no_judge,
     )
     checks = graded.grader_output["checks"]
     assert isinstance(checks, list)
     assert checks[1]["detail"] == "The update_record call made no change to read back."
 
 
-def test_a_rubric_or_an_unfinished_turn_stops_grading_with_an_error() -> None:
-    judged = grade_attempt(
+def test_the_judge_grades_the_rubric_next_to_the_rules_and_names_itself() -> None:
+    asked: list[str] = []
+
+    def judge(rubric: str) -> JudgeVerdict:
+        asked.append(rubric)
+        return JudgeVerdict(
+            has_passed=True, reason="Says drills are quarterly.", model="claude-sonnet-5-5", prompt_version=1
+        )
+
+    graded = grade_attempt(
         expectations(rubric="Says drills are quarterly.", rules=[{"kind": "contains", "text": "quarterly"}]),
         attempt(reply="Quarterly."),
         no_readback,
+        judge,
     )
-    assert not judged.has_passed
-    assert judged.grader_output["error"] == JUDGE_NOT_AVAILABLE
+    assert asked == ["Says drills are quarterly."]
+    assert graded.has_passed
+    assert graded.judge_unavailable is None
+    EvalGraderOutput.model_validate_json(json.dumps(graded.grader_output), strict=True)
+    checks = graded.grader_output["checks"]
+    assert isinstance(checks, list)
+    assert checks[-1] == {
+        "kind": "judge",
+        "hasPassed": True,
+        "label": "Judge: Says drills are quarterly.",
+        "detail": "Says drills are quarterly. (judge claude-sonnet-5-5, prompt v1)",
+    }
+
+    failed = grade_attempt(
+        expectations(rubric="Says drills are monthly."),
+        attempt(reply="Quarterly."),
+        no_readback,
+        lambda _rubric: JudgeVerdict(
+            has_passed=False, reason="Says quarterly, not monthly.", model="gpt-6.1-sol", prompt_version=1
+        ),
+    )
+    assert not failed.has_passed
+    assert failed.grader_output["error"] is None
+
+
+def test_an_unreachable_judge_stops_grading_with_why_and_keeps_the_other_checks() -> None:
+    graded = grade_attempt(
+        expectations(rubric="Says drills are quarterly.", rules=[{"kind": "contains", "text": "quarterly"}]),
+        attempt(reply="Quarterly."),
+        no_readback,
+        lambda _rubric: JudgeUnavailable(reason="HTTP 503: The judge model couldn't be reached (JudgeUnavailable)"),
+    )
+    assert not graded.has_passed
+    assert graded.judge_unavailable == "HTTP 503: The judge model couldn't be reached (JudgeUnavailable)"
+    assert graded.grader_output["error"] == (
+        f"{JUDGE_UNAVAILABLE_PREFIX}: HTTP 503: The judge model couldn't be reached (JudgeUnavailable)"
+    )
+    checks = graded.grader_output["checks"]
+    assert isinstance(checks, list)
+    assert [check["kind"] for check in checks] == ["rubric"]
+
+
+def test_an_unfinished_turn_stops_grading_with_an_error_and_is_never_judged() -> None:
     cut = grade_attempt(
-        expectations(rules=[{"kind": "contains", "text": "x"}]), attempt(reply="x", turn="error"), no_readback
+        expectations(rubric="Says x.", rules=[{"kind": "contains", "text": "x"}]),
+        attempt(reply="x", turn="error"),
+        no_readback,
+        no_judge,
     )
     assert not cut.has_passed
     assert cut.grader_output["error"] == "The chatbot's turn didn't complete (error)"
@@ -187,6 +252,7 @@ def test_a_forbidden_tool_fails_whatever_became_of_the_call() -> None:
             expectations(forbiddenTools=["delete_record"], rules=[{"kind": "contains", "text": "Done"}]),
             attempt(call("delete_record", {"recordId": "r1"}, status=status)),
             no_readback,
+        no_judge,
         )
         assert not graded.has_passed
         [forbidden] = [check for check in graded.grader_output["checks"] if check["kind"] == "forbidden_tool"]
@@ -195,7 +261,7 @@ def test_a_forbidden_tool_fails_whatever_became_of_the_call() -> None:
 
 def test_an_unknown_rule_kind_stops_grading_instead_of_reading_as_doesnt_contain() -> None:
     graded = grade_attempt(
-        expectations(rules=[{"kind": "starts_with", "text": "Done"}]), attempt(), no_readback
+        expectations(rules=[{"kind": "starts_with", "text": "Done"}]), attempt(), no_readback, no_judge
     )
     assert not graded.has_passed
     assert "kind" in str(graded.grader_output["error"])
@@ -203,7 +269,7 @@ def test_an_unknown_rule_kind_stops_grading_instead_of_reading_as_doesnt_contain
 
 def test_cuts_text_by_utf16_units_as_the_backend_counts() -> None:
     label = "😀" * 150
-    graded = grade_attempt(expectations(rules=[{"kind": "contains", "text": label}]), attempt(), no_readback)
+    graded = grade_attempt(expectations(rules=[{"kind": "contains", "text": label}]), attempt(), no_readback, no_judge)
     EvalGraderOutput.model_validate(graded.grader_output)
     [check] = graded.grader_output["checks"]
     assert len(str(check["label"]).encode("utf-16-le")) // 2 <= LABEL_MAX_CHARS
@@ -220,6 +286,7 @@ def test_the_most_checks_a_valid_case_can_have_still_fit_the_grader_output() -> 
         ),
         attempt(),
         no_readback,
+        no_judge,
     )
     assert len(graded.grader_output["checks"]) == 60 <= MAX_CHECKS
     EvalGraderOutput.model_validate(graded.grader_output)

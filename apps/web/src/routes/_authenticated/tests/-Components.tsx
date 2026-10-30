@@ -58,7 +58,7 @@ import {
 } from "./-data";
 
 const Tone = Schemas.DashboardChipToneEnum;
-const { Queued, Running, Done } = Schemas.EvalRunStatusIntEnum;
+const { Queued, Running, Done, Failed } = Schemas.EvalRunStatusIntEnum;
 const { Runs, Cases } = Schemas.TestsPageTabEnum;
 
 // DEV_NOTE: Run triggers in the dashboard's words (DESIGN.md §8)
@@ -84,7 +84,8 @@ const EMPTY_CASE: Schemas.EvalCaseDraft = {
 type RunResult = Schemas.DashboardTestRunResultProps["evalRun"];
 
 // DEV_NOTE: A run's outcome: Passed / Failed once Done; Queued and Running as they are; a run that stopped (status
-// Failed) "Didn't finish", so it never reads as a failed test
+// Failed) "Didn't finish", so it never reads as a failed test. Why it stopped (failureLabel, M5-3: an unreachable
+// judge, the staging host, a server error) is shown next to it where the harness said (RunStopReason)
 function runResult(evalRun: RunResult): { label: string; tone: Schemas.DashboardChipToneEnum } {
   if (evalRun.evalRunStatus === Done) {
     return evalRun.hasPassed
@@ -100,6 +101,15 @@ function runResult(evalRun: RunResult): { label: string; tone: Schemas.Dashboard
 function RunResultChip({ evalRun }: Schemas.DashboardTestRunResultProps) {
   const { label, tone } = runResult(evalRun);
   return <StatusChip label={label} tone={tone} />;
+}
+
+function RunStopReason({ evalRun }: Schemas.DashboardTestRunStopReasonProps) {
+  if (evalRun.evalRunStatus !== Failed || !evalRun.failureLabel) {
+    return null;
+  }
+  return (
+    <span className="mt-1 block text-caption text-muted-foreground">{evalRun.failureLabel}</span>
+  );
 }
 
 // DEV_NOTE: A case's result in a run; null = the run is still grading it (never shown as failed)
@@ -154,6 +164,9 @@ function configNote(run: Schemas.EvalRunListItem): {
       : failedSafety === 0
         ? "all safety"
         : Utilities.plural(failedSafety, "safety case");
+  if (run.evalRunStatus === Failed && run.failureLabel) {
+    return { note: run.failureLabel, tone: Schemas.DashboardToneEnum.Negative };
+  }
   if (!isDone) {
     return {
       note: `Started ${Utilities.formatWhenWithTime(run.createdAt)}`,
@@ -388,6 +401,7 @@ function TestRunRow({ evalRun }: Schemas.DashboardTestRunRowProps) {
       <TableCell className="px-4 py-3 tabular-nums">{safetyText(evalRun)}</TableCell>
       <TableCell className="px-4 py-3">
         <RunResultChip evalRun={evalRun} />
+        <RunStopReason evalRun={evalRun} />
       </TableCell>
       <TableCell className="px-4 py-3 text-right tabular-nums">
         {costText(evalRun.costUsd)}
@@ -679,7 +693,12 @@ export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPagePr
       </PageHeader>
 
       <MetricStrip>
-        <MetricCell label="Result" value={runResult(evalRun).label} />
+        <MetricCell
+          label="Result"
+          value={runResult(evalRun).label}
+          note={evalRun.evalRunStatus === Failed ? (evalRun.failureLabel ?? undefined) : undefined}
+          noteTone={Schemas.DashboardToneEnum.Negative}
+        />
         <MetricCell label="Cases passed" value={casesText(evalRun)} />
         <MetricCell label="Safety cases" value={safetyText(evalRun)} />
         <MetricCell

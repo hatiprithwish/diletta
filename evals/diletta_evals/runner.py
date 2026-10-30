@@ -5,9 +5,11 @@ Attempts run one after another, each in its own conversation with a fresh {case.
 refuses a repeat). An attempt the chatbot couldn't answer (the backend's failure ChatbotUnavailable or BudgetRefused)
 is recorded as failed with the reason, and the run goes on; a readback the backend refused (a 4xx) is a failed check
 of that attempt. Anything else stops the run: a backend ServerError, the backend or the host unreachable, a host
-login that fails. The run then still resets and ends Failed, and the error that stopped it is raised (the CLI exits 2:
-the run couldn't run, which is not the chatbot failing). The reset (the connection's reset_op) runs once, after the
-last attempt; a run whose reset didn't go through can't be Done.
+login that fails, a judge that couldn't give a verdict (M5-3: that attempt is recorded failed with why first, so a
+case with a rubric never passes ungraded). The run then still resets and ends Failed with why it stopped (the Tests
+page shows it), and the error that stopped it is raised (the CLI exits 2: the run couldn't run, which is not the
+chatbot failing). The reset (the connection's reset_op) runs once, after the last attempt; a run whose reset didn't
+go through can't be Done.
 """
 
 import sys
@@ -19,8 +21,15 @@ from typing import TextIO
 from pydantic import ValidationError
 
 from diletta_evals.client import EvalApi, EvalApiError
-from diletta_evals.graders import GradedAttempt, ReadbackOutcome, failed_attempt, grade_attempt
-from diletta_evals.hosts.base import HostLogin
+from diletta_evals.graders import (
+    GradedAttempt,
+    JudgeUnavailable,
+    JudgeVerdict,
+    ReadbackOutcome,
+    failed_attempt,
+    grade_attempt,
+)
+from diletta_evals.hosts.base import HostLogin, HostLoginError
 from diletta_evals.tags import fill_case_tag, new_case_tag
 from diletta_evals.types import eval_api
 
@@ -29,6 +38,21 @@ HARNESS_VERSION = version("diletta-evals")
 # DEV_NOTE: packages/schemas EvalAttemptFailureEnum: the attempt couldn't run because of the chatbot (it can't answer,
 # a budget said no), so it fails and the run goes on. Its ServerError is the backend's, and stops the run.
 ATTEMPT_REFUSED_FAILURES = frozenset({eval_api.Failure.ChatbotUnavailable, eval_api.Failure.BudgetRefused})
+
+
+class JudgeUnavailableError(Exception):
+    """The pinned judge couldn't give a verdict on an attempt: the run stops (its attempt is already recorded)."""
+
+
+def stop_reason(error: BaseException | None, is_reset: bool) -> eval_api.EvalRunFailure | None:
+    """Why a run that didn't finish stopped, as the Tests page shows it (packages/schemas EvalRunFailureIntEnum)."""
+    if error is None:
+        return None if is_reset else eval_api.EvalRunFailure.number_2
+    if isinstance(error, JudgeUnavailableError):
+        return eval_api.EvalRunFailure.number_1
+    if isinstance(error, HostLoginError):
+        return eval_api.EvalRunFailure.number_2
+    return eval_api.EvalRunFailure.number_3
 
 
 @dataclass
@@ -80,9 +104,14 @@ class EvalRunner:
         # next run would start from data this one left behind. If ending the run fails too, the error that stopped the
         # run is the one raised (the other is printed), so the first cause is never hidden.
         is_reset = self._reset(run_id)
+        is_complete = stopped_by is None and is_reset
         try:
             finished = self._client.finish(
-                run_id, eval_api.FinishEvalRunApiRequest(isComplete=stopped_by is None and is_reset)
+                run_id,
+                eval_api.FinishEvalRunApiRequest(
+                    isComplete=is_complete,
+                    failure=None if is_complete else stop_reason(stopped_by, is_reset),
+                ),
             )
         except Exception as error:
             if stopped_by is not None:
@@ -158,8 +187,29 @@ class EvalRunner:
                 reason=checked.reason,
             )
 
-        graded = grade_attempt(expectations, attempt_json, read_back)
+        def judge(rubric: str) -> JudgeVerdict | JudgeUnavailable:
+            try:
+                judged = self._client.judge(
+                    run_id,
+                    eval_api.EvalJudgeApiRequest(conversationId=answered.conversationId, rubric=rubric),
+                )
+            except EvalApiError as error:
+                # DEV_NOTE: Only the judge's own refusal is graded (and stops the run once recorded); any other refusal
+                # stops the run as it would at any step
+                if error.failure is not eval_api.Failure.JudgeUnavailable:
+                    raise
+                return JudgeUnavailable(reason=str(error))
+            return JudgeVerdict(
+                has_passed=judged.hasPassed,
+                reason=judged.reason,
+                model=judged.model,
+                prompt_version=judged.promptVersion,
+            )
+
+        graded = grade_attempt(expectations, attempt_json, read_back, judge)
         self._record(run_id, case.publicId, attempt, graded, answered.latencyMs)
+        if graded.judge_unavailable is not None:
+            raise JudgeUnavailableError(f"The judge couldn't be reached: {graded.judge_unavailable}")
         return graded
 
     def _record(

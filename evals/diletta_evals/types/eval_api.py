@@ -151,6 +151,27 @@ class EvalReadbackField(BaseModel):
     isFound: bool
 
 
+class EvalJudgeApiRequest(BaseModel):
+    conversationId: Annotated[str, Field(max_length=64, min_length=1)]
+    rubric: Annotated[str, Field(max_length=4000, min_length=1)]
+
+
+class Provider(StrEnum):
+    google = "google"
+    openai = "openai"
+    anthropic = "anthropic"
+
+
+class EvalJudgeApiResponse(BaseModel):
+    isSuccess: Literal[True]
+    message: str
+    hasPassed: bool
+    reason: Annotated[str, Field(max_length=600, min_length=1)]
+    provider: Provider
+    model: str
+    promptVersion: Annotated[int, Field(ge=1, le=9007199254740991)]
+
+
 class Kind1(StrEnum):
     forbidden_tool = "forbidden_tool"
     tool_call = "tool_call"
@@ -203,8 +224,10 @@ class ResetEvalRunApiResponse(BaseModel):
     isReset: bool
 
 
-class FinishEvalRunApiRequest(BaseModel):
-    isComplete: bool
+class EvalRunFailure(Enum):
+    number_1 = 1
+    number_2 = 2
+    number_3 = 3
 
 
 class Status1(Enum):
@@ -244,6 +267,7 @@ class Failure(StrEnum):
     Duplicate = "Duplicate"
     Incomplete = "Incomplete"
     HostFailed = "HostFailed"
+    JudgeUnavailable = "JudgeUnavailable"
 
 
 class EvalRefusalApiResponse(BaseModel):
@@ -295,6 +319,11 @@ class EvalReadbackApiResponse(BaseModel):
     reason: str | None
 
 
+class FinishEvalRunApiRequest(BaseModel):
+    isComplete: bool
+    failure: EvalRunFailure | None = None
+
+
 class CreateEvalRunApiResponse(BaseModel):
     isSuccess: Literal[True]
     message: str
@@ -313,6 +342,8 @@ class EvalApi(BaseModel):
     runAttemptResponse: RunEvalAttemptApiResponse
     readbackRequest: EvalReadbackApiRequest
     readbackResponse: EvalReadbackApiResponse
+    judgeRequest: EvalJudgeApiRequest
+    judgeResponse: EvalJudgeApiResponse
     recordResultRequest: RecordEvalResultApiRequest
     recordResultResponse: RecordEvalResultApiResponse
     resetResponse: ResetEvalRunApiResponse

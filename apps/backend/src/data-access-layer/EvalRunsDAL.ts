@@ -63,6 +63,7 @@ export default class EvalRunsDAL {
         caseCount: evalRuns.caseCount,
         passAllKCount: evalRuns.passAllKCount,
         hasPassed: evalRuns.hasPassed,
+        failure: evalRuns.failure,
         costUsd: evalRuns.costUsd,
         finishedAt: evalRuns.finishedAt,
         createdAt: evalRuns.createdAt,
@@ -626,6 +627,7 @@ export default class EvalRunsDAL {
           caseCount: params.caseCount,
           passAllKCount: params.passAllKCount,
           hasPassed: params.hasPassed,
+          failure: params.failure,
           finishedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -810,18 +812,23 @@ export default class EvalRunsDAL {
         return response;
       }
 
-      await tx.insert(evalResults).values({
-        companyId: params.companyId,
-        evalRunId: params.evalRunId,
-        evalCaseId: params.evalCaseId,
-        attempt: params.attempt,
-        hasPassed: params.hasPassed,
-        graderOutput: params.graderOutput,
-        latencyMs: params.latencyMs,
-      });
+      const [created] = await tx
+        .insert(evalResults)
+        .values({
+          companyId: params.companyId,
+          evalRunId: params.evalRunId,
+          evalCaseId: params.evalCaseId,
+          attempt: params.attempt,
+          hasPassed: params.hasPassed,
+          graderOutput: params.graderOutput,
+          transcriptFileId: params.transcriptFileId,
+          latencyMs: params.latencyMs,
+        })
+        .returning({ id: evalResults.id });
 
       response.isSuccess = true;
       response.message = "Eval result created successfully";
+      response.evalResultId = created?.id;
     } catch (error) {
       if (Utility.isUniqueViolation(error, RESULT_ATTEMPT_INDEX)) {
         const message = "This attempt already has a result";

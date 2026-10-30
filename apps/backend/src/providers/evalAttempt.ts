@@ -49,6 +49,45 @@ export default class EvalAttemptProvider {
     };
   }
 
+  // DEV_NOTE: The attempt's whole conversation for its transcript (M5-3), oldest first: each user or assistant message's
+  // text, split where a tool part sits so a tool call stays where it ran, and each tool call with how it ended and its
+  // change request (toolCall). Empty text and other roles are left out; args never leave here.
+  static entries(messages: UIMessage[]): Schemas.EvalAttemptEntry[] {
+    const entries: Schemas.EvalAttemptEntry[] = [];
+    for (const message of messages) {
+      if (message.role !== "user" && message.role !== "assistant") continue;
+      const role =
+        message.role === "user"
+          ? Schemas.EvalCaseMessageRoleEnum.User
+          : Schemas.EvalCaseMessageRoleEnum.Assistant;
+      let text = "";
+      const flush = () => {
+        const trimmed = text.trim();
+        if (trimmed.length > 0) {
+          entries.push({ kind: Schemas.EvalAttemptEntryKindEnum.Message, role, text: trimmed });
+        }
+        text = "";
+      };
+      for (const part of message.parts) {
+        if (part.type === "text") {
+          text += part.text;
+          continue;
+        }
+        const [call] = EvalAttemptProvider.toolCall(part, new Set());
+        if (!call) continue;
+        flush();
+        entries.push({
+          kind: Schemas.EvalAttemptEntryKindEnum.ToolCall,
+          toolName: call.toolName,
+          status: call.status,
+          changeRequestId: call.changeRequestId,
+        });
+      }
+      flush();
+    }
+    return entries;
+  }
+
   // DEV_NOTE: One tool part of the transcript as the eval harness grades it: name, the model's args, how it ended (a
   // host tool's own status; search_help_docs is Ok once it answered) and a write's change request. Other parts: none.
   static toolCall(

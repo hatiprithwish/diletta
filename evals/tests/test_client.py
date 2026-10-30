@@ -126,3 +126,60 @@ def test_an_answer_of_another_shape_is_an_error() -> None:
     client, _ = client_for([httpx.Response(200, json={"isSuccess": True})])
     with pytest.raises(EvalApiError, match="doesn't match"):
         client.finish("run_1", eval_api.FinishEvalRunApiRequest(isComplete=True))
+
+
+JUDGE = eval_api.EvalJudgeApiRequest(conversationId="conv_1", rubric="Confirms the note")
+VERDICT = {
+    "isSuccess": True,
+    "message": "Attempt judged",
+    "hasPassed": True,
+    "reason": "Confirms the note.",
+    "provider": "anthropic",
+    "model": "claude-sonnet-5-5",
+    "promptVersion": 1,
+}
+
+
+def test_asks_the_judge_with_no_host_token_and_resends_it_on_a_dropped_connection_or_a_500() -> None:
+    client, sent = client_for(
+        [httpx.ConnectError("reset"), refusal(500, "ServerError"), httpx.Response(200, json=VERDICT)]
+    )
+    judged = client.judge("run_1", JUDGE)
+    assert judged.hasPassed and judged.model == "claude-sonnet-5-5"
+    assert len(sent) == 3
+    assert str(sent[0].url) == "https://worker.example/eval/runs/run_1/judge"
+    assert EVAL_HOST_TOKEN_HEADER not in sent[0].headers
+    assert json.loads(sent[0].content) == {"conversationId": "conv_1", "rubric": "Confirms the note"}
+
+
+def test_never_resends_a_judge_refused_as_unavailable() -> None:
+    client, sent = client_for([refusal(503, "JudgeUnavailable")])
+    with pytest.raises(EvalApiError) as raised:
+        client.judge("run_1", JUDGE)
+    assert raised.value.failure is eval_api.Failure.JudgeUnavailable
+    assert len(sent) == 1
+
+
+def test_finishes_a_stopped_run_with_why() -> None:
+    client, sent = client_for(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "isSuccess": True,
+                    "message": "ok",
+                    "status": 4,
+                    "statusLabel": "Failed",
+                    "caseCount": 1,
+                    "passAllKCount": 0,
+                    "hasPassed": False,
+                    "costUsd": "0.010000",
+                },
+            )
+        ]
+    )
+    client.finish(
+        "run_1",
+        eval_api.FinishEvalRunApiRequest(isComplete=False, failure=eval_api.EvalRunFailure.number_1),
+    )
+    assert json.loads(sent[0].content) == {"isComplete": False, "failure": 1}

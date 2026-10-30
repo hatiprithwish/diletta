@@ -4,8 +4,19 @@ import { EVAL_GRADER_OUTPUT_SCHEMA_VERSION, EvalCheckKindEnum } from "../evalRes
 import { HostCallOutcomeEnum } from "../hostAdapter";
 import { ToolOpMethodEnum } from "../toolDefinitions";
 import { TEST_HOST_RESET_OP } from "../testHost";
-import { ZRecordEvalResultApiRequest } from "./EvalHarnessApiRequest";
-import { EvalReadbackVerdictEnum, ZEvalJwtClaims, checkEvalReadback } from "./EvalHarnessCommon";
+import { ModelProviderEnum } from "../companySecrets";
+import { EvalRunFailureIntEnum } from "../evalRuns";
+import { getModelPrice } from "../modelRouter";
+import { HostToolStatusEnum } from "../toolCalls";
+import { ZFinishEvalRunApiRequest, ZRecordEvalResultApiRequest } from "./EvalHarnessApiRequest";
+import {
+  EVAL_JUDGE_MODELS,
+  EVAL_TRANSCRIPT_TOOL_STATUS_MAP,
+  EvalReadbackVerdictEnum,
+  ZEvalJudgeOutput,
+  ZEvalJwtClaims,
+  checkEvalReadback,
+} from "./EvalHarnessCommon";
 
 const readbackOp = {
   method: ToolOpMethodEnum.Get as const,
@@ -131,5 +142,48 @@ describe("eval API requests", () => {
       false,
     );
     expect(ZEvalJwtClaims.safeParse({ ...claims, connection: undefined }).success).toBe(false);
+  });
+});
+
+describe("the pinned judge (M5-3)", () => {
+  it("pins a priced model for every provider, so every judge call can be costed", () => {
+    for (const provider of Object.values(ModelProviderEnum)) {
+      expect(getModelPrice(provider, EVAL_JUDGE_MODELS[provider])).not.toBeNull();
+    }
+  });
+
+  it("holds the judge's answer to a verdict and a reason", () => {
+    expect(
+      ZEvalJudgeOutput.safeParse({ hasPassed: true, reason: "Explains the refund rule." }).success,
+    ).toBe(true);
+    expect(ZEvalJudgeOutput.safeParse({ hasPassed: true, reason: "  " }).success).toBe(false);
+    expect(ZEvalJudgeOutput.safeParse({ reason: "No verdict" }).success).toBe(false);
+  });
+
+  it("maps every way a tool call ends to a transcript status", () => {
+    for (const status of Object.values(HostToolStatusEnum)) {
+      expect(EVAL_TRANSCRIPT_TOOL_STATUS_MAP[status].text.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("finishing a run with a failure (M5-3)", () => {
+  it("takes a failure only on a run that didn't complete", () => {
+    expect(
+      ZFinishEvalRunApiRequest.safeParse({
+        isComplete: false,
+        failure: EvalRunFailureIntEnum.JudgeUnavailable,
+      }).success,
+    ).toBe(true);
+    expect(ZFinishEvalRunApiRequest.safeParse({ isComplete: true }).success).toBe(true);
+    expect(ZFinishEvalRunApiRequest.safeParse({ isComplete: true, failure: null }).success).toBe(
+      true,
+    );
+    expect(
+      ZFinishEvalRunApiRequest.safeParse({
+        isComplete: true,
+        failure: EvalRunFailureIntEnum.ServerError,
+      }).success,
+    ).toBe(false);
   });
 });

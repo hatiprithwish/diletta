@@ -59,7 +59,7 @@ companion/                    (from scaffold)
                   Tailwind preset, lime theme (light + dark)
     crypto/       new: envelope encryption
     adapter/      new: Adapter + AuthStrategy
-  evals/          new: Python harness (DeepEval), types from schemas
+  evals/          new: Python harness (judge via the backend's model router), types from schemas
   llm-context/    scaffold docs + new: neon, hyperdrive, durable-objects,
                   think, ai-gateway, queues, pgvector
   docs/           new: architecture/ (v0.15 diagram), adr/, runbooks/

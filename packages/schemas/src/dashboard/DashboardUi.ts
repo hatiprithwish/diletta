@@ -367,6 +367,11 @@ export interface DashboardTestRunResultProps {
   evalRun: Pick<EvalRunListItem, "evalRunStatus" | "evalRunStatusLabel" | "hasPassed">;
 }
 
+// DEV_NOTE: Why the harness stopped a run (M5-3), under its result; nothing for any other run
+export interface DashboardTestRunStopReasonProps {
+  evalRun: Pick<EvalRunListItem, "evalRunStatus" | "failureLabel">;
+}
+
 export interface DashboardTestCasesProps {
   page: number;
   onPage: (page: number) => void;

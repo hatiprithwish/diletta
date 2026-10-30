@@ -123,6 +123,35 @@ EvalHarnessRoutes.post(
   },
 );
 
+// DEV_NOTE: The pinned judge (M5-3). No host token: it reads the attempt's transcript from its DO and calls the model
+// router, never the host. JudgeUnavailable is 503.
+EvalHarnessRoutes.post(
+  "/runs/:runId/judge",
+  authenticateEval,
+  zValidator("param", Schemas.ZEvalRunParam),
+  zValidator("json", Schemas.ZEvalJudgeApiRequest),
+  async (c) => {
+    const result = await new EvalHarnessRepo(c.env).judge({
+      identity: c.get("evalIdentity"),
+      runPublicId: c.req.valid("param").runId,
+      request: c.req.valid("json"),
+      ctx: c.executionCtx,
+    });
+    if (!result.isSuccess || !result.verdict) {
+      return c.json(
+        { isSuccess: false, message: result.message, failure: result.failure },
+        stepStatus(result.failure),
+      );
+    }
+    const response: Schemas.EvalJudgeApiResponse = {
+      isSuccess: true,
+      message: result.message ?? "Attempt judged",
+      ...result.verdict,
+    };
+    return c.json(response, 200);
+  },
+);
+
 EvalHarnessRoutes.post(
   "/runs/:runId/results",
   authenticateEval,

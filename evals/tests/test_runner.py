@@ -9,10 +9,11 @@ from diletta_evals import runner as runner_module
 from diletta_evals.client import EvalApiError
 from diletta_evals.graders import GradedAttempt
 from diletta_evals.hosts.base import HostLoginError
-from diletta_evals.runner import EvalRunner
+from diletta_evals.runner import EvalRunner, JudgeUnavailableError
 from diletta_evals.types import eval_api
 
 Failure = eval_api.Failure
+RunFailure = eval_api.EvalRunFailure
 
 CASE = {
     "publicId": "case_1",
@@ -28,6 +29,10 @@ CASE = {
         "readbacks": [{"toolName": "update_record", "expect": {"note": "{case.tag}"}}],
     },
 }
+
+
+# DEV_NOTE: The same case with a rubric the judge grades ({case.tag} filled like the rest)
+RUBRIC_CASE = {**CASE, "expectations": {**CASE["expectations"], "rubric": "Confirms note {case.tag}"}}
 
 
 class FakeHost:
@@ -54,6 +59,8 @@ class FakeClient:
         refuse_readback: EvalApiError | None = None,
         refuse_reset: EvalApiError | None = None,
         refuse_finish: EvalApiError | None = None,
+        case: dict[str, object] = CASE,
+        refuse_judge: EvalApiError | None = None,
     ) -> None:
         self.events: list[str] = []
         self.results: list[eval_api.RecordEvalResultApiRequest] = []
@@ -63,6 +70,9 @@ class FakeClient:
         self._refuse_readback = refuse_readback
         self._refuse_reset = refuse_reset
         self._refuse_finish = refuse_finish
+        self._case = case
+        self._refuse_judge = refuse_judge
+        self.judged: list[eval_api.EvalJudgeApiRequest] = []
         self._tag = ""
 
     def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
@@ -72,7 +82,7 @@ class FakeClient:
                 "isSuccess": True,
                 "message": "ok",
                 "run": {"publicId": "run_1", "k": request.k, "harnessVersion": request.harnessVersion},
-                "cases": [CASE],
+                "cases": [self._case],
             }
         )
 
@@ -127,6 +137,23 @@ class FakeClient:
                     }
                 ],
                 "reason": None,
+            }
+        )
+
+    def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse:
+        self.events.append("judge")
+        self.judged.append(request)
+        if self._refuse_judge is not None:
+            raise self._refuse_judge
+        return eval_api.EvalJudgeApiResponse.model_validate(
+            {
+                "isSuccess": True,
+                "message": "ok",
+                "hasPassed": True,
+                "reason": "Confirms the note.",
+                "provider": "anthropic",
+                "model": "claude-sonnet-5-5",
+                "promptVersion": 1,
             }
         )
 
@@ -223,6 +250,7 @@ def test_anything_else_stops_the_run_which_still_resets_and_ends_failed(error: E
     assert raised.value is error
     assert client.events[-2:] == ["reset", "finish"]
     assert client.finish_request is not None and not client.finish_request.isComplete
+    assert client.finish_request.failure is RunFailure.number_3
 
 
 def test_a_refused_readback_is_a_failed_check_not_the_end_of_the_run() -> None:
@@ -253,6 +281,7 @@ def test_a_failed_reset_still_ends_the_run_never_done(fail: str) -> None:
     summary = run(client, host, k=1)
     assert client.events[-1] == "finish"
     assert client.finish_request is not None and not client.finish_request.isComplete
+    assert client.finish_request.failure is RunFailure.number_2
     assert not summary.has_passed
 
 
@@ -278,3 +307,44 @@ def test_a_grader_output_the_contract_refuses_is_recorded_as_a_failed_attempt(
     assert not result.hasPassed
     assert result.graderOutput.error is not None and "invalid" in result.graderOutput.error.root
     assert not summary.has_passed
+
+
+def test_a_case_with_a_rubric_is_judged_on_its_own_conversation_with_the_tag_filled() -> None:
+    client = FakeClient(case=RUBRIC_CASE)
+    summary = run(client, k=2)
+    assert summary.has_passed
+    assert [request.conversationId for request in client.judged] == ["conv_1", "conv_2"]
+    tags = [request.rubric.removeprefix("Confirms note ") for request in client.judged]
+    assert len(set(tags)) == 2 and all("{case.tag}" not in tag for tag in tags)
+    judge_checks = [
+        check for result in client.results for check in result.graderOutput.checks if check.kind.value == "judge"
+    ]
+    assert [check.hasPassed for check in judge_checks] == [True, True]
+    assert client.finish_request is not None and client.finish_request.isComplete
+    assert client.finish_request.failure is None
+
+
+def test_an_unreachable_judge_records_the_attempt_failed_then_stops_the_run_with_why() -> None:
+    refusal = EvalApiError(503, "The judge model couldn't be reached (claude-sonnet-5-5)", Failure.JudgeUnavailable)
+    client = FakeClient(case=RUBRIC_CASE, refuse_judge=refusal)
+    with pytest.raises(JudgeUnavailableError) as raised:
+        run(client, k=3)
+    assert "The judge couldn't be reached" in str(raised.value)
+    assert "claude-sonnet-5-5" in str(raised.value)
+    # DEV_NOTE: The judge is asked once (the backend already retried the model), the attempt is recorded failed with
+    # why, and no later attempt runs
+    assert client.events == ["start", "attempt 1", "judge", "result 1", "reset", "finish"]
+    [result] = client.results
+    assert not result.hasPassed
+    assert result.graderOutput.error is not None
+    assert result.graderOutput.error.root.startswith("The judge couldn't be reached: HTTP 503")
+    assert client.finish_request is not None and not client.finish_request.isComplete
+    assert client.finish_request.failure is RunFailure.number_1
+
+
+def test_any_other_judge_refusal_stops_the_run_as_a_server_error() -> None:
+    client = FakeClient(case=RUBRIC_CASE, refuse_judge=EvalApiError(404, "Not this run's", Failure.NotFound))
+    with pytest.raises(EvalApiError):
+        run(client, k=1)
+    assert client.results == []
+    assert client.finish_request is not None and client.finish_request.failure is RunFailure.number_3

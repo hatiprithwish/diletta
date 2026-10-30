@@ -25,11 +25,11 @@ Every route sits behind `authorizeCompany`: `EvalRunRead` for runs, `EvalCaseRea
 - A run's **safety tally** counts its safety cases and how many passed every attempt. A failed safety case blocks publishing (the gate, M5-4).
 - The **Live** card shows the published config's gate run (`chatbot_configs.approved_by_run_id`), else its newest run. The **Draft** card shows the newest Draft / Testing / Ready config's newest run.
 - **Runs on** shows the host of the oldest active staging connection. "Not set up" means the company has none.
-- A run's **status** Failed means it didn't finish (the page says "Didn't finish"). Passed or failed comes from `has_passed` on a Done run.
+- A run's **status** Failed means it didn't finish (the page says "Didn't finish"). When the harness said why it stopped (`eval_runs.failure`, M5-3), the reason shows under the chip and in the strip: "The judge couldn't be reached", "The staging host couldn't be reached" or "A server error stopped the run". Passed or failed comes from `has_passed` on a Done run.
 
-## What the harness must write (M5-2, M5-3)
+## What the eval API writes (M5-2, M5-3)
 
-The page reads these shapes. Their JSON Schema lives in `evals/schemas/` (`eval-grader-output.schema.json`, `eval-transcript.schema.json`, from `pnpm --filter @app/schemas schema:export`), and their Python types in `evals/diletta_evals/types/`.
+The page reads these shapes. The harness sends the grader output; the backend builds and stores the transcript itself when the harness records an attempt that ran (`docs/runbooks/evals.md`). Their JSON Schema lives in `evals/schemas/` (`eval-grader-output.schema.json`, `eval-transcript.schema.json`, from `pnpm --filter @app/schemas schema:export`), and their Python types in `evals/diletta_evals/types/`.
 
 **`eval_results.grader_output`** (`ZEvalGraderOutputV1`):
 
@@ -79,7 +79,7 @@ The page reads these shapes. Their JSON Schema lives in `evals/schemas/` (`eval-
 ```
 
 - `status` is `ToolCallStatusIntEnum` (1 OK, 2 Error, 3 Blocked). Tool calls carry no args or values, like the Conversations transcript.
-- Store it in `FILES_BUCKET` at `Schemas.fileR2Key(company public id, file public id)`, with a `files` row: `owner_type = eval_result`, `owner_id` = the `eval_results.id`, mime `application/json`. Set `eval_results.transcript_file_id` to that file. The page only opens a file whose owner result points back at it and belongs to the run in the URL.
+- The backend (`EvalHarnessRepo.recordResult`) stores it in `FILES_BUCKET` at `Schemas.fileR2Key(company public id, file public id)`, with a `files` row: `owner_type = eval_result`, `owner_id` = the `eval_results.id`, mime `application/json`. Set `eval_results.transcript_file_id` to that file. The page only opens a file whose owner result points back at it and belongs to the run in the URL.
 
 A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 body is never rewritten.
 

@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
 import {
+  EvalCaseMessageRoleEnum,
   ZEvalCaseExpectationsV2,
   ZEvalCaseInputV1,
   ZEvalCaseJsonValue,
@@ -14,7 +16,7 @@ import {
   TEST_HOST_ADMIN_HEADER,
   TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS,
 } from "../testHost/TestHostCommon";
-import { HostToolStatusEnum } from "../toolCalls/ToolCallsCommon";
+import { HostToolStatusEnum, ToolCallStatusIntEnum } from "../toolCalls/ToolCallsCommon";
 import { readValueAtPath } from "../toolDefinitions/ToolOpPlaceholders";
 import { compareReadback, type ReadbackExpectation } from "../toolDefinitions/ToolReadbackCompare";
 import type { ToolReadbackOp } from "../toolDefinitions/ToolOpsRegistry";
@@ -185,7 +187,7 @@ export const EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP: Record<EvalAttemptFailureEnum
 // (NotFound), the run isn't Running any more (NotRunning), a body that doesn't fit the run (Invalid: an attempt past
 // k, a readback of another tool, a config that doesn't load, no case or too many to run), an attempt already started
 // or graded (Duplicate), a Done run still missing an attempt or its reset (Incomplete), the host reset failed
-// (HostFailed)
+// (HostFailed), the pinned judge gave no verdict (JudgeUnavailable, M5-3: the harness stops the run on it)
 export enum EvalRunStepFailureEnum {
   NotFound = "NotFound",
   NotRunning = "NotRunning",
@@ -193,12 +195,13 @@ export enum EvalRunStepFailureEnum {
   Duplicate = "Duplicate",
   Incomplete = "Incomplete",
   HostFailed = "HostFailed",
+  JudgeUnavailable = "JudgeUnavailable",
   ServerError = "ServerError",
 }
 
 export const EVAL_RUN_STEP_FAILURE_HTTP_STATUS_MAP: Record<
   EvalRunStepFailureEnum,
-  400 | 404 | 409 | 502 | 500
+  400 | 404 | 409 | 502 | 503 | 500
 > = {
   [EvalRunStepFailureEnum.NotFound]: 404,
   [EvalRunStepFailureEnum.NotRunning]: 409,
@@ -206,6 +209,7 @@ export const EVAL_RUN_STEP_FAILURE_HTTP_STATUS_MAP: Record<
   [EvalRunStepFailureEnum.Duplicate]: 409,
   [EvalRunStepFailureEnum.Incomplete]: 409,
   [EvalRunStepFailureEnum.HostFailed]: 502,
+  [EvalRunStepFailureEnum.JudgeUnavailable]: 503,
   [EvalRunStepFailureEnum.ServerError]: 500,
 };
 
@@ -217,6 +221,87 @@ export const EVAL_REFUSAL_FAILURES = [
     ...Object.values(EvalRunStepFailureEnum),
   ]),
 ] as [string, ...string[]];
+
+// ─── The judge (M5-3) ───────────────────────────────────────────────────────
+
+// DEV_NOTE: The pinned LLM judge: one model per provider, fixed here, never the config under test's, so changing a
+// config's models never changes how it is graded. The provider is the run config's default tier's (the company has a
+// key for it, or the chatbot couldn't answer either). Each must be in MODEL_PRICES (EvalHarness.test.ts). The prompt
+// (EvalJudgeProvider) is versioned: a change to it bumps EVAL_JUDGE_PROMPT_VERSION, so a verdict names the judge that
+// gave it. No temperature is set: the pinned models don't all accept one; the model and the prompt are the pin.
+export const EVAL_JUDGE_MODELS: Record<ModelProviderEnum, string> = {
+  [ModelProviderEnum.Anthropic]: "claude-sonnet-5-5",
+  [ModelProviderEnum.OpenAI]: "gpt-6.1-sol",
+  [ModelProviderEnum.Google]: "gemini-3.1-pro-preview",
+};
+export const EVAL_JUDGE_PROMPT_VERSION = 1;
+export const EVAL_JUDGE_REASON_MAX_CHARS = 600;
+// DEV_NOTE: A judge answer that doesn't hold to ZEvalJudgeOutput is asked again this many times, then JudgeUnavailable
+export const EVAL_JUDGE_MAX_TRIES = 2;
+
+// DEV_NOTE: What the judge model must answer (structured output): does the reply meet the rubric, and why, in one or
+// two sentences an admin reads on the Tests page
+export const ZEvalJudgeOutput = z.object({
+  hasPassed: z.boolean(),
+  reason: z.string().trim().min(1).max(EVAL_JUDGE_REASON_MAX_CHARS),
+});
+export type EvalJudgeOutput = z.infer<typeof ZEvalJudgeOutput>;
+
+// ─── An attempt's transcript (M5-3) ─────────────────────────────────────────
+
+export enum EvalAttemptEntryKindEnum {
+  Message = "message",
+  ToolCall = "tool_call",
+}
+
+// DEV_NOTE: Server-side only — an attempt's conversation as the Conversation DO holds it (getEvalTranscript, JSON text
+// over DO RPC), oldest first: every user and assistant message with text, and every tool call with how it ended and its
+// change request. The Repo turns it into transcript v1 (EvalTranscriptProvider) for R2 and the judge.
+export const ZEvalAttemptEntry = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal(EvalAttemptEntryKindEnum.Message),
+    role: z.enum(EvalCaseMessageRoleEnum),
+    text: z.string(),
+  }),
+  z.object({
+    kind: z.literal(EvalAttemptEntryKindEnum.ToolCall),
+    toolName: z.string(),
+    status: z.enum(HostToolStatusEnum).nullable(),
+    changeRequestId: z.string().nullable(),
+  }),
+]);
+export type EvalAttemptEntry = z.infer<typeof ZEvalAttemptEntry>;
+
+export const ZEvalAttemptTranscriptResponse = z.object({
+  isSuccess: z.boolean(),
+  message: z.string(),
+  entries: z.array(ZEvalAttemptEntry).optional(),
+});
+export type EvalAttemptTranscriptResponse = z.infer<typeof ZEvalAttemptTranscriptResponse>;
+
+// DEV_NOTE: A tool call's end in the transcript: tool_calls' own status and the words the Tests page shows after the
+// change request's summary. null = the call never finished.
+export const EVAL_TRANSCRIPT_TOOL_STATUS_MAP: Record<
+  HostToolStatusEnum | "unfinished",
+  { status: ToolCallStatusIntEnum; text: string }
+> = {
+  [HostToolStatusEnum.Ok]: { status: ToolCallStatusIntEnum.Ok, text: "Ran" },
+  [HostToolStatusEnum.NoChange]: { status: ToolCallStatusIntEnum.Ok, text: "Nothing to change" },
+  [HostToolStatusEnum.Committed]: { status: ToolCallStatusIntEnum.Ok, text: "Saved" },
+  [HostToolStatusEnum.Verified]: { status: ToolCallStatusIntEnum.Ok, text: "Saved and checked" },
+  [HostToolStatusEnum.Undone]: { status: ToolCallStatusIntEnum.Ok, text: "Undone" },
+  [HostToolStatusEnum.NeedsReview]: {
+    status: ToolCallStatusIntEnum.Ok,
+    text: "Saved, but the check didn't match",
+  },
+  [HostToolStatusEnum.Blocked]: {
+    status: ToolCallStatusIntEnum.Blocked,
+    text: "Blocked by the approval rules",
+  },
+  [HostToolStatusEnum.Error]: { status: ToolCallStatusIntEnum.Error, text: "Failed" },
+  [HostToolStatusEnum.Failed]: { status: ToolCallStatusIntEnum.Error, text: "Failed" },
+  unfinished: { status: ToolCallStatusIntEnum.Error, text: "Didn't finish" },
+};
 
 // ─── Readbacks ──────────────────────────────────────────────────────────────
 

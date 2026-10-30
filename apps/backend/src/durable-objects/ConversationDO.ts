@@ -613,6 +613,26 @@ export class ConversationDO extends Think<Env> {
     return JSON.stringify(await this.runEvalAttemptTurn(params));
   }
 
+  // DEV_NOTE: An eval attempt's conversation for its transcript (M5-3), called by EvalHarnessRepo over DO RPC when the
+  // harness judges or records the attempt: read-only, from Think's transcript (the plaintext source of truth; the
+  // messages read model is encrypted), as JSON text (Schemas.ZEvalAttemptTranscriptResponse). Only an eval session's,
+  // only once its turn is over: a widget conversation's never leaves through here.
+  async getEvalTranscript(): Promise<string> {
+    await this.__unsafe_ensureInitialized();
+    const state = this.getRuntimeState();
+    const answer: Schemas.EvalAttemptTranscriptResponse =
+      !state || !state.session.eval
+        ? { isSuccess: false, message: "Not an eval conversation" }
+        : this.isBusy()
+          ? { isSuccess: false, message: "The attempt's turn is still running" }
+          : {
+              isSuccess: true,
+              message: "Eval transcript read",
+              entries: EvalAttemptProvider.entries(this.messages),
+            };
+    return JSON.stringify(answer);
+  }
+
   private async runEvalAttemptTurn(params: {
     session: Schemas.ConversationSession;
     hostToken: string;

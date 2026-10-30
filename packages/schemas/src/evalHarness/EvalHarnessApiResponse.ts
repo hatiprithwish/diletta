@@ -2,12 +2,14 @@ import { z } from "zod";
 import type { ApiResponse } from "../common";
 import {
   ZCreateEvalRunApiRequest,
+  ZEvalJudgeApiRequest,
   ZEvalReadbackApiRequest,
   ZFinishEvalRunApiRequest,
   ZRecordEvalResultApiRequest,
   ZRunEvalAttemptApiRequest,
 } from "./EvalHarnessApiRequest";
 import type { Chatbot } from "../chatbots/ChatbotsCommon";
+import type { ConfigSpec } from "../configSpec";
 import type { ConversationSession } from "../conversations/ConversationsCommon";
 import {
   EvalRunStatusIntEnum,
@@ -15,7 +17,10 @@ import {
   type EvalRun,
 } from "../evalRuns/EvalRunsCommon";
 import type { DashboardEvalRunRow } from "../evalRuns/EvalRunsDALResponse";
+import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
+import type { EvalTranscript } from "../evalResults/EvalResultsCommon";
 import {
+  EVAL_JUDGE_REASON_MAX_CHARS,
   EvalReadbackVerdictEnum,
   EvalTurnStatusEnum,
   ZEvalAttemptToolCall,
@@ -72,6 +77,21 @@ export const ZEvalReadbackApiResponse = z
   })
   .meta({ id: "EvalReadbackApiResponse" });
 export type EvalReadbackApiResponse = z.infer<typeof ZEvalReadbackApiResponse>;
+
+// DEV_NOTE: The pinned judge's verdict on one attempt (M5-3): whether the reply meets the rubric and why, and which
+// judge gave it (the provider's pinned model, the prompt version). Its model call is the run's (cost, budget).
+export const ZEvalJudgeApiResponse = z
+  .object({
+    isSuccess: z.literal(true),
+    message: z.string(),
+    hasPassed: z.boolean(),
+    reason: z.string().min(1).max(EVAL_JUDGE_REASON_MAX_CHARS),
+    provider: z.enum(ModelProviderEnum),
+    model: z.string(),
+    promptVersion: z.number().int().min(1),
+  })
+  .meta({ id: "EvalJudgeApiResponse" });
+export type EvalJudgeApiResponse = z.infer<typeof ZEvalJudgeApiResponse>;
 
 export const ZRecordEvalResultApiResponse = z
   .object({
@@ -192,6 +212,10 @@ export interface ResetEvalRunResponse extends EvalRunStepResponse {
   isReset?: boolean;
 }
 
+export interface EvalJudgeResponse extends EvalRunStepResponse {
+  verdict?: Omit<EvalJudgeApiResponse, "isSuccess" | "message">;
+}
+
 export interface FinishEvalRunResponse extends EvalRunStepResponse {
   run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd">;
 }
@@ -221,6 +245,30 @@ export interface EvalRunConversationResponse extends EvalRunStepResponse {
   conversationId?: string;
 }
 
+// DEV_NOTE: A conversation of the run with what its transcript and judge need: the run and its config's chatbot
+// (internal ids: the judge's model call is the run's), the conversation (internal id and public id, the DO's name), the
+// company's public id (the R2 key), and the run config's tool pins (name → version: a transcript tool call names the
+// version it ran) and routing (the judge's provider)
+export interface EvalRunTranscriptSourceResponse extends EvalRunStepResponse {
+  source?: EvalRunTranscriptSource;
+}
+
+export interface EvalRunTranscriptSource {
+  evalRunId: string;
+  chatbotId: string;
+  conversationId: string;
+  conversationPublicId: string;
+  companyPublicId: string;
+  toolVersions: Record<string, number>;
+  routing: ConfigSpec["routing"];
+}
+
+// DEV_NOTE: An attempt's transcript v1, built from its DO and change requests (EvalTranscriptProvider), and the bytes
+// of its R2 file
+export interface EvalTranscriptBuildResponse extends EvalRunStepResponse {
+  built?: { transcript: EvalTranscript; bytes: Uint8Array<ArrayBuffer> };
+}
+
 // DEV_NOTE: The whole /eval/* API as one object, for the JSON Schema export (evals/schemas/eval-api.schema.json): each
 // message is a $def named by its meta id, so the generated Python module has one model per message. Never sent.
 export const ZEvalApiContract = z.object({
@@ -230,6 +278,8 @@ export const ZEvalApiContract = z.object({
   runAttemptResponse: ZRunEvalAttemptApiResponse,
   readbackRequest: ZEvalReadbackApiRequest,
   readbackResponse: ZEvalReadbackApiResponse,
+  judgeRequest: ZEvalJudgeApiRequest,
+  judgeResponse: ZEvalJudgeApiResponse,
   recordResultRequest: ZRecordEvalResultApiRequest,
   recordResultResponse: ZRecordEvalResultApiResponse,
   resetResponse: ZResetEvalRunApiResponse,

@@ -240,6 +240,50 @@ export default class ConversationsDAL {
     return response;
   }
 
+  // DEV_NOTE: An eval attempt's conversation (M5-3); isNotFound = the attempt never started one
+  async getEvalAttemptConversation(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindEvalAttemptConversationDALRequest,
+  ) {
+    const response: Schemas.ConversationDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.evalRunId, params.evalRunId),
+        eq(conversations.evalCaseId, params.evalCaseId),
+        eq(conversations.evalAttempt, params.evalAttempt),
+      ];
+      const [conversation] = await tx
+        .select()
+        .from(conversations)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!conversation) {
+        response.message = "The attempt has no conversation";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Conversation fetched successfully";
+      response.conversation = conversation;
+    } catch (error) {
+      const message = "Unknown error in fetching an eval attempt's conversation";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetEvalAttemptConversation,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: No DB foreign keys — the activity row must exist in the company (it is a root: no parent of its own)
   async setConversationRootLog(
     tx: NodePgTransaction<EmptyRelations>,

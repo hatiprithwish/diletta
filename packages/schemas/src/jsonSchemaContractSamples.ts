@@ -23,7 +23,12 @@ import {
   EvalTurnStatusEnum,
 } from "./evalHarness";
 import { TEST_HOST_ADMIN_HEADER, TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS } from "./testHost";
-import { EvalRunStatusIntEnum, EvalRunStatusLabelEnum, EvalRunTriggerIntEnum } from "./evalRuns";
+import {
+  EvalRunFailureIntEnum,
+  EvalRunStatusIntEnum,
+  EvalRunStatusLabelEnum,
+  EvalRunTriggerIntEnum,
+} from "./evalRuns";
 import { HostToolStatusEnum, ToolCallStatusIntEnum } from "./toolCalls";
 
 // DEV_NOTE: The contract between packages/schemas and the Python harness (M5-1): for every JSON_SCHEMA_EXPORTS file,
@@ -169,6 +174,16 @@ const evalApi = {
     fields: [{ name: "amount", isMatch: false, expected: 120, found: null, isFound: false }],
     reason: null,
   },
+  judgeRequest: { conversationId: "conv_1", rubric: "Says the refund takes 5 days." },
+  judgeResponse: {
+    isSuccess: true,
+    message: "Attempt judged",
+    hasPassed: false,
+    reason: "The reply never says how long the refund takes.",
+    provider: ModelProviderEnum.Anthropic,
+    model: "claude-sonnet-5-5",
+    promptVersion: 1,
+  },
   recordResultRequest: {
     caseId: "case_1",
     attempt: 1,
@@ -178,7 +193,7 @@ const evalApi = {
   },
   recordResultResponse: { isSuccess: true, message: "Eval result recorded" },
   resetResponse: { isSuccess: true, message: "Staging data reset", isReset: true },
-  finishRequest: { isComplete: true },
+  finishRequest: { isComplete: false, failure: EvalRunFailureIntEnum.JudgeUnavailable },
   finishResponse: {
     isSuccess: true,
     message: "Eval run finished",
@@ -315,6 +330,9 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
       { ...evalApi, recordResultRequest: { ...evalApi.recordResultRequest, graderOutput: {} } },
       { ...evalApi, finishResponse: { ...evalApi.finishResponse, costUsd: 0.012 } },
       { ...evalApi, finishRequest: undefined },
+      { ...evalApi, finishRequest: { isComplete: false, failure: 9 } },
+      { ...evalApi, judgeRequest: { ...evalApi.judgeRequest, rubric: "" } },
+      { ...evalApi, judgeResponse: { ...evalApi.judgeResponse, provider: "mistral" } },
       { ...evalApi, refusal: { ...evalApi.refusal, failure: "Teapot" } },
       {
         ...evalApi,

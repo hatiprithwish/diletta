@@ -78,9 +78,10 @@ export interface EvalRunDALResponse extends ApiResponse {
   evalRun?: EvalRun;
 }
 
-// DEV_NOTE: isConflict = the attempt already has a result
+// DEV_NOTE: isConflict = the attempt already has a result. evalResultId = the new row's (its transcript's owner)
 export interface CreateEvalResultDALResponse extends ApiResponse {
   isConflict?: boolean;
+  evalResultId?: string;
 }
 
 // DEV_NOTE: One case's attempts in a run: how many were recorded and how many passed

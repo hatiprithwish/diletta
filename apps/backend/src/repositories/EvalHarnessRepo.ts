@@ -1,22 +1,35 @@
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import { getAgentByName } from "agents";
+import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
+import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
+import FilesDAL from "@/data-access-layer/FilesDAL";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import EvalJudgeProvider from "@/providers/evalJudge";
 import EvalRefusalProvider from "@/providers/evalRefusal";
+import EvalTranscriptProvider from "@/providers/evalTranscript";
+import FileStorageProvider from "@/providers/fileStorage";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
+
+// DEV_NOTE: A transcript's files row is written before the result it belongs to, then pointed at it (setFileOwner), as
+// KnowledgeDocumentFilesProvider does
+const PENDING_OWNER_ID = "0";
+// DEV_NOTE: The rollback message of a result that already exists, so the refusal is still Duplicate
+const DUPLICATE_RESULT = "This attempt already has a result";
 
 // DEV_NOTE: The eval harness's API (M5-2): /eval/* as the platform's harness drives it, one Repo method per route.
 // Every call is authenticated first (authenticateEval → EvalAuthRepo): the identity names one company and its active
@@ -29,7 +42,10 @@ type Tx = NodePgTransaction<EmptyRelations>;
 //     staging connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write
 //     auto-approved.
 //   readBack: a readback assert, the same request live verification sends, on the staging connection.
-//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only).
+//   judge: the pinned LLM judge (M5-3) on one attempt's transcript and its case's rubric, through the model router on
+//     the company's key (the run's model call: budget held, cost on the run). No verdict = JudgeUnavailable.
+//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only), with its transcript (M5-3:
+//     built from its DO, a JSON file in R2 with a files row of owner eval_result) when the attempt ran.
 //   reset: the connection's reset_op, once after the attempts.
 //   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set.
 // Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
@@ -44,6 +60,9 @@ export default class EvalHarnessRepo {
   private evalCasesDal: EvalCasesDAL;
   private evalRunsDal: EvalRunsDAL;
   private conversationsDal: ConversationsDAL;
+  private companiesDal: CompaniesDAL;
+  private changeRequestsDal: ChangeRequestsDAL;
+  private filesDal: FilesDAL;
   private conversationsRepo: ConversationsRepo;
   private actionEngineRepo: ActionEngineRepo;
 
@@ -56,6 +75,9 @@ export default class EvalHarnessRepo {
     this.evalCasesDal = new EvalCasesDAL();
     this.evalRunsDal = new EvalRunsDAL();
     this.conversationsDal = new ConversationsDAL();
+    this.companiesDal = new CompaniesDAL();
+    this.changeRequestsDal = new ChangeRequestsDAL();
+    this.filesDal = new FilesDAL();
     this.conversationsRepo = new ConversationsRepo(env);
     this.actionEngineRepo = new ActionEngineRepo(env);
   }
@@ -407,7 +429,115 @@ export default class EvalHarnessRepo {
     return { isSuccess: true, message: "Record read back", check };
   }
 
-  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate (append-only)
+  // DEV_NOTE: The pinned judge on one attempt (M5-3). The conversation must be one of this run's. Its transcript is
+  // read from its DO (never taken from the harness), and the judge is the pinned model (Schemas.EVAL_JUDGE_MODELS) of
+  // the run config's default tier's provider, called through the model router: the company's key, the company budget
+  // (no per-user caps: an eval has none), the run's id (its cost adds to the run), the attempt's conversation. Any
+  // router, provider or answer failure is JudgeUnavailable (503): the harness stops the run on it, so a case with a
+  // rubric never passes ungraded.
+  async judge(params: {
+    identity: Schemas.EvalIdentity;
+    runPublicId: string;
+    request: Schemas.EvalJudgeApiRequest;
+    ctx: Pick<ExecutionContext, "waitUntil">;
+  }): Promise<Schemas.EvalJudgeResponse> {
+    const { identity, request } = params;
+    const companyId = identity.companyId;
+    const metadata = { companyId, runPublicId: params.runPublicId };
+    const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
+      this.refuseStep(Schemas.LogAction.JudgeEvalAttempt, failure, message, metadata);
+
+    const found: Schemas.EvalRunTranscriptSourceResponse = await withTenant(
+      this.db,
+      companyId,
+      async (tx): Promise<Schemas.EvalRunTranscriptSourceResponse> => {
+        const running = await this.runningRun(tx, identity, params.runPublicId);
+        if (!running.isSuccess || !running.run || !running.chatbotId) return running;
+        const conversation = await this.conversationsDal.getConversationDetails(tx, {
+          companyId,
+          publicId: request.conversationId,
+        });
+        if (!conversation.isSuccess || !conversation.conversation) {
+          return this.stepFailure(conversation.isNotFound, conversation.message);
+        }
+        if (conversation.conversation.evalRunId !== running.run.id) {
+          return this.stepFailure(true, "Conversation is not this run's");
+        }
+        return await this.transcriptSource(tx, companyId, {
+          run: running.run,
+          chatbotId: running.chatbotId,
+          conversation: conversation.conversation,
+        });
+      },
+    );
+    if (!found.isSuccess || !found.source) {
+      return refuse(found.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, found.message);
+    }
+    const { source } = found;
+
+    const transcript = await this.buildTranscript(companyId, source);
+    if (!transcript.isSuccess || !transcript.built) {
+      return refuse(
+        transcript.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
+        transcript.message,
+      );
+    }
+
+    const { provider } = source.routing[source.routing.defaultTier];
+    const pinned = { provider, model: Schemas.EVAL_JUDGE_MODELS[provider] };
+    const routed = await new ModelRouterRepo(this.env, params.ctx).getModel({
+      companyId,
+      chatbotId: source.chatbotId,
+      chatbotUserId: null,
+      conversationId: source.conversationId,
+      evalRunId: source.evalRunId,
+      turnId: null,
+      taskType: Schemas.ModelTaskTypeEnum.EvalJudge,
+      tier: Schemas.ModelTierEnum.Top,
+      routing: {
+        small: pinned,
+        mid: pinned,
+        top: pinned,
+        defaultTier: Schemas.ModelTierEnum.Top,
+      },
+      caps: null,
+    });
+    if (!routed.isSuccess) {
+      return refuse(
+        Schemas.EvalRunStepFailureEnum.JudgeUnavailable,
+        `The judge (${pinned.model}) couldn't be reached: ${routed.failure}`,
+      );
+    }
+    const judged = await EvalJudgeProvider.judge(
+      routed.model,
+      { transcript: transcript.built.transcript, rubric: request.rubric },
+      { ...metadata, provider, model: pinned.model },
+    );
+    if (!judged.isSuccess) {
+      return refuse(
+        Schemas.EvalRunStepFailureEnum.JudgeUnavailable,
+        `${judged.message} (${pinned.model})`,
+      );
+    }
+    return {
+      isSuccess: true,
+      message: "Attempt judged",
+      verdict: {
+        hasPassed: judged.verdict.hasPassed,
+        reason: judged.verdict.reason,
+        provider,
+        model: pinned.model,
+        promptVersion: Schemas.EVAL_JUDGE_PROMPT_VERSION,
+      },
+    };
+  }
+
+  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate (append-only).
+  // An attempt that ran (it has a conversation) gets its transcript (M5-3): built from its DO and put in R2 first, then
+  // in one withTenant its files row (pending owner) → the result pointing at it → the row's owner set to the result.
+  // Anything that fails after the object is put deletes it, so a result never points at a missing file and no row is
+  // left without its result. A transcript that can't be built is a ServerError (the harness retries the result: nothing
+  // was written). An attempt that never started has no conversation and no transcript.
   async recordResult(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -416,46 +546,127 @@ export default class EvalHarnessRepo {
     const { identity, request } = params;
     const companyId = identity.companyId;
     const metadata = { companyId, runPublicId: params.runPublicId, attempt: request.attempt };
+    const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
+      this.refuseStep(Schemas.LogAction.RecordEvalResult, failure, message, metadata);
+
+    const found: Schemas.EvalRunTranscriptSourceResponse & { hasConversation?: boolean } =
+      await withTenant(this.db, companyId, async (tx) => {
+        const checked = await this.resultCase(tx, identity, params.runPublicId, request);
+        if (!checked.isSuccess || !checked.run || !checked.chatbotId || !checked.evalCaseId) {
+          return checked;
+        }
+        const conversation = await this.conversationsDal.getEvalAttemptConversation(tx, {
+          companyId,
+          evalRunId: checked.run.id,
+          evalCaseId: checked.evalCaseId,
+          evalAttempt: request.attempt,
+        });
+        if (conversation.isNotFound) {
+          return { isSuccess: true, hasConversation: false };
+        }
+        if (!conversation.isSuccess || !conversation.conversation) {
+          return this.stepFailure(false, conversation.message);
+        }
+        const source = await this.transcriptSource(tx, companyId, {
+          run: checked.run,
+          chatbotId: checked.chatbotId,
+          conversation: conversation.conversation,
+        });
+        return { ...source, hasConversation: true };
+      });
+    if (!found.isSuccess || (found.hasConversation && !found.source)) {
+      return refuse(found.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, found.message);
+    }
+
+    let stored: { fileR2Key: string; file: Schemas.CreateFileDALRequest } | null = null;
+    if (found.source) {
+      const transcript = await this.buildTranscript(companyId, found.source);
+      if (!transcript.isSuccess || !transcript.built) {
+        return refuse(
+          transcript.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
+          transcript.message,
+        );
+      }
+      const { bytes } = transcript.built;
+      const file: Schemas.CreateFileDALRequest = {
+        publicId: Utility.generatePublicId(),
+        companyId,
+        ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
+        ownerId: PENDING_OWNER_ID,
+        filename: null,
+        mime: Schemas.EVAL_TRANSCRIPT_MIME,
+        sizeBytes: bytes.byteLength,
+        sha256: await Utility.sha256Hex(new TextDecoder().decode(bytes)),
+        createdBy: null,
+      };
+      const fileR2Key = Schemas.fileR2Key(found.source.companyPublicId, file.publicId);
+      const put = await FileStorageProvider.putObject(this.env, {
+        key: fileR2Key,
+        bytes,
+        mime: Schemas.EVAL_TRANSCRIPT_MIME,
+      });
+      if (!put.isSuccess) {
+        return refuse(
+          Schemas.EvalRunStepFailureEnum.ServerError,
+          "The transcript couldn't be stored",
+        );
+      }
+      stored = { fileR2Key, file };
+    }
 
     const result: Schemas.EvalRunStepResponse = await withTenant(this.db, companyId, async (tx) => {
-      const running = await this.runningRun(tx, identity, params.runPublicId, true);
-      if (!running.isSuccess || !running.run) return running;
-      if (request.attempt > running.run.k) {
-        return {
-          isSuccess: false,
-          message: "Attempt is past the run's k",
-          failure: Schemas.EvalRunStepFailureEnum.Invalid,
-        };
-      }
-      const evalCase = await this.runCase(tx, companyId, running.run, request.caseId);
-      if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
+      const checked = await this.resultCase(tx, identity, params.runPublicId, request, true);
+      if (!checked.isSuccess || !checked.run || !checked.evalCaseId) return checked;
 
+      let transcriptFileId: string | null = null;
+      if (stored) {
+        const created = await this.filesDal.createFile(tx, stored.file);
+        if (!created.isSuccess || !created.file) return this.stepFailure(false, created.message);
+        transcriptFileId = created.file.id;
+      }
       const created = await this.evalRunsDal.createEvalResult(tx, {
         companyId,
-        evalRunId: running.run.id,
-        evalCaseId: evalCase.evalCaseId,
+        evalRunId: checked.run.id,
+        evalCaseId: checked.evalCaseId,
         attempt: request.attempt,
         hasPassed: request.hasPassed,
         graderOutput: request.graderOutput,
+        transcriptFileId,
         latencyMs: request.latencyMs,
       });
       if (created.isConflict) {
+        // DEV_NOTE: The file row written above goes with the refusal: the attempt already has its result
+        if (transcriptFileId !== null) throw new TenantRollbackError(DUPLICATE_RESULT);
         return {
           isSuccess: false,
           message: created.message,
           failure: Schemas.EvalRunStepFailureEnum.Duplicate,
         };
       }
-      if (!created.isSuccess) return this.stepFailure(false, created.message);
+      if (!created.isSuccess || !created.evalResultId) {
+        if (transcriptFileId !== null)
+          throw new TenantRollbackError(created.message ?? "No result");
+        return this.stepFailure(false, created.message);
+      }
+      if (transcriptFileId !== null) {
+        const owned = await this.filesDal.setFileOwner(tx, {
+          id: transcriptFileId,
+          companyId,
+          ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
+          ownerId: created.evalResultId,
+        });
+        if (!owned.isSuccess) throw new TenantRollbackError(owned.message ?? "No file owner");
+      }
       return { isSuccess: true, message: "Eval result recorded" };
     });
     if (!result.isSuccess) {
-      return this.refuseStep(
-        Schemas.LogAction.RecordEvalResult,
-        result.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
-        result.message,
-        metadata,
-      );
+      if (stored) await FileStorageProvider.deleteObjects(this.env, { keys: [stored.fileR2Key] });
+      const failure =
+        result.failure ??
+        (result.message === DUPLICATE_RESULT
+          ? Schemas.EvalRunStepFailureEnum.Duplicate
+          : Schemas.EvalRunStepFailureEnum.ServerError);
+      return refuse(failure, result.message);
     }
     return result;
   }
@@ -545,7 +756,7 @@ export default class EvalHarnessRepo {
 
   // DEV_NOTE: Ends a Running run (its row locked, so no result lands after the tally). isComplete: every case of the
   // run's set has all k attempts and the reset went through (else Incomplete, nothing written) → Done; otherwise
-  // Failed. pass^k: a case passes when all k attempts did; the run passes when it is Done
+  // Failed, with why the harness stopped it when it says (failure, M5-3). pass^k: a case passes when all k attempts did; the run passes when it is Done
   // and every case of the set passed (the safety hard gate on top is M5-4's). case_count = the set's size. cost_usd is
   // already the run's (every model call adds to it, ModelCallsRepo) and keeps settling after the finish.
   async finish(params: {
@@ -602,6 +813,7 @@ export default class EvalHarnessRepo {
           caseCount: caseIds.length,
           passAllKCount,
           hasPassed: request.isComplete && passAllKCount === caseIds.length,
+          failure: request.isComplete ? null : (request.failure ?? null),
         });
         if (!finished.isSuccess || !finished.evalRun) {
           return finished.isNotFound
@@ -716,6 +928,139 @@ export default class EvalHarnessRepo {
       };
     }
     return { isSuccess: true, chatbot: found.chatbot };
+  }
+
+  // DEV_NOTE: The run (Running, the token's connection), its config's chatbot and the case of the run a result is for,
+  // with the attempt within k. isLocked: the run row FOR UPDATE, as runningRun.
+  private async resultCase(
+    tx: Tx,
+    identity: Schemas.EvalIdentity,
+    runPublicId: string,
+    request: Pick<Schemas.RecordEvalResultApiRequest, "caseId" | "attempt">,
+    isLocked = false,
+  ): Promise<Schemas.EvalRunningRunResponse & { evalCaseId?: string }> {
+    const running = await this.runningRun(tx, identity, runPublicId, isLocked);
+    if (!running.isSuccess || !running.run) return running;
+    if (request.attempt > running.run.k) {
+      return {
+        isSuccess: false,
+        message: "Attempt is past the run's k",
+        failure: Schemas.EvalRunStepFailureEnum.Invalid,
+      };
+    }
+    const evalCase = await this.runCase(tx, identity.companyId, running.run, request.caseId);
+    if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
+    return { ...running, evalCaseId: evalCase.evalCaseId };
+  }
+
+  // DEV_NOTE: What an attempt's transcript and judge need besides its DO: the company's public id (the R2 key), the run
+  // config's tool pins (the versions the attempt ran) and routing (the judge's provider). A config that no longer
+  // loads is a ServerError: the run started on it.
+  private async transcriptSource(
+    tx: Tx,
+    companyId: string,
+    params: {
+      run: Pick<Schemas.EvalRun, "id" | "chatbotConfigId">;
+      chatbotId: string;
+      conversation: Pick<Schemas.Conversation, "id" | "publicId">;
+    },
+  ): Promise<Schemas.EvalRunTranscriptSourceResponse> {
+    const company = await this.companiesDal.getCompanyDetails(tx, { companyId });
+    if (!company.isSuccess || !company.company) return this.stepFailure(false, company.message);
+    const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
+      companyId,
+      id: params.run.chatbotConfigId,
+    });
+    if (!config.isSuccess || !config.chatbotConfig) return this.stepFailure(false, config.message);
+    const loaded = Schemas.loadConfigSpec({
+      schemaVersion: config.chatbotConfig.schemaVersion,
+      body: config.chatbotConfig.body,
+    });
+    if (!loaded.isSuccess || !loaded.spec) {
+      return this.stepFailure(false, "The run's config doesn't load");
+    }
+    return {
+      isSuccess: true,
+      source: {
+        evalRunId: params.run.id,
+        chatbotId: params.chatbotId,
+        conversationId: params.conversation.id,
+        conversationPublicId: params.conversation.publicId,
+        companyPublicId: company.company.publicId,
+        toolVersions: Object.fromEntries(loaded.spec.tools.map((pin) => [pin.name, pin.version])),
+        routing: loaded.spec.routing,
+      },
+    };
+  }
+
+  // DEV_NOTE: An attempt's transcript v1: its conversation from its DO (getEvalTranscript, JSON text over DO RPC), its
+  // change requests' summaries (no values) from change_requests, put together by EvalTranscriptProvider. The DO
+  // unreachable, an answer that doesn't parse or a transcript that won't hold to v1 is a ServerError.
+  private async buildTranscript(
+    companyId: string,
+    source: Schemas.EvalRunTranscriptSource,
+  ): Promise<Schemas.EvalTranscriptBuildResponse> {
+    const metadata = { companyId, conversationPublicId: source.conversationPublicId };
+    let read: Schemas.EvalAttemptTranscriptResponse;
+    try {
+      const stub = await getAgentByName(this.env.CONVERSATION_DO, source.conversationPublicId);
+      const parsed = Schemas.ZEvalAttemptTranscriptResponse.safeParse(
+        Utility.parseJson(await stub.getEvalTranscript()),
+      );
+      read = parsed.success
+        ? parsed.data
+        : { isSuccess: false, message: "Conversation DO answered something else" };
+    } catch (error) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Eval,
+        action: Schemas.LogAction.GetEvalTranscript,
+        message: "Conversation DO unreachable",
+        error,
+        metadata,
+      });
+      read = { isSuccess: false, message: "Conversation DO unreachable" };
+    }
+    if (!read.isSuccess || !read.entries) return this.stepFailure(false, read.message);
+    const entries = read.entries;
+
+    const changeRequestIds = [
+      ...new Set(
+        entries.flatMap((entry) =>
+          entry.kind === Schemas.EvalAttemptEntryKindEnum.ToolCall && entry.changeRequestId !== null
+            ? [entry.changeRequestId]
+            : [],
+        ),
+      ),
+    ];
+    const listed: Schemas.ChangeRequestsDALResponse = await withTenant(
+      this.db,
+      companyId,
+      async (tx) =>
+        await this.changeRequestsDal.listConversationChangeRequests(tx, {
+          companyId,
+          conversationId: source.conversationId,
+          publicIds: changeRequestIds,
+        }),
+    );
+    if (!listed.isSuccess) return this.stepFailure(false, listed.message);
+
+    const built = EvalTranscriptProvider.build({
+      entries,
+      toolVersions: source.toolVersions,
+      changeRequestSummaries: Object.fromEntries(
+        (listed.changeRequests ?? []).map((row) => [row.publicId, row.summary]),
+      ),
+    });
+    if (!built) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Eval,
+        action: Schemas.LogAction.StoreEvalTranscript,
+        message: "Transcript doesn't hold to its schema",
+        metadata,
+      });
+      return this.stepFailure(false, "The transcript couldn't be built");
+    }
+    return { isSuccess: true, built };
   }
 
   private stepFailure(

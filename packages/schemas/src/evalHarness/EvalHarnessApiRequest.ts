@@ -1,6 +1,10 @@
 import { z } from "zod";
-import { ZEvalCaseMessages, ZEvalCaseReadback } from "../evalCases/EvalCasesCommon";
-import { EvalRunTriggerIntEnum } from "../evalRuns/EvalRunsCommon";
+import {
+  ZEvalCaseMessages,
+  ZEvalCaseReadback,
+  ZEvalCaseRubric,
+} from "../evalCases/EvalCasesCommon";
+import { EvalRunFailureIntEnum, EvalRunTriggerIntEnum } from "../evalRuns/EvalRunsCommon";
 import { ZEvalGraderOutputV1 } from "../evalResults/EvalResultsCommon";
 import {
   EVAL_HARNESS_VERSION_MAX_CHARS,
@@ -46,6 +50,16 @@ export const ZEvalReadbackApiRequest = z
   .meta({ id: "EvalReadbackApiRequest" });
 export type EvalReadbackApiRequest = z.infer<typeof ZEvalReadbackApiRequest>;
 
+// DEV_NOTE: The pinned judge on one attempt (M5-3): the attempt's conversation (one of the run's) and the case's rubric,
+// {case.tag} filled as in the attempt's messages. The backend reads the transcript itself, never from the harness.
+export const ZEvalJudgeApiRequest = z
+  .object({
+    conversationId: z.string().min(1).max(64),
+    rubric: ZEvalCaseRubric,
+  })
+  .meta({ id: "EvalJudgeApiRequest" });
+export type EvalJudgeApiRequest = z.infer<typeof ZEvalJudgeApiRequest>;
+
 // DEV_NOTE: One graded attempt. An attempt whose grading stopped (graderOutput.error) never passes.
 export const ZRecordEvalResultApiRequest = z
   .object({
@@ -63,11 +77,17 @@ export const ZRecordEvalResultApiRequest = z
 export type RecordEvalResultApiRequest = z.infer<typeof ZRecordEvalResultApiRequest>;
 
 // DEV_NOTE: Ends the run. isComplete true = every case of the run ran its k attempts and the staging data was reset
-// (Done; refused while an attempt or the reset is missing); false = the harness stopped early (Failed: the page says
-// "Didn't finish").
+// (Done; refused while an attempt or the reset is missing); false = the harness stopped early (Failed). failure (M5-3)
+// = why it stopped, shown on the Tests page in place of "Didn't finish"; only with isComplete false.
 export const ZFinishEvalRunApiRequest = z
   .object({
     isComplete: z.boolean(),
+    // DEV_NOTE: Named, so the generated Python enum is EvalRunFailure and the refusal's stays Failure
+    failure: z.enum(EvalRunFailureIntEnum).meta({ id: "EvalRunFailure" }).nullable().optional(),
+  })
+  .refine((body) => !body.isComplete || body.failure === null || body.failure === undefined, {
+    message: "A complete run has no failure",
+    path: ["failure"],
   })
   .meta({ id: "FinishEvalRunApiRequest" });
 export type FinishEvalRunApiRequest = z.infer<typeof ZFinishEvalRunApiRequest>;
