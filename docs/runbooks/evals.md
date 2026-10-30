@@ -9,14 +9,20 @@ M5-3 adds the LLM judge and the transcripts. Until then, a case with a rubric re
 ## How a run works
 
 1. **Sign in to the host.** The harness gets the host test user's bearer token from the host's own login (the test host: an admin-minted token in a fresh workspace). It sends that token with every call that reaches the host. The backend keeps it in memory only.
-2. **Start the run.** `POST /eval/runs` with the config's public id and `k`. The backend creates the run (Running) and answers its cases, already upgraded to the current shapes. If any active case can't be read, nothing is created (400 `Invalid`): the gate never passes on a case it skipped.
+2. **Start the run.** `POST /eval/runs` with the config's public id and `k`. The backend creates the run (Running) and answers its cases, already upgraded to the current shapes. If any active case can't be read, nothing is created (400 `Invalid`): the gate never passes on a case it skipped. The run keeps the cases it handed out (its case set) and the staging connection the token named. Every later step must use a token for that connection (another one is 404), and only cases of the set can be run or recorded (a case added or turned off after the start is 404).
 3. **Run each attempt.** For every case and attempt, the harness fills `{case.tag}` with a new token and calls `POST /eval/runs/:runId/attempts`. The backend starts a new conversation pinned to the run's config and runs it in one turn:
    - every tool the config pins runs against the token's staging connection, whatever connection the tool version names;
    - every write the approval rules allow is approved as proposed, committed and verified in the turn (a Blocked rule still blocks);
-   - its model calls are the run's (they count toward the company's budget, and `cost_usd` sums them).
+   - its model calls are the run's (they count toward the company's budget, and each adds its cost to the run's `cost_usd`).
 4. **Grade it.** The harness checks the attempt (`evals/diletta_evals/graders.py`): forbidden tools never ran, each expected call was made, each readback reads back (`POST /eval/runs/:runId/readbacks`, the same request live verification sends), and the reply rules hold. It records the attempt with its grader output (`POST /eval/runs/:runId/results`).
 5. **Reset.** `POST /eval/runs/:runId/reset` sends the connection's `reset_op` once, after the last attempt.
-6. **Finish.** `POST /eval/runs/:runId/finish`. Done when every case ran all `k` attempts (and the reset worked), else Failed ("Didn't finish" on the Tests page). The run passes when it is Done and every case passed all `k` attempts.
+6. **Finish.** `POST /eval/runs/:runId/finish`. Done when every case of the set has all `k` results (and the reset worked), else Failed ("Didn't finish" on the Tests page). Asking for Done while a case of the set is short is 409 `Incomplete`. The run passes when it is Done and every case of the set passed all `k` attempts.
+
+**Cost.** `cost_usd` grows as the run's model calls are recorded. A call cut off before the provider reported its usage is Pending until the per-minute backfill reads its AI Gateway log, and then adds its real cost. So the cost shown at the finish can still rise for a few minutes.
+
+**Trust.** The harness is platform code that holds the platform key. The backend doesn't compare an attempt's messages with the stored case (the harness fills `{case.tag}` in them), and the grading is the harness's own. What the backend does enforce is the run's case set, its connection, `k`, and that a passing result has no grader error.
+
+An eval conversation is the harness's only. The widget can't resume it, even for the same host user, and a model-key failure in it marks the key Invalid without opening a Quality issue.
 
 An attempt the backend couldn't start (the chatbot is paused, there's no model key, a budget said no) is recorded as failed with the reason, and the run goes on. Anything else that stops the run (the backend or the host unreachable) ends it Failed, after the reset.
 
@@ -115,5 +121,6 @@ and commit the output with the change (pattern rule 3.50).
 | 403 on start                            | The connection is a production one, disabled, or another company's                                                  |
 | 400 `Invalid` on start                  | A case can't be read (fix or turn it off), the config doesn't load, the chatbot is paused, or it has no active case |
 | Attempts fail "The attempt didn't run"  | The chatbot can't answer: no model key, a budget limit, or the config's model isn't priced                          |
+| 404 on a step of a running run          | The token names another staging connection than the run started on, or the case isn't one the run started with      |
 | Readbacks fail "couldn't be read back"  | The host test user can't read the record, or the host token expired mid-run                                         |
 | The run ends Failed after a reset error | The connection's `reset_op` is wrong or the host refused it; the next run starts from what this one left            |

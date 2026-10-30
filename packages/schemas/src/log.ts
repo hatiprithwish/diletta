@@ -432,7 +432,7 @@ export enum LogAction {
   FinishEvalRun = "FinishEvalRun",
   CreateEvalResult = "CreateEvalResult",
   GetEvalRunTallies = "GetEvalRunTallies",
-  GetEvalRunCostSum = "GetEvalRunCostSum",
+  AddEvalRunCost = "AddEvalRunCost",
   DecodeEvalJwt = "DecodeEvalJwt",
   VerifyEvalJwt = "VerifyEvalJwt",
   AuthenticateEval = "AuthenticateEval",

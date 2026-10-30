@@ -2151,7 +2151,7 @@ ZEvalCaseExpectationsV\d+\.(safeParse|parse)\(|expectations:\s*\{\s*schemaVersio
 
 ### 3.51 /eval/\* Takes Only a Platform-Signed Eval JWT, on a Staging Connection [CRITICAL]
 
-**Rule:** Every `/eval/*` route (M5-2) runs `authenticateEval` first, before any validator, and nothing else: no Clerk session, no widget JWT. The token is verified only by `EvalHarnessRepo.authenticate`: `EvalJwtProvider` (ES256, a `kid` from `EVAL_JWT_PUBLIC_JWKS`, `iss` / `aud` / lifetime), then the company and connection it names, and the connection must be an active **Staging** one of an active company (a production connection is 403). The company and connection come from the token, never from a body or path. An eval conversation is marked by `session.eval` and `conversations.eval_run_id`. It runs the run's config, never the published one. Its host calls run only on the token's staging connection (`evalConnectionId` in place of the tool version's own connection). Its model calls carry `evalRunId`. Its writes are approved without a user, and a Blocked rule still blocks. It never shows on the dashboard: every dashboard read and rollup of conversations or change requests filters `eval_run_id IS NULL`. The harness's host bearer (`X-Host-Token`) goes only to DO memory or the adapter (rule 3.11). A connection's `reset_op` is a `ZConnectionResetOp` and exists only on a Staging connection.
+**Rule:** Every `/eval/*` route (M5-2) runs `authenticateEval` first, before any validator, and nothing else: no Clerk session, no widget JWT. The token is verified only by `EvalAuthRepo.authenticate`: `EvalJwtProvider` (ES256, a `kid` from `EVAL_JWT_PUBLIC_JWKS`, `iss` / `aud` / lifetime), then the company and connection it names, and the connection must be an active **Staging** one of an active company (a production connection is 403). The company and connection come from the token, never from a body or path. A run is held to what it started with: `eval_runs.eval_case_ids` (the cases `startRun` handed out) and `company_connection_id` (the token's staging connection). A step whose token names another connection is 404, a result or attempt for a case outside the set is 404, and Done needs k results for every case of the set (`case_count` = its size). `cost_usd` is added to by every model call of the run as it is recorded or backfilled (`EvalRunsDAL.addEvalRunCost`), never summed at the finish. An eval conversation is marked by `session.eval` and `conversations.eval_run_id`; the widget never resumes one (`startOrResume` and `onConnect` refuse it), and a key failure in it opens no Quality issue. It runs the run's config, never the published one. Its host calls run only on the token's staging connection (`evalConnectionId` in place of the tool version's own connection). Its model calls carry `evalRunId`. Its writes are approved without a user, and a Blocked rule still blocks. It never shows on the dashboard: every dashboard read and rollup of conversations or change requests filters `eval_run_id IS NULL`. The harness's host bearer (`X-Host-Token`) goes only to DO memory or the adapter (rule 3.11). A connection's `reset_op` is a `ZConnectionResetOp` and exists only on a Staging connection.
 
 **Violations:**
 
@@ -2160,14 +2160,16 @@ ZEvalCaseExpectationsV\d+\.(safeParse|parse)\(|expectations:\s*\{\s*schemaVersio
 - A host call of an eval conversation that runs on the tool version's own connection, or an eval turn that loads the published config
 - A dashboard query of `conversations` or `change_requests` (list, count, detail, rollup) without `isNull(conversations.evalRunId)`
 - Logging, storing or echoing `X-Host-Token`; a `reset_op` on a Production connection
+- Finishing a run Done from the cases that have results instead of `eval_case_ids`, recording a case outside the set, or a run step that doesn't check `company_connection_id`
+- A widget resume or socket connect that admits an eval conversation (`evalRunId` / `session.eval` set)
 
 **Detection Pattern:**
 
 ```regex
-EvalHarnessRoutes\.(get|post|put|patch|delete)\((?![^)]*authenticateEval)|evalRunId:\s*null
+EvalHarnessRoutes\.(get|post|put|patch|delete)\((?![^)]*authenticateEval)
 ```
 
-- `evalRunId: null` in `ConversationDO` is a violation (it must come from `session.eval`)
+- In `durable-objects/ConversationDO.ts` only: `evalRunId:\s*null` is a violation (it must come from `session.eval`). Elsewhere it is legitimate (knowledge calls, a user's quality issue), so scope the search to that file.
 
 **Examples:**
 

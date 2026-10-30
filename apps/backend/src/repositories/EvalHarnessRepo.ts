@@ -3,16 +3,12 @@ import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgre
 import { getAgentByName } from "agents";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
-import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
-import CompanyConnectionsDAL from "@/data-access-layer/CompanyConnectionsDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
-import ModelCallsDAL from "@/data-access-layer/ModelCallsDAL";
 import getDbClient from "@/db/dbClient";
-import withPlatform from "@/db/withPlatform";
 import withTenant from "@/db/withTenant";
-import EvalJwtProvider from "@/providers/evalJwt";
+import EvalRefusalProvider from "@/providers/evalRefusal";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
@@ -23,140 +19,45 @@ import * as Schemas from "@app/schemas";
 type Tx = NodePgTransaction<EmptyRelations>;
 
 // DEV_NOTE: The eval harness's API (M5-2): /eval/* as the platform's harness drives it, one Repo method per route.
-// Every call is authenticated first (authenticate): a platform-signed eval JWT naming one company and one of its
-// connections, which must be an active Staging connection of an active company; a production connection is refused,
-// so an eval never drives a production host. Everything after it is scoped to that company (withTenant).
-//   startRun: a Running eval_runs row for one config (any status) and its cases: the config's chatbot's active cases
-//     and every active platform case, upgraded to the current shapes (a case that won't load refuses the run: the gate
-//     must never pass on a case it skipped).
-//   runAttempt: one attempt of one case: a new conversation of the run (pinned to its config and the token's staging
-//     connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write auto-approved.
+// Every call is authenticated first (authenticateEval → EvalAuthRepo): the identity names one company and its active
+// Staging connection. Everything here is scoped to that company (withTenant), and a run to the connection it started
+// on: a step whose token names another connection is NotFound.
+//   startRun: a Running eval_runs row for one config (any status), its staging connection and its case set
+//     (eval_case_ids): the config's chatbot's active cases and every active platform case, upgraded to the current
+//     shapes (a case that won't load refuses the run: the gate must never pass on a case it skipped).
+//   runAttempt: one attempt of one of the run's cases: a new conversation of the run (pinned to its config and the
+//     staging connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write
+//     auto-approved.
 //   readBack: a readback assert, the same request live verification sends, on the staging connection.
-//   recordResult: one graded attempt (eval_results, append-only).
+//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only).
 //   reset: the connection's reset_op, once after the attempts.
-//   finish: Done (every case ran its k attempts) or Failed, with pass^k and the run's cost.
+//   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set.
+// Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
+// case's input with {case.tag} filled in), not compared to the stored case; the grading is the harness's too.
 // The host bearer token (the harness's, from the host's own login) only passes through: to the DO's memory or the
 // adapter. It is never stored or logged (pattern rule 3.11). Case text and host data stay out of every log.
 export default class EvalHarnessRepo {
   private env: Env;
   private db: NodePgDatabase;
-  private companiesDal: CompaniesDAL;
-  private connectionsDal: CompanyConnectionsDAL;
   private chatbotsDal: ChatbotsDAL;
   private chatbotConfigsDal: ChatbotConfigsDAL;
   private evalCasesDal: EvalCasesDAL;
   private evalRunsDal: EvalRunsDAL;
   private conversationsDal: ConversationsDAL;
-  private modelCallsDal: ModelCallsDAL;
 
   constructor(env: Env) {
     this.env = env;
     this.db = getDbClient(env);
-    this.companiesDal = new CompaniesDAL();
-    this.connectionsDal = new CompanyConnectionsDAL();
     this.chatbotsDal = new ChatbotsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.evalCasesDal = new EvalCasesDAL();
     this.evalRunsDal = new EvalRunsDAL();
     this.conversationsDal = new ConversationsDAL();
-    this.modelCallsDal = new ModelCallsDAL();
-  }
-
-  // DEV_NOTE: decode → signature (the platform's EVAL_JWT_PUBLIC_JWKS) → claims, all Unauthorized on failure, so a
-  // made-up token learns nothing. Only then is anything it names read: the company by public id (withPlatform: no
-  // company is known yet, like the widget's issuer lookup), then its connection in withTenant. A company or connection
-  // that isn't found, isn't active, or a connection that isn't Staging is Forbidden.
-  async authenticate(token: string): Promise<Schemas.EvalAuthResponse> {
-    const decoded = EvalJwtProvider.decode(token);
-    if (!decoded.isSuccess || !decoded.jwt) {
-      return this.rejectAuth(Schemas.EvalAuthFailureEnum.Unauthorized, decoded.message);
-    }
-    const { jwt } = decoded;
-    const signature = await EvalJwtProvider.verifySignature(this.env, jwt);
-    if (!signature.isSuccess) {
-      return this.rejectAuth(
-        signature.failure ?? Schemas.EvalAuthFailureEnum.ServerError,
-        signature.message,
-      );
-    }
-    const claims = EvalJwtProvider.checkClaims(jwt.claims);
-    if (!claims.isSuccess) {
-      return this.rejectAuth(Schemas.EvalAuthFailureEnum.Unauthorized, claims.message);
-    }
-    const metadata = {
-      companyPublicId: jwt.claims.company,
-      connectionPublicId: jwt.claims.connection,
-    };
-
-    const company: Schemas.CompanyDALResponse = await withPlatform(this.db, async (tx) => {
-      return await this.companiesDal.getCompanyByPublicId(tx, { publicId: jwt.claims.company });
-    });
-    if (!company.isSuccess || !company.company) {
-      return company.isNotFound
-        ? this.rejectAuth(Schemas.EvalAuthFailureEnum.Forbidden, "Company not found", metadata)
-        : this.rejectAuth(Schemas.EvalAuthFailureEnum.ServerError, company.message, metadata);
-    }
-    if (company.company.status !== Schemas.CompanyStatusIntEnum.Active) {
-      return this.rejectAuth(
-        Schemas.EvalAuthFailureEnum.Forbidden,
-        "Company is not active",
-        metadata,
-      );
-    }
-    const companyId = company.company.id;
-
-    const found: Schemas.CompanyConnectionDALResponse = await withTenant(
-      this.db,
-      companyId,
-      async (tx) => {
-        return await this.connectionsDal.getCompanyConnectionDetails(tx, {
-          companyId,
-          publicId: jwt.claims.connection,
-        });
-      },
-    );
-    if (!found.isSuccess || !found.companyConnection) {
-      return found.isNotFound
-        ? this.rejectAuth(Schemas.EvalAuthFailureEnum.Forbidden, "Connection not found", metadata)
-        : this.rejectAuth(Schemas.EvalAuthFailureEnum.ServerError, found.message, metadata);
-    }
-    const connection = found.companyConnection;
-    if (connection.environment !== Schemas.CompanyConnectionEnvironmentIntEnum.Staging) {
-      return this.rejectAuth(
-        Schemas.EvalAuthFailureEnum.Forbidden,
-        "Eval tokens are accepted only for a staging connection",
-        metadata,
-      );
-    }
-    if (connection.status !== Schemas.CompanyConnectionStatusIntEnum.Active) {
-      return this.rejectAuth(
-        Schemas.EvalAuthFailureEnum.Forbidden,
-        "Connection is disabled",
-        metadata,
-      );
-    }
-
-    return {
-      isSuccess: true,
-      message: "Eval caller authenticated",
-      identity: {
-        companyId,
-        connectionId: connection.id,
-        connection: {
-          adapterType: connection.adapterType,
-          baseUrl: connection.baseUrl,
-          authType: connection.authType,
-          authConfig: connection.authConfig,
-          credentialScope: connection.credentialScope,
-        },
-        resetOp: connection.resetOp,
-        hostUserId: jwt.claims.sub,
-      },
-    };
   }
 
   // DEV_NOTE: A Running run of the config, and the cases it runs. The config's chatbot must be active and the config
-  // must load (loadConfigSpec), else nothing is created. Cases are read in the same transaction as the insert.
+  // must load (loadConfigSpec), else nothing is created. Cases are read in the same transaction as the insert, which
+  // stores them as the run's case set, with the token's staging connection.
   async startRun(params: {
     identity: Schemas.EvalIdentity;
     request: Schemas.CreateEvalRunApiRequest;
@@ -164,7 +65,7 @@ export default class EvalHarnessRepo {
     const { identity, request } = params;
     const companyId = identity.companyId;
     const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
-      this.rejectStep(Schemas.LogAction.StartEvalRun, failure, message, { companyId });
+      this.refuseStep(Schemas.LogAction.StartEvalRun, failure, message, { companyId });
 
     const result: Schemas.CreateEvalRunResponse = await withTenant(
       this.db,
@@ -200,6 +101,7 @@ export default class EvalHarnessRepo {
           return this.stepFailure(false, runnable.message);
         }
         const cases: Schemas.EvalHarnessCase[] = [];
+        const evalCaseIds: string[] = [];
         for (const row of runnable.evalCases) {
           const body = Schemas.readEvalCaseBody(row.input, row.expectations);
           const expectations = Schemas.loadEvalCaseExpectations(row.expectations);
@@ -220,6 +122,7 @@ export default class EvalHarnessRepo {
             },
             expectations,
           });
+          evalCaseIds.push(row.id);
         }
         if (cases.length === 0) {
           return {
@@ -232,6 +135,8 @@ export default class EvalHarnessRepo {
         const created = await this.evalRunsDal.createEvalRun(tx, {
           companyId,
           chatbotConfigId: chatbotConfig.id,
+          companyConnectionId: identity.connectionId,
+          evalCaseIds,
           trigger: request.trigger,
           harnessVersion: request.harnessVersion,
           k: request.k,
@@ -275,7 +180,7 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx): Promise<Schemas.EvalAttemptCheckResponse> => {
-        const running = await this.runningRun(tx, companyId, params.runPublicId);
+        const running = await this.runningRun(tx, identity, params.runPublicId);
         if (!running.isSuccess || !running.run || !running.chatbotId) return running;
         if (request.attempt > running.run.k) {
           return {
@@ -284,7 +189,7 @@ export default class EvalHarnessRepo {
             failure: Schemas.EvalRunStepFailureEnum.Invalid,
           };
         }
-        const evalCase = await this.runCase(tx, companyId, running.chatbotId, request.caseId);
+        const evalCase = await this.runCase(tx, companyId, running.run, request.caseId);
         if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
         const chatbot = await this.activeChatbot(tx, companyId, running.chatbotId);
         if (!chatbot.isSuccess || !chatbot.chatbot) return chatbot;
@@ -294,7 +199,7 @@ export default class EvalHarnessRepo {
     if (!checked.isSuccess || !checked.run || !checked.chatbot) {
       const failure = checked.failure ?? Schemas.EvalRunStepFailureEnum.ServerError;
       return {
-        ...this.rejectStep(Schemas.LogAction.RunEvalAttempt, failure, checked.message, metadata),
+        ...this.refuseStep(Schemas.LogAction.RunEvalAttempt, failure, checked.message, metadata),
         stepFailure: failure,
       };
     }
@@ -393,13 +298,13 @@ export default class EvalHarnessRepo {
     const companyId = identity.companyId;
     const metadata = { companyId, runPublicId: params.runPublicId };
     const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
-      this.rejectStep(Schemas.LogAction.ReadBackEvalRecord, failure, message, metadata);
+      this.refuseStep(Schemas.LogAction.ReadBackEvalRecord, failure, message, metadata);
 
     const conversation: Schemas.EvalRunConversationResponse = await withTenant(
       this.db,
       companyId,
       async (tx): Promise<Schemas.EvalRunConversationResponse> => {
-        const running = await this.runningRun(tx, companyId, params.runPublicId);
+        const running = await this.runningRun(tx, identity, params.runPublicId);
         if (!running.isSuccess || !running.run) return running;
         const found = await this.conversationsDal.getConversationDetails(tx, {
           companyId,
@@ -475,8 +380,8 @@ export default class EvalHarnessRepo {
     const metadata = { companyId, runPublicId: params.runPublicId, attempt: request.attempt };
 
     const result: Schemas.EvalRunStepResponse = await withTenant(this.db, companyId, async (tx) => {
-      const running = await this.runningRun(tx, companyId, params.runPublicId);
-      if (!running.isSuccess || !running.run || !running.chatbotId) return running;
+      const running = await this.runningRun(tx, identity, params.runPublicId);
+      if (!running.isSuccess || !running.run) return running;
       if (request.attempt > running.run.k) {
         return {
           isSuccess: false,
@@ -484,7 +389,7 @@ export default class EvalHarnessRepo {
           failure: Schemas.EvalRunStepFailureEnum.Invalid,
         };
       }
-      const evalCase = await this.runCase(tx, companyId, running.chatbotId, request.caseId);
+      const evalCase = await this.runCase(tx, companyId, running.run, request.caseId);
       if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
 
       const created = await this.evalRunsDal.createEvalResult(tx, {
@@ -507,7 +412,7 @@ export default class EvalHarnessRepo {
       return { isSuccess: true, message: "Eval result recorded" };
     });
     if (!result.isSuccess) {
-      return this.rejectStep(
+      return this.refuseStep(
         Schemas.LogAction.RecordEvalResult,
         result.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
         result.message,
@@ -528,13 +433,13 @@ export default class EvalHarnessRepo {
     const companyId = identity.companyId;
     const metadata = { companyId, runPublicId: params.runPublicId };
     const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
-      this.rejectStep(Schemas.LogAction.ResetEvalRun, failure, message, metadata);
+      this.refuseStep(Schemas.LogAction.ResetEvalRun, failure, message, metadata);
 
     const running: Schemas.EvalRunningRunResponse = await withTenant(
       this.db,
       companyId,
       async (tx): Promise<Schemas.EvalRunningRunResponse> =>
-        await this.runningRun(tx, companyId, params.runPublicId),
+        await this.runningRun(tx, identity, params.runPublicId),
     );
     if (!running.isSuccess || !running.run) {
       return refuse(running.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, running.message);
@@ -572,9 +477,10 @@ export default class EvalHarnessRepo {
     return { isSuccess: true, message: "Staging data reset", isReset: true };
   }
 
-  // DEV_NOTE: Ends a Running run. isComplete: every case with results has all k attempts (else Incomplete, nothing
+  // DEV_NOTE: Ends a Running run. isComplete: every case of the run's set has all k attempts (else Incomplete, nothing
   // written) → Done; otherwise Failed. pass^k: a case passes when all k attempts did; the run passes when it is Done
-  // and every case passed (the safety hard gate on top is M5-4's). cost_usd = the run's model calls.
+  // and every case of the set passed (the safety hard gate on top is M5-4's). case_count = the set's size. cost_usd is
+  // already the run's (every model call adds to it, ModelCallsRepo) and keeps settling after the finish.
   async finish(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -588,7 +494,7 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx) => {
-        const running = await this.runningRun(tx, companyId, params.runPublicId);
+        const running = await this.runningRun(tx, identity, params.runPublicId);
         if (!running.isSuccess || !running.run) return running;
         const { run } = running;
 
@@ -597,26 +503,21 @@ export default class EvalHarnessRepo {
           evalRunId: run.id,
         });
         if (!tallied.isSuccess || !tallied.tallies) return this.stepFailure(false, tallied.message);
-        const tallies = tallied.tallies;
-        if (
-          request.isComplete &&
-          (tallies.length === 0 || tallies.some((tally) => tally.attemptCount < run.k))
-        ) {
+        const caseIds = run.evalCaseIds ?? [];
+        const tallies = new Map(tallied.tallies.map((tally) => [tally.evalCaseId, tally]));
+        const isEveryCaseRun =
+          caseIds.length > 0 &&
+          caseIds.every((caseId) => (tallies.get(caseId)?.attemptCount ?? 0) >= run.k);
+        if (request.isComplete && !isEveryCaseRun) {
           return {
             isSuccess: false,
             message: "Some cases haven't run all their attempts",
             failure: Schemas.EvalRunStepFailureEnum.Incomplete,
           };
         }
-        const passAllKCount = tallies.filter((tally) => tally.passedAttemptCount >= run.k).length;
-
-        const cost = await this.modelCallsDal.getEvalRunCostSum(tx, {
-          companyId,
-          evalRunId: run.id,
-        });
-        if (!cost.isSuccess || cost.totalCostUsd === undefined) {
-          return this.stepFailure(false, cost.message);
-        }
+        const passAllKCount = caseIds.filter(
+          (caseId) => (tallies.get(caseId)?.passedAttemptCount ?? 0) >= run.k,
+        ).length;
 
         const finished = await this.evalRunsDal.finishEvalRun(tx, {
           companyId,
@@ -624,10 +525,9 @@ export default class EvalHarnessRepo {
           status: request.isComplete
             ? Schemas.EvalRunStatusIntEnum.Done
             : Schemas.EvalRunStatusIntEnum.Failed,
-          caseCount: tallies.length,
+          caseCount: caseIds.length,
           passAllKCount,
-          hasPassed: request.isComplete && passAllKCount === tallies.length,
-          costUsd: cost.totalCostUsd,
+          hasPassed: request.isComplete && passAllKCount === caseIds.length,
         });
         if (!finished.isSuccess || !finished.evalRun) {
           return finished.isNotFound
@@ -653,7 +553,7 @@ export default class EvalHarnessRepo {
       },
     );
     if (!result.isSuccess) {
-      return this.rejectStep(
+      return this.refuseStep(
         Schemas.LogAction.EndEvalRun,
         result.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
         result.message,
@@ -669,15 +569,20 @@ export default class EvalHarnessRepo {
     return result;
   }
 
-  // DEV_NOTE: The token company's run by public id, still Running, with its config's chatbot
+  // DEV_NOTE: The token company's run by public id, started on the token's connection (another connection's run is
+  // NotFound, so one run's attempts and reset never go to two hosts), still Running, with its config's chatbot
   private async runningRun(
     tx: Tx,
-    companyId: string,
+    identity: Schemas.EvalIdentity,
     runPublicId: string,
   ): Promise<Schemas.EvalRunningRunResponse> {
+    const { companyId } = identity;
     const found = await this.evalRunsDal.getEvalRun(tx, { companyId, publicId: runPublicId });
     if (!found.isSuccess || !found.evalRun) {
       return this.stepFailure(found.isNotFound, found.message);
+    }
+    if (found.evalRun.companyConnectionId !== identity.connectionId) {
+      return this.stepFailure(true, "Eval run is another connection's");
     }
     if (found.evalRun.status !== Schemas.EvalRunStatusIntEnum.Running) {
       return {
@@ -694,12 +599,12 @@ export default class EvalHarnessRepo {
     return { isSuccess: true, run: found.evalRun, chatbotId: config.chatbotConfig.chatbotId };
   }
 
-  // DEV_NOTE: A case a run of this chatbot runs: the chatbot's own or a platform case (the company's other chatbots'
-  // cases are NotFound)
+  // DEV_NOTE: A case of the run's set (the cases startRun handed out). Any other case is NotFound: one turned off, made
+  // after the start, or another chatbot's never counts toward the run.
   private async runCase(
     tx: Tx,
     companyId: string,
-    chatbotId: string,
+    run: Pick<Schemas.EvalRun, "evalCaseIds">,
     casePublicId: string,
   ): Promise<Schemas.EvalRunCaseResponse> {
     const found = await this.evalCasesDal.getEvalCase(tx, {
@@ -708,11 +613,10 @@ export default class EvalHarnessRepo {
     });
     if (!found.isSuccess || !found.evalCase)
       return this.stepFailure(found.isNotFound, found.message);
-    const { evalCase } = found;
-    if (evalCase.companyId !== null && evalCase.chatbotId !== chatbotId) {
-      return this.stepFailure(true, "Eval case is another chatbot's");
+    if (!(run.evalCaseIds ?? []).includes(found.evalCase.id)) {
+      return this.stepFailure(true, "Eval case is not one of the run's");
     }
-    return { isSuccess: true, evalCaseId: evalCase.id };
+    return { isSuccess: true, evalCaseId: found.evalCase.id };
   }
 
   // DEV_NOTE: The config's chatbot, which must be active (a paused chatbot can't be tested, as it can't answer)
@@ -747,42 +651,18 @@ export default class EvalHarnessRepo {
     };
   }
 
-  private rejectStep(
+  private refuseStep(
     action: Schemas.LogAction,
     failure: Schemas.EvalRunStepFailureEnum,
     message: string | undefined,
     metadata: Record<string, unknown>,
   ): { isSuccess: false; message: string; failure: Schemas.EvalRunStepFailureEnum } {
-    const entry = {
-      category: Schemas.LogCategory.Eval,
+    return EvalRefusalProvider.refuse({
       action,
+      failure,
+      serverError: Schemas.EvalRunStepFailureEnum.ServerError,
       message: message ?? "Eval run step refused",
-      metadata: { ...metadata, failure },
-    };
-    if (failure === Schemas.EvalRunStepFailureEnum.ServerError) {
-      AppLogger.error(entry);
-    } else {
-      AppLogger.warn(entry);
-    }
-    return { isSuccess: false, message: entry.message, failure };
-  }
-
-  private rejectAuth(
-    failure: Schemas.EvalAuthFailureEnum,
-    message: string | undefined,
-    metadata?: Record<string, unknown>,
-  ): Schemas.EvalAuthResponse {
-    const entry = {
-      category: Schemas.LogCategory.Eval,
-      action: Schemas.LogAction.AuthenticateEval,
-      message: message ?? "Eval authentication failed",
-      metadata: { ...metadata, failure },
-    };
-    if (failure === Schemas.EvalAuthFailureEnum.ServerError) {
-      AppLogger.error(entry);
-    } else {
-      AppLogger.warn(entry);
-    }
-    return { isSuccess: false, message: entry.message, failure };
+      metadata,
+    });
   }
 }

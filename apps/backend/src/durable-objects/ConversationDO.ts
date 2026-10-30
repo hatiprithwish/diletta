@@ -8,11 +8,12 @@ import type {
 } from "@cloudflare/think";
 import type { Connection, ConnectionContext } from "agents";
 import { jsonSchema, tool } from "ai";
-import type { LanguageModel, ToolSet, UIMessage } from "ai";
+import type { LanguageModel, ToolSet } from "ai";
 import TurnBudget from "@/budget/TurnBudget";
 import HostTokenAsk from "@/hostToken/HostTokenAsk";
 import Constants from "@/config/Constants";
 import { BudgetDO } from "@/durable-objects/BudgetDO";
+import EvalAttemptProvider from "@/providers/evalAttempt";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import HostToolsProvider from "@/providers/hostTools";
 import AppLogger from "@/providers/logger";
@@ -366,8 +367,15 @@ export class ConversationDO extends Think<Env> {
     }
     const session = parsed.data;
 
+    // DEV_NOTE: An eval attempt's conversation (M5-2) never takes a socket: it runs the run's config with writes
+    // approved, for the harness only (ConversationsRepo.startOrResume refuses it too)
     const existing = this.getRuntimeState();
-    if (existing && existing.session.conversationId !== session.conversationId) {
+    if (
+      session.eval !== null ||
+      (existing &&
+        (existing.session.conversationId !== session.conversationId ||
+          existing.session.eval !== null))
+    ) {
       connection.close(1008, "Not allowed");
       return;
     }
@@ -379,23 +387,7 @@ export class ConversationDO extends Think<Env> {
     );
     const roles = grant.success ? grant.data : { roles: [], expiresAt: 0 };
     if (!existing) {
-      this.configure<Schemas.ConversationRuntimeState>({
-        session,
-        lastActivityAt: Date.now(),
-        hasAnswer: false,
-        closeScheduleId: null,
-        isClosed: false,
-        lastSyncedMessageId: null,
-        turnIds: {},
-        lastSyncedTurnId: null,
-        turnStartedAts: [],
-        spentMicros: 0,
-        roles: roles.roles,
-        rolesExpiresAt: roles.expiresAt,
-        changeRequests: {},
-        undoWindows: {},
-        userUndos: {},
-      });
+      this.configure(ConversationDO.initialRuntimeState(session, roles));
       await this.armAutoClose();
     } else {
       this.patchRuntimeState({ roles: roles.roles, rolesExpiresAt: roles.expiresAt });
@@ -643,30 +635,10 @@ export class ConversationDO extends Think<Env> {
       return fail(Schemas.EvalAttemptFailureEnum.ServerError, "This conversation already ran");
     }
     const session = parsed.data;
-    this.configure<Schemas.ConversationRuntimeState>({
-      session,
-      lastActivityAt: Date.now(),
-      hasAnswer: false,
-      closeScheduleId: null,
-      isClosed: false,
-      lastSyncedMessageId: null,
-      turnIds: {},
-      lastSyncedTurnId: null,
-      turnStartedAts: [],
-      spentMicros: 0,
-      roles: [],
-      rolesExpiresAt: 0,
-      changeRequests: {},
-      undoWindows: {},
-      userUndos: {},
-    });
+    this.configure(ConversationDO.initialRuntimeState(session, { roles: [], expiresAt: 0 }));
     await this.armAutoClose();
 
-    const saved: UIMessage[] = messages.data.map((message) => ({
-      id: Utility.generateUlid(),
-      role: message.role,
-      parts: [{ type: "text", text: message.text }],
-    }));
+    const saved = EvalAttemptProvider.toUIMessages(messages.data);
     const firstId = saved[0]?.id;
     const userMessageId = saved.at(-1)?.id;
     if (!firstId || !userMessageId) {
@@ -692,7 +664,7 @@ export class ConversationDO extends Think<Env> {
     let status: Schemas.EvalTurnStatusEnum;
     try {
       const result = await this.saveMessages(saved);
-      status = ConversationDO.evalTurnStatus(result.status);
+      status = EvalAttemptProvider.turnStatus(result.status);
     } catch (error) {
       AppLogger.error({
         category: Schemas.LogCategory.Eval,
@@ -708,60 +680,37 @@ export class ConversationDO extends Think<Env> {
       this.hostToken = null;
     }
 
-    const start = this.messages.findIndex((message) => message.id === firstId);
-    const attempt = start < 0 ? [] : this.messages.slice(start);
-    const replies = TranscriptProvider.toEntries(
-      attempt.filter((message) => message.role === "assistant"),
-    ).filter((entry) => entry.text.length > 0);
     return {
       isSuccess: true,
       message: "Eval attempt ran",
       turnStatus: status,
-      reply: replies.at(-1)?.text ?? "",
-      toolCalls: attempt.flatMap((message) =>
-        message.parts.flatMap((part) => ConversationDO.evalToolCall(part)),
-      ),
+      ...EvalAttemptProvider.summarize(this.messages, firstId),
     };
   }
 
-  private static evalTurnStatus(status: string): Schemas.EvalTurnStatusEnum {
-    const parsed = Schemas.ZEvalTurnStatus.safeParse(status);
-    return parsed.success ? parsed.data : Schemas.EvalTurnStatusEnum.Error;
-  }
-
-  // DEV_NOTE: One tool part of the transcript as the eval harness grades it: name, the model's args, how it ended (a
-  // host tool's own status; search_help_docs is Ok once it answered) and a write's change request. Other parts: none.
-  private static evalToolCall(part: UIMessage["parts"][number]): Schemas.EvalAttemptToolCall[] {
-    const toolName =
-      part.type === "dynamic-tool"
-        ? part.toolName
-        : part.type.startsWith("tool-")
-          ? part.type.slice("tool-".length)
-          : null;
-    if (toolName === null || !("toolCallId" in part) || !("state" in part)) return [];
-    const args = Schemas.ZEvalToolArgs.safeParse("input" in part ? part.input : null);
-    let status: Schemas.HostToolStatusEnum | null = null;
-    let changeRequestId: string | null = null;
-    if (part.state === "output-available") {
-      const output = Schemas.ZHostToolOutput.safeParse(part.output);
-      if (output.success) {
-        status = output.data.status;
-        changeRequestId = output.data.changeRequestId ?? null;
-      } else if (toolName === Schemas.SEARCH_HELP_DOCS_TOOL_NAME) {
-        status = Schemas.HostToolStatusEnum.Ok;
-      }
-    } else if (part.state === "output-error") {
-      status = Schemas.HostToolStatusEnum.Error;
-    }
-    return [
-      {
-        toolCallId: part.toolCallId,
-        toolName,
-        args: args.success ? args.data : null,
-        status,
-        changeRequestId,
-      },
-    ];
+  // DEV_NOTE: A conversation's state at its first connect (or an eval attempt's start): nothing synced, no turn, no
+  // change request, the connect's roles
+  private static initialRuntimeState(
+    session: Schemas.ConversationSession,
+    roles: Schemas.ConversationRolesGrant,
+  ): Schemas.ConversationRuntimeState {
+    return {
+      session,
+      lastActivityAt: Date.now(),
+      hasAnswer: false,
+      closeScheduleId: null,
+      isClosed: false,
+      lastSyncedMessageId: null,
+      turnIds: {},
+      lastSyncedTurnId: null,
+      turnStartedAts: [],
+      spentMicros: 0,
+      roles: roles.roles,
+      rolesExpiresAt: roles.expiresAt,
+      changeRequests: {},
+      undoWindows: {},
+      userUndos: {},
+    };
   }
 
   // DEV_NOTE: Admits a new user turn: refused while the conversation is closed or closing or another turn runs. The
