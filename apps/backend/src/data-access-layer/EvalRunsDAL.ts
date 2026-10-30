@@ -55,6 +55,7 @@ export default class EvalRunsDAL {
         chatbotConfigId: evalRuns.chatbotConfigId,
         companyConnectionId: evalRuns.companyConnectionId,
         evalCaseIds: evalRuns.evalCaseIds,
+        resetAt: evalRuns.resetAt,
         trigger: evalRuns.trigger,
         harnessVersion: evalRuns.harnessVersion,
         k: evalRuns.k,
@@ -159,7 +160,12 @@ export default class EvalRunsDAL {
   }
 
   async getEvalRun(tx: NodePgTransaction<EmptyRelations>, params: Schemas.FindEvalRunDALRequest) {
-    return await this.findRun(tx, [eq(evalRuns.publicId, params.publicId)], params);
+    return await this.findRun(
+      tx,
+      [eq(evalRuns.publicId, params.publicId)],
+      params,
+      params.isLocked,
+    );
   }
 
   async getEvalRunById(
@@ -169,19 +175,22 @@ export default class EvalRunsDAL {
     return await this.findRun(tx, [eq(evalRuns.id, params.id)], params);
   }
 
-  // DEV_NOTE: One run within the company; isNotFound when there is none
+  // DEV_NOTE: One run within the company; isNotFound when there is none. isLocked: FOR UPDATE on the run row.
   private async findRun(
     tx: NodePgTransaction<EmptyRelations>,
     match: SQL[],
     params: Schemas.FindEvalRunDALRequest | Schemas.FindEvalRunByIdDALRequest,
+    isLocked = false,
   ) {
     const response: Schemas.DashboardEvalRunDALResponse = { isSuccess: false };
 
     try {
       const conditions = [...match, eq(evalRuns.companyId, params.companyId)];
-      const [selected] = await this.runQuery(tx)
+      const query = this.runQuery(tx)
         .where(and(...conditions))
         .limit(1);
+      // DEV_NOTE: The lock takes the run row only, not the joined config or chatbot
+      const [selected] = isLocked ? await query.for("update", { of: evalRuns }) : await query;
 
       if (!selected) {
         const message = "Eval run not found";
@@ -644,6 +653,56 @@ export default class EvalRunsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.FinishEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: reset_at = now, once the harness's reset went through, only while the run is Running (isNotFound else)
+  async markEvalRunReset(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MarkEvalRunResetDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalRuns.id, params.id),
+        eq(evalRuns.companyId, params.companyId),
+        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Running),
+      ];
+      const [evalRun] = await tx
+        .update(evalRuns)
+        .set({ resetAt: new Date(), updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      if (!evalRun) {
+        const message = "Eval run not found or not running";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.MarkEvalRunReset,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Eval run marked reset successfully";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in marking eval run reset";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.MarkEvalRunReset,
         message,
         error,
         metadata: params,

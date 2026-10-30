@@ -9,6 +9,7 @@ import {
   chatbotUsers,
   chatbots,
   conversations,
+  evalCases,
   evalRuns,
   feedback,
   messages,
@@ -19,6 +20,8 @@ import {
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
+
+const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). title is chat content (the first user
@@ -75,9 +78,10 @@ export default class ConversationsDAL {
         return response;
       }
 
-      if (params.evalRunId) {
+      const evalAttempt = params.eval;
+      if (evalAttempt) {
         const runConditions = [
-          eq(evalRuns.id, params.evalRunId),
+          eq(evalRuns.id, evalAttempt.evalRunId),
           eq(evalRuns.companyId, params.companyId),
         ];
         const [run] = await tx
@@ -97,9 +101,32 @@ export default class ConversationsDAL {
           return response;
         }
       }
-      if (params.chatbotConfigId) {
+      if (evalAttempt) {
+        // DEV_NOTE: The company's own case or a platform one (company_id null)
+        const caseConditions = [
+          eq(evalCases.id, evalAttempt.evalCaseId),
+          or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)),
+        ];
+        const [evalCase] = await tx
+          .select({ id: evalCases.id })
+          .from(evalCases)
+          .where(and(...caseConditions))
+          .limit(1);
+        if (!evalCase) {
+          const message = "Eval case not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateConversation,
+            message,
+            metadata: params,
+          });
+          response.message = message;
+          return response;
+        }
+      }
+      if (evalAttempt?.chatbotConfigId) {
         const configConditions = [
-          eq(chatbotConfigs.id, params.chatbotConfigId),
+          eq(chatbotConfigs.id, evalAttempt.chatbotConfigId),
           eq(chatbotConfigs.chatbotId, params.chatbotId),
           eq(chatbotConfigs.companyId, params.companyId),
         ];
@@ -128,8 +155,10 @@ export default class ConversationsDAL {
           companyId: params.companyId,
           chatbotId: params.chatbotId,
           chatbotUserId: params.chatbotUserId,
-          evalRunId: params.evalRunId ?? null,
-          chatbotConfigId: params.chatbotConfigId ?? null,
+          evalRunId: evalAttempt?.evalRunId ?? null,
+          evalCaseId: evalAttempt?.evalCaseId ?? null,
+          evalAttempt: evalAttempt?.evalAttempt ?? null,
+          chatbotConfigId: evalAttempt?.chatbotConfigId ?? null,
         })
         .returning();
 
@@ -137,6 +166,18 @@ export default class ConversationsDAL {
       response.message = "Conversation created successfully";
       response.conversation = conversationResponse;
     } catch (error) {
+      if (Utility.isUniqueViolation(error, EVAL_ATTEMPT_INDEX)) {
+        const message = "This eval attempt already ran";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateConversation,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isConflict = true;
+        return response;
+      }
       const message = "Unknown error in creating conversation";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,

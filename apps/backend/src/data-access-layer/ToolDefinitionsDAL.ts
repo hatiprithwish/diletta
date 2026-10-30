@@ -23,9 +23,12 @@ const connectionJoinConditions = [
 // (M5-2) in its place, so an eval never reaches the connection the tool names (production for a live tool)
 function runConnectionJoinConditions(evalConnectionId: string | null | undefined): SQL[] {
   if (!evalConnectionId) return connectionJoinConditions;
+  // DEV_NOTE: Staging only, on top of the eval token's check: a production connection never joins, so an eval's tool
+  // has no connection and never runs
   return [
     eq(companyConnections.id, evalConnectionId),
     eq(companyConnections.companyId, toolDefinitions.companyId),
+    eq(companyConnections.environment, Schemas.CompanyConnectionEnvironmentIntEnum.Staging),
   ];
 }
 

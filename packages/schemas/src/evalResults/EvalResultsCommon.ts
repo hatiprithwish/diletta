@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { EvalCaseMessageRoleEnum } from "../evalCases";
+import {
+  EVAL_CASE_MAX_FORBIDDEN_TOOLS,
+  EVAL_CASE_MAX_READBACKS,
+  EVAL_CASE_MAX_RULES,
+  EVAL_CASE_MAX_TOOL_CALLS,
+  EvalCaseMessageRoleEnum,
+} from "../evalCases";
 import { ToolCallStatusIntEnum } from "../toolCalls";
 
 // DEV_NOTE: eval_results.grader_output is jsonb and the transcript is a JSON file in R2, both written by the eval
@@ -11,8 +17,14 @@ export const EVAL_GRADER_OUTPUT_SCHEMA_VERSION = 1;
 export const EVAL_TRANSCRIPT_SCHEMA_VERSION = 1;
 
 // DEV_NOTE: Sizes of a v1 grader output: how many checks one attempt has, a check's label and detail, and the error
-// that stopped grading (an unreachable judge, M5-3)
-export const EVAL_GRADER_MAX_CHECKS = 50;
+// that stopped grading (an unreachable judge, M5-3). The check limit is the most a case can produce: one per rule,
+// expected call, forbidden tool and readback, and the judge's one (M5-3), so a valid case always grades.
+export const EVAL_GRADER_MAX_CHECKS =
+  EVAL_CASE_MAX_RULES +
+  EVAL_CASE_MAX_TOOL_CALLS +
+  EVAL_CASE_MAX_FORBIDDEN_TOOLS +
+  EVAL_CASE_MAX_READBACKS +
+  1;
 export const EVAL_CHECK_LABEL_MAX_CHARS = 200;
 export const EVAL_CHECK_DETAIL_MAX_CHARS = 1000;
 export const EVAL_GRADER_ERROR_MAX_CHARS = 1000;

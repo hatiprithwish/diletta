@@ -154,8 +154,8 @@ export default class HostToolCallProvider {
     });
   }
 
-  // DEV_NOTE: An eval run's reset (M5-2): the staging connection's reset_op (no placeholders), sent once as the host
-  // test user after every attempt, under the run's key so a retried reset is the same request. Sent as a Native write:
+  // DEV_NOTE: An eval run's reset (M5-2): the staging connection's reset_op (no placeholders), sent once per run after
+  // its last attempt as the host test user, under the run's key so a retried reset is the same request. Sent as a Native write:
   // the host's Idempotency-Key handling makes a resend harmless.
   static async reset(params: {
     connection: Schemas.HostConnection;

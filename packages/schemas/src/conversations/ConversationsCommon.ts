@@ -48,8 +48,9 @@ export const CONVERSATION_OUTCOME_LABEL_MAP: Record<
 
 // Whole Conversation Body — DB shape (enums stored as integers)
 // DEV_NOTE: publicId is also the Conversation DO's name. id, companyId, chatbotUserId, chatbotId, chatbotConfigId,
-// evalRunId (set = an eval attempt's conversation, M5-2: never on the dashboard) and rootLogId are internal bigint
-// ids — used by DAL/Repo only, NEVER sent to a client. title comes from the first user message (chat content: purged
+// evalRunId (set = an eval attempt's conversation, M5-2: never on the dashboard), evalCaseId and rootLogId are
+// internal bigint ids — used by DAL/Repo only, NEVER sent to a client. evalCaseId + evalAttempt = which attempt of the
+// run it is (unique per run, so an attempt runs once). title comes from the first user message (chat content: purged
 // with it).
 export const ZConversation = z.object({
   id: z.string(),
@@ -59,6 +60,8 @@ export const ZConversation = z.object({
   chatbotId: z.string(),
   chatbotConfigId: z.string().nullable(),
   evalRunId: z.string().nullable(),
+  evalCaseId: z.string().nullable(),
+  evalAttempt: z.number().int().nullable(),
   status: z.enum(ConversationStatusIntEnum),
   outcome: z.enum(ConversationOutcomeIntEnum).nullable(),
   title: z.string().nullable(),

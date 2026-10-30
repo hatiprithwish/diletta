@@ -16,7 +16,11 @@ export type EvalRunsFilterDALRequest = Pick<EvalRun, "companyId"> & { chatbotId:
 export type GetEvalRunsDALRequest = EvalRunsFilterDALRequest &
   PageDALRequest & { sortColumn: EvalRunSortColumn };
 
-export type FindEvalRunDALRequest = Pick<EvalRun, "companyId" | "publicId">;
+// DEV_NOTE: isLocked = the run row under FOR UPDATE (the eval harness's steps): a result, an attempt start and the
+// finish of one run take turns, so nothing is recorded into a run after it ended
+export type FindEvalRunDALRequest = Pick<EvalRun, "companyId" | "publicId"> & {
+  isLocked?: boolean;
+};
 
 export type FindEvalRunByIdDALRequest = Pick<EvalRun, "companyId" | "id">;
 
@@ -62,6 +66,9 @@ export type FinishEvalRunDALRequest = Pick<
   EvalRun,
   "companyId" | "id" | "caseCount" | "passAllKCount" | "hasPassed"
 > & { status: EvalRunStatusIntEnum.Done | EvalRunStatusIntEnum.Failed };
+
+// DEV_NOTE: The run's staging data was put back (or there was no reset_op to send): reset_at = now, only while Running
+export type MarkEvalRunResetDALRequest = Pick<EvalRun, "companyId" | "id">;
 
 // DEV_NOTE: A model call of the run changed its cost: cost_usd + addUsd - subtractUsd, in the database (exact decimals).
 // A new call adds its cost; a backfilled one replaces the cost it was recorded with.

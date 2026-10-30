@@ -51,6 +51,8 @@ export const ZEvalRun = z.object({
   chatbotConfigId: z.string(),
   companyConnectionId: z.string().nullable(),
   evalCaseIds: z.array(z.string()).nullable(),
+  // DEV_NOTE: When the harness's reset (the connection's reset_op, or none to send) went through; Done needs it
+  resetAt: z.date().nullable(),
   trigger: z.enum(EvalRunTriggerIntEnum),
   harnessVersion: z.string(),
   k: z.number().int(),

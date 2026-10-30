@@ -26,7 +26,8 @@ export interface RecordToolCallRequest {
 }
 
 // DEV_NOTE: A write's proposal: its tool call, the change request (Proposed, or Approved when no approval is needed)
-// and their events, in one transaction
+// and their events, in one transaction. isApprovalRequired is the approval rules' answer; isApprovedByEval: an eval
+// attempt (M5-2) approved it on its test user's behalf (Approved at once, logged as such, never as automatic).
 export interface ProposeChangeRequest {
   session: ConversationSession;
   turnId: string;
@@ -36,6 +37,7 @@ export interface ProposeChangeRequest {
   before: unknown;
   changes: ChangeRequestChange[];
   isApprovalRequired: boolean;
+  isApprovedByEval: boolean;
   hasUntrustedContext: boolean;
   latencyMs: number;
 }

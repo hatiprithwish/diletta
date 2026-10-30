@@ -208,7 +208,8 @@ export default class ActionEngineRepo {
       }
 
       const changeCount = Schemas.countChangedFields(params.changes);
-      const status = params.isApprovalRequired
+      const isAwaitingUser = params.isApprovalRequired && !params.isApprovedByEval;
+      const status = isAwaitingUser
         ? Schemas.ChangeRequestStatusIntEnum.Proposed
         : Schemas.ChangeRequestStatusIntEnum.Approved;
       const created = await this.changeRequestsDal.createChangeRequest(tx, {
@@ -228,7 +229,7 @@ export default class ActionEngineRepo {
       const changeRequest = created.changeRequest;
 
       const outboxIds: string[] = [];
-      const statuses = params.isApprovalRequired
+      const statuses = isAwaitingUser
         ? [Schemas.ChangeRequestStatusIntEnum.Proposed]
         : [
             Schemas.ChangeRequestStatusIntEnum.Proposed,
@@ -248,6 +249,7 @@ export default class ActionEngineRepo {
               toolVersion: tool.version,
               hasUntrustedContext: params.hasUntrustedContext,
               isAutomatic: !params.isApprovalRequired,
+              isEvalApproval: params.isApprovedByEval,
             },
           }),
         );

@@ -167,6 +167,7 @@ async function propose(
   amount: number,
   isApprovalRequired = true,
   before: unknown = { data: { id: "rec_alpha", amount: 120 } },
+  isApprovedByEval = false,
 ) {
   const tool = await loadUpdateTool(session);
   const args = { recordId: "rec_alpha", amount };
@@ -186,6 +187,7 @@ async function propose(
       before,
     }),
     isApprovalRequired,
+    isApprovedByEval,
     hasUntrustedContext: true,
     latencyMs: 5,
   });
@@ -406,6 +408,27 @@ describe("ActionEngineRepo.loadTurnTools", () => {
 });
 
 describe("ActionEngineRepo change requests", () => {
+  it("parks a write that needs approval for the user, and an eval's approval is logged as one, never as automatic", async () => {
+    const parked = await propose(sessionA, 334);
+    expect(parked.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Proposed,
+    );
+
+    const byEval = await propose(
+      sessionA,
+      335,
+      true,
+      { data: { id: "rec_alpha", amount: 120 } },
+      true,
+    );
+    expect(byEval.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Approved,
+    );
+    const events = await eventsOf(byEval.changeRequest?.publicId ?? "");
+    expect(events.map((event) => event.entityAction)).toEqual(["proposed", "approved"]);
+    expect(events[1]?.detail).toMatchObject({ isAutomatic: false, isEvalApproval: true });
+  });
+
   it("proposes, approves and commits a change against the test host, one event per status", async () => {
     routeTestHostFetch();
     const repo = new ActionEngineRepo(env);
@@ -658,6 +681,7 @@ describe("ActionEngineRepo change requests", () => {
         before: null,
         changes: [],
         isApprovalRequired: true,
+        isApprovedByEval: false,
         hasUntrustedContext: false,
         latencyMs: 1,
       });

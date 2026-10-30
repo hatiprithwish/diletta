@@ -15,7 +15,7 @@ import {
   EvalTranscriptEntryKindEnum,
 } from "./evalResults";
 import { EvalReadbackVerdictEnum, EvalTurnStatusEnum } from "./evalHarness";
-import { EvalRunStatusIntEnum, EvalRunTriggerIntEnum } from "./evalRuns";
+import { EvalRunStatusIntEnum, EvalRunStatusLabelEnum, EvalRunTriggerIntEnum } from "./evalRuns";
 import { HostToolStatusEnum, ToolCallStatusIntEnum } from "./toolCalls";
 
 // DEV_NOTE: The contract between packages/schemas and the Python harness (M5-1): for every JSON_SCHEMA_EXPORTS file,
@@ -116,6 +116,7 @@ const toolCall = {
   args: { name: "Drill t1", amount: 120, tags: ["a"], meta: null },
   status: HostToolStatusEnum.Verified,
   changeRequestId: "cr_1",
+  wasApprovalRequired: true,
 };
 const evalApi = {
   createRunRequest: {
@@ -174,6 +175,7 @@ const evalApi = {
     isSuccess: true,
     message: "Eval run finished",
     status: EvalRunStatusIntEnum.Done,
+    statusLabel: EvalRunStatusLabelEnum.Done,
     caseCount: 1,
     passAllKCount: 1,
     hasPassed: true,
@@ -296,6 +298,11 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
       { ...evalApi, recordResultRequest: { ...evalApi.recordResultRequest, graderOutput: {} } },
       { ...evalApi, finishResponse: { ...evalApi.finishResponse, costUsd: 0.012 } },
       { ...evalApi, finishRequest: undefined },
+      { ...evalApi, refusal: { ...evalApi.refusal, failure: "Teapot" } },
+      {
+        ...evalApi,
+        recordResultRequest: { ...evalApi.recordResultRequest, latencyMs: 2 ** 31 },
+      },
     ],
   },
   "eval-case-tag.schema.json": {

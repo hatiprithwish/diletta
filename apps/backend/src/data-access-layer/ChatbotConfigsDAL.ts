@@ -61,58 +61,6 @@ export default class ChatbotConfigsDAL {
     return response;
   }
 
-  // DEV_NOTE: One config by its public id or its id, any chatbot, any status (an eval run's config, M5-2). isNotFound
-  // when the company has none.
-  async getChatbotConfig(
-    tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindChatbotConfigDALRequest,
-  ) {
-    const response: Schemas.ChatbotConfigDALResponse = { isSuccess: false };
-
-    try {
-      const conditions = [
-        params.id !== undefined
-          ? eq(chatbotConfigs.id, params.id)
-          : eq(chatbotConfigs.publicId, params.publicId),
-        eq(chatbotConfigs.companyId, params.companyId),
-      ];
-      const [chatbotConfig] = await tx
-        .select()
-        .from(chatbotConfigs)
-        .where(and(...conditions))
-        .limit(1);
-
-      if (!chatbotConfig) {
-        const message = "Chatbot config not found";
-        AppLogger.warn({
-          category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.GetChatbotConfig,
-          message,
-          metadata: params,
-        });
-        response.message = message;
-        response.isNotFound = true;
-        return response;
-      }
-
-      response.isSuccess = true;
-      response.message = "Chatbot config fetched successfully";
-      response.chatbotConfig = chatbotConfig;
-    } catch (error) {
-      const message = "Unknown error in fetching chatbot config";
-      AppLogger.error({
-        category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.GetChatbotConfig,
-        message,
-        error,
-        metadata: params,
-      });
-      response.message = message;
-    }
-
-    return response;
-  }
-
   // DEV_NOTE: The chatbot's newest config being worked on (Draft, Testing or Ready): the Tests page's Draft card (M4-8).
   // isNotFound when every config is published or archived.
   async getLatestDraftChatbotConfig(
@@ -312,10 +260,13 @@ export default class ChatbotConfigsDAL {
 
     try {
       const conditions = [
-        eq(chatbotConfigs.publicId, params.publicId),
-        eq(chatbotConfigs.chatbotId, params.chatbotId),
+        params.id !== undefined
+          ? eq(chatbotConfigs.id, params.id)
+          : eq(chatbotConfigs.publicId, params.publicId),
         eq(chatbotConfigs.companyId, params.companyId),
       ];
+      if (params.chatbotId !== undefined)
+        conditions.push(eq(chatbotConfigs.chatbotId, params.chatbotId));
       const query = tx
         .select(this.versionSelection())
         .from(chatbotConfigs)

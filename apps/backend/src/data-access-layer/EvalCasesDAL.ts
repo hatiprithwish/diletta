@@ -427,19 +427,19 @@ export default class EvalCasesDAL {
     const response: Schemas.EvalCasesDALResponse = { isSuccess: false };
 
     try {
-      const ownConditions = [
-        eq(evalCases.companyId, params.companyId),
-        eq(evalCases.chatbotId, params.chatbotId),
-      ];
+      // DEV_NOTE: The company's case of this chatbot, or a platform case: company_id and chatbot_id are null together
+      // (CHK_eval_cases_platform_chatbot_id), so each column is matched or null on its own
       const conditions = [
         eq(evalCases.isActive, true),
-        or(and(...ownConditions), isNull(evalCases.companyId)),
+        or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)),
+        or(eq(evalCases.chatbotId, params.chatbotId), isNull(evalCases.chatbotId)),
       ];
       const selected = await tx
         .select()
         .from(evalCases)
         .where(and(...conditions))
-        .orderBy(desc(evalCases.isSafety), asc(evalCases.name), asc(evalCases.id));
+        .orderBy(desc(evalCases.isSafety), asc(evalCases.name), asc(evalCases.id))
+        .limit(params.limit);
 
       response.isSuccess = true;
       response.message = "Runnable eval cases fetched successfully";

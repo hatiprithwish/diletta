@@ -9,7 +9,11 @@ import {
 } from "./EvalHarnessApiRequest";
 import type { Chatbot } from "../chatbots/ChatbotsCommon";
 import type { ConversationSession } from "../conversations/ConversationsCommon";
-import { EvalRunStatusIntEnum, type EvalRun } from "../evalRuns/EvalRunsCommon";
+import {
+  EvalRunStatusIntEnum,
+  EvalRunStatusLabelEnum,
+  type EvalRun,
+} from "../evalRuns/EvalRunsCommon";
 import type { DashboardEvalRunRow } from "../evalRuns/EvalRunsDALResponse";
 import {
   EvalReadbackVerdictEnum,
@@ -19,6 +23,7 @@ import {
   ZEvalHarnessRun,
   ZEvalReadbackField,
   type DecodedEvalJwt,
+  EVAL_REFUSAL_FAILURES,
   EvalAttemptFailureEnum,
   type EvalAuthFailureEnum,
   type EvalHarnessCase,
@@ -91,6 +96,7 @@ export const ZFinishEvalRunApiResponse = z
     isSuccess: z.literal(true),
     message: z.string(),
     status: z.enum(EvalRunStatusIntEnum),
+    statusLabel: z.enum(EvalRunStatusLabelEnum),
     caseCount: z.number().int().min(0),
     passAllKCount: z.number().int().min(0),
     hasPassed: z.boolean(),
@@ -99,12 +105,13 @@ export const ZFinishEvalRunApiResponse = z
   .meta({ id: "FinishEvalRunApiResponse" });
 export type FinishEvalRunApiResponse = z.infer<typeof ZFinishEvalRunApiResponse>;
 
-// DEV_NOTE: Any refusal. failure is one of the eval enums (auth, attempt or run step), as text.
+// DEV_NOTE: Any refusal. failure is one of the eval enums (auth, attempt or run step): the harness decides by it, never
+// by the HTTP status alone (an attempt the chatbot couldn't answer is a failed attempt; a ServerError stops the run).
 export const ZEvalRefusalApiResponse = z
   .object({
     isSuccess: z.literal(false),
     message: z.string(),
-    failure: z.string().optional(),
+    failure: z.enum(EVAL_REFUSAL_FAILURES).optional(),
   })
   .meta({ id: "EvalRefusalApiResponse" });
 export type EvalRefusalApiResponse = z.infer<typeof ZEvalRefusalApiResponse>;
@@ -136,6 +143,8 @@ export interface StartEvalConversationResponse extends ApiResponse {
   failure?: EvalAttemptFailureEnum;
   session?: ConversationSession;
   outboxId?: string;
+  // DEV_NOTE: The attempt already has its conversation: nothing was started
+  isDuplicate?: boolean;
 }
 
 // DEV_NOTE: What the Conversation DO's runEvalAttempt answers the worker (DO RPC). It crosses the RPC as JSON text,
@@ -151,14 +160,24 @@ export const ZEvalAttemptRunResponse = z.object({
 });
 export type EvalAttemptRunResponse = z.infer<typeof ZEvalAttemptRunResponse>;
 
-// DEV_NOTE: An attempt as EvalHarnessRepo answers the route: a run step refusal, an attempt that couldn't start, or
-// what the DO ran
-export interface RunEvalAttemptResponse extends ApiResponse {
-  stepFailure?: EvalRunStepFailureEnum;
-  attemptFailure?: EvalAttemptFailureEnum;
-  outboxIds?: string[];
-  attempt?: Omit<RunEvalAttemptApiResponse, "isSuccess" | "message">;
-}
+// DEV_NOTE: An attempt as EvalHarnessRepo answers the route: what the DO ran, a run step refusal (nothing started), or
+// an attempt that couldn't run (its conversation may have started: outboxIds to relay). failure is one enum or the
+// other, told apart by kind, each with its own HTTP status map.
+export type RunEvalAttemptResponse =
+  | {
+      isSuccess: true;
+      message: string;
+      outboxIds: string[];
+      attempt: Omit<RunEvalAttemptApiResponse, "isSuccess" | "message">;
+    }
+  | { isSuccess: false; message: string; kind: "step"; failure: EvalRunStepFailureEnum }
+  | {
+      isSuccess: false;
+      message: string;
+      kind: "attempt";
+      failure: EvalAttemptFailureEnum;
+      outboxIds: string[];
+    };
 
 export interface EvalReadbackResponse extends ApiResponse {
   failure?: EvalRunStepFailureEnum;
@@ -187,6 +206,7 @@ export interface EvalRunningRunResponse extends EvalRunStepResponse {
 export interface EvalAttemptCheckResponse extends EvalRunStepResponse {
   run?: DashboardEvalRunRow;
   chatbot?: Chatbot;
+  evalCaseId?: string;
 }
 
 export interface EvalRunCaseResponse extends EvalRunStepResponse {

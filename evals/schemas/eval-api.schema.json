@@ -496,6 +496,9 @@
               "type": "null"
             }
           ]
+        },
+        "wasApprovalRequired": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -503,7 +506,8 @@
         "toolName",
         "args",
         "status",
-        "changeRequestId"
+        "changeRequestId",
+        "wasApprovalRequired"
       ]
     },
     "EvalReadbackApiRequest": {
@@ -645,7 +649,7 @@
               "const": 1
             },
             "checks": {
-              "maxItems": 50,
+              "maxItems": 61,
               "type": "array",
               "items": {
                 "type": "object",
@@ -712,7 +716,7 @@
             {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 3600000
             },
             {
               "type": "null"
@@ -794,6 +798,15 @@
             4
           ]
         },
+        "statusLabel": {
+          "type": "string",
+          "enum": [
+            "Queued",
+            "Running",
+            "Done",
+            "Failed"
+          ]
+        },
         "caseCount": {
           "type": "integer",
           "minimum": 0,
@@ -815,6 +828,7 @@
         "isSuccess",
         "message",
         "status",
+        "statusLabel",
         "caseCount",
         "passAllKCount",
         "hasPassed",
@@ -832,7 +846,20 @@
           "type": "string"
         },
         "failure": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "Unauthorized",
+            "Forbidden",
+            "ServerError",
+            "ChatbotUnavailable",
+            "BudgetRefused",
+            "NotFound",
+            "NotRunning",
+            "Invalid",
+            "Duplicate",
+            "Incomplete",
+            "HostFailed"
+          ]
         }
       },
       "required": [

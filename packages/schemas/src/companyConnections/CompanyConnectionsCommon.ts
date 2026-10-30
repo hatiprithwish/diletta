@@ -165,8 +165,9 @@ export const ZOrigin = z
   });
 
 // DEV_NOTE: company_connections.reset_op (staging only, M5-2): the one host call that puts the staging data back after
-// an eval run. A call op with no placeholders (there are no args), sent once as the host test user after every attempt
-// of the run. null = the host needs no reset (state-independent cases only).
+// an eval run. A call op with no placeholders (there are no args), sent once per run, after its last attempt, as the
+// host test user. Attempts within a run aren't reset between them: cases are state-independent (each names its own
+// records with {case.tag}). null = the host needs no reset.
 export const ZConnectionResetOp = ZToolCallOpV1.superRefine((op, ctx) => {
   const templates = [op.path, ...Object.values(op.query ?? {}), JSON.stringify(op.bodyMap ?? {})];
   if (templates.some((template) => findToolOpPlaceholders(template).length > 0)) {
