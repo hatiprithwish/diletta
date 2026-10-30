@@ -5,12 +5,14 @@ import { HostCallOutcomeEnum } from "../hostAdapter";
 import { ToolOpMethodEnum } from "../toolDefinitions";
 import { TEST_HOST_RESET_OP } from "../testHost";
 import { ModelProviderEnum } from "../companySecrets";
+import { ModelTierEnum } from "../configSpec";
 import { EvalRunFailureIntEnum } from "../evalRuns";
 import { getModelPrice } from "../modelRouter";
 import { HostToolStatusEnum } from "../toolCalls";
 import { ZFinishEvalRunApiRequest, ZRecordEvalResultApiRequest } from "./EvalHarnessApiRequest";
 import {
   EVAL_JUDGE_MODELS,
+  pickEvalJudgeModel,
   EVAL_TRANSCRIPT_TOOL_STATUS_MAP,
   EvalReadbackVerdictEnum,
   ZEvalJudgeOutput,
@@ -146,10 +148,41 @@ describe("eval API requests", () => {
 });
 
 describe("the pinned judge (M5-3)", () => {
-  it("pins a priced model for every provider, so every judge call can be costed", () => {
+  it("pins two different priced models for every provider, so every judge call can be costed", () => {
     for (const provider of Object.values(ModelProviderEnum)) {
-      expect(getModelPrice(provider, EVAL_JUDGE_MODELS[provider])).not.toBeNull();
+      const { primary, alternate } = EVAL_JUDGE_MODELS[provider];
+      expect(primary).not.toBe(alternate);
+      expect(getModelPrice(provider, primary)).not.toBeNull();
+      expect(getModelPrice(provider, alternate)).not.toBeNull();
     }
+  });
+
+  it("never picks a judge the config answers with: the primary, else the alternate", () => {
+    const { Anthropic, OpenAI } = ModelProviderEnum;
+    const { primary, alternate } = EVAL_JUDGE_MODELS[Anthropic];
+    const routing = (mid: string, top = "claude-fable-5-1") => ({
+      small: { provider: Anthropic, model: "claude-haiku-4-5" },
+      mid: { provider: Anthropic, model: mid },
+      top: { provider: Anthropic, model: top },
+      defaultTier: ModelTierEnum.Mid,
+    });
+    expect(pickEvalJudgeModel(routing("claude-haiku-4-5"))).toEqual({
+      provider: Anthropic,
+      model: primary,
+    });
+    // DEV_NOTE: A config on the primary (any tier) is graded by the alternate
+    expect(pickEvalJudgeModel(routing(primary)).model).toBe(alternate);
+    expect(pickEvalJudgeModel(routing("claude-haiku-4-5", primary)).model).toBe(alternate);
+    // DEV_NOTE: Both named: never the default tier's own model
+    expect(pickEvalJudgeModel(routing(primary, alternate)).model).toBe(alternate);
+    expect(pickEvalJudgeModel(routing(alternate, primary)).model).toBe(primary);
+    // DEV_NOTE: The provider is the default tier's; another provider's tiers don't count
+    expect(
+      pickEvalJudgeModel({
+        ...routing("claude-haiku-4-5"),
+        top: { provider: OpenAI, model: primary },
+      }).model,
+    ).toBe(primary);
   });
 
   it("holds the judge's answer to a verdict and a reason", () => {

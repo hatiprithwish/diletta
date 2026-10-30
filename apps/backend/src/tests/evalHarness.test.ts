@@ -79,8 +79,8 @@ const ownerDatabaseUrl =
 const END_TO_END_TIMEOUT_MS = 120_000;
 const PRODUCTION_BASE_URL = "https://production.unreachable.invalid/v1/";
 const HOST_USER = "eval-test-user";
-// DEV_NOTE: The config's default tier (Mid). No tier names Anthropic's pinned judge, so a judge that took the config's
-// own model would be told apart from the pinned one
+// DEV_NOTE: The config's default tier (Mid). No tier names Anthropic's primary judge, so the judge is the primary, and
+// a judge that took the config's own model would be told apart from it
 const CHATBOT_MODEL = "claude-opus-5-5";
 const createdCompanyIds: string[] = [];
 let ownerPool: Pool | null = null;
@@ -1075,18 +1075,18 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(judged.status).toBe(200);
     // DEV_NOTE: The config's default tier is Anthropic's (Mid: CHATBOT_MODEL); the judge is Anthropic's pinned model,
     // which none of the config's tiers name
-    const judgeModel = Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic];
+    const judgeModel = Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary;
     expect([CHATBOT_MODEL, "claude-haiku-4-5", "claude-fable-5-1"]).not.toContain(judgeModel);
     expect(Schemas.ZEvalJudgeApiResponse.parse(await judged.json())).toMatchObject({
       hasPassed: true,
       reason: "The reply confirms the new amount of 300.",
       provider: Schemas.ModelProviderEnum.Anthropic,
-      model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic],
+      model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
       promptVersion: Schemas.EVAL_JUDGE_PROMPT_VERSION,
     });
     const judgeRequest = gatewayRequests().at(-1);
     expect(judgeRequest?.body?.model).toBe(
-      Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic],
+      Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
     );
     // DEV_NOTE: The judge reads the transcript the backend built (the case's message, the write, the reply) and the
     // rubric, each fenced as data
@@ -1111,7 +1111,7 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(judgeCalls[0]).toMatchObject({
       evalRunId: run?.id,
       chatbotUserId: null,
-      model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic],
+      model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
     });
     expect(Number(run?.costUsd)).toBeGreaterThan(0);
     // DEV_NOTE: The chatbot's own calls ran on the config's model, the judge's on the pinned one
@@ -1256,7 +1256,7 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     const refusal = Schemas.ZEvalRefusalApiResponse.parse(await judged.json());
     expect(refusal.failure).toBe(Schemas.EvalRunStepFailureEnum.JudgeUnavailable);
     expect(refusal.message).toContain(
-      Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic],
+      Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
     );
 
     // DEV_NOTE: Not this run's conversation (or none at all) is NotFound, before any model call

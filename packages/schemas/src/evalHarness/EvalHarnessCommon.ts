@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
+import { type ConfigSpec, ModelTierEnum } from "../configSpec";
 import {
   EvalCaseMessageRoleEnum,
   ZEvalCaseExpectationsV2,
@@ -225,16 +226,39 @@ export const EVAL_REFUSAL_FAILURES = [
 
 // ─── The judge (M5-3) ───────────────────────────────────────────────────────
 
-// DEV_NOTE: The pinned LLM judge: one model per provider, fixed here, never the config under test's, so changing a
-// config's models never changes how it is graded. The provider is the run config's default tier's (the company has a
-// key for it, or the chatbot couldn't answer either). Each must be in MODEL_PRICES (EvalHarness.test.ts). The prompt
+// DEV_NOTE: The pinned LLM judge: two models per provider, fixed here, never chosen by the config under test, so changing
+// a config's models never changes how it is graded beyond picking between the two. The provider is the run config's
+// default tier's (the company has a key for it, or the chatbot couldn't answer either). The judge is the primary model,
+// unless a tier of the config names it: then the alternate, so a model never grades its own replies
+// (pickEvalJudgeModel). Each must be in MODEL_PRICES (EvalHarness.test.ts), and the two must differ. The prompt
 // (EvalJudgeProvider) is versioned: a change to it bumps EVAL_JUDGE_PROMPT_VERSION, so a verdict names the judge that
 // gave it. No temperature is set: the pinned models don't all accept one; the model and the prompt are the pin.
-export const EVAL_JUDGE_MODELS: Record<ModelProviderEnum, string> = {
-  [ModelProviderEnum.Anthropic]: "claude-sonnet-5-5",
-  [ModelProviderEnum.OpenAI]: "gpt-6.1-sol",
-  [ModelProviderEnum.Google]: "gemini-3.1-pro-preview",
-};
+export const EVAL_JUDGE_MODELS: Record<ModelProviderEnum, { primary: string; alternate: string }> =
+  {
+    [ModelProviderEnum.Anthropic]: { primary: "claude-sonnet-5-5", alternate: "claude-opus-5-5" },
+    [ModelProviderEnum.OpenAI]: { primary: "gpt-6.1-sol", alternate: "gpt-6-astra" },
+    [ModelProviderEnum.Google]: {
+      primary: "gemini-3.1-pro-preview",
+      alternate: "gemini-3.8-flash",
+    },
+  };
+
+// DEV_NOTE: The judge for a run config's routing, pure: its default tier's provider, and of that provider's two pinned
+// models the first one no tier of the routing names. A config that names both gets the one its default tier doesn't
+// answer with, so the judge is never the model that answers by default.
+export function pickEvalJudgeModel(routing: ConfigSpec["routing"]): {
+  provider: ModelProviderEnum;
+  model: string;
+} {
+  const { provider, model: answering } = routing[routing.defaultTier];
+  const { primary, alternate } = EVAL_JUDGE_MODELS[provider];
+  const named = new Set(
+    Object.values(ModelTierEnum).map((tier) => `${routing[tier].provider}:${routing[tier].model}`),
+  );
+  const unused = [primary, alternate].find((model) => !named.has(`${provider}:${model}`));
+  return { provider, model: unused ?? (primary === answering ? alternate : primary) };
+}
+
 export const EVAL_JUDGE_PROMPT_VERSION = 1;
 export const EVAL_JUDGE_REASON_MAX_CHARS = 600;
 // DEV_NOTE: The judge's view of an attempt, in characters (about 30k tokens): inside every pinned model's context with

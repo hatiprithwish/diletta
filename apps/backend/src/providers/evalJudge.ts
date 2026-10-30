@@ -9,7 +9,7 @@ import { ModelUnavailableError } from "@/providers/modelCallRecording";
 const FENCE_TAG = /<(\s*\/?\s*(?:transcript|message|tool_call|rubric)\b)/gi;
 
 // DEV_NOTE: The pinned LLM judge (M5-3): does an eval attempt's last reply meet the case's rubric. The model comes from
-// the model router on the company's key (taskType EvalJudge, the pinned model of Schemas.EVAL_JUDGE_MODELS, budget
+// the model router on the company's key (taskType EvalJudge, the pinned model of Schemas.pickEvalJudgeModel, budget
 // held, cost on the run); this provider only builds the prompt, asks for a structured verdict and holds the answer to
 // Schemas.ZEvalJudgeOutput. Never throws. The prompt is versioned: any change here bumps
 // Schemas.EVAL_JUDGE_PROMPT_VERSION, so a verdict always names the judge that gave it.

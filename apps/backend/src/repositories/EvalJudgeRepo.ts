@@ -15,9 +15,10 @@ import * as Schemas from "@app/schemas";
 //   2. The attempt is read from its DO (EvalTranscriptsRepo.read), never taken from the harness, and graded on the
 //      judge's view (EvalTranscriptProvider.judgeView: every tool call, the last reply whole, held to the model-safe
 //      budget).
-//   3. The judge is the pinned model (Schemas.EVAL_JUDGE_MODELS) of the run config's default tier's provider, never a
-//      model of the config under test, called through the model router: the company's key, the company budget (no
-//      per-user caps: an eval has none), the run's id (its cost adds to the run), the attempt's conversation.
+//   3. The judge is one of the two pinned models (Schemas.EVAL_JUDGE_MODELS) of the run config's default tier's
+//      provider, the one no tier of the config names (Schemas.pickEvalJudgeModel: a model never grades its own
+//      replies), called through the model router: the company's key, the company budget (no per-user caps: an eval
+//      has none), the run's id (its cost adds to the run), the attempt's conversation.
 // Any router, provider or answer failure is JudgeUnavailable (503): the harness stops the run on it, so a case with a
 // rubric never passes ungraded. Transcript, rubric and answer stay out of every log.
 export default class EvalJudgeRepo {
@@ -64,8 +65,8 @@ export default class EvalJudgeRepo {
       return refuse(read.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, read.message);
     }
 
-    const { provider } = source.routing[source.routing.defaultTier];
-    const pinned = { provider, model: Schemas.EVAL_JUDGE_MODELS[provider] };
+    const pinned = Schemas.pickEvalJudgeModel(source.routing);
+    const { provider } = pinned;
     const routed = await this.modelRouterRepo.getModel({
       companyId,
       chatbotId: source.chatbotId,
