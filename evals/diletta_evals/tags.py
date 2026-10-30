@@ -4,13 +4,19 @@ records, and a readback asserts only on its own.
 """
 
 import secrets
+import typing
 
-# packages/schemas EVAL_CASE_TAG_PLACEHOLDER (evals/schemas/eval-case-tag.schema.json)
-CASE_TAG_PLACEHOLDER = "{case.tag}"
+from diletta_evals.types.eval_case_tag import EvalCaseTag
+
+# packages/schemas EVAL_CASE_TAG_PLACEHOLDER, read from the generated type (evals/schemas/eval-case-tag.schema.json)
+CASE_TAG_PLACEHOLDER: str = typing.get_args(EvalCaseTag.model_fields["root"].annotation)[0]
+# DEV_NOTE: A tag is exactly as long as the placeholder, so filling it in never makes a text longer than the case's
+# own (a message at the length limit stays valid): "t" and 9 hex digits (36 random bits)
+CASE_TAG_LENGTH = len(CASE_TAG_PLACEHOLDER)
 
 
 def new_case_tag() -> str:
-    return f"t{secrets.token_hex(5)}"
+    return f"t{secrets.token_hex(CASE_TAG_LENGTH)[: CASE_TAG_LENGTH - 1]}"
 
 
 def fill_case_tag(value: object, tag: str) -> object:

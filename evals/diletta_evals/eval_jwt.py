@@ -10,11 +10,13 @@ import time
 import jwt
 from jwt.algorithms import ECAlgorithm
 
-# packages/schemas EVAL_JWT_ISSUER / EVAL_JWT_AUDIENCE: the worker refuses anything else
-EVAL_JWT_ISSUER = "diletta-eval-harness"
-EVAL_JWT_AUDIENCE = "diletta-eval"
-# Well under EVAL_JWT_MAX_LIFETIME_SECONDS (300): a token outlives one request only
+# The worker refuses any other iss / aud
+from diletta_evals.constants import EVAL_JWT_AUDIENCE, EVAL_JWT_ISSUER, EVAL_JWT_MAX_LIFETIME_SECONDS
+
+# Well under EVAL_JWT_MAX_LIFETIME_SECONDS: a token outlives one request only
 EVAL_JWT_LIFETIME_SECONDS = 120
+if EVAL_JWT_LIFETIME_SECONDS > EVAL_JWT_MAX_LIFETIME_SECONDS:
+    raise RuntimeError("The eval JWT's lifetime is over the worker's maximum")
 
 
 def sign_eval_jwt(

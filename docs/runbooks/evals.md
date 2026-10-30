@@ -105,7 +105,7 @@ pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project eva
 
 ## Changing the API
 
-The request and answer shapes are Zod schemas in `packages/schemas/src/evalHarness/`, exported to `evals/schemas/eval-api.schema.json`, with Python types generated in `evals/diletta_evals/types/eval_api.py`. After a change:
+The request and answer shapes are Zod schemas in `packages/schemas/src/evalHarness/`, exported to `evals/schemas/eval-api.schema.json`, with Python types generated in `evals/diletta_evals/types/eval_api.py`. The constants no message carries (the eval JWT's `iss` / `aud` / lifetime, the headers, the test host's token lifetime) are `ZEvalHarnessConstants`, exported as literals to `eval-constants.schema.json` and read by `diletta_evals/constants.py`; the grader's limits come from the generated grader output type. Nothing is copied into Python by hand. After a change:
 
 ```bash
 pnpm --filter @app/schemas schema:export && pnpm evals:types && pnpm evals:check

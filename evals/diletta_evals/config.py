@@ -8,6 +8,10 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 
+from cryptography.hazmat.primitives.asymmetric import ec
+from jwt.algorithms import ECAlgorithm
+from jwt.exceptions import InvalidKeyError
+
 
 class ConfigError(Exception):
     """A setting is missing or unreadable."""
@@ -55,6 +59,13 @@ def load_config() -> HarnessConfig:
         raise ConfigError("EVAL_JWT_PRIVATE_KEY is not a JWK (JSON)") from error
     if not isinstance(private_jwk, dict) or not private_jwk.get("kid") or "d" not in private_jwk:
         raise ConfigError("EVAL_JWT_PRIVATE_KEY must be a private JWK with a kid")
+    # DEV_NOTE: The worker verifies ES256 only: the key must be a P-256 private key, checked here, not at the first call
+    try:
+        key = ECAlgorithm.from_jwk(json.dumps(private_jwk))
+    except (InvalidKeyError, ValueError, TypeError) as error:
+        raise ConfigError("EVAL_JWT_PRIVATE_KEY is not an EC private JWK") from error
+    if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
+        raise ConfigError("EVAL_JWT_PRIVATE_KEY must be a P-256 (ES256) private key")
 
     raw_kind = os.environ.get("EVAL_HOST_KIND", HostKind.TEST_HOST.value).strip()
     try:

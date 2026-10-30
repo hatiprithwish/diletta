@@ -3,7 +3,8 @@
     uv run --project evals python -m diletta_evals run --config <chatbotConfigPublicId> [--k 3]
     uv run --project evals python -m diletta_evals keygen [--kid <kid>]
 
-run: exit 0 when the run passed, 1 when it failed, 2 when it couldn't run (settings, backend, host).
+run: exit 0 when the run passed, 1 when it ran and failed (the chatbot regressed), 2 when it couldn't run: settings,
+the backend or the host, or any error that stopped the run before its verdict (never read as the chatbot failing).
 keygen: a new platform eval key; the private JWK goes to the harness's EVAL_JWT_PRIVATE_KEY, the JWKS to the worker's
 EVAL_JWT_PUBLIC_JWKS secret.
 """
@@ -14,17 +15,23 @@ import sys
 from datetime import UTC, datetime
 
 import httpx
+from annotated_types import Le
 
-from diletta_evals.client import EvalApiClient, EvalApiError
+from diletta_evals.client import EvalApiClient
 from diletta_evals.config import ConfigError, load_config
 from diletta_evals.eval_jwt import generate_key_pair
 from diletta_evals.hosts import host_login_for
-from diletta_evals.hosts.testhost import HostLoginError
 from diletta_evals.runner import EvalRunner
 from diletta_evals.types import eval_api
 
-# packages/schemas EVAL_RUN_MAX_K
-MAX_K = 10
+EXIT_PASSED = 0
+EXIT_FAILED = 1
+EXIT_COULD_NOT_RUN = 2
+
+# packages/schemas EVAL_RUN_MAX_K, read from the generated type
+MAX_K = next(
+    meta.le for meta in eval_api.CreateEvalRunApiRequest.model_fields["k"].metadata if isinstance(meta, Le)
+)
 TRIGGERS = {
     "manual": eval_api.Trigger.number_2,
     "gate": eval_api.Trigger.number_1,
@@ -37,15 +44,17 @@ def _run(args: argparse.Namespace) -> int:
         config = load_config()
     except ConfigError as error:
         sys.stderr.write(f"{error}\n")
-        return 2
+        return EXIT_COULD_NOT_RUN
     with httpx.Client() as http:
         try:
             runner = EvalRunner(EvalApiClient(config, http), host_login_for(config, http))
             summary = runner.run(config_id=args.config, k=args.k, trigger=TRIGGERS[args.trigger])
-        except (ConfigError, EvalApiError, HostLoginError) as error:
-            sys.stderr.write(f"The run couldn't finish: {error}\n")
-            return 2
-    return 0 if summary.has_passed else 1
+        except Exception as error:
+            # DEV_NOTE: Every error that stops a run is "couldn't run" (CI must never read it as a regression); the
+            # expected ones (settings, backend, host) say why, anything else names its type
+            sys.stderr.write(f"The run couldn't finish: {type(error).__name__}: {error}\n")
+            return EXIT_COULD_NOT_RUN
+    return EXIT_PASSED if summary.has_passed else EXIT_FAILED
 
 
 def _keygen(args: argparse.Namespace) -> int:

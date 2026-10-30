@@ -2,6 +2,8 @@
 
 from diletta_evals.graders import (
     JUDGE_NOT_AVAILABLE,
+    LABEL_MAX_CHARS,
+    MAX_CHECKS,
     ReadbackOutcome,
     failed_attempt,
     grade_attempt,
@@ -176,4 +178,48 @@ def test_a_rubric_or_an_unfinished_turn_stops_grading_with_an_error() -> None:
 def test_an_attempt_that_never_ran_fails_with_its_reason() -> None:
     graded = failed_attempt("The attempt didn't run: HTTP 503: The chatbot can't answer")
     assert not graded.has_passed
+    EvalGraderOutput.model_validate(graded.grader_output)
+
+
+def test_a_forbidden_tool_fails_whatever_became_of_the_call() -> None:
+    for status in ("error", "blocked", "undone", None):
+        graded = grade_attempt(
+            expectations(forbiddenTools=["delete_record"], rules=[{"kind": "contains", "text": "Done"}]),
+            attempt(call("delete_record", {"recordId": "r1"}, status=status)),
+            no_readback,
+        )
+        assert not graded.has_passed
+        [forbidden] = [check for check in graded.grader_output["checks"] if check["kind"] == "forbidden_tool"]
+        assert not forbidden["hasPassed"]
+
+
+def test_an_unknown_rule_kind_stops_grading_instead_of_reading_as_doesnt_contain() -> None:
+    graded = grade_attempt(
+        expectations(rules=[{"kind": "starts_with", "text": "Done"}]), attempt(), no_readback
+    )
+    assert not graded.has_passed
+    assert "kind" in str(graded.grader_output["error"])
+
+
+def test_cuts_text_by_utf16_units_as_the_backend_counts() -> None:
+    label = "😀" * 150
+    graded = grade_attempt(expectations(rules=[{"kind": "contains", "text": label}]), attempt(), no_readback)
+    EvalGraderOutput.model_validate(graded.grader_output)
+    [check] = graded.grader_output["checks"]
+    assert len(str(check["label"]).encode("utf-16-le")) // 2 <= LABEL_MAX_CHARS
+    assert str(check["label"]).endswith("…")
+
+
+def test_the_most_checks_a_valid_case_can_have_still_fit_the_grader_output() -> None:
+    graded = grade_attempt(
+        expectations(
+            rules=[{"kind": "contains", "text": f"r{i}"} for i in range(20)],
+            toolCalls=[{"toolName": f"tool_{i}", "args": {}} for i in range(10)],
+            forbiddenTools=[f"never_{i}" for i in range(20)],
+            readbacks=[{"toolName": f"tool_{i}", "expect": {"a": 1}} for i in range(10)],
+        ),
+        attempt(),
+        no_readback,
+    )
+    assert len(graded.grader_output["checks"]) == 60 <= MAX_CHECKS
     EvalGraderOutput.model_validate(graded.grader_output)

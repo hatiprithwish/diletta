@@ -7,7 +7,7 @@ import {
   ZEvalCaseInputV1,
   ZEvalCaseTag,
 } from "./evalCases";
-import { ZEvalApiContract } from "./evalHarness";
+import { ZEvalApiContract, ZEvalHarnessConstants } from "./evalHarness";
 import {
   EVAL_GRADER_OUTPUT_SCHEMA_VERSION,
   EVAL_TRANSCRIPT_SCHEMA_VERSION,
@@ -20,7 +20,8 @@ import {
 // (jsonSchemaExports.test.ts) fails when a committed file no longer matches its Zod schema. io "input" = what a
 // client sends. M4-8 adds what the harness writes for the Tests page (grader output, transcript); M5-1 the eval case
 // (input, expectations at the current version: the harness gets cases already upgraded, and the placeholder its
-// messages and values carry); M5-2 the /eval/* API (every request and answer, one model per message). evals/diletta_evals/types/ is generated from these files (`pnpm evals:types`), and
+// messages and values carry); M5-2 the /eval/* API (every request and answer, one model per message) and the
+// constants the harness needs that no message carries (each a literal, read from its generated type). evals/diletta_evals/types/ is generated from these files (`pnpm evals:types`), and
 // `pnpm evals:check` fails when it no longer matches them or the samples in jsonSchemaContractSamples.ts.
 // The JSON Schema is NOT the full contract: refinements (superRefine) have no JSON Schema form and are dropped.
 // For the config spec that is: no duplicate procedure / tool / knowledge source, approval rules name only pinned
@@ -82,6 +83,13 @@ export const JSON_SCHEMA_EXPORTS: JsonSchemaExport[] = [
     description:
       "The placeholder an eval case's messages, rules and expected values carry; the harness fills it with one unique token per attempt",
     schema: ZEvalCaseTag,
+  },
+  {
+    fileName: "eval-constants.schema.json",
+    title: "EvalHarnessConstants",
+    description:
+      "Constants the harness needs that no request or answer carries (the eval JWT, headers, the test host's token), each a literal: read by the harness, never sent",
+    schema: ZEvalHarnessConstants,
   },
 ];
 

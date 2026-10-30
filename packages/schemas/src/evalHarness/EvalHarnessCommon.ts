@@ -10,6 +10,10 @@ import {
   type HostCallResponse,
   type HostConnection,
 } from "../hostAdapter/HostAdapterCommon";
+import {
+  TEST_HOST_ADMIN_HEADER,
+  TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS,
+} from "../testHost/TestHostCommon";
 import { HostToolStatusEnum } from "../toolCalls/ToolCallsCommon";
 import { readValueAtPath } from "../toolDefinitions/ToolOpPlaceholders";
 import { compareReadback, type ReadbackExpectation } from "../toolDefinitions/ToolReadbackCompare";
@@ -295,3 +299,18 @@ export function checkEvalReadback(params: {
     reason: null,
   };
 }
+
+// DEV_NOTE: The constants the Python harness needs that no request or answer carries, each a literal so the JSON
+// Schema export (evals/schemas/eval-constants.schema.json) holds its value and the generated Python type reads it:
+// nothing is copied into Python by hand. Never sent.
+export const ZEvalHarnessConstants = z
+  .object({
+    evalJwtIssuer: z.literal(EVAL_JWT_ISSUER),
+    evalJwtAudience: z.literal(EVAL_JWT_AUDIENCE),
+    evalJwtMaxLifetimeSeconds: z.literal(EVAL_JWT_MAX_LIFETIME_SECONDS),
+    evalHostTokenHeader: z.literal(EVAL_HOST_TOKEN_HEADER),
+    testHostAdminHeader: z.literal(TEST_HOST_ADMIN_HEADER),
+    testHostTokenMaxLifetimeSeconds: z.literal(TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS),
+  })
+  .meta({ id: "EvalHarnessConstants" });
+export type EvalHarnessConstants = z.infer<typeof ZEvalHarnessConstants>;

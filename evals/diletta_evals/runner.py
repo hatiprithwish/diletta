@@ -1,10 +1,13 @@
 """One eval run (M5-2): start it, run every case k times (pass^k), grade each attempt, record it, then reset the
 staging host and finish the run.
 
-Attempts run one after another, each in its own conversation with a fresh {case.tag}. An attempt the backend refused
-(the chatbot couldn't answer, a budget said no) is recorded as failed with the reason, and the run goes on. Anything
-else that stops the run (the backend or host unreachable, a refused result) ends it Failed; the reset still runs
-first. The reset (the connection's reset_op) runs once, after the last attempt.
+Attempts run one after another, each in its own conversation with a fresh {case.tag}, each sent once (the backend
+refuses a repeat). An attempt the chatbot couldn't answer (the backend's failure ChatbotUnavailable or BudgetRefused)
+is recorded as failed with the reason, and the run goes on; a readback the backend refused (a 4xx) is a failed check
+of that attempt. Anything else stops the run: a backend ServerError, the backend or the host unreachable, a host
+login that fails. The run then still resets and ends Failed, and the error that stopped it is raised (the CLI exits 2:
+the run couldn't run, which is not the chatbot failing). The reset (the connection's reset_op) runs once, after the
+last attempt; a run whose reset didn't go through can't be Done.
 """
 
 import sys
@@ -12,6 +15,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import TextIO
+
+from pydantic import ValidationError
 
 from diletta_evals.client import EvalApi, EvalApiError
 from diletta_evals.graders import GradedAttempt, ReadbackOutcome, failed_attempt, grade_attempt
@@ -21,9 +26,9 @@ from diletta_evals.types import eval_api
 
 HARNESS_VERSION = version("diletta-evals")
 
-# The backend's answer to an attempt it couldn't start (EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP): the attempt fails,
-# the run goes on
-ATTEMPT_REFUSED_STATUSES = frozenset({500, 503})
+# DEV_NOTE: packages/schemas EvalAttemptFailureEnum: the attempt couldn't run because of the chatbot (it can't answer,
+# a budget said no), so it fails and the run goes on. Its ServerError is the backend's, and stops the run.
+ATTEMPT_REFUSED_FAILURES = frozenset({eval_api.Failure.ChatbotUnavailable, eval_api.Failure.BudgetRefused})
 
 
 @dataclass
@@ -52,26 +57,40 @@ class EvalRunner:
         run_id = started.run.publicId
         self._say(f"Run {run_id}: {len(started.cases)} cases × {k} attempts")
 
-        is_complete = False
+        failed_cases: list[str] = []
+        stopped_by: BaseException | None = None
         try:
             for case in started.cases:
+                has_case_passed = True
                 for attempt in range(1, k + 1):
                     graded = self._run_attempt(run_id, case, attempt)
+                    has_case_passed = has_case_passed and graded.has_passed
                     error = graded.grader_output.get("error")
                     self._say(
                         f"  {'PASS' if graded.has_passed else 'FAIL'} {case.name} (attempt {attempt})"
                         + (f": {error}" if error else "")
                     )
-            is_complete = True
-        finally:
-            # DEV_NOTE: A failed reset doesn't fail the results already graded, but the run can't count as Done:
-            # the next run would start from data this one left behind
-            try:
-                self._reset(run_id)
-            except EvalApiError as error:
-                self._say(f"The staging reset failed: {error}")
-                is_complete = False
-            finished = self._client.finish(run_id, eval_api.FinishEvalRunApiRequest(isComplete=is_complete))
+                if not has_case_passed:
+                    failed_cases.append(case.name)
+        except BaseException as error:
+            stopped_by = error
+
+        # DEV_NOTE: Whatever stopped the attempts, the staging data is put back and the run is ended, so it never stays
+        # Running. A reset that fails doesn't fail the results already graded, but the run can't count as Done: the
+        # next run would start from data this one left behind. If ending the run fails too, the error that stopped the
+        # run is the one raised (the other is printed), so the first cause is never hidden.
+        is_reset = self._reset(run_id)
+        try:
+            finished = self._client.finish(
+                run_id, eval_api.FinishEvalRunApiRequest(isComplete=stopped_by is None and is_reset)
+            )
+        except Exception as error:
+            if stopped_by is not None:
+                self._say(f"The run couldn't be ended: {error}")
+                raise stopped_by from None
+            raise
+        if stopped_by is not None:
+            raise stopped_by
 
         summary = RunSummary(
             run_id=run_id,
@@ -79,11 +98,14 @@ class EvalRunner:
             passed_case_count=finished.passAllKCount,
             has_passed=finished.hasPassed,
             cost_usd=finished.costUsd,
+            failed_cases=failed_cases,
         )
         self._say(
-            f"Run {run_id} {'passed' if summary.has_passed else 'failed'}: "
+            f"Run {run_id} {'passed' if summary.has_passed else 'failed'} ({finished.statusLabel.value}): "
             f"{summary.passed_case_count}/{summary.case_count} cases passed every attempt, ${summary.cost_usd}"
         )
+        for name in failed_cases:
+            self._say(f"  Failed: {name}")
         return summary
 
     def _run_attempt(self, run_id: str, case: eval_api.EvalHarnessCase, attempt: int) -> GradedAttempt:
@@ -102,7 +124,7 @@ class EvalRunner:
                 self._host.host_token(),
             )
         except EvalApiError as error:
-            if error.status not in ATTEMPT_REFUSED_STATUSES:
+            if error.failure not in ATTEMPT_REFUSED_FAILURES:
                 raise
             graded = failed_attempt(f"The attempt didn't run: {error}")
             self._record(run_id, case.publicId, attempt, graded, None)
@@ -111,17 +133,25 @@ class EvalRunner:
         attempt_json = answered.model_dump(mode="json")
 
         def read_back(call: Mapping[str, object], readback: Mapping[str, object]) -> ReadbackOutcome:
-            checked = self._client.read_back(
-                run_id,
-                eval_api.EvalReadbackApiRequest.model_validate(
-                    {
-                        "conversationId": answered.conversationId,
-                        "changeRequestId": call["changeRequestId"],
-                        "readback": readback,
-                    }
-                ),
-                self._host.host_token(),
-            )
+            try:
+                checked = self._client.read_back(
+                    run_id,
+                    eval_api.EvalReadbackApiRequest.model_validate(
+                        {
+                            "conversationId": answered.conversationId,
+                            "changeRequestId": call["changeRequestId"],
+                            "readback": readback,
+                        }
+                    ),
+                    self._host.host_token(),
+                )
+            except EvalApiError as error:
+                # DEV_NOTE: The backend refused this readback (the tool has no readback, the change isn't the run's):
+                # a failed check of this attempt, never the end of the run. Unreachable or 5xx (after the client's
+                # retries) stops the run.
+                if error.is_transient:
+                    raise
+                return ReadbackOutcome(verdict="unknown", fields=[], reason=f"The readback was refused: {error}")
             return ReadbackOutcome(
                 verdict=checked.verdict.value,
                 fields=[item.model_dump(mode="json") for item in checked.fields],
@@ -135,22 +165,33 @@ class EvalRunner:
     def _record(
         self, run_id: str, case_id: str, attempt: int, graded: GradedAttempt, latency_ms: int | None
     ) -> None:
-        self._client.record_result(
-            run_id,
-            eval_api.RecordEvalResultApiRequest.model_validate(
-                {
-                    "caseId": case_id,
-                    "attempt": attempt,
-                    "hasPassed": graded.has_passed,
-                    "graderOutput": graded.grader_output,
-                    "latencyMs": latency_ms,
-                }
-            ),
-        )
+        body = {
+            "caseId": case_id,
+            "attempt": attempt,
+            "hasPassed": graded.has_passed,
+            "graderOutput": graded.grader_output,
+            "latencyMs": latency_ms,
+        }
+        try:
+            request = eval_api.RecordEvalResultApiRequest.model_validate(body)
+        except ValidationError as error:
+            # DEV_NOTE: Grading produced an output the contract refuses (a harness bug): the attempt is recorded as
+            # failed with why, so the run still has its result
+            reason = f"The grader output is invalid: {error.error_count()} error(s), first at {error.errors()[0]['loc']}"
+            request = eval_api.RecordEvalResultApiRequest.model_validate(
+                {**body, "hasPassed": False, "graderOutput": failed_attempt(reason).grader_output}
+            )
+        self._client.record_result(run_id, request)
 
-    def _reset(self, run_id: str) -> None:
-        reset = self._client.reset(run_id, self._host.host_token())
+    def _reset(self, run_id: str) -> bool:
+        """The connection's reset_op, once; False (printed) when it didn't go through, whatever the reason."""
+        try:
+            reset = self._client.reset(run_id, self._host.host_token())
+        except Exception as error:
+            self._say(f"The staging reset failed: {error}")
+            return False
         self._say("Staging data reset" if reset.isReset else "The connection has no reset op")
+        return True
 
     def _say(self, line: str) -> None:
         self._out.write(f"{line}\n")

@@ -14,7 +14,15 @@ import {
   EvalCheckKindEnum,
   EvalTranscriptEntryKindEnum,
 } from "./evalResults";
-import { EvalReadbackVerdictEnum, EvalTurnStatusEnum } from "./evalHarness";
+import {
+  EVAL_HOST_TOKEN_HEADER,
+  EVAL_JWT_AUDIENCE,
+  EVAL_JWT_ISSUER,
+  EVAL_JWT_MAX_LIFETIME_SECONDS,
+  EvalReadbackVerdictEnum,
+  EvalTurnStatusEnum,
+} from "./evalHarness";
+import { TEST_HOST_ADMIN_HEADER, TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS } from "./testHost";
 import { EvalRunStatusIntEnum, EvalRunStatusLabelEnum, EvalRunTriggerIntEnum } from "./evalRuns";
 import { HostToolStatusEnum, ToolCallStatusIntEnum } from "./toolCalls";
 
@@ -184,6 +192,15 @@ const evalApi = {
   refusal: { isSuccess: false, message: "Forbidden", failure: "Forbidden" },
 };
 
+const evalConstants = {
+  evalJwtIssuer: EVAL_JWT_ISSUER,
+  evalJwtAudience: EVAL_JWT_AUDIENCE,
+  evalJwtMaxLifetimeSeconds: EVAL_JWT_MAX_LIFETIME_SECONDS,
+  evalHostTokenHeader: EVAL_HOST_TOKEN_HEADER,
+  testHostAdminHeader: TEST_HOST_ADMIN_HEADER,
+  testHostTokenMaxLifetimeSeconds: TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS,
+};
+
 export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamples> = {
   "config-spec.schema.json": {
     valid: [configSpec],
@@ -308,5 +325,12 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
   "eval-case-tag.schema.json": {
     valid: [EVAL_CASE_TAG_PLACEHOLDER],
     invalid: ["{case.id}", 1],
+  },
+  "eval-constants.schema.json": {
+    valid: [evalConstants],
+    invalid: [
+      { ...evalConstants, evalJwtAudience: "diletta-widget" },
+      { ...evalConstants, evalHostTokenHeader: undefined },
+    ],
   },
 };

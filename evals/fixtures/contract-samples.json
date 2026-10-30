@@ -3348,5 +3348,34 @@
       "{case.id}",
       1
     ]
+  },
+  "eval-constants.schema.json": {
+    "valid": [
+      {
+        "evalJwtIssuer": "diletta-eval-harness",
+        "evalJwtAudience": "diletta-eval",
+        "evalJwtMaxLifetimeSeconds": 300,
+        "evalHostTokenHeader": "X-Host-Token",
+        "testHostAdminHeader": "X-Test-Host-Admin",
+        "testHostTokenMaxLifetimeSeconds": 300
+      }
+    ],
+    "invalid": [
+      {
+        "evalJwtIssuer": "diletta-eval-harness",
+        "evalJwtAudience": "diletta-widget",
+        "evalJwtMaxLifetimeSeconds": 300,
+        "evalHostTokenHeader": "X-Host-Token",
+        "testHostAdminHeader": "X-Test-Host-Admin",
+        "testHostTokenMaxLifetimeSeconds": 300
+      },
+      {
+        "evalJwtIssuer": "diletta-eval-harness",
+        "evalJwtAudience": "diletta-eval",
+        "evalJwtMaxLifetimeSeconds": 300,
+        "testHostAdminHeader": "X-Test-Host-Admin",
+        "testHostTokenMaxLifetimeSeconds": 300
+      }
+    ]
   }
 }
