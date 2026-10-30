@@ -1,5 +1,9 @@
 import type { PageDALRequest } from "../common";
-import type { ChatbotConfig, ChatbotConfigSortColumn } from "./ChatbotConfigsCommon";
+import type {
+  ChatbotConfig,
+  ChatbotConfigSortColumn,
+  ChatbotConfigStatusIntEnum,
+} from "./ChatbotConfigsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // The chatbot's one published config (UNQ_chatbot_configs_chatbot_id_published).
@@ -57,6 +61,19 @@ export type ArchivePublishedChatbotConfigDALRequest = Pick<
   "companyId" | "chatbotId" | "updatedBy"
 >;
 
+// DEV_NOTE: The gate's moves (M5-4), one version from one of fromStatuses to status: Draft → Testing (an admin),
+// Testing → Ready / Draft (its gate run's finish), Testing / Ready → Draft (an admin). approvedByRunId is written with
+// it (the passed gate run on Ready, else null). updatedBy unset = no admin made the move (the harness's finish), and the
+// row keeps who last edited it. Zero rows (it left fromStatuses) is isNotFound.
+export type MoveChatbotConfigStatusDALRequest = Pick<
+  ChatbotConfig,
+  "companyId" | "chatbotId" | "id" | "status" | "approvedByRunId"
+> & {
+  fromStatuses: readonly ChatbotConfigStatusIntEnum[];
+  updatedBy?: string;
+};
+
+// DEV_NOTE: Ready → Published (the DAL matches Ready: a version never goes live without passing the gate)
 export type PublishChatbotConfigDALRequest = Pick<
   ChatbotConfig,
   "companyId" | "chatbotId" | "publicId" | "publishedBy"

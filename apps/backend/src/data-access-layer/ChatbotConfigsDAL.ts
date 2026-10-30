@@ -524,8 +524,59 @@ export default class ChatbotConfigsDAL {
     return response;
   }
 
-  // DEV_NOTE: Draft → Published (the DAL matches Draft). The caller archives the old Published version first, in the
-  // same transaction (UNQ_chatbot_configs_chatbot_id_published).
+  // DEV_NOTE: The gate's moves (M5-4). updated_at is clock_timestamp(), taken when the row is written (after its lock),
+  // the clock eval_runs.created_at uses too, so a gate run's finish can tell whether the run started after the version
+  // was sent to testing, whatever order the two transactions began in (ChatbotConfigsRepo.applyGateResult)
+  async moveChatbotConfigStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MoveChatbotConfigStatusDALRequest,
+  ) {
+    const response: Schemas.ChatbotConfigDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotConfigs.id, params.id),
+        eq(chatbotConfigs.chatbotId, params.chatbotId),
+        eq(chatbotConfigs.companyId, params.companyId),
+        inArray(chatbotConfigs.status, [...params.fromStatuses]),
+      ];
+      const [chatbotConfig] = await tx
+        .update(chatbotConfigs)
+        .set({
+          status: params.status,
+          approvedByRunId: params.approvedByRunId,
+          ...(params.updatedBy !== undefined ? { updatedBy: params.updatedBy } : {}),
+          updatedAt: sql`clock_timestamp()`,
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!chatbotConfig) {
+        response.message = "Chatbot config not found in that status";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Chatbot config status changed successfully";
+      response.chatbotConfig = chatbotConfig;
+    } catch (error) {
+      const message = "Unknown error in changing chatbot config status";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.MoveChatbotConfigStatus,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Ready → Published (the DAL matches Ready: a version goes live only through its gate). The caller archives the
+  // old Published version first, in the same transaction (UNQ_chatbot_configs_chatbot_id_published).
   async publishChatbotConfig(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.PublishChatbotConfigDALRequest,
@@ -538,7 +589,7 @@ export default class ChatbotConfigsDAL {
         eq(chatbotConfigs.publicId, params.publicId),
         eq(chatbotConfigs.chatbotId, params.chatbotId),
         eq(chatbotConfigs.companyId, params.companyId),
-        eq(chatbotConfigs.status, Schemas.ChatbotConfigStatusIntEnum.Draft),
+        eq(chatbotConfigs.status, Schemas.ChatbotConfigStatusIntEnum.Ready),
       ];
       const [chatbotConfig] = await tx
         .update(chatbotConfigs)
@@ -553,7 +604,7 @@ export default class ChatbotConfigsDAL {
         .returning();
 
       if (!chatbotConfig) {
-        response.message = "Draft chatbot config not found";
+        response.message = "Ready chatbot config not found";
         response.isNotFound = true;
         return response;
       }

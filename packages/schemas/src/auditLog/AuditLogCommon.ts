@@ -50,6 +50,10 @@ export enum AuditEntityActionEnum {
   MadeDefault = "made_default",
   Discarded = "discarded",
   Published = "published",
+  SentToTesting = "sent_to_testing",
+  MovedToDraft = "moved_to_draft",
+  PassedGate = "passed_gate",
+  FailedGate = "failed_gate",
   BudgetChanged = "budget_changed",
   Revoked = "revoked",
   Removed = "removed",
@@ -112,6 +116,10 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Created,
     AuditEntityActionEnum.Updated,
     AuditEntityActionEnum.Discarded,
+    AuditEntityActionEnum.SentToTesting,
+    AuditEntityActionEnum.MovedToDraft,
+    AuditEntityActionEnum.PassedGate,
+    AuditEntityActionEnum.FailedGate,
     AuditEntityActionEnum.Published,
   ],
 } as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;
@@ -119,19 +127,28 @@ export const AUDIT_ENTITY_ACTIONS = {
 export type AuditEntityActionFor<T extends AuditEntityTypeEnum> =
   (typeof AUDIT_ENTITY_ACTIONS)[T][number];
 
-// DEV_NOTE: The person behind a write, by internal admins.id: the signed-in company admin for a dashboard Repo (actor
-// Admin), the operator for an operator-only Repo (actor Operator, ToolDefinitionsRepo). Server-side only.
+// DEV_NOTE: Who made a write: the signed-in company admin for a dashboard Repo (actor Admin), the operator for an
+// operator-only Repo (actor Operator, ToolDefinitionsRepo), both by internal admins.id; or the platform itself (actor
+// System, no id) for a change no person made, on the entity types in AUDIT_SYSTEM_ENTITY_TYPES only (M5-4: a gate run's
+// finish moving a chatbot version). Server-side only.
 export const AUDIT_ACTOR_TYPES = [
   ActivityLogActorTypeIntEnum.Admin,
   ActivityLogActorTypeIntEnum.Operator,
+  ActivityLogActorTypeIntEnum.System,
 ] as const;
 
 export type AuditActorType = (typeof AUDIT_ACTOR_TYPES)[number];
 
-export interface AuditActor {
-  actorType: AuditActorType;
-  actorId: string;
-}
+export type AuditActor =
+  | {
+      actorType: ActivityLogActorTypeIntEnum.Admin | ActivityLogActorTypeIntEnum.Operator;
+      actorId: string;
+    }
+  | { actorType: ActivityLogActorTypeIntEnum.System; actorId: null };
+
+// DEV_NOTE: The entity types whose System rows are audit rows (the audit log reads them, the partial index
+// IDX_activity_log_company_id_created_at_audit covers them); every other System row is a runtime event, never shown
+export const AUDIT_SYSTEM_ENTITY_TYPES = [AuditEntityTypeEnum.ChatbotConfig] as const;
 
 // DEV_NOTE: What the log shows in its On column, stored at write time so a renamed or deleted entity still reads:
 // the chatbot's, source's, case's or tool's name, the document's title, the group's label, the ROI task. Names the

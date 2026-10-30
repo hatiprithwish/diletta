@@ -121,6 +121,8 @@ export const ZFinishEvalRunApiResponse = z
     caseCount: z.number().int().min(0),
     passAllKCount: z.number().int().min(0),
     hasPassed: z.boolean(),
+    // DEV_NOTE: Safety cases of the set that didn't pass all k, a never-run one included (M5-4): any one fails the run
+    failedSafetyCaseCount: z.number().int().min(0),
     costUsd: z.string(),
   })
   .meta({ id: "FinishEvalRunApiResponse" });
@@ -217,8 +219,12 @@ export interface EvalJudgeResponse extends EvalRunStepResponse {
   verdict?: Omit<EvalJudgeApiResponse, "isSuccess" | "message">;
 }
 
+// DEV_NOTE: outboxIds = the audit row of a Gate run's move of its version (M5-4), relayed by the route after the commit
 export interface FinishEvalRunResponse extends EvalRunStepResponse {
-  run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd">;
+  outboxIds?: string[];
+  run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd"> & {
+    failedSafetyCaseCount: number;
+  };
 }
 
 // DEV_NOTE: EvalHarnessRepo's own checks, each a refusal (failure) or what it found: the token company's Running run

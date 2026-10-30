@@ -31,24 +31,25 @@ Until M6-4 detects them automatically, the events are the company's quality issu
 
 ## Audit log
 
-The audit log is not its own table. It is the company's `activity_log` rows written by a person: an admin of the company (actor Admin) or a Diletta operator (actor Operator). Chatbot users' and the system's events stay out of it.
+The audit log is not its own table. It is the company's `activity_log` rows written by a person: an admin of the company (actor Admin) or a Diletta operator (actor Operator), plus the platform's own moves of a chatbot version (actor System, M5-4: a gate run's finish making it Ready or a draft again; `Schemas.AUDIT_SYSTEM_ENTITY_TYPES`). Chatbot users' and the system's other events stay out of it.
 
 ### What writes a row
 
 Every dashboard and operator write records one row, in the write's own transaction, through `recordAuditOrRollback` (`repositories/audit.ts`, over `AuditEventProvider.record`). It is a critical event (`activity_log` + `event_outbox`), so a write never commits without its row, and the row is relayed to the events queue after the commit like any other event (the queue consumer logs and acks it).
 
-| Where                       | Actions                                                                                | On                        |
-| --------------------------- | -------------------------------------------------------------------------------------- | ------------------------- |
-| Chatbots                    | Created, Renamed, Paused, Resumed                                                      | the chatbot's name        |
-| Knowledge sources           | Added, Edited (name or frequency), Paused, Resumed, Synced (Sync now / Retry), Deleted | the source's name         |
-| Knowledge files             | Uploaded, Removed                                                                      | the file's title          |
-| Unanswered questions        | Answered with a document, Dismissed                                                    | the group's label         |
-| Test cases                  | Created, Edited, Turned on, Turned off                                                 | the case's name           |
-| Minutes saved (Impact)      | Changed                                                                                | the task                  |
-| Tool definitions (operator) | Added, Edited, Created version, Activated, Disabled, Deleted draft                     | the tool's name + version |
-| Allowed origins             | Changed                                                                                | the environment           |
-| Encryption key              | Rotated                                                                                | the new version           |
-| Chat retention              | Changed                                                                                | the days                  |
+| Where                       | Actions                                                                                                                 | On                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Chatbots                    | Created, Renamed, Paused, Resumed                                                                                       | the chatbot's name           |
+| Knowledge sources           | Added, Edited (name or frequency), Paused, Resumed, Synced (Sync now / Retry), Deleted                                  | the source's name            |
+| Knowledge files             | Uploaded, Removed                                                                                                       | the file's title             |
+| Unanswered questions        | Answered with a document, Dismissed                                                                                     | the group's label            |
+| Test cases                  | Created, Edited, Turned on, Turned off                                                                                  | the case's name              |
+| Minutes saved (Impact)      | Changed                                                                                                                 | the task                     |
+| Tool definitions (operator) | Added, Edited, Created version, Activated, Disabled, Deleted draft                                                      | the tool's name + version    |
+| Allowed origins             | Changed                                                                                                                 | the environment              |
+| Encryption key              | Rotated                                                                                                                 | the new version              |
+| Chat retention              | Changed                                                                                                                 | the days                     |
+| Chatbot versions            | Started, Edited, Discarded, Sent to testing, Moved back to draft, Published; System: Passed its tests, Failed its tests | the chatbot's name + version |
 
 The writes that already had an admin event show up as they are: Flag a conversation, the Quality page's triage / fixed / dismissed / turned into a test, and Mark resolved on the Changes page.
 
@@ -61,7 +62,7 @@ Rules:
 
 ### Reading it
 
-`GET /dashboard/audit-log` (paged, newest first), `/count` and `/export` (at most 5,000 rows, `isTruncated` beyond) for the signed-in admin's company (`AuditLogRead`). A partial index, `IDX_activity_log_company_id_created_at_audit` (company, created_at) where the actor is an admin or operator, serves all three without reading the company's other events.
+`GET /dashboard/audit-log` (paged, newest first), `/count` and `/export` (at most 5,000 rows, `isTruncated` beyond) for the signed-in admin's company (`AuditLogRead`). A partial index, `IDX_activity_log_company_id_created_at_audit` (company, created_at) where the actor is an admin or operator, (and the System rows of the audit's system entity types, M5-4) serves all three without reading the company's other events.
 
 The migration that adds it (`20261025115726_diletta`) is a plain `CREATE INDEX` on the partitioned parent: it builds the index on every partition while holding a SHARE lock, so `activity_log` inserts (every critical event) wait until it finishes. That is accepted while the table is small. If a deploy ever has to add an index to a large `activity_log`, build it without blocking instead: `CREATE INDEX … ON ONLY activity_log …`, then `CREATE INDEX CONCURRENTLY` on each partition (outside a transaction), then `ALTER INDEX … ATTACH PARTITION` for each.
 

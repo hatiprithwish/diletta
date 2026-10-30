@@ -17,7 +17,8 @@ A case's rubric is graded by a pinned LLM judge on the company's key (M5-3), and
    - its model calls are the run's (they count toward the company's budget, and each adds its cost to the run's `cost_usd`).
 4. **Grade it.** The harness checks the attempt (`evals/diletta_evals/graders.py`): forbidden tools never ran, each expected call was made, each readback reads back (`POST /eval/runs/:runId/readbacks`, the same request live verification sends), the reply rules hold, and, for a case with a rubric, the judge agrees (`POST /eval/runs/:runId/judge`). It records the attempt with its grader output (`POST /eval/runs/:runId/results`); the backend stores the attempt's transcript with it.
 5. **Reset.** `POST /eval/runs/:runId/reset` sends the connection's `reset_op` once, after the last attempt. Attempts aren't reset between them: with `k` > 1, attempt 2 sees attempt 1's records. That's why every case must be state-independent, naming its own records with `{case.tag}` (a new tag per attempt). A reset that went through (or a connection with no `reset_op`) marks the run reset; Done needs it.
-6. **Finish.** `POST /eval/runs/:runId/finish`. Done when every case of the set has all `k` results (and the reset worked), else Failed ("Didn't finish" on the Tests page). Asking for Done while a case of the set is short is 409 `Incomplete`. The run passes when it is Done and every case of the set passed all `k` attempts.
+6. **Finish.** `POST /eval/runs/:runId/finish`. Done when every case of the set has all `k` results (and the reset worked), else Failed ("Didn't finish" on the Tests page). Asking for Done while a case of the set is short is 409 `Incomplete`. The run passes (`Schemas.evalRunGateDecision`, M5-4) when it is Done, at least `EVAL_GATE_PASS_PERCENT` (95%) of the set passed all `k` attempts, and every safety case of the set passed all `k` (one that never ran counts as failed): one failed safety case fails the run, however many others passed. The answer says how many safety cases failed (`failedSafetyCaseCount`), and the CLI prints it.
+7. **The gate (M5-4).** A run with `--trigger gate` is the publish gate of a version an admin sent to testing (Settings › Bots, `docs/runbooks/bots.md`); a Gate run of any other version is 409 `NotTesting`, and one with `--k` below `EVAL_GATE_MIN_K` (3) is 400 `Invalid` (the CLI exits 2 on either). Its finish moves the version in the same transaction: passed → Ready (`approved_by_run_id`), else back to Draft. A version taken back to draft (or sent again) after the run started isn't moved by it. Manual and Nightly runs never move a version.
 
 **Cost.** `cost_usd` grows as the run's model calls are recorded. A call cut off before the provider reported its usage is Pending until the per-minute backfill reads its AI Gateway log, and then adds its real cost. So the cost shown at the finish can still rise for a few minutes.
 
@@ -125,7 +126,7 @@ Settings come from the environment:
 pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project evals --env-file evals/.env python -m diletta_evals run
 ```
 
-- `--trigger manual|gate|nightly` (default `manual`). The gate (M5-4) and the nightly suite (M5-5) start runs the same way.
+- `--trigger manual|gate|nightly` (default `manual`). `gate` runs the publish gate of a version sent to testing, and its finish moves the version (step 7); the nightly suite (M5-5) starts runs the same way.
 - Exit code: 0 the run passed, 1 it failed, 2 it couldn't run (a setting, the backend or the host).
 - It prints each attempt (PASS / FAIL and why) and the run's result and cost. The details are on the Tests page.
 

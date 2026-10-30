@@ -253,6 +253,7 @@ class FinishEvalRunApiResponse(BaseModel):
     caseCount: Annotated[int, Field(ge=0, le=9007199254740991)]
     passAllKCount: Annotated[int, Field(ge=0, le=9007199254740991)]
     hasPassed: bool
+    failedSafetyCaseCount: Annotated[int, Field(ge=0, le=9007199254740991)]
     costUsd: str
 
 
@@ -267,6 +268,7 @@ class Failure(StrEnum):
     Invalid = "Invalid"
     Duplicate = "Duplicate"
     Incomplete = "Incomplete"
+    NotTesting = "NotTesting"
     HostFailed = "HostFailed"
     JudgeUnavailable = "JudgeUnavailable"
 

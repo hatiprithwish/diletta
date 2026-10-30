@@ -188,14 +188,16 @@ export const EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP: Record<EvalAttemptFailureEnum
 // DEV_NOTE: What a run step refuses with: the run, config, case or conversation isn't the token company's or this run's
 // (NotFound), the run isn't Running any more (NotRunning), a body that doesn't fit the run (Invalid: an attempt past
 // k, a readback of another tool, a config that doesn't load, no case or too many to run), an attempt already started
-// or graded (Duplicate), a Done run still missing an attempt or its reset (Incomplete), the host reset failed
-// (HostFailed), the pinned judge gave no verdict (JudgeUnavailable, M5-3: the harness stops the run on it)
+// or graded (Duplicate), a Done run still missing an attempt or its reset (Incomplete), a Gate run of a config that
+// isn't Testing (NotTesting, M5-4: an admin sends it to testing first), the host reset failed (HostFailed), the pinned
+// judge gave no verdict (JudgeUnavailable, M5-3: the harness stops the run on it)
 export enum EvalRunStepFailureEnum {
   NotFound = "NotFound",
   NotRunning = "NotRunning",
   Invalid = "Invalid",
   Duplicate = "Duplicate",
   Incomplete = "Incomplete",
+  NotTesting = "NotTesting",
   HostFailed = "HostFailed",
   JudgeUnavailable = "JudgeUnavailable",
   ServerError = "ServerError",
@@ -210,6 +212,7 @@ export const EVAL_RUN_STEP_FAILURE_HTTP_STATUS_MAP: Record<
   [EvalRunStepFailureEnum.Invalid]: 400,
   [EvalRunStepFailureEnum.Duplicate]: 409,
   [EvalRunStepFailureEnum.Incomplete]: 409,
+  [EvalRunStepFailureEnum.NotTesting]: 409,
   [EvalRunStepFailureEnum.HostFailed]: 502,
   [EvalRunStepFailureEnum.JudgeUnavailable]: 503,
   [EvalRunStepFailureEnum.ServerError]: 500,

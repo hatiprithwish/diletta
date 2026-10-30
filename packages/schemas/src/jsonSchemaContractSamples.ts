@@ -202,6 +202,7 @@ const evalApi = {
     caseCount: 1,
     passAllKCount: 1,
     hasPassed: true,
+    failedSafetyCaseCount: 0,
     costUsd: "0.012000",
   },
   refusal: { isSuccess: false, message: "Forbidden", failure: "Forbidden" },

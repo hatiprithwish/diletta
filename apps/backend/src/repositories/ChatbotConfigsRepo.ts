@@ -3,12 +3,15 @@ import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgre
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
+import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import Constants from "@/config/Constants";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import EvalRunsProvider from "@/providers/evalRuns";
+import AppLogger from "@/providers/logger";
+import { adminAuditActor, recordAuditOrRollback, systemAuditActor } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -28,24 +31,30 @@ type NormalizedBody =
 // DEV_NOTE: Tenant Repo for Settings › Bots (M4-10): a chatbot's versions, its one draft and the publish. companyId is
 // the internal companies.id, resolved server-side; chatbots and versions are addressed by publicId, and every version is
 // read within its chatbot. Lifecycle: a draft (Draft) is created new or as a copy of any version (rollback = copy), saved
-// in place, discarded (→ Archived: configs are never deleted, runs and conversations point at them) or published
-// (→ Published, the previous Published → Archived). One open version (Draft, Testing, Ready) per chatbot: create, copy
-// and publish take the chatbot row's lock; save and discard lock the version row and act only on a Draft (the DAL
-// matches Draft), which is enough for them. Bodies are written only through normalizeConfigBody and read for the editor through
+// in place, discarded (→ Archived: configs are never deleted, runs and conversations point at them) or sent to testing
+// (→ Testing, M5-4). Its gate run's finish (EvalHarnessRepo) moves it to Ready (approved_by_run_id) or back to Draft; an
+// admin can take a Testing or Ready version back to Draft. Only a Ready version is published (→ Published, the previous
+// Published → Archived), on its passed gate run, which must have run every active safety case. One open version (Draft,
+// Testing, Ready) per chatbot: create, copy and publish take the chatbot row's lock; save, discard and the gate moves
+// lock the version row and act only from their statuses (the DAL matches them), which is enough for them. The gate run's
+// move (applyGateResult) runs in the eval harness's finish transaction, so the whole lifecycle stays in this Repo. Bodies are written only through normalizeConfigBody and read for the editor through
 // readConfigBody (no platform defaults). Every write records its audit row in its own transaction.
 export default class ChatbotConfigsRepo {
   private db: NodePgDatabase;
   private dal: ChatbotConfigsDAL;
   private chatbotsDal: ChatbotsDAL;
   private companySecretsDal: CompanySecretsDAL;
+  private evalCasesDal: EvalCasesDAL;
   private evalRunsDal: EvalRunsDAL;
   private toolDefinitionsDal: ToolDefinitionsDAL;
 
-  constructor(env: Env) {
-    this.db = getDbClient(env);
+  // DEV_NOTE: db = the caller's client when it has one (EvalHarnessRepo, which hands it its finish transaction)
+  constructor(env: Env, db: NodePgDatabase = getDbClient(env)) {
+    this.db = db;
     this.dal = new ChatbotConfigsDAL();
     this.chatbotsDal = new ChatbotsDAL();
     this.companySecretsDal = new CompanySecretsDAL();
+    this.evalCasesDal = new EvalCasesDAL();
     this.evalRunsDal = new EvalRunsDAL();
     this.toolDefinitionsDal = new ToolDefinitionsDAL();
   }
@@ -134,6 +143,27 @@ export default class ChatbotConfigsRepo {
       chatbotConfigIds: [row.id],
     });
     if (!runs.isSuccess || !runs.runs) return { isSuccess: false, message: runs.message };
+    // DEV_NOTE: The safety banner reads the newest Gate run, the one that decided the version's way, never a Manual or
+    // Nightly run after it
+    const gateRuns = await this.evalRunsDal.getLatestEvalRunsByConfig(tx, {
+      companyId: params.companyId,
+      chatbotConfigIds: [row.id],
+      trigger: Schemas.EvalRunTriggerIntEnum.Gate,
+    });
+    if (!gateRuns.isSuccess || !gateRuns.runs) {
+      return { isSuccess: false, message: gateRuns.message };
+    }
+    const gateRun = gateRuns.runs[0] ?? null;
+    const safety = await this.evalRunsDal.getEvalRunSafetyCases(tx, {
+      companyId: params.companyId,
+      evalRunIds: gateRun ? [gateRun.id] : [],
+    });
+    if (!safety.isSuccess || !safety.safetyCases) {
+      return { isSuccess: false, message: safety.message };
+    }
+    const tally = gateRun
+      ? EvalRunsProvider.safetyTallies([gateRun], safety.safetyCases).get(gateRun.id)
+      : undefined;
 
     const read = Schemas.readConfigBody({ schemaVersion: row.schemaVersion, body: row.body });
     return {
@@ -144,20 +174,23 @@ export default class ChatbotConfigsRepo {
         chatbotPublicId: params.chatbot.publicId,
         body: read.isSuccess && read.body ? read.body : null,
         bodyIssue: read.isSuccess ? null : (read.message ?? "The stored config doesn't read"),
+        gateRunPublicId: gateRun?.publicId ?? null,
+        failedSafetyCaseCount: tally ? tally.totalCount - tally.passedCount : 0,
       },
     };
   }
 
+  // DEV_NOTE: adminId null = no person made the write (a gate run's move): a System row
   private async audit(
     tx: Tx,
-    params: { companyId: string; adminId: string },
-    chatbot: Schemas.Chatbot,
+    params: { companyId: string; adminId: string | null },
+    chatbot: Pick<Schemas.Chatbot, "name">,
     chatbotConfig: Schemas.ChatbotConfig,
     entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ChatbotConfig>,
   ): Promise<string> {
     return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: adminAuditActor(params.adminId),
+      actor: params.adminId === null ? systemAuditActor() : adminAuditActor(params.adminId),
       entityType: Schemas.AuditEntityTypeEnum.ChatbotConfig,
       entityAction,
       entity: chatbotConfig,
@@ -261,11 +294,18 @@ export default class ChatbotConfigsRepo {
     );
   }
 
-  // DEV_NOTE: The version locked and checked Draft (save, discard, publish): a write never lands on a version that left
-  // Draft. Refused with NotDraft (refusal = the words for this write).
-  private async lockDraft(
+  // DEV_NOTE: The version locked and checked to be in one of statuses: a write never lands on a version that left them.
+  // Refused with failure (refusal = the words for this write).
+  private async lockVersion(
     tx: Tx,
-    params: { companyId: string; chatbot: Schemas.Chatbot; publicId: string; refusal: string },
+    params: {
+      companyId: string;
+      chatbot: Schemas.Chatbot;
+      publicId: string;
+      statuses: readonly Schemas.ChatbotConfigStatusIntEnum[];
+      failure: Schemas.ChatbotConfigFailureEnum;
+      refusal: string;
+    },
   ): Promise<
     | { isSuccess: true; chatbotConfig: Schemas.ChatbotConfig }
     | { isSuccess: false; response: Schemas.ChatbotConfigWriteApiResponse }
@@ -282,13 +322,44 @@ export default class ChatbotConfigsRepo {
         response: { isSuccess: false, message: found.message, isNotFound: found.isNotFound },
       };
     }
-    if (found.chatbotConfig.status !== Schemas.ChatbotConfigStatusIntEnum.Draft) {
-      return {
-        isSuccess: false,
-        response: this.refuse(Schemas.ChatbotConfigFailureEnum.NotDraft, params.refusal),
-      };
+    if (!params.statuses.includes(found.chatbotConfig.status)) {
+      return { isSuccess: false, response: this.refuse(params.failure, params.refusal) };
     }
     return { isSuccess: true, chatbotConfig: found.chatbotConfig };
+  }
+
+  // DEV_NOTE: The version locked and checked Draft (save, discard, send to testing), else NotDraft
+  private async lockDraft(
+    tx: Tx,
+    params: { companyId: string; chatbot: Schemas.Chatbot; publicId: string; refusal: string },
+  ) {
+    return await this.lockVersion(tx, {
+      ...params,
+      statuses: [Schemas.ChatbotConfigStatusIntEnum.Draft],
+      failure: Schemas.ChatbotConfigFailureEnum.NotDraft,
+    });
+  }
+
+  // DEV_NOTE: The stored body, read for a send to testing or a publish; one that no longer reads is InvalidBody
+  private readStoredBody(
+    chatbotConfig: Schemas.ChatbotConfig,
+  ):
+    | { isSuccess: true; body: Schemas.ConfigSpecBody }
+    | { isSuccess: false; response: Schemas.ChatbotConfigWriteApiResponse } {
+    const read = Schemas.readConfigBody({
+      schemaVersion: chatbotConfig.schemaVersion,
+      body: chatbotConfig.body,
+    });
+    if (!read.isSuccess || !read.body) {
+      return {
+        isSuccess: false,
+        response: this.refuse(
+          Schemas.ChatbotConfigFailureEnum.InvalidBody,
+          read.message ?? "The stored config doesn't read",
+        ),
+      };
+    }
+    return { isSuccess: true, body: read.body };
   }
 
   // DEV_NOTE: The next version number and the one-draft rule, read under the chatbot row's lock
@@ -561,10 +632,232 @@ export default class ChatbotConfigsRepo {
     return null;
   }
 
-  // DEV_NOTE: Draft → Published in one transaction: the chatbot row locked (publishes of one chatbot run one at a time),
-  // the version locked and checked Draft, its needs checked, the old Published version archived, this one published, and
-  // its audit row. The runtime reads the Published config at every turn, so the next message uses it. The eval gate
-  // (Ready + approved_by_run_id, safety hard gate) is M5-4.
+  // DEV_NOTE: Draft → Testing (M5-4): the version locked and checked Draft, its body read and its publish needs checked
+  // (a config that couldn't go live isn't worth testing; publish checks them again), and its audit row. The gate run is
+  // then started by the eval harness (trigger Gate), whose finish moves it to Ready or back to Draft.
+  async sendChatbotConfigToTesting(
+    params: ConfigScope & { adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> => {
+        const resolved = await this.resolveChatbot(tx, params);
+        if (!resolved.isSuccess) return resolved.response;
+        const found = await this.lockDraft(tx, {
+          companyId: params.companyId,
+          chatbot: resolved.chatbot,
+          publicId: params.publicId,
+          refusal: "Only a draft can be sent to testing",
+        });
+        if (!found.isSuccess) return found.response;
+        const read = this.readStoredBody(found.chatbotConfig);
+        if (!read.isSuccess) return read.response;
+        const refused = await this.checkPublishNeeds(tx, {
+          companyId: params.companyId,
+          body: read.body,
+        });
+        if (refused) return refused;
+
+        const moved = await this.dal.moveChatbotConfigStatus(tx, {
+          companyId: params.companyId,
+          chatbotId: resolved.chatbot.id,
+          id: found.chatbotConfig.id,
+          fromStatuses: [Schemas.ChatbotConfigStatusIntEnum.Draft],
+          status: Schemas.ChatbotConfigStatusIntEnum.Testing,
+          approvedByRunId: null,
+          updatedBy: params.adminId,
+        });
+        return await this.answerWrite(
+          tx,
+          params,
+          resolved.chatbot,
+          moved,
+          Schemas.AuditEntityActionEnum.SentToTesting,
+        );
+      },
+    );
+  }
+
+  // DEV_NOTE: Testing / Ready → Draft (M5-4): the admin takes the version back to edit it, or out of a gate run that
+  // never finished. Its approval is cleared; a gate run still going for it never moves it again (it started before this).
+  async moveChatbotConfigToDraft(
+    params: ConfigScope & { adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> => {
+        const resolved = await this.resolveChatbot(tx, params);
+        if (!resolved.isSuccess) return resolved.response;
+        const found = await this.lockVersion(tx, {
+          companyId: params.companyId,
+          chatbot: resolved.chatbot,
+          publicId: params.publicId,
+          statuses: Schemas.CHATBOT_CONFIG_GATE_STATUSES,
+          failure: Schemas.ChatbotConfigFailureEnum.NotInGate,
+          refusal: "Only a version in testing or ready to publish can go back to draft",
+        });
+        if (!found.isSuccess) return found.response;
+
+        const moved = await this.dal.moveChatbotConfigStatus(tx, {
+          companyId: params.companyId,
+          chatbotId: resolved.chatbot.id,
+          id: found.chatbotConfig.id,
+          fromStatuses: Schemas.CHATBOT_CONFIG_GATE_STATUSES,
+          status: Schemas.ChatbotConfigStatusIntEnum.Draft,
+          approvedByRunId: null,
+          updatedBy: params.adminId,
+        });
+        return await this.answerWrite(
+          tx,
+          params,
+          resolved.chatbot,
+          moved,
+          Schemas.AuditEntityActionEnum.MovedToDraft,
+        );
+      },
+    );
+  }
+
+  // DEV_NOTE: A Gate run's finish moves its version (M5-4), in the caller's transaction (EvalHarnessRepo.finish, the run
+  // row already locked): the version, locked, moves only while it is still Testing and was sent to testing no later than
+  // the run started (updated_at and created_at are both clock_timestamp() taken after their row locks), so a run left
+  // over from an earlier send never moves it. Passed → Ready with approved_by_run_id = the run, audited PassedGate;
+  // failed or didn't finish → Draft, editable again, audited FailedGate. Both are System audit rows (no admin made the
+  // move), and updated_by stays who last edited it. A failed write throws TenantRollbackError, so the finish rolls back
+  // with it: a run never ends without its gate's move. Answers the audit row's outbox id (none when nothing moved).
+  async applyGateResult(
+    tx: Tx,
+    params: {
+      companyId: string;
+      run: Pick<Schemas.EvalRun, "id" | "publicId" | "chatbotConfigId" | "createdAt">;
+      hasPassed: boolean;
+    },
+  ): Promise<{ outboxIds: string[] }> {
+    const { companyId, run } = params;
+    const config = await this.dal.getChatbotConfigDetails(tx, {
+      companyId,
+      id: run.chatbotConfigId,
+      isForUpdate: true,
+    });
+    if (!config.isSuccess || !config.chatbotConfig) {
+      throw new TenantRollbackError(config.message ?? "Chatbot config not read");
+    }
+    const { chatbotConfig } = config;
+    const metadata = {
+      companyId,
+      runPublicId: run.publicId,
+      configPublicId: chatbotConfig.publicId,
+    };
+    const isThisSend =
+      chatbotConfig.status === Schemas.ChatbotConfigStatusIntEnum.Testing &&
+      chatbotConfig.updatedAt.getTime() <= run.createdAt.getTime();
+    if (!isThisSend) {
+      AppLogger.info({
+        category: Schemas.LogCategory.Repo,
+        action: Schemas.LogAction.GateChatbotConfig,
+        message: "Gate run finished for a config no longer waiting on it",
+        metadata: { ...metadata, status: chatbotConfig.status },
+      });
+      return { outboxIds: [] };
+    }
+    const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
+      companyId,
+      id: chatbotConfig.chatbotId,
+    });
+    if (!chatbot.isSuccess || !chatbot.chatbot) {
+      throw new TenantRollbackError(chatbot.message ?? "Chatbot not read");
+    }
+    const moved = await this.dal.moveChatbotConfigStatus(tx, {
+      companyId,
+      chatbotId: chatbotConfig.chatbotId,
+      id: chatbotConfig.id,
+      fromStatuses: [Schemas.ChatbotConfigStatusIntEnum.Testing],
+      status: params.hasPassed
+        ? Schemas.ChatbotConfigStatusIntEnum.Ready
+        : Schemas.ChatbotConfigStatusIntEnum.Draft,
+      approvedByRunId: params.hasPassed ? run.id : null,
+    });
+    if (!moved.isSuccess || !moved.chatbotConfig) {
+      throw new TenantRollbackError(moved.message ?? "Chatbot config not moved");
+    }
+    const outboxId = await this.audit(
+      tx,
+      { companyId, adminId: null },
+      chatbot.chatbot,
+      moved.chatbotConfig,
+      params.hasPassed
+        ? Schemas.AuditEntityActionEnum.PassedGate
+        : Schemas.AuditEntityActionEnum.FailedGate,
+    );
+    AppLogger.info({
+      category: Schemas.LogCategory.Repo,
+      action: Schemas.LogAction.GateChatbotConfig,
+      message: params.hasPassed ? "Config passed its gate" : "Config failed its gate",
+      metadata: { ...metadata, status: moved.chatbotConfig.status },
+    });
+    return { outboxIds: [outboxId] };
+  }
+
+  // DEV_NOTE: The safety hard gate at publish (M5-4): the version's approved_by_run_id must be its own Gate run, Done,
+  // passed (Schemas.evalRunGateDecision: threshold and every safety case) with k ≥ EVAL_GATE_MIN_K, else NotApproved; and
+  // every safety case the chatbot runs today (its own and the platform's, active) must be in that run's case set, else
+  // GateOutdated (one was added or turned on since: the gate runs again). Null = approved.
+  private async checkGateApproval(
+    tx: Tx,
+    params: { companyId: string; chatbotConfig: Schemas.ChatbotConfig },
+  ): Promise<Schemas.ChatbotConfigWriteApiResponse | null> {
+    const { chatbotConfig } = params;
+    const notApproved = () =>
+      this.refuse(
+        Schemas.ChatbotConfigFailureEnum.NotApproved,
+        "This version hasn't passed its tests. Move it back to draft and send it to testing again",
+      );
+    if (chatbotConfig.approvedByRunId === null) return notApproved();
+    const approved = await this.evalRunsDal.getEvalRunById(tx, {
+      companyId: params.companyId,
+      id: chatbotConfig.approvedByRunId,
+    });
+    if (approved.isNotFound) return notApproved();
+    if (!approved.isSuccess || !approved.evalRun) {
+      return { isSuccess: false, message: approved.message };
+    }
+    const run = approved.evalRun;
+    if (
+      run.chatbotConfigId !== chatbotConfig.id ||
+      run.trigger !== Schemas.EvalRunTriggerIntEnum.Gate ||
+      run.k < Schemas.EVAL_GATE_MIN_K ||
+      run.status !== Schemas.EvalRunStatusIntEnum.Done ||
+      run.hasPassed !== true
+    ) {
+      return notApproved();
+    }
+
+    // DEV_NOTE: One over the run limit, so a chatbot with more safety cases than a run holds is never approved by a run
+    // that couldn't have held them all
+    const safety = await this.evalCasesDal.getRunnableEvalCases(tx, {
+      companyId: params.companyId,
+      chatbotId: chatbotConfig.chatbotId,
+      limit: Schemas.EVAL_RUN_MAX_CASES + 1,
+      isSafetyOnly: true,
+    });
+    if (!safety.isSuccess || !safety.evalCases)
+      return { isSuccess: false, message: safety.message };
+    const ranCaseIds = new Set(run.evalCaseIds ?? []);
+    if (safety.evalCases.some((evalCase) => !ranCaseIds.has(evalCase.id))) {
+      return this.refuse(
+        Schemas.ChatbotConfigFailureEnum.GateOutdated,
+        "A safety case was added since this version was tested. Move it back to draft and send it to testing again",
+      );
+    }
+    return null;
+  }
+
+  // DEV_NOTE: Ready → Published in one transaction: the chatbot row locked (publishes of one chatbot run one at a time),
+  // the version locked and checked Ready, its gate approval checked (checkGateApproval: the safety hard gate), its needs
+  // checked again (a key or tool may have changed since it was tested), the old Published version archived, this one
+  // published, and its audit row. The runtime reads the Published config at every turn, so the next message uses it.
   async publishChatbotConfig(
     params: ConfigScope & { adminId: string },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
@@ -574,23 +867,22 @@ export default class ChatbotConfigsRepo {
       async (tx): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> => {
         const resolved = await this.resolveChatbot(tx, { ...params, isForUpdate: true });
         if (!resolved.isSuccess) return resolved.response;
-        const found = await this.lockDraft(tx, {
+        const found = await this.lockVersion(tx, {
           companyId: params.companyId,
           chatbot: resolved.chatbot,
           publicId: params.publicId,
-          refusal: "Only a draft can be published",
+          statuses: [Schemas.ChatbotConfigStatusIntEnum.Ready],
+          failure: Schemas.ChatbotConfigFailureEnum.NotReady,
+          refusal: "Only a version that passed its tests can be published",
         });
         if (!found.isSuccess) return found.response;
-        const read = Schemas.readConfigBody({
-          schemaVersion: found.chatbotConfig.schemaVersion,
-          body: found.chatbotConfig.body,
+        const notApproved = await this.checkGateApproval(tx, {
+          companyId: params.companyId,
+          chatbotConfig: found.chatbotConfig,
         });
-        if (!read.isSuccess || !read.body) {
-          return this.refuse(
-            Schemas.ChatbotConfigFailureEnum.InvalidBody,
-            read.message ?? "The stored config doesn't read",
-          );
-        }
+        if (notApproved) return notApproved;
+        const read = this.readStoredBody(found.chatbotConfig);
+        if (!read.isSuccess) return read.response;
         const refused = await this.checkPublishNeeds(tx, {
           companyId: params.companyId,
           body: read.body,

@@ -173,6 +173,7 @@ def test_finishes_a_stopped_run_with_why() -> None:
                     "caseCount": 1,
                     "passAllKCount": 0,
                     "hasPassed": False,
+                    "failedSafetyCaseCount": 0,
                     "costUsd": "0.010000",
                 },
             )

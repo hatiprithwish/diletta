@@ -434,6 +434,7 @@ export default class EvalCasesDAL {
         or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)),
         or(eq(evalCases.chatbotId, params.chatbotId), isNull(evalCases.chatbotId)),
       ];
+      if (params.isSafetyOnly) conditions.push(eq(evalCases.isSafety, true));
       const selected = await tx
         .select()
         .from(evalCases)

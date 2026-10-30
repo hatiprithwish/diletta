@@ -4,6 +4,7 @@ import type {
   EvalRunCaseSortColumn,
   EvalRunSortColumn,
   EvalRunStatusIntEnum,
+  EvalRunTriggerIntEnum,
 } from "./EvalRunsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS. The Tests page
@@ -27,9 +28,11 @@ export type FindEvalRunByIdDALRequest = Pick<EvalRun, "companyId" | "id">;
 // DEV_NOTE: A config's newest run (the summary's live and draft cards)
 export type FindLatestEvalRunDALRequest = Pick<EvalRun, "companyId" | "chatbotConfigId">;
 
-// DEV_NOTE: Each of these configs' newest run in one read (Settings › Bots' Tests column, M4-10)
+// DEV_NOTE: Each of these configs' newest run in one read (Settings › Bots' Tests column, M4-10); trigger set = the newest
+// run of that trigger only (a version's newest Gate run, M5-4)
 export type GetLatestEvalRunsByConfigDALRequest = Pick<EvalRun, "companyId"> & {
   chatbotConfigIds: string[];
+  trigger?: EvalRunTriggerIntEnum;
 };
 
 // DEV_NOTE: The safety cases of a page of runs, read in one query (the Repo tallies them against each run's k)
@@ -97,5 +100,9 @@ export type HasEvalResultDALRequest = Pick<
   "companyId" | "evalRunId" | "evalCaseId" | "attempt"
 >;
 
-// DEV_NOTE: Every case's attempt tally in one run (the finish's pass^k)
-export type GetEvalRunTalliesDALRequest = Pick<EvalRun, "companyId"> & { evalRunId: string };
+// DEV_NOTE: The attempt tally of every case of the run's set (the finish's pass^k and gate decision): one row per case,
+// 0 attempts for one that never ran
+export type GetEvalRunTalliesDALRequest = Pick<EvalRun, "companyId"> & {
+  evalRunId: string;
+  evalCaseIds: string[];
+};

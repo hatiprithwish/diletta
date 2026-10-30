@@ -194,6 +194,7 @@ class FakeClient:
                 "caseCount": 1,
                 "passAllKCount": 1 if passed == len(self.results) else 0,
                 "hasPassed": request.isComplete and passed == len(self.results),
+                "failedSafetyCaseCount": 0,
                 "costUsd": "0.010000",
             }
         )

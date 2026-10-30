@@ -51,9 +51,10 @@ export type GetLatestEvalCaseResultsDALRequest = {
 export type CountActiveEvalCasesDALRequest = { companyId: string; chatbotId: string };
 
 // DEV_NOTE: The cases an eval run of one chatbot runs (M5-2): its active cases and every active platform case, at most
-// limit
+// limit. isSafetyOnly: only its safety cases (the publish gate's check that the approved run ran them all, M5-4).
 export type GetRunnableEvalCasesDALRequest = {
   companyId: string;
   chatbotId: string;
   limit: number;
+  isSafetyOnly?: boolean;
 };

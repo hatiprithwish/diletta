@@ -381,7 +381,7 @@ function BotVersions({ chatbot, page, onPage }: Schemas.DashboardBotVersionsProp
     <section className="flex flex-col gap-4" aria-label={`Versions of ${chatbot.name}`}>
       <SectionHeader
         title={`Versions of ${chatbot.name}`}
-        description="Publishing a version makes it live from the next message. Rolling back copies an old version into a new draft."
+        description="Publishing a version runs its tests first. Rolling back copies an old version into a new draft."
       >
         <Button
           variant="outline"
