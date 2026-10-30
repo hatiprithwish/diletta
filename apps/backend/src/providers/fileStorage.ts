@@ -10,7 +10,7 @@ const R2_DELETE_BATCH_SIZE = 1000;
 export default class FileStorageProvider {
   static async putObject(
     env: Env,
-    params: { key: string; bytes: Uint8Array<ArrayBuffer>; mime: string },
+    params: { key: string; bytes: Uint8Array; mime: string },
   ): Promise<Schemas.ApiResponse> {
     try {
       await env.FILES_BUCKET.put(params.key, params.bytes, {

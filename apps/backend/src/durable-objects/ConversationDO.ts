@@ -613,23 +613,30 @@ export class ConversationDO extends Think<Env> {
     return JSON.stringify(await this.runEvalAttemptTurn(params));
   }
 
-  // DEV_NOTE: An eval attempt's conversation for its transcript (M5-3), called by EvalHarnessRepo over DO RPC when the
+  // DEV_NOTE: An eval attempt's conversation for its transcript (M5-3), called by EvalTranscriptsRepo over DO RPC when the
   // harness judges or records the attempt: read-only, from Think's transcript (the plaintext source of truth; the
-  // messages read model is encrypted), as JSON text (Schemas.ZEvalAttemptTranscriptResponse). Only an eval session's,
-  // only once its turn is over: a widget conversation's never leaves through here.
+  // messages read model is encrypted), as JSON text (Schemas.ZEvalAttemptTranscriptResponse). Only an eval session's: a
+  // widget conversation's never leaves through here. A commit or verify retry of the attempt still running is waited for
+  // (Constants.EVAL_TRANSCRIPT_IDLE_WAIT_MS); once idle, an eval conversation never changes again (no widget can join,
+  // no turn follows), so every read of it answers the same transcript.
   async getEvalTranscript(): Promise<string> {
     await this.__unsafe_ensureInitialized();
     const state = this.getRuntimeState();
-    const answer: Schemas.EvalAttemptTranscriptResponse =
-      !state || !state.session.eval
-        ? { isSuccess: false, message: "Not an eval conversation" }
-        : this.isBusy()
-          ? { isSuccess: false, message: "The attempt's turn is still running" }
-          : {
-              isSuccess: true,
-              message: "Eval transcript read",
-              entries: EvalAttemptProvider.entries(this.messages),
-            };
+    if (!state || !state.session.eval) {
+      return JSON.stringify({ isSuccess: false, message: "Not an eval conversation" });
+    }
+    const isIdle = await EvalAttemptProvider.waitUntilIdle(() => this.isBusy(), {
+      timeoutMs: Constants.EVAL_TRANSCRIPT_IDLE_WAIT_MS,
+      pollMs: Constants.EVAL_TRANSCRIPT_IDLE_POLL_MS,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    const answer: Schemas.EvalAttemptTranscriptResponse = isIdle
+      ? {
+          isSuccess: true,
+          message: "Eval transcript read",
+          entries: EvalAttemptProvider.entries(this.messages),
+        }
+      : { isSuccess: false, message: "The attempt's turn is still running" };
     return JSON.stringify(answer);
   }
 

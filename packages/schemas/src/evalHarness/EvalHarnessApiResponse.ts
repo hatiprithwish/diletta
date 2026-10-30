@@ -20,6 +20,7 @@ import type { DashboardEvalRunRow } from "../evalRuns/EvalRunsDALResponse";
 import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
 import type { EvalTranscript } from "../evalResults/EvalResultsCommon";
 import {
+  type EvalAttemptRecord,
   EVAL_JUDGE_REASON_MAX_CHARS,
   EvalReadbackVerdictEnum,
   EvalTurnStatusEnum,
@@ -263,10 +264,32 @@ export interface EvalRunTranscriptSource {
   routing: ConfigSpec["routing"];
 }
 
-// DEV_NOTE: An attempt's transcript v1, built from its DO and change requests (EvalTranscriptProvider), and the bytes
-// of its R2 file
-export interface EvalTranscriptBuildResponse extends EvalRunStepResponse {
-  built?: { transcript: EvalTranscript; bytes: Uint8Array<ArrayBuffer> };
+// DEV_NOTE: A recorded attempt's source: hasConversation false = it never started (no transcript to store)
+export interface EvalResultSourceResponse extends EvalRunTranscriptSourceResponse {
+  hasConversation?: boolean;
+}
+
+// DEV_NOTE: The Running run, its chatbot and the case of the run a result is for
+export interface EvalResultCaseResponse extends EvalRunningRunResponse {
+  evalCaseId?: string;
+}
+
+// DEV_NOTE: An attempt as its DO and change requests hold it (EvalTranscriptsRepo.read)
+export interface EvalAttemptRecordResponse extends EvalRunStepResponse {
+  record?: EvalAttemptRecord;
+}
+
+// DEV_NOTE: An attempt's transcript stored (EvalTranscriptsRepo.store): its files row, still pending its owner, and the
+// R2 object written after it. The result's transaction attaches it (EvalTranscriptFilesProvider.attach).
+export interface StoredEvalTranscriptResponse extends EvalRunStepResponse {
+  stored?: { fileId: string; fileR2Key: string };
+}
+
+// DEV_NOTE: Transcript v1 as stored: the parsed transcript and the exact text of its R2 file (the parsed one, serialized)
+export interface BuiltEvalTranscript {
+  transcript: EvalTranscript;
+  text: string;
+  bytes: Uint8Array;
 }
 
 // DEV_NOTE: The whole /eval/* API as one object, for the JSON Schema export (evals/schemas/eval-api.schema.json): each
@@ -287,3 +310,8 @@ export const ZEvalApiContract = z.object({
   finishResponse: ZFinishEvalRunApiResponse,
   refusal: ZEvalRefusalApiResponse,
 });
+
+// DEV_NOTE: The transcript sweep (EvalTranscriptsRepo.sweepPending): pending transcript rows removed with their objects
+export interface SweepEvalTranscriptsResponse extends ApiResponse {
+  sweptCount?: number;
+}

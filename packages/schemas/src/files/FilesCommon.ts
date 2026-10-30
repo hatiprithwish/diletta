@@ -9,6 +9,11 @@ export enum FileOwnerTypeEnum {
   EvalResult = "eval_result",
 }
 
+// DEV_NOTE: owner_id of a files row written before its owner row, then pointed at it (setFileOwner) in a later step. A
+// transcript row still pending an hour on was never attached (its /results failed) and is swept with its R2 object
+// (EvalTranscriptSweep, M5-3).
+export const FILE_PENDING_OWNER_ID = "0";
+
 // Whole Stored File Body — DB shape
 // DEV_NOTE: id, companyId, ownerId and createdBy are internal bigint ids — used by DAL/Repo only, NEVER sent to a
 // client. sha256 is over the stored bytes (integrity + dedupe). The R2 key is derived, never stored:

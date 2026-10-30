@@ -7,6 +7,7 @@ import CronScheduleProvider from "@/providers/cronSchedule";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
@@ -38,6 +39,9 @@ vi.mock("@/crons/ActivityLogPartitionsCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/crons/ActivityRollupsCron", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@/crons/EvalTranscriptSweepCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 
 const {
   OutboxSweep,
@@ -45,6 +49,7 @@ const {
   ChangeRequestPurge,
   KnowledgeResync,
   ActivityRollups,
+  EvalTranscriptSweep,
   ActivityLogPartitions,
 } = Schemas.CronJobEnum;
 const at = (iso: string) => Date.parse(iso);
@@ -58,13 +63,14 @@ describe("CronScheduleProvider.getDueJobs", () => {
     ]);
   });
 
-  it("adds the knowledge re-sync and the activity rollups at the top of every hour", () => {
+  it("adds the knowledge re-sync, the activity rollups and the eval transcript sweep at the top of every hour", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:00:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
       KnowledgeResync,
       ActivityRollups,
+      EvalTranscriptSweep,
     ]);
   });
 
@@ -75,6 +81,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       ChangeRequestPurge,
       KnowledgeResync,
       ActivityRollups,
+      EvalTranscriptSweep,
       ActivityLogPartitions,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:01:00Z"))).not.toContain(
@@ -118,6 +125,7 @@ describe("scheduled()", () => {
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).toHaveBeenCalledTimes(1);
     expect(runActivityRollups).toHaveBeenCalledTimes(1);
+    expect(runEvalTranscriptSweep).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
 
     vi.clearAllMocks();
@@ -126,6 +134,7 @@ describe("scheduled()", () => {
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).not.toHaveBeenCalled();
     expect(runActivityRollups).not.toHaveBeenCalled();
+    expect(runEvalTranscriptSweep).not.toHaveBeenCalled();
     expect(runActivityLogPartitions).not.toHaveBeenCalled();
   });
 

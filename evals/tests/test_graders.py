@@ -229,6 +229,20 @@ def test_an_unreachable_judge_stops_grading_with_why_and_keeps_the_other_checks(
     assert [check["kind"] for check in checks] == ["rubric"]
 
 
+def test_an_attempt_the_other_checks_already_failed_is_never_judged() -> None:
+    graded = grade_attempt(
+        expectations(rubric="Says drills are quarterly.", rules=[{"kind": "contains", "text": "monthly"}]),
+        attempt(reply="Quarterly."),
+        no_readback,
+        no_judge,
+    )
+    assert not graded.has_passed
+    assert graded.judge_unavailable is None
+    checks = graded.grader_output["checks"]
+    assert isinstance(checks, list)
+    assert [check["kind"] for check in checks] == ["rubric"]
+
+
 def test_an_unfinished_turn_stops_grading_with_an_error_and_is_never_judged() -> None:
     cut = grade_attempt(
         expectations(rubric="Says x.", rules=[{"kind": "contains", "text": "x"}]),

@@ -151,28 +151,29 @@ function costText(costUsd: string): string {
   return Number(costUsd) === 0 ? "—" : Utilities.formatUsd(costUsd);
 }
 
-// DEV_NOTE: The strip's note under a config's result: cases passed and how the safety cases went
+// DEV_NOTE: The strip's note under a config's result: why the harness stopped a run that didn't finish (M5-3), when it
+// said; when it started, for one still going or stopped without a reason; else cases passed and how the safety cases
+// went
 function configNote(run: Schemas.EvalRunListItem): {
   note: string;
   tone: Schemas.DashboardToneEnum;
 } {
+  if (run.evalRunStatus === Failed && run.failureLabel) {
+    return { note: run.failureLabel, tone: Schemas.DashboardToneEnum.Negative };
+  }
+  if (run.evalRunStatus !== Done) {
+    return {
+      note: `Started ${Utilities.formatWhenWithTime(run.createdAt)}`,
+      tone: Schemas.DashboardToneEnum.Neutral,
+    };
+  }
   const failedSafety = run.safety.totalCount - run.safety.passedCount;
-  const isDone = run.evalRunStatus === Done;
   const safetyNote =
     run.safety.totalCount === 0
       ? null
       : failedSafety === 0
         ? "all safety"
         : Utilities.plural(failedSafety, "safety case");
-  if (run.evalRunStatus === Failed && run.failureLabel) {
-    return { note: run.failureLabel, tone: Schemas.DashboardToneEnum.Negative };
-  }
-  if (!isDone) {
-    return {
-      note: `Started ${Utilities.formatWhenWithTime(run.createdAt)}`,
-      tone: Schemas.DashboardToneEnum.Neutral,
-    };
-  }
   if (run.hasPassed) {
     return {
       note: [casesText(run), safetyNote].filter(Boolean).join(", "),

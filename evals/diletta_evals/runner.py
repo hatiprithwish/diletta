@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from diletta_evals.client import EvalApi, EvalApiError
 from diletta_evals.graders import (
+    JUDGE_UNAVAILABLE_PREFIX,
     GradedAttempt,
     JudgeUnavailable,
     JudgeVerdict,
@@ -44,15 +45,22 @@ class JudgeUnavailableError(Exception):
     """The pinned judge couldn't give a verdict on an attempt: the run stops (its attempt is already recorded)."""
 
 
-def stop_reason(error: BaseException | None, is_reset: bool) -> eval_api.EvalRunFailure | None:
-    """Why a run that didn't finish stopped, as the Tests page shows it (packages/schemas EvalRunFailureIntEnum)."""
+def stop_reason(error: BaseException | None) -> eval_api.EvalRunFailure | None:
+    """Why a run that didn't finish stopped, as the Tests page shows it (packages/schemas EvalRunFailureIntEnum), from
+    the error that stopped it (or, when nothing else did, the one that failed its reset). The backend is only blamed
+    for what it answered with a 5xx or couldn't answer at all; anything else is the harness's own stop."""
     if error is None:
-        return None if is_reset else eval_api.EvalRunFailure.number_2
+        return None
     if isinstance(error, JudgeUnavailableError):
         return eval_api.EvalRunFailure.number_1
     if isinstance(error, HostLoginError):
         return eval_api.EvalRunFailure.number_2
-    return eval_api.EvalRunFailure.number_3
+    if isinstance(error, EvalApiError):
+        if error.failure is eval_api.Failure.HostFailed:
+            return eval_api.EvalRunFailure.number_2
+        if error.is_transient:
+            return eval_api.EvalRunFailure.number_3
+    return eval_api.EvalRunFailure.number_4
 
 
 @dataclass
@@ -103,14 +111,14 @@ class EvalRunner:
         # Running. A reset that fails doesn't fail the results already graded, but the run can't count as Done: the
         # next run would start from data this one left behind. If ending the run fails too, the error that stopped the
         # run is the one raised (the other is printed), so the first cause is never hidden.
-        is_reset = self._reset(run_id)
-        is_complete = stopped_by is None and is_reset
+        reset_error = self._reset(run_id)
+        is_complete = stopped_by is None and reset_error is None
         try:
             finished = self._client.finish(
                 run_id,
                 eval_api.FinishEvalRunApiRequest(
                     isComplete=is_complete,
-                    failure=None if is_complete else stop_reason(stopped_by, is_reset),
+                    failure=None if is_complete else stop_reason(stopped_by or reset_error),
                 ),
             )
         except Exception as error:
@@ -209,7 +217,7 @@ class EvalRunner:
         graded = grade_attempt(expectations, attempt_json, read_back, judge)
         self._record(run_id, case.publicId, attempt, graded, answered.latencyMs)
         if graded.judge_unavailable is not None:
-            raise JudgeUnavailableError(f"The judge couldn't be reached: {graded.judge_unavailable}")
+            raise JudgeUnavailableError(f"{JUDGE_UNAVAILABLE_PREFIX}: {graded.judge_unavailable}")
         return graded
 
     def _record(
@@ -233,15 +241,15 @@ class EvalRunner:
             )
         self._client.record_result(run_id, request)
 
-    def _reset(self, run_id: str) -> bool:
-        """The connection's reset_op, once; False (printed) when it didn't go through, whatever the reason."""
+    def _reset(self, run_id: str) -> Exception | None:
+        """The connection's reset_op, once; the error (printed) when it didn't go through, None when it did."""
         try:
             reset = self._client.reset(run_id, self._host.host_token())
         except Exception as error:
             self._say(f"The staging reset failed: {error}")
-            return False
+            return error
         self._say("Staging data reset" if reset.isReset else "The connection has no reset op")
-        return True
+        return None
 
     def _say(self, line: str) -> None:
         self._out.write(f"{line}\n")

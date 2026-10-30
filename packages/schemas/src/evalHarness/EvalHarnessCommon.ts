@@ -236,6 +236,10 @@ export const EVAL_JUDGE_MODELS: Record<ModelProviderEnum, string> = {
 };
 export const EVAL_JUDGE_PROMPT_VERSION = 1;
 export const EVAL_JUDGE_REASON_MAX_CHARS = 600;
+// DEV_NOTE: The judge's view of an attempt, in characters (about 30k tokens): inside every pinned model's context with
+// room for the instructions and the answer. The last reply is always kept whole; earlier entries are kept newest first
+// until the budget is spent, and the view says how many were left out (EvalTranscriptProvider.judgeView).
+export const EVAL_JUDGE_TRANSCRIPT_MAX_CHARS = 120_000;
 // DEV_NOTE: A judge answer that doesn't hold to ZEvalJudgeOutput is asked again this many times, then JudgeUnavailable
 export const EVAL_JUDGE_MAX_TRIES = 2;
 
@@ -278,6 +282,42 @@ export const ZEvalAttemptTranscriptResponse = z.object({
   entries: z.array(ZEvalAttemptEntry).optional(),
 });
 export type EvalAttemptTranscriptResponse = z.infer<typeof ZEvalAttemptTranscriptResponse>;
+
+// DEV_NOTE: Server-side only — an attempt entry the stored transcript lists: a message, or a call of a tool the run's
+// config pins, with the version it pins (EvalTranscriptProvider.build)
+export type EvalAttemptEntryOf<K extends EvalAttemptEntryKindEnum> = Extract<
+  EvalAttemptEntry,
+  { kind: K }
+>;
+export type EvalTranscriptListedEntry =
+  | {
+      kind: EvalAttemptEntryKindEnum.Message;
+      entry: EvalAttemptEntryOf<EvalAttemptEntryKindEnum.Message>;
+    }
+  | {
+      kind: EvalAttemptEntryKindEnum.ToolCall;
+      entry: EvalAttemptEntryOf<EvalAttemptEntryKindEnum.ToolCall>;
+      toolVersion: number;
+    };
+
+// DEV_NOTE: Server-side only — an attempt as its DO and change requests hold it, read once per step
+// (EvalTranscriptsRepo.read): the entries, and each change request's summary (no values) by public id
+export interface EvalAttemptRecord {
+  entries: EvalAttemptEntry[];
+  changeRequestSummaries: Record<string, string>;
+}
+
+// DEV_NOTE: Server-side only — what the judge reads (EvalTranscriptProvider.judgeView): every message and every tool call
+// (pinned or not, e.g. search_help_docs) with how it ended, never args; held to EVAL_JUDGE_TRANSCRIPT_MAX_CHARS with the
+// last reply whole. omittedCount = earlier entries left out for the budget.
+export type EvalJudgeEntry =
+  | { kind: EvalAttemptEntryKindEnum.Message; role: EvalCaseMessageRoleEnum; text: string }
+  | { kind: EvalAttemptEntryKindEnum.ToolCall; toolName: string; outcome: string };
+
+export interface EvalJudgeTranscript {
+  entries: EvalJudgeEntry[];
+  omittedCount: number;
+}
 
 // DEV_NOTE: A tool call's end in the transcript: tool_calls' own status and the words the Tests page shows after the
 // change request's summary. null = the call never finished.

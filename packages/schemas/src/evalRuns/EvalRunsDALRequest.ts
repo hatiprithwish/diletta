@@ -91,5 +91,11 @@ export type CreateEvalResultDALRequest = {
   latencyMs: number | null;
 };
 
+// DEV_NOTE: Whether one attempt of a case of the run already has its result (the /results pre-check, M5-3)
+export type HasEvalResultDALRequest = Pick<
+  CreateEvalResultDALRequest,
+  "companyId" | "evalRunId" | "evalCaseId" | "attempt"
+>;
+
 // DEV_NOTE: Every case's attempt tally in one run (the finish's pass^k)
 export type GetEvalRunTalliesDALRequest = Pick<EvalRun, "companyId"> & { evalRunId: string };

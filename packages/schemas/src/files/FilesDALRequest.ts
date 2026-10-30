@@ -29,3 +29,10 @@ export type DeleteFilesDALRequest = Pick<StoredFile, "companyId"> & { ids: strin
 export type FindEvalRunTranscriptFileDALRequest = Pick<StoredFile, "companyId" | "publicId"> & {
   evalRunId: string;
 };
+
+// DEV_NOTE: Platform (withPlatform, every company): files rows of one owner type still pending their owner
+// (FILE_PENDING_OWNER_ID) and created before createdBefore, oldest first, at most limit (the transcript sweep, M5-3)
+export type GetPendingOwnerFilesDALRequest = Pick<StoredFile, "ownerType"> & {
+  createdBefore: Date;
+  limit: number;
+};

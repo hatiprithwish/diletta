@@ -235,22 +235,25 @@ def test_an_attempt_the_chatbot_couldnt_answer_fails_and_the_run_goes_on() -> No
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "reason"),
     [
-        EvalApiError(0, "The backend is unreachable"),
-        # DEV_NOTE: A backend fault is never read as the chatbot failing: it stops the run (exit 2)
-        EvalApiError(500, "Server error", Failure.ServerError),
-        EvalApiError(409, "This eval attempt already ran", Failure.Duplicate),
+        # DEV_NOTE: A backend fault is never read as the chatbot failing: it stops the run (exit 2), and the page blames
+        # the backend only for what it failed to answer; a refusal it answered (4xx) is the harness's own stop
+        (EvalApiError(0, "The backend is unreachable"), RunFailure.number_3),
+        (EvalApiError(500, "Server error", Failure.ServerError), RunFailure.number_3),
+        (EvalApiError(409, "This eval attempt already ran", Failure.Duplicate), RunFailure.number_4),
     ],
 )
-def test_anything_else_stops_the_run_which_still_resets_and_ends_failed(error: EvalApiError) -> None:
+def test_anything_else_stops_the_run_which_still_resets_and_ends_failed(
+    error: EvalApiError, reason: eval_api.EvalRunFailure
+) -> None:
     client = FakeClient(refuse_attempt=(2, error))
     with pytest.raises(EvalApiError) as raised:
         run(client)
     assert raised.value is error
     assert client.events[-2:] == ["reset", "finish"]
     assert client.finish_request is not None and not client.finish_request.isComplete
-    assert client.finish_request.failure is RunFailure.number_3
+    assert client.finish_request.failure is reason
 
 
 def test_a_refused_readback_is_a_failed_check_not_the_end_of_the_run() -> None:
@@ -271,17 +274,28 @@ def test_an_unreachable_readback_stops_the_run() -> None:
     assert client.finish_request is not None and not client.finish_request.isComplete
 
 
-@pytest.mark.parametrize("fail", ["reset", "host login"])
-def test_a_failed_reset_still_ends_the_run_never_done(fail: str) -> None:
-    if fail == "reset":
+@pytest.mark.parametrize(
+    ("fail", "reason"),
+    [
+        ("host refused the reset", RunFailure.number_2),
+        ("host login", RunFailure.number_2),
+        ("backend failed the reset", RunFailure.number_3),
+    ],
+)
+def test_a_failed_reset_still_ends_the_run_never_done_with_its_own_reason(
+    fail: str, reason: eval_api.EvalRunFailure
+) -> None:
+    if fail == "host refused the reset":
         client, host = FakeClient(refuse_reset=EvalApiError(502, "The host reset failed", Failure.HostFailed)), None
-    else:
+    elif fail == "host login":
         # DEV_NOTE: Every attempt and readback gets its token; the reset's own token can't be minted
         client, host = FakeClient(), FakeHost(fail_token_after=2)
+    else:
+        client, host = FakeClient(refuse_reset=EvalApiError(500, "Server error", Failure.ServerError)), None
     summary = run(client, host, k=1)
     assert client.events[-1] == "finish"
     assert client.finish_request is not None and not client.finish_request.isComplete
-    assert client.finish_request.failure is RunFailure.number_2
+    assert client.finish_request.failure is reason
     assert not summary.has_passed
 
 
@@ -342,9 +356,26 @@ def test_an_unreachable_judge_records_the_attempt_failed_then_stops_the_run_with
     assert client.finish_request.failure is RunFailure.number_1
 
 
-def test_any_other_judge_refusal_stops_the_run_as_a_server_error() -> None:
-    client = FakeClient(case=RUBRIC_CASE, refuse_judge=EvalApiError(404, "Not this run's", Failure.NotFound))
+def test_any_other_judge_refusal_stops_the_run_with_its_own_reason() -> None:
+    refused = FakeClient(case=RUBRIC_CASE, refuse_judge=EvalApiError(404, "Not this run's", Failure.NotFound))
     with pytest.raises(EvalApiError):
+        run(refused, k=1)
+    assert refused.results == []
+    assert refused.finish_request is not None and refused.finish_request.failure is RunFailure.number_4
+
+    failed = FakeClient(case=RUBRIC_CASE, refuse_judge=EvalApiError(500, "Server error", Failure.ServerError))
+    with pytest.raises(EvalApiError):
+        run(failed, k=1)
+    assert failed.finish_request is not None and failed.finish_request.failure is RunFailure.number_3
+
+
+def test_a_stop_of_the_harness_own_is_never_blamed_on_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_args: object) -> GradedAttempt:
+        raise TypeError("a harness bug")
+
+    monkeypatch.setattr(runner_module, "grade_attempt", broken)
+    client = FakeClient()
+    with pytest.raises(TypeError):
         run(client, k=1)
-    assert client.results == []
-    assert client.finish_request is not None and client.finish_request.failure is RunFailure.number_3
+    assert client.events[-2:] == ["reset", "finish"]
+    assert client.finish_request is not None and client.finish_request.failure is RunFailure.number_4

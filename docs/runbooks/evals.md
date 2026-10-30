@@ -25,13 +25,23 @@ A case's rubric is graded by a pinned LLM judge on the company's key (M5-3), and
 
 An eval conversation is the harness's only. The widget can't resume it, even for the same host user, and a model-key failure in it marks the key Invalid without opening a Quality issue.
 
-An attempt the backend couldn't start (the chatbot is paused, there's no model key, a budget said no: `failure` `ChatbotUnavailable` or `BudgetRefused`) is recorded as failed with the reason, and the run goes on. Anything else that stops the run (a backend `ServerError`, the backend or the host unreachable, a host login that fails, a judge that couldn't give a verdict) ends it Failed, after the reset, with why (`failure`: the judge, the staging host, or a server error; the Tests page shows it), and the CLI exits 2. Each attempt runs once: the harness never retries `/attempts` (a repeat is 409 `Duplicate`). Readbacks, results and the reset are retried on a dropped connection or a 5xx.
+An attempt the backend couldn't start (the chatbot is paused, there's no model key, a budget said no: `failure` `ChatbotUnavailable` or `BudgetRefused`) is recorded as failed with the reason, and the run goes on. Anything else that stops the run (a backend `ServerError`, the backend or the host unreachable, a host login that fails, a judge that couldn't give a verdict, a harness error) ends it Failed, after the reset, and the CLI exits 2. The run keeps why (`failure`, shown on the Tests page), from the error that stopped it, else the one that failed its reset:
+
+| `failure`        | When                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| JudgeUnavailable | The judge gave no verdict                                                                           |
+| HostUnavailable  | The host login failed, or the host refused the reset (`HostFailed`)                                 |
+| ServerError      | The backend answered a 5xx or couldn't be reached                                                   |
+| HarnessError     | Anything else: a refusal the harness got (4xx), a harness bug, an answer it couldn't read, a cancel |
+
+Each attempt runs once: the harness never retries `/attempts` (a repeat is 409 `Duplicate`). Readbacks, results and the reset are retried on a dropped connection or a 5xx.
 
 ## The judge and transcripts
 
-**The judge.** A case with a rubric is graded by an LLM judge, after the deterministic checks, only when the chatbot's turn completed. The harness sends the attempt's conversation and the rubric (`{case.tag}` filled) to `POST /eval/runs/:runId/judge`; the backend does the rest:
+**The judge.** A case with a rubric is graded by an LLM judge, after the deterministic checks, only when its verdict can still decide the attempt: the chatbot's turn completed and every other check passed. An attempt the other checks already failed isn't judged (the call is billed and couldn't change it), so it shows no judge check. The harness sends the attempt's conversation and the rubric (`{case.tag}` filled) to `POST /eval/runs/:runId/judge`; the backend does the rest:
 
-- it reads the attempt's transcript from its Conversation DO (the harness never sends one);
+- it reads the attempt from its Conversation DO (the harness never sends one), once the DO is idle: a commit or verify retry still running is waited for, up to 30 s. An idle eval conversation never changes again, so the judge and the stored transcript see the same attempt;
+- the judge reads its own view of it: every message and tool call (`search_help_docs` too) with how it ended, never args. It is held to about 30k tokens (`EVAL_JUDGE_TRANSCRIPT_MAX_CHARS`) so it fits every pinned model: the chatbot's last reply is always kept whole, then the newest earlier entries that fit, with a note of how many were left out;
 - the judge model is pinned in `packages/schemas` (`EVAL_JUDGE_MODELS`), one per provider: the provider of the config's default tier (the company has a key for it). The config under test never picks its own judge;
 - the call goes through the model router on the company's key, like the chatbot's: the company budget holds it, its cost is the run's (`cost_usd`) and it is a `model_calls` row with `task_type` `eval.judge` (Usage shows it under test runs);
 - the prompt is versioned (`EVAL_JUDGE_PROMPT_VERSION`): the check's detail names the model and prompt version that graded it, e.g. "The reply never gives the date. (judge claude-sonnet-5-5, prompt v1)".
@@ -40,7 +50,12 @@ To change the judge, edit `EVAL_JUDGE_MODELS` (the model must be in `MODEL_PRICE
 
 **When the judge can't be reached** (the provider or AI Gateway down, the company's key refused, the budget said no, or no usable answer after `EVAL_JUDGE_MAX_TRIES`), `/judge` answers 503 `JudgeUnavailable`. The judge never makes up a verdict, and the harness never retries it (the backend already did). It records that attempt failed ("The judge couldn't be reached: …"), stops, resets, and ends the run Failed with `failure` JudgeUnavailable. The CLI exits 2 and prints the reason; the Tests page shows "The judge couldn't be reached" under the run's Didn't finish. A key the provider refused is also marked Invalid (Settings › Model keys), with no Quality issue.
 
-**Transcripts.** When the harness records an attempt that ran, the backend builds its transcript (the case's messages, the chatbot's replies, and each call of a tool the config pins with its version, how it ended and its change's summary; never args or values) and stores it in R2 as a `files` row of owner `eval_result`, linked from the result. The Tests page opens it with View transcript. An attempt that never started has none. A transcript that can't be built or stored fails the `/results` call with a 5xx, and the harness retries it; nothing is written until it is.
+**Transcripts.** When the harness records an attempt that ran, the backend builds its transcript (the case's messages, the chatbot's replies, and each call of a tool the config pins with its version, how it ended and its change's summary; never args or values; `search_help_docs` calls aren't listed, transcript v1 needs a tool version) and stores it in R2 as a `files` row of owner `eval_result`, linked from the result. The Tests page opens it with View transcript. An attempt that never started has none.
+
+- A repeated `/results` for an attempt that already has its result is 409 `Duplicate` straight away, before anything is read or stored (the harness reads it as "the first one landed").
+- The `files` row is written first, pending its owner, then the R2 object, then the result's transaction attaches the row. If that transaction refused or rolled back, the object and row are deleted. If its outcome is unknown (the connection dropped at the commit), nothing is touched: either it committed (the harness's retry gets `Duplicate`) or the row is still pending.
+- The hourly `EvalTranscriptSweep` cron removes transcript rows still pending after an hour, and their objects. A row a result points at is never pending, so it is never swept.
+- A transcript that can't be read or stored fails the `/results` call with a 5xx, and the harness retries it; no result is written until it is.
 
 ## The eval JWT
 
@@ -144,3 +159,5 @@ and commit the output with the change (pattern rule 3.50).
 | The run ends Failed after a reset error                           | The connection's `reset_op` is wrong or the host refused it; the next run starts from what this one left                                     |
 | 503 `JudgeUnavailable` / run ends "The judge couldn't be reached" | The provider or AI Gateway is down, the company's key for the default tier's provider was refused (check Model keys), or the budget is spent |
 | `/results` 500 "The transcript couldn't be stored"                | R2 (`FILES_BUCKET`) refused the write, or the attempt's Conversation DO couldn't be reached; the harness retries it                          |
+| `/judge` or `/results` 500 "The attempt's turn is still running"  | A commit or verify retry of the attempt ran past 30 s; the harness retries, and the run stops with ServerError if it still runs              |
+| Run ends "The test harness stopped the run"                       | The harness hit a bug, couldn't read an answer, was refused a step (4xx) or was cancelled: see the CLI's output                              |

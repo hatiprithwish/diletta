@@ -35,6 +35,7 @@ import ChangeRequestsRepo from "@/repositories/ChangeRequestsRepo";
 import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EvalAuthRepo from "@/repositories/EvalAuthRepo";
+import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
 import Utility from "@/utils/Utility";
 import {
   anthropicReplyStream,
@@ -1171,6 +1172,28 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     ]);
     expect(new TextDecoder().decode(bytes)).not.toContain("rec_alpha");
 
+    // DEV_NOTE: A repeat of the result is Duplicate before the DO is read or anything stored: one row, one object
+    const repeated = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: tenant.casePublicId,
+        attempt: 1,
+        hasPassed: true,
+        graderOutput: graderOutput(true),
+        latencyMs: attempt.latencyMs,
+      },
+    });
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({
+      failure: Schemas.EvalRunStepFailureEnum.Duplicate,
+    });
+    const companyFiles = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(files).where(eq(files.companyId, tenant.companyId)),
+    );
+    expect(companyFiles).toHaveLength(1);
+    const objects = await env.FILES_BUCKET.list({ prefix: `t/${tenant.companyPublicId}/` });
+    expect(objects.objects).toHaveLength(1);
+
     // DEV_NOTE: An attempt that never started has no conversation, so no transcript
     const otherCase = await addCase(tenant);
     const restarted = await startRun(tenant);
@@ -1271,3 +1294,95 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(refused.status).toBe(400);
   });
 });
+
+describe(
+  "Eval graders across companies and the transcript sweep (M5-3)",
+  { timeout: END_TO_END_TIMEOUT_MS },
+  () => {
+    it("never judges or records another company's run or conversation", async () => {
+      const owner = await createTenant();
+      const other = await createTenant();
+      const started = await startRun(owner);
+      const runId = started.run.publicId;
+      scriptModel([updateAlpha(300), reply("Done: Alpha's amount is now 300.")]);
+      routeTestHostFetch();
+      const ran = await runAttempt(owner, runId);
+      const attempt = Schemas.ZRunEvalAttemptApiResponse.parse(await ran.json());
+      const requestsBefore = gatewayRequests().length;
+
+      // DEV_NOTE: Another company's token can't reach this run, and its own run can't reach this conversation
+      const judgedOther = await call(`/runs/${runId}/judge`, {
+        token: await tokenFor(other),
+        body: { conversationId: attempt.conversationId, rubric: "Says 300" },
+      });
+      expect(judgedOther.status).toBe(404);
+      const recordedOther = await call(`/runs/${runId}/results`, {
+        token: await tokenFor(other),
+        body: {
+          caseId: owner.casePublicId,
+          attempt: 1,
+          hasPassed: true,
+          graderOutput: graderOutput(true),
+          latencyMs: null,
+        },
+      });
+      expect(recordedOther.status).toBe(404);
+      const otherRun = await startRun(other);
+      const judgedAcross = await call(`/runs/${otherRun.run.publicId}/judge`, {
+        token: await tokenFor(other),
+        body: { conversationId: attempt.conversationId, rubric: "Says 300" },
+      });
+      expect(judgedAcross.status).toBe(404);
+      expect(gatewayRequests()).toHaveLength(requestsBefore);
+      const otherFiles = await withOwnerDb((ownerDb) =>
+        ownerDb.select().from(files).where(eq(files.companyId, other.companyId)),
+      );
+      expect(otherFiles).toHaveLength(0);
+    });
+
+    it("sweeps transcripts still pending their result after an hour, with their objects, and nothing else", async () => {
+      const tenant = await createTenant();
+      const now = Date.now();
+      const pending = async (
+        minutesAgo: number,
+        ownerId: string = Schemas.FILE_PENDING_OWNER_ID,
+      ) => {
+        const publicId = Utility.generatePublicId();
+        const key = Schemas.fileR2Key(tenant.companyPublicId, publicId);
+        await env.FILES_BUCKET.put(key, "{}");
+        const [row] = await withOwnerDb((ownerDb) =>
+          ownerDb
+            .insert(files)
+            .values({
+              publicId,
+              companyId: tenant.companyId,
+              ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
+              ownerId,
+              mime: Schemas.EVAL_TRANSCRIPT_MIME,
+              sizeBytes: 2,
+              sha256: "test",
+              createdAt: new Date(now - minutesAgo * 60_000),
+              updatedAt: new Date(now - minutesAgo * 60_000),
+            })
+            .returning({ id: files.id }),
+        );
+        return { id: row?.id ?? "", key };
+      };
+      const stale = await pending(90);
+      const fresh = await pending(10);
+      const attached = await pending(90, "123");
+
+      const swept = await new EvalTranscriptsRepo(env).sweepPending({ now });
+      expect(swept.isSuccess).toBe(true);
+      expect(swept.sweptCount).toBeGreaterThanOrEqual(1);
+
+      const left = await withOwnerDb((ownerDb) =>
+        ownerDb.select({ id: files.id }).from(files).where(eq(files.companyId, tenant.companyId)),
+      );
+      expect(left.map((row) => row.id).sort()).toEqual([fresh.id, attached.id].sort());
+      expect(await env.FILES_BUCKET.head(stale.key)).toBeNull();
+      expect(await env.FILES_BUCKET.head(fresh.key)).not.toBeNull();
+      expect(await env.FILES_BUCKET.head(attached.key)).not.toBeNull();
+    });
+  },
+);

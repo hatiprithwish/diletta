@@ -447,4 +447,7 @@ export enum LogAction {
   GetEvalTranscript = "GetEvalTranscript",
   StoreEvalTranscript = "StoreEvalTranscript",
   GetEvalAttemptConversation = "GetEvalAttemptConversation",
+  HasEvalResult = "HasEvalResult",
+  GetPendingOwnerFiles = "GetPendingOwnerFiles",
+  SweepEvalTranscripts = "SweepEvalTranscripts",
 }

@@ -36,7 +36,7 @@ EvalHarnessRoutes.post(
   authenticateEval,
   zValidator("json", Schemas.ZCreateEvalRunApiRequest),
   async (c) => {
-    const repo = new EvalHarnessRepo(c.env);
+    const repo = new EvalHarnessRepo(c.env, c.executionCtx);
     const result = await repo.startRun({
       identity: c.get("evalIdentity"),
       request: c.req.valid("json"),
@@ -66,7 +66,7 @@ EvalHarnessRoutes.post(
     const hostToken = hostTokenOf(c);
     if (!hostToken) return c.json(HOST_TOKEN_REQUIRED, 400);
     const identity = c.get("evalIdentity");
-    const result = await new EvalHarnessRepo(c.env).runAttempt({
+    const result = await new EvalHarnessRepo(c.env, c.executionCtx).runAttempt({
       identity,
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -102,7 +102,7 @@ EvalHarnessRoutes.post(
   async (c) => {
     const hostToken = hostTokenOf(c);
     if (!hostToken) return c.json(HOST_TOKEN_REQUIRED, 400);
-    const result = await new EvalHarnessRepo(c.env).readBack({
+    const result = await new EvalHarnessRepo(c.env, c.executionCtx).readBack({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -131,11 +131,10 @@ EvalHarnessRoutes.post(
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZEvalJudgeApiRequest),
   async (c) => {
-    const result = await new EvalHarnessRepo(c.env).judge({
+    const result = await new EvalHarnessRepo(c.env, c.executionCtx).judge({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
-      ctx: c.executionCtx,
     });
     if (!result.isSuccess || !result.verdict) {
       return c.json(
@@ -158,7 +157,7 @@ EvalHarnessRoutes.post(
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZRecordEvalResultApiRequest),
   async (c) => {
-    const result = await new EvalHarnessRepo(c.env).recordResult({
+    const result = await new EvalHarnessRepo(c.env, c.executionCtx).recordResult({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -184,7 +183,7 @@ EvalHarnessRoutes.post(
   async (c) => {
     const hostToken = hostTokenOf(c);
     if (!hostToken) return c.json(HOST_TOKEN_REQUIRED, 400);
-    const result = await new EvalHarnessRepo(c.env).reset({
+    const result = await new EvalHarnessRepo(c.env, c.executionCtx).reset({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       hostToken,
@@ -210,7 +209,7 @@ EvalHarnessRoutes.post(
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZFinishEvalRunApiRequest),
   async (c) => {
-    const result = await new EvalHarnessRepo(c.env).finish({
+    const result = await new EvalHarnessRepo(c.env, c.executionCtx).finish({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),

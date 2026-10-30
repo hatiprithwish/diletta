@@ -84,6 +84,10 @@ export interface CreateEvalResultDALResponse extends ApiResponse {
   evalResultId?: string;
 }
 
+export interface HasEvalResultDALResponse extends ApiResponse {
+  hasResult?: boolean;
+}
+
 // DEV_NOTE: One case's attempts in a run: how many were recorded and how many passed
 export interface EvalRunCaseTallyRow {
   evalCaseId: string;

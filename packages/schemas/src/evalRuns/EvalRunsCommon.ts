@@ -42,23 +42,27 @@ export const EVAL_RUN_STATUS_LABEL_MAP: Record<EvalRunStatusIntEnum, EvalRunStat
 // DEV_NOTE: Why the harness stopped a run before it finished (M5-3), set only on a Failed run the harness ended early;
 // null = finished, or ended without a reason. JudgeUnavailable: the pinned judge couldn't give a verdict (the provider
 // or the gateway unreachable, the key refused, the budget said no, no usable answer). HostUnavailable: the staging host
-// couldn't be reached or signed in to. ServerError: the backend failed a step.
+// couldn't be reached, signed in to or reset. ServerError: the backend failed a step or couldn't be reached.
+// HarnessError: the harness itself stopped (a bug, an answer it couldn't read, a cancel), never the backend's doing.
 export enum EvalRunFailureIntEnum {
   JudgeUnavailable = 1,
   HostUnavailable = 2,
   ServerError = 3,
+  HarnessError = 4,
 }
 
 export enum EvalRunFailureLabelEnum {
   JudgeUnavailable = "The judge couldn't be reached",
   HostUnavailable = "The staging host couldn't be reached",
   ServerError = "A server error stopped the run",
+  HarnessError = "The test harness stopped the run",
 }
 
 export const EVAL_RUN_FAILURE_LABEL_MAP: Record<EvalRunFailureIntEnum, EvalRunFailureLabelEnum> = {
   [EvalRunFailureIntEnum.JudgeUnavailable]: EvalRunFailureLabelEnum.JudgeUnavailable,
   [EvalRunFailureIntEnum.HostUnavailable]: EvalRunFailureLabelEnum.HostUnavailable,
   [EvalRunFailureIntEnum.ServerError]: EvalRunFailureLabelEnum.ServerError,
+  [EvalRunFailureIntEnum.HarnessError]: EvalRunFailureLabelEnum.HarnessError,
 };
 
 // Whole Eval Run Body — DB shape

@@ -10,9 +10,12 @@ Every check works on JSON values as the API sent them (the case already tag-fill
                   with the call's args and result, as live verification does); every expect value must read back
   rubric          a rule on the chatbot's last reply: contains / doesn't contain, case-insensitive
   judge           the pinned LLM judge (M5-3) on the case's rubric (when it has one), asked through the backend, which
-                  reads the attempt's transcript itself and calls the judge on the company's key. Only a turn that
-                  completed is judged (one that didn't has failed already). A judge that couldn't give a verdict stops
-                  grading with an error (judge_unavailable): the attempt can't pass, and the runner stops the run.
+                  reads the attempt's transcript itself and calls the judge on the company's key. It is asked only when
+                  the judge's verdict can still decide the attempt: the turn completed and every other check passed.
+                  An attempt the other checks already failed is never judged (the call is billed on the company's
+                  key and couldn't change the outcome), so it has no judge check. A judge that couldn't give a verdict
+                  stops grading with an error (judge_unavailable): the attempt can't pass, and the runner stops the
+                  run.
 A call "ran" when the host was reached and answered for it; a refused, blocked or failed one didn't.
 JSON equality is strict about types (true is not 1), numbers compare by value, as the backend compares them.
 Text limits count UTF-16 code units, as the backend's Zod does (an emoji is two).
@@ -343,7 +346,8 @@ def grade_attempt(
 
     judge_unavailable: str | None = None
     rubric = expectations.get("rubric")
-    if isinstance(rubric, str) and is_completed:
+    is_still_passing = not errors and all(check["hasPassed"] for check in checks)
+    if isinstance(rubric, str) and is_still_passing:
         judged = judge(rubric)
         if isinstance(judged, JudgeVerdict):
             checks.append(_judge_check(rubric, judged))

@@ -1,35 +1,28 @@
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import { getAgentByName } from "agents";
-import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
-import FilesDAL from "@/data-access-layer/FilesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import EvalJudgeProvider from "@/providers/evalJudge";
 import EvalRefusalProvider from "@/providers/evalRefusal";
 import EvalTranscriptProvider from "@/providers/evalTranscript";
-import FileStorageProvider from "@/providers/fileStorage";
+import EvalTranscriptFilesProvider from "@/providers/evalTranscriptFiles";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
-
-// DEV_NOTE: A transcript's files row is written before the result it belongs to, then pointed at it (setFileOwner), as
-// KnowledgeDocumentFilesProvider does
-const PENDING_OWNER_ID = "0";
-// DEV_NOTE: The rollback message of a result that already exists, so the refusal is still Duplicate
-const DUPLICATE_RESULT = "This attempt already has a result";
 
 // DEV_NOTE: The eval harness's API (M5-2): /eval/* as the platform's harness drives it, one Repo method per route.
 // Every call is authenticated first (authenticateEval → EvalAuthRepo): the identity names one company and its active
@@ -42,10 +35,11 @@ const DUPLICATE_RESULT = "This attempt already has a result";
 //     staging connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write
 //     auto-approved.
 //   readBack: a readback assert, the same request live verification sends, on the staging connection.
-//   judge: the pinned LLM judge (M5-3) on one attempt's transcript and its case's rubric, through the model router on
-//     the company's key (the run's model call: budget held, cost on the run). No verdict = JudgeUnavailable.
-//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only), with its transcript (M5-3:
-//     built from its DO, a JSON file in R2 with a files row of owner eval_result) when the attempt ran.
+//   judge: the pinned LLM judge (M5-3) on one attempt's transcript (the judge's view) and its case's rubric, through
+//     the model router on the company's key (the run's model call: budget held, cost on the run). No verdict =
+//     JudgeUnavailable.
+//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only), with its transcript (M5-3)
+//     when the attempt ran. Reading and storing transcripts is EvalTranscriptsRepo's.
 //   reset: the connection's reset_op, once after the attempts.
 //   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set.
 // Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
@@ -61,13 +55,14 @@ export default class EvalHarnessRepo {
   private evalRunsDal: EvalRunsDAL;
   private conversationsDal: ConversationsDAL;
   private companiesDal: CompaniesDAL;
-  private changeRequestsDal: ChangeRequestsDAL;
-  private filesDal: FilesDAL;
   private conversationsRepo: ConversationsRepo;
   private actionEngineRepo: ActionEngineRepo;
+  private modelRouterRepo: ModelRouterRepo;
+  private evalTranscriptsRepo: EvalTranscriptsRepo;
 
-  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan) are built once, here
-  constructor(env: Env) {
+  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan, the judge's model, a
+  // transcript) are built once, here. ctx is the request's: the judge's model_calls row is written in its waitUntil.
+  constructor(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     this.env = env;
     this.db = getDbClient(env);
     this.chatbotsDal = new ChatbotsDAL();
@@ -76,10 +71,10 @@ export default class EvalHarnessRepo {
     this.evalRunsDal = new EvalRunsDAL();
     this.conversationsDal = new ConversationsDAL();
     this.companiesDal = new CompaniesDAL();
-    this.changeRequestsDal = new ChangeRequestsDAL();
-    this.filesDal = new FilesDAL();
     this.conversationsRepo = new ConversationsRepo(env);
     this.actionEngineRepo = new ActionEngineRepo(env);
+    this.modelRouterRepo = new ModelRouterRepo(env, ctx);
+    this.evalTranscriptsRepo = new EvalTranscriptsRepo(env);
   }
 
   // DEV_NOTE: A Running run of the config, and the cases it runs. The config's chatbot must be active and the config
@@ -429,17 +424,17 @@ export default class EvalHarnessRepo {
     return { isSuccess: true, message: "Record read back", check };
   }
 
-  // DEV_NOTE: The pinned judge on one attempt (M5-3). The conversation must be one of this run's. Its transcript is
-  // read from its DO (never taken from the harness), and the judge is the pinned model (Schemas.EVAL_JUDGE_MODELS) of
-  // the run config's default tier's provider, called through the model router: the company's key, the company budget
-  // (no per-user caps: an eval has none), the run's id (its cost adds to the run), the attempt's conversation. Any
-  // router, provider or answer failure is JudgeUnavailable (503): the harness stops the run on it, so a case with a
-  // rubric never passes ungraded.
+  // DEV_NOTE: The pinned judge on one attempt (M5-3). The conversation must be one of this run's. The attempt is read
+  // from its DO (never taken from the harness) and graded on the judge's view (EvalTranscriptProvider.judgeView: every
+  // tool call, the last reply whole, held to the model-safe budget). The judge is the pinned model
+  // (Schemas.EVAL_JUDGE_MODELS) of the run config's default tier's provider, called through the model router: the
+  // company's key, the company budget (no per-user caps: an eval has none), the run's id (its cost adds to the run),
+  // the attempt's conversation. Any router, provider or answer failure is JudgeUnavailable (503): the harness stops the
+  // run on it, so a case with a rubric never passes ungraded.
   async judge(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
     request: Schemas.EvalJudgeApiRequest;
-    ctx: Pick<ExecutionContext, "waitUntil">;
   }): Promise<Schemas.EvalJudgeResponse> {
     const { identity, request } = params;
     const companyId = identity.companyId;
@@ -475,17 +470,14 @@ export default class EvalHarnessRepo {
     }
     const { source } = found;
 
-    const transcript = await this.buildTranscript(companyId, source);
-    if (!transcript.isSuccess || !transcript.built) {
-      return refuse(
-        transcript.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
-        transcript.message,
-      );
+    const read = await this.evalTranscriptsRepo.read({ companyId, source });
+    if (!read.isSuccess || !read.record) {
+      return refuse(read.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, read.message);
     }
 
     const { provider } = source.routing[source.routing.defaultTier];
     const pinned = { provider, model: Schemas.EVAL_JUDGE_MODELS[provider] };
-    const routed = await new ModelRouterRepo(this.env, params.ctx).getModel({
+    const routed = await this.modelRouterRepo.getModel({
       companyId,
       chatbotId: source.chatbotId,
       chatbotUserId: null,
@@ -510,7 +502,7 @@ export default class EvalHarnessRepo {
     }
     const judged = await EvalJudgeProvider.judge(
       routed.model,
-      { transcript: transcript.built.transcript, rubric: request.rubric },
+      { transcript: EvalTranscriptProvider.judgeView(read.record), rubric: request.rubric },
       { ...metadata, provider, model: pinned.model },
     );
     if (!judged.isSuccess) {
@@ -532,12 +524,15 @@ export default class EvalHarnessRepo {
     };
   }
 
-  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate (append-only).
-  // An attempt that ran (it has a conversation) gets its transcript (M5-3): built from its DO and put in R2 first, then
-  // in one withTenant its files row (pending owner) → the result pointing at it → the row's owner set to the result.
-  // Anything that fails after the object is put deletes it, so a result never points at a missing file and no row is
-  // left without its result. A transcript that can't be built is a ServerError (the harness retries the result: nothing
-  // was written). An attempt that never started has no conversation and no transcript.
+  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate (append-only),
+  // answered in the first transaction, before the DO is read or anything is stored. An attempt that ran (it has a
+  // conversation) gets its transcript (M5-3): EvalTranscriptsRepo stores it (files row pending its owner, then the R2
+  // object), and the result's own withTenant (run row locked) writes the result pointing at it and attaches the row.
+  // When that transaction is known not to have written the result (a refusal it answered, or a rollback it threw), the
+  // stored transcript is discarded. When its outcome is unknown (the commit's answer lost), nothing is touched: if it
+  // committed, the row is attached and the harness's retry answers Duplicate; if not, the row is still pending and the
+  // hourly sweep removes it with its object. A transcript that can't be read or stored is a ServerError (the harness
+  // retries the result: nothing was written). An attempt that never started has no conversation and no transcript.
   async recordResult(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -549,21 +544,30 @@ export default class EvalHarnessRepo {
     const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
       this.refuseStep(Schemas.LogAction.RecordEvalResult, failure, message, metadata);
 
-    const found: Schemas.EvalRunTranscriptSourceResponse & { hasConversation?: boolean } =
-      await withTenant(this.db, companyId, async (tx) => {
+    const found: Schemas.EvalResultSourceResponse = await withTenant(
+      this.db,
+      companyId,
+      async (tx): Promise<Schemas.EvalResultSourceResponse> => {
         const checked = await this.resultCase(tx, identity, params.runPublicId, request);
         if (!checked.isSuccess || !checked.run || !checked.chatbotId || !checked.evalCaseId) {
           return checked;
         }
+        const attempt = {
+          companyId,
+          evalRunId: checked.run.id,
+          evalCaseId: checked.evalCaseId,
+          attempt: request.attempt,
+        };
+        const existing = await this.evalRunsDal.hasEvalResult(tx, attempt);
+        if (!existing.isSuccess) return this.stepFailure(false, existing.message);
+        if (existing.hasResult) return this.duplicateResult();
         const conversation = await this.conversationsDal.getEvalAttemptConversation(tx, {
           companyId,
           evalRunId: checked.run.id,
           evalCaseId: checked.evalCaseId,
           evalAttempt: request.attempt,
         });
-        if (conversation.isNotFound) {
-          return { isSuccess: true, hasConversation: false };
-        }
+        if (conversation.isNotFound) return { isSuccess: true, hasConversation: false };
         if (!conversation.isSuccess || !conversation.conversation) {
           return this.stepFailure(false, conversation.message);
         }
@@ -573,56 +577,37 @@ export default class EvalHarnessRepo {
           conversation: conversation.conversation,
         });
         return { ...source, hasConversation: true };
-      });
+      },
+    );
     if (!found.isSuccess || (found.hasConversation && !found.source)) {
       return refuse(found.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, found.message);
     }
 
-    let stored: { fileR2Key: string; file: Schemas.CreateFileDALRequest } | null = null;
+    let stored: { fileId: string; fileR2Key: string } | null = null;
     if (found.source) {
-      const transcript = await this.buildTranscript(companyId, found.source);
-      if (!transcript.isSuccess || !transcript.built) {
-        return refuse(
-          transcript.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
-          transcript.message,
-        );
+      const read = await this.evalTranscriptsRepo.read({ companyId, source: found.source });
+      if (!read.isSuccess || !read.record) {
+        return refuse(read.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, read.message);
       }
-      const { bytes } = transcript.built;
-      const file: Schemas.CreateFileDALRequest = {
-        publicId: Utility.generatePublicId(),
+      const saved = await this.evalTranscriptsRepo.store({
         companyId,
-        ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
-        ownerId: PENDING_OWNER_ID,
-        filename: null,
-        mime: Schemas.EVAL_TRANSCRIPT_MIME,
-        sizeBytes: bytes.byteLength,
-        sha256: await Utility.sha256Hex(new TextDecoder().decode(bytes)),
-        createdBy: null,
-      };
-      const fileR2Key = Schemas.fileR2Key(found.source.companyPublicId, file.publicId);
-      const put = await FileStorageProvider.putObject(this.env, {
-        key: fileR2Key,
-        bytes,
-        mime: Schemas.EVAL_TRANSCRIPT_MIME,
+        source: found.source,
+        record: read.record,
       });
-      if (!put.isSuccess) {
-        return refuse(
-          Schemas.EvalRunStepFailureEnum.ServerError,
-          "The transcript couldn't be stored",
-        );
+      if (!saved.isSuccess || !saved.stored) {
+        return refuse(saved.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, saved.message);
       }
-      stored = { fileR2Key, file };
+      stored = saved.stored;
     }
 
+    // DEV_NOTE: Set on every path of the callback that answers or throws on purpose: the result wasn't written. Unset
+    // when withTenant failed on its own (a lost connection, a failed commit), whose outcome is unknown.
+    let isKnownNotWritten = false;
     const result: Schemas.EvalRunStepResponse = await withTenant(this.db, companyId, async (tx) => {
       const checked = await this.resultCase(tx, identity, params.runPublicId, request, true);
-      if (!checked.isSuccess || !checked.run || !checked.evalCaseId) return checked;
-
-      let transcriptFileId: string | null = null;
-      if (stored) {
-        const created = await this.filesDal.createFile(tx, stored.file);
-        if (!created.isSuccess || !created.file) return this.stepFailure(false, created.message);
-        transcriptFileId = created.file.id;
+      if (!checked.isSuccess || !checked.run || !checked.evalCaseId) {
+        isKnownNotWritten = true;
+        return checked;
       }
       const created = await this.evalRunsDal.createEvalResult(tx, {
         companyId,
@@ -631,42 +616,35 @@ export default class EvalHarnessRepo {
         attempt: request.attempt,
         hasPassed: request.hasPassed,
         graderOutput: request.graderOutput,
-        transcriptFileId,
+        transcriptFileId: stored?.fileId ?? null,
         latencyMs: request.latencyMs,
       });
       if (created.isConflict) {
-        // DEV_NOTE: The file row written above goes with the refusal: the attempt already has its result
-        if (transcriptFileId !== null) throw new TenantRollbackError(DUPLICATE_RESULT);
-        return {
-          isSuccess: false,
-          message: created.message,
-          failure: Schemas.EvalRunStepFailureEnum.Duplicate,
-        };
+        isKnownNotWritten = true;
+        return this.duplicateResult();
       }
       if (!created.isSuccess || !created.evalResultId) {
-        if (transcriptFileId !== null)
-          throw new TenantRollbackError(created.message ?? "No result");
+        isKnownNotWritten = true;
         return this.stepFailure(false, created.message);
       }
-      if (transcriptFileId !== null) {
-        const owned = await this.filesDal.setFileOwner(tx, {
-          id: transcriptFileId,
+      if (stored) {
+        const attached = await EvalTranscriptFilesProvider.attach(tx, {
           companyId,
-          ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
-          ownerId: created.evalResultId,
+          fileId: stored.fileId,
+          evalResultId: created.evalResultId,
         });
-        if (!owned.isSuccess) throw new TenantRollbackError(owned.message ?? "No file owner");
+        if (!attached.isSuccess) {
+          isKnownNotWritten = true;
+          throw new TenantRollbackError(attached.message ?? "The transcript couldn't be attached");
+        }
       }
       return { isSuccess: true, message: "Eval result recorded" };
     });
     if (!result.isSuccess) {
-      if (stored) await FileStorageProvider.deleteObjects(this.env, { keys: [stored.fileR2Key] });
-      const failure =
-        result.failure ??
-        (result.message === DUPLICATE_RESULT
-          ? Schemas.EvalRunStepFailureEnum.Duplicate
-          : Schemas.EvalRunStepFailureEnum.ServerError);
-      return refuse(failure, result.message);
+      if (stored && isKnownNotWritten) {
+        await this.evalTranscriptsRepo.discard({ companyId, stored });
+      }
+      return refuse(result.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, result.message);
     }
     return result;
   }
@@ -938,7 +916,7 @@ export default class EvalHarnessRepo {
     runPublicId: string,
     request: Pick<Schemas.RecordEvalResultApiRequest, "caseId" | "attempt">,
     isLocked = false,
-  ): Promise<Schemas.EvalRunningRunResponse & { evalCaseId?: string }> {
+  ): Promise<Schemas.EvalResultCaseResponse> {
     const running = await this.runningRun(tx, identity, runPublicId, isLocked);
     if (!running.isSuccess || !running.run) return running;
     if (request.attempt > running.run.k) {
@@ -993,74 +971,13 @@ export default class EvalHarnessRepo {
     };
   }
 
-  // DEV_NOTE: An attempt's transcript v1: its conversation from its DO (getEvalTranscript, JSON text over DO RPC), its
-  // change requests' summaries (no values) from change_requests, put together by EvalTranscriptProvider. The DO
-  // unreachable, an answer that doesn't parse or a transcript that won't hold to v1 is a ServerError.
-  private async buildTranscript(
-    companyId: string,
-    source: Schemas.EvalRunTranscriptSource,
-  ): Promise<Schemas.EvalTranscriptBuildResponse> {
-    const metadata = { companyId, conversationPublicId: source.conversationPublicId };
-    let read: Schemas.EvalAttemptTranscriptResponse;
-    try {
-      const stub = await getAgentByName(this.env.CONVERSATION_DO, source.conversationPublicId);
-      const parsed = Schemas.ZEvalAttemptTranscriptResponse.safeParse(
-        Utility.parseJson(await stub.getEvalTranscript()),
-      );
-      read = parsed.success
-        ? parsed.data
-        : { isSuccess: false, message: "Conversation DO answered something else" };
-    } catch (error) {
-      AppLogger.error({
-        category: Schemas.LogCategory.Eval,
-        action: Schemas.LogAction.GetEvalTranscript,
-        message: "Conversation DO unreachable",
-        error,
-        metadata,
-      });
-      read = { isSuccess: false, message: "Conversation DO unreachable" };
-    }
-    if (!read.isSuccess || !read.entries) return this.stepFailure(false, read.message);
-    const entries = read.entries;
-
-    const changeRequestIds = [
-      ...new Set(
-        entries.flatMap((entry) =>
-          entry.kind === Schemas.EvalAttemptEntryKindEnum.ToolCall && entry.changeRequestId !== null
-            ? [entry.changeRequestId]
-            : [],
-        ),
-      ),
-    ];
-    const listed: Schemas.ChangeRequestsDALResponse = await withTenant(
-      this.db,
-      companyId,
-      async (tx) =>
-        await this.changeRequestsDal.listConversationChangeRequests(tx, {
-          companyId,
-          conversationId: source.conversationId,
-          publicIds: changeRequestIds,
-        }),
-    );
-    if (!listed.isSuccess) return this.stepFailure(false, listed.message);
-
-    const built = EvalTranscriptProvider.build({
-      entries,
-      toolVersions: source.toolVersions,
-      changeRequestSummaries: Object.fromEntries(
-        (listed.changeRequests ?? []).map((row) => [row.publicId, row.summary]),
-      ),
-    });
-    if (!built) {
-      AppLogger.error({
-        category: Schemas.LogCategory.Eval,
-        action: Schemas.LogAction.StoreEvalTranscript,
-        message: "Transcript doesn't hold to its schema",
-        metadata,
-      });
-      return this.stepFailure(false, "The transcript couldn't be built");
-    }
-    return { isSuccess: true, built };
+  // DEV_NOTE: The attempt already has its result (append-only): the harness reads Duplicate as "the first one landed"
+  private duplicateResult(): Schemas.EvalRunStepResponse {
+    return {
+      isSuccess: false,
+      message: "This attempt already has a result",
+      failure: Schemas.EvalRunStepFailureEnum.Duplicate,
+    };
   }
 
   private stepFailure(

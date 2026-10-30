@@ -29,6 +29,7 @@ import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
@@ -48,6 +49,7 @@ const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.ChangeRequestPurge]: runChangeRequestPurge,
   [Schemas.CronJobEnum.KnowledgeResync]: runKnowledgeResync,
   [Schemas.CronJobEnum.ActivityRollups]: runActivityRollups,
+  [Schemas.CronJobEnum.EvalTranscriptSweep]: runEvalTranscriptSweep,
   [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
 };
 
