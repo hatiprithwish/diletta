@@ -836,6 +836,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       started,
       started.cases.map((evalCase) => evalCase.publicId).filter((id) => id !== skipped),
     );
+    routeTestHostFetch();
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
       hostToken: tenant.hostToken,
