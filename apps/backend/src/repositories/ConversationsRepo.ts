@@ -1,4 +1,5 @@
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { EmptyRelations } from "drizzle-orm";
+import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotUsersDAL from "@/data-access-layer/ChatbotUsersDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
@@ -48,7 +49,9 @@ export default class ConversationsRepo {
   // DEV_NOTE: The verified user's chatbot_users row (created on first visit, display name kept current), then either
   // their open conversation with this chatbot (conversationPublicId) or a new one with its conversation.started
   // critical event as the activity root. A conversation that is another user's, another chatbot's, another
-  // company's, or closed answers NotFound, never which of them. The caller relays outboxId after the commit.
+  // company's, closed, or an eval attempt's (M5-2: the host test user is a real host user, and an eval conversation
+  // runs the run's config with writes approved) answers NotFound, never which of them. The caller relays outboxId
+  // after the commit.
   async startOrResume(params: {
     identity: Schemas.WidgetIdentity;
     conversationPublicId: string | null;
@@ -86,7 +89,8 @@ export default class ConversationsRepo {
           const isTheirs =
             conversation.chatbotId === identity.chatbotId &&
             conversation.chatbotUserId === chatbotUserId &&
-            conversation.status === Schemas.ConversationStatusIntEnum.Open;
+            conversation.status === Schemas.ConversationStatusIntEnum.Open &&
+            conversation.evalRunId === null;
           if (!isTheirs) {
             return {
               isSuccess: false,
@@ -102,49 +106,20 @@ export default class ConversationsRepo {
           };
         }
 
-        const created = await this.conversationsDal.createConversation(tx, {
-          companyId: identity.companyId,
-          chatbotId: identity.chatbotId,
-          chatbotUserId,
-        });
-        if (!created.isSuccess || !created.conversation) {
-          throw new TenantRollbackError(created.message);
-        }
-        const { conversation } = created;
-
-        const event = await CriticalEventProvider.record(tx, {
-          companyId: identity.companyId,
-          actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
-          actorId: chatbotUserId,
-          entityType: "conversation",
-          entityId: conversation.id,
-          entityAction: "started",
-          entityVersion: null,
-          parentLogId: null,
-          rootLogId: null,
+        const started = await this.createStartedConversation(tx, {
+          conversation: {
+            companyId: identity.companyId,
+            chatbotId: identity.chatbotId,
+            chatbotUserId,
+          },
           detail: { chatbotId: identity.chatbotId, connectionId: identity.connectionId },
-          eventType: "conversation.started",
-          dedupeKey: `conversation.started:${conversation.publicId}`,
         });
-        if (!event.isSuccess || !event.activityLogId || !event.outboxId) {
-          throw new TenantRollbackError(event.message);
-        }
-
-        const rooted = await this.conversationsDal.setConversationRootLog(tx, {
-          companyId: identity.companyId,
-          publicId: conversation.publicId,
-          rootLogId: event.activityLogId,
-        });
-        if (!rooted.isSuccess || !rooted.conversation) {
-          throw new TenantRollbackError(rooted.message);
-        }
-
         return {
           isSuccess: true,
           message: "Conversation started",
-          session: this.toSession(identity, chatbotUserId, rooted.conversation),
+          session: this.toSession(identity, chatbotUserId, started.conversation),
           isNew: true,
-          outboxId: event.outboxId,
+          outboxId: started.outboxId,
         };
       },
     );
@@ -192,58 +167,29 @@ export default class ConversationsRepo {
       this.db,
       identity.companyId,
       async (tx) => {
-        const created = await this.conversationsDal.createConversation(tx, {
-          companyId: identity.companyId,
-          chatbotId: chatbot.id,
-          chatbotUserId,
-          evalRunId: params.evalRunId,
-          chatbotConfigId: params.chatbotConfigId,
-        });
-        if (!created.isSuccess || !created.conversation) {
-          throw new TenantRollbackError(created.message);
-        }
-        const { conversation } = created;
-
-        const event = await CriticalEventProvider.record(tx, {
-          companyId: identity.companyId,
-          actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
-          actorId: chatbotUserId,
-          entityType: "conversation",
-          entityId: conversation.id,
-          entityAction: "started",
-          entityVersion: null,
-          parentLogId: null,
-          rootLogId: null,
+        const started = await this.createStartedConversation(tx, {
+          conversation: {
+            companyId: identity.companyId,
+            chatbotId: chatbot.id,
+            chatbotUserId,
+            evalRunId: params.evalRunId,
+            chatbotConfigId: params.chatbotConfigId,
+          },
           detail: {
             chatbotId: chatbot.id,
             connectionId: identity.connectionId,
             evalRunId: params.evalRunId,
           },
-          eventType: "conversation.started",
-          dedupeKey: `conversation.started:${conversation.publicId}`,
         });
-        if (!event.isSuccess || !event.activityLogId || !event.outboxId) {
-          throw new TenantRollbackError(event.message);
-        }
-
-        const rooted = await this.conversationsDal.setConversationRootLog(tx, {
-          companyId: identity.companyId,
-          publicId: conversation.publicId,
-          rootLogId: event.activityLogId,
-        });
-        if (!rooted.isSuccess || !rooted.conversation) {
-          throw new TenantRollbackError(rooted.message);
-        }
-
         return {
           isSuccess: true,
           message: "Eval conversation started",
-          session: this.toSession(chatbotRef, chatbotUserId, rooted.conversation, {
+          session: this.toSession(chatbotRef, chatbotUserId, started.conversation, {
             evalRunId: params.evalRunId,
             chatbotConfigId: params.chatbotConfigId,
             connectionId: identity.connectionId,
           }),
-          outboxId: event.outboxId,
+          outboxId: started.outboxId,
         };
       },
     );
@@ -382,6 +328,51 @@ export default class ConversationsRepo {
         });
       return result;
     });
+  }
+
+  // DEV_NOTE: A new conversation (a widget's or an eval attempt's) with its conversation.started critical event as the
+  // activity root, in the caller's transaction; any failed step throws TenantRollbackError
+  private async createStartedConversation(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: {
+      conversation: Schemas.CreateConversationDALRequest;
+      detail: Schemas.CriticalEventBase["detail"];
+    },
+  ): Promise<{ conversation: Schemas.Conversation; outboxId: string }> {
+    const { companyId, chatbotUserId } = params.conversation;
+    const created = await this.conversationsDal.createConversation(tx, params.conversation);
+    if (!created.isSuccess || !created.conversation) {
+      throw new TenantRollbackError(created.message);
+    }
+    const { conversation } = created;
+
+    const event = await CriticalEventProvider.record(tx, {
+      companyId,
+      actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+      actorId: chatbotUserId,
+      entityType: "conversation",
+      entityId: conversation.id,
+      entityAction: "started",
+      entityVersion: null,
+      parentLogId: null,
+      rootLogId: null,
+      detail: params.detail,
+      eventType: "conversation.started",
+      dedupeKey: `conversation.started:${conversation.publicId}`,
+    });
+    if (!event.isSuccess || !event.activityLogId || !event.outboxId) {
+      throw new TenantRollbackError(event.message);
+    }
+
+    const rooted = await this.conversationsDal.setConversationRootLog(tx, {
+      companyId,
+      publicId: conversation.publicId,
+      rootLogId: event.activityLogId,
+    });
+    if (!rooted.isSuccess || !rooted.conversation) {
+      throw new TenantRollbackError(rooted.message);
+    }
+    return { conversation: rooted.conversation, outboxId: event.outboxId };
   }
 
   // DEV_NOTE: Its own transaction, before the conversation's: two first connects of one user can race, and the loser

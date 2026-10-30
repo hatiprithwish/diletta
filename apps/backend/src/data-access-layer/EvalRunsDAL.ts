@@ -1,7 +1,15 @@
 import { and, asc, countDistinct, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { chatbotConfigs, chatbots, evalCases, evalResults, evalRuns, files } from "@/db/tables";
+import {
+  chatbotConfigs,
+  chatbots,
+  companyConnections,
+  evalCases,
+  evalResults,
+  evalRuns,
+  files,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -10,7 +18,8 @@ const RESULT_ATTEMPT_INDEX = "UNQ_eval_results_eval_run_id_eval_case_id_attempt"
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). The Tests page (M4-8) reads runs and their
-// results; the eval harness (M5-2) writes them (createEvalRun, createEvalResult, finishEvalRun). A result's case is
+// results; the eval harness (M5-2) writes them (createEvalRun, createEvalResult, finishEvalRun), and every model call
+// of a run adds its cost (addEvalRunCost). A result's case is
 // the company's own or a platform case (company_id null, readable by every tenant under RLS), so every case join takes
 // either.
 export default class EvalRunsDAL {
@@ -44,6 +53,8 @@ export default class EvalRunsDAL {
         publicId: evalRuns.publicId,
         companyId: evalRuns.companyId,
         chatbotConfigId: evalRuns.chatbotConfigId,
+        companyConnectionId: evalRuns.companyConnectionId,
+        evalCaseIds: evalRuns.evalCaseIds,
         trigger: evalRuns.trigger,
         harnessVersion: evalRuns.harnessVersion,
         k: evalRuns.k,
@@ -514,7 +525,8 @@ export default class EvalRunsDAL {
 
   // ─── The eval harness's writes (M5-2) ─────────────────────────────────────
 
-  // DEV_NOTE: A new run, Running from the start. The config must be the company's (no DB foreign keys).
+  // DEV_NOTE: A new run, Running from the start, with its staging connection and case set. The config and the
+  // connection must be the company's (no DB foreign keys); the cases were read by the Repo in the same transaction.
   async createEvalRun(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.CreateEvalRunDALRequest,
@@ -531,8 +543,17 @@ export default class EvalRunsDAL {
         .from(chatbotConfigs)
         .where(and(...configConditions))
         .limit(1);
-      if (!config) {
-        const message = "Chatbot config not found";
+      const connectionConditions = [
+        eq(companyConnections.id, params.companyConnectionId),
+        eq(companyConnections.companyId, params.companyId),
+      ];
+      const [connection] = await tx
+        .select({ id: companyConnections.id })
+        .from(companyConnections)
+        .where(and(...connectionConditions))
+        .limit(1);
+      if (!config || !connection) {
+        const message = config ? "Company connection not found" : "Chatbot config not found";
         AppLogger.error({
           category: Schemas.LogCategory.DAL,
           action: Schemas.LogAction.CreateEvalRun,
@@ -549,6 +570,8 @@ export default class EvalRunsDAL {
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
           chatbotConfigId: params.chatbotConfigId,
+          companyConnectionId: params.companyConnectionId,
+          evalCaseIds: params.evalCaseIds,
           trigger: params.trigger,
           harnessVersion: params.harnessVersion,
           k: params.k,
@@ -594,7 +617,6 @@ export default class EvalRunsDAL {
           caseCount: params.caseCount,
           passAllKCount: params.passAllKCount,
           hasPassed: params.hasPassed,
-          costUsd: params.costUsd,
           finishedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -622,6 +644,57 @@ export default class EvalRunsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.FinishEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: cost_usd + addUsd - subtractUsd as one update (numeric, exact), in the transaction that writes the model
+  // call, so concurrent calls never lose a cost. Any status: a call recorded or backfilled after the finish still
+  // counts. isNotFound when the run is gone.
+  async addEvalRunCost(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.AddEvalRunCostDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(evalRuns.id, params.id), eq(evalRuns.companyId, params.companyId)];
+      const [evalRun] = await tx
+        .update(evalRuns)
+        .set({
+          costUsd: sql`${evalRuns.costUsd} + ${params.addUsd}::numeric - ${params.subtractUsd}::numeric`,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!evalRun) {
+        const message = "Eval run not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.AddEvalRunCost,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Eval run cost added successfully";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in adding eval run cost";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.AddEvalRunCost,
         message,
         error,
         metadata: params,

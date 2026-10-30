@@ -58,6 +58,9 @@ export default class ModelRouterRepo {
       provider,
       model,
     };
+    // DEV_NOTE: The conversation a key failure's System issue links to: none for an eval attempt's (M5-2), whose
+    // conversation never shows on the dashboard; the key is still marked Invalid and the run records the failed attempt
+    const issueConversationId = params.evalRunId === null ? params.conversationId : null;
 
     const price = Schemas.getModelPrice(provider, model);
     if (!price) {
@@ -79,7 +82,7 @@ export default class ModelRouterRepo {
       }
       await this.handleKeyFailure({
         companyId: params.companyId,
-        conversationId: params.conversationId,
+        conversationId: issueConversationId,
         provider,
         usedKey: null,
         reason: Schemas.ModelKeyFailureReasonEnum.NoActiveKey,
@@ -122,7 +125,7 @@ export default class ModelRouterRepo {
         onRejectedKey: async () => {
           await this.handleKeyFailure({
             companyId: params.companyId,
-            conversationId: params.conversationId,
+            conversationId: issueConversationId,
             provider,
             usedKey: context.usedKey,
             reason: Schemas.ModelKeyFailureReasonEnum.RejectedByProvider,

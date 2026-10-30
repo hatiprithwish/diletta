@@ -30,6 +30,8 @@ import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import DashboardConversationsRepo from "@/repositories/DashboardConversationsRepo";
 import EvalJwtProvider from "@/providers/evalJwt";
+import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EvalAuthRepo from "@/repositories/EvalAuthRepo";
 import Utility from "@/utils/Utility";
 import {
   anthropicReplyStream,
@@ -108,7 +110,7 @@ async function createTenant() {
         name: "Records bot",
         isDefault: true,
       })
-      .returning({ id: chatbots.id });
+      .returning({ id: chatbots.id, publicId: chatbots.publicId });
     const connectionColumns = {
       companyId,
       authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
@@ -212,6 +214,7 @@ async function createTenant() {
       companyId,
       companyPublicId,
       chatbotId: chatbot?.id ?? "",
+      chatbotPublicId: chatbot?.publicId ?? "",
       configId: config?.id ?? "",
       configPublicId: config?.publicId ?? "",
       stagingPublicId: staging?.publicId ?? "",
@@ -342,6 +345,58 @@ const graderOutput = (hasPassed: boolean): Schemas.EvalGraderOutput => ({
   ],
   error: null,
 });
+
+// DEV_NOTE: Records a result for every case of the run but the ones skipped (a passing one for the tenant's own case)
+async function recordAll(
+  tenant: Tenant,
+  started: Schemas.CreateEvalRunApiResponse,
+  skip: string[] = [],
+): Promise<void> {
+  for (const evalCase of started.cases) {
+    if (skip.includes(evalCase.publicId)) continue;
+    for (let attempt = 1; attempt <= started.run.k; attempt += 1) {
+      const recorded = await call(`/runs/${started.run.publicId}/results`, {
+        token: await tokenFor(tenant),
+        body: {
+          caseId: evalCase.publicId,
+          attempt,
+          hasPassed: true,
+          graderOutput: graderOutput(true),
+          latencyMs: null,
+        },
+      });
+      expect(recorded.status).toBe(201);
+    }
+  }
+}
+
+// DEV_NOTE: Another case of the tenant's chatbot, active
+async function addCase(tenant: Tenant): Promise<string> {
+  return await withOwnerDb(async (ownerDb) => {
+    const [evalCase] = await ownerDb
+      .insert(evalCases)
+      .values({
+        publicId: Utility.generatePublicId(),
+        companyId: tenant.companyId,
+        chatbotId: tenant.chatbotId,
+        name: "Answers politely",
+        input: {
+          schemaVersion: Schemas.EVAL_CASE_INPUT_SCHEMA_VERSION,
+          messages: [{ role: "user", text: "Hello" }],
+        },
+        expectations: {
+          schemaVersion: Schemas.EVAL_CASE_EXPECTATIONS_SCHEMA_VERSION,
+          rubric: null,
+          rules: [{ kind: Schemas.EvalCaseRuleKindEnum.Contains, text: "Hello" }],
+          toolCalls: [],
+          forbiddenTools: [],
+          readbacks: [],
+        },
+      })
+      .returning({ publicId: evalCases.publicId });
+    return evalCase?.publicId ?? "";
+  });
+}
 
 beforeAll(async () => {
   evalKey = await createKey(Schemas.WidgetJwtAlgorithmEnum.ES256, `eval-${crypto.randomUUID()}`);
@@ -552,6 +607,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       body: result(1),
     });
     expect(recorded.status).toBe(201);
+    await recordAll(tenant, started, [tenant.casePublicId]);
     const duplicate = await call(`/runs/${runId}/results`, {
       token: await tokenFor(tenant),
       body: result(1),
@@ -582,8 +638,8 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     expect(finished.status).toBe(200);
     expect(Schemas.ZFinishEvalRunApiResponse.parse(await finished.json())).toMatchObject({
       status: Schemas.EvalRunStatusIntEnum.Done,
-      caseCount: 1,
-      passAllKCount: 1,
+      caseCount: started.cases.length,
+      passAllKCount: started.cases.length,
       hasPassed: true,
     });
     const [done] = await withOwnerDb((ownerDb) =>
@@ -631,9 +687,118 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     });
     expect(Schemas.ZFinishEvalRunApiResponse.parse(await stopped.json())).toMatchObject({
       status: Schemas.EvalRunStatusIntEnum.Failed,
-      caseCount: 1,
+      caseCount: started.cases.length,
       passAllKCount: 0,
       hasPassed: false,
+    });
+  });
+
+  it("holds a run to the cases it started with, on the connection it started on", async () => {
+    const tenant = await createTenant();
+    const skipped = await addCase(tenant);
+    const started = await startRun(tenant);
+    const runId = started.run.publicId;
+    expect(started.cases.map((evalCase) => evalCase.publicId)).toContain(skipped);
+
+    // DEV_NOTE: Every case but one has its attempt: Done is refused, whatever the cases with results say
+    await recordAll(tenant, started, [skipped]);
+    const incomplete = await call(`/runs/${runId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: true },
+    });
+    expect(incomplete.status).toBe(409);
+
+    // DEV_NOTE: A case made after the start is not the run's (nor is one turned off since: the same check)
+    const late = await addCase(tenant);
+    const lateResult = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: late,
+        attempt: 1,
+        hasPassed: true,
+        graderOutput: graderOutput(true),
+        latencyMs: null,
+      },
+    });
+    expect(lateResult.status).toBe(404);
+
+    // DEV_NOTE: Another staging connection of the same company can't drive or reset this run
+    const otherStaging = await withOwnerDb(async (ownerDb) => {
+      const [connection] = await ownerDb
+        .insert(companyConnections)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: tenant.companyId,
+          environment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+          baseUrl: Schemas.getTestHostBaseUrl(testHostIssuer),
+          jwtIssuer: `https://${crypto.randomUUID()}.staging.example.com`,
+          authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
+          authConfig: {},
+          credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
+          allowedOrigins: ["https://app.example.com"],
+          resetOp: Schemas.TEST_HOST_RESET_OP,
+        })
+        .returning({ publicId: companyConnections.publicId });
+      return connection?.publicId ?? "";
+    });
+    const asOtherConnection = await call(`/runs/${runId}/reset`, {
+      token: await tokenFor(tenant, { connection: otherStaging }),
+      hostToken: tenant.hostToken,
+    });
+    expect(asOtherConnection.status).toBe(404);
+
+    await recordAll(
+      tenant,
+      started,
+      started.cases.map((evalCase) => evalCase.publicId).filter((id) => id !== skipped),
+    );
+    const finished = await call(`/runs/${runId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: true },
+    });
+    expect(Schemas.ZFinishEvalRunApiResponse.parse(await finished.json())).toMatchObject({
+      status: Schemas.EvalRunStatusIntEnum.Done,
+      caseCount: started.cases.length,
+      passAllKCount: started.cases.length,
+    });
+  });
+
+  it("never lets the widget resume an eval conversation", async () => {
+    const tenant = await createTenant();
+    const started = await startRun(tenant);
+    const authenticated = await new EvalAuthRepo(evalEnv).authenticate(await tokenFor(tenant));
+    if (!authenticated.isSuccess) throw new Error(authenticated.message);
+    const [run] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, started.run.publicId)),
+    );
+    const conversationsRepo = new ConversationsRepo(env);
+    const evalConversation = await conversationsRepo.startEvalConversation({
+      identity: authenticated.identity,
+      evalRunId: run?.id ?? "",
+      chatbotConfigId: tenant.configId,
+      chatbot: { id: tenant.chatbotId, publicId: tenant.chatbotPublicId, name: "Records bot" },
+    });
+    expect(evalConversation.isSuccess).toBe(true);
+
+    // DEV_NOTE: The same host user, signed in to the staging host's widget, naming the eval conversation
+    const resumed = await conversationsRepo.startOrResume({
+      identity: {
+        companyId: tenant.companyId,
+        connectionId: authenticated.identity.connectionId,
+        connectionEnvironment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+        chatbotId: tenant.chatbotId,
+        chatbotPublicId: tenant.chatbotPublicId,
+        chatbotName: "Records bot",
+        hostUserId: HOST_USER,
+        displayName: null,
+        roles: [],
+        tokenExpiresAt: new Date(Date.now() + 60_000),
+      },
+      conversationPublicId: evalConversation.session?.conversationPublicId ?? "",
+    });
+    expect(resumed).toMatchObject({
+      isSuccess: false,
+      failure: Schemas.ConversationStartFailureEnum.NotFound,
     });
   });
 

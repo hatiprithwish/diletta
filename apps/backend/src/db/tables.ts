@@ -437,6 +437,10 @@ export const roiAssumptions = table(
 
 // DEV_NOTE: One run of a config against its eval cases. Publish gate = trigger gate AND has_passed.
 // Pass threshold, judge model and safety rule are pinned by harness_version.
+// The harness (M5-2) starts a run Running with the cases it handed out (eval_case_ids, the set Done is checked
+// against) and the staging connection its token named (company_connection_id, the only one its steps may use); both
+// are null only on a run that never started. cost_usd is added to by every model call of the run as it is recorded
+// or backfilled, so it settles after the run ends.
 export const evalRuns = table(
   "eval_runs",
   {
@@ -444,6 +448,8 @@ export const evalRuns = table(
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
     chatbotConfigId: t.bigint("chatbot_config_id", { mode: "string" }).notNull(), // → chatbot_configs.id
+    companyConnectionId: t.bigint("company_connection_id", { mode: "string" }), // → company_connections.id
+    evalCaseIds: t.bigint("eval_case_ids", { mode: "string" }).array(), // → eval_cases.id
     trigger: t.smallint().$type<Schemas.EvalRunTriggerIntEnum>().notNull(),
     harnessVersion: t.text("harness_version").notNull(),
     k: t.smallint().notNull(),
@@ -464,6 +470,7 @@ export const evalRuns = table(
     t.uniqueIndex("UNQ_eval_runs_public_id").on(table.publicId),
     t.index("IDX_eval_runs_company_id").on(table.companyId),
     t.index("IDX_eval_runs_chatbot_config_id").on(table.chatbotConfigId),
+    t.index("IDX_eval_runs_company_connection_id").on(table.companyConnectionId),
   ],
 );
 

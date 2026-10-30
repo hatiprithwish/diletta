@@ -119,10 +119,10 @@ export interface VerifyEvalJwtResponse extends ApiResponse {
   failure?: EvalAuthFailureEnum;
 }
 
-export interface EvalAuthResponse extends ApiResponse {
-  identity?: EvalIdentity;
-  failure?: EvalAuthFailureEnum;
-}
+// DEV_NOTE: The eval caller (EvalAuthRepo.authenticate): who the token names, or why it was refused
+export type EvalAuthResponse =
+  | { isSuccess: true; message: string; identity: EvalIdentity }
+  | { isSuccess: false; message: string; failure: EvalAuthFailureEnum };
 
 export interface CreateEvalRunResponse extends ApiResponse {
   failure?: EvalRunStepFailureEnum;

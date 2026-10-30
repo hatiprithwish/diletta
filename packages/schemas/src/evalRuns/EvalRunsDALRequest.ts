@@ -50,17 +50,25 @@ export type GetEvalRunCaseAttemptsDALRequest = Pick<EvalRun, "companyId"> & {
 
 // ─── The eval harness's writes (M5-2) ───────────────────────────────────────
 
-// DEV_NOTE: A run starts Running: the harness creates it as it starts driving the attempts
+// DEV_NOTE: A run starts Running: the harness creates it as it starts driving the attempts, with its token's staging
+// connection and the cases it hands out
 export type CreateEvalRunDALRequest = Pick<
   EvalRun,
   "companyId" | "chatbotConfigId" | "trigger" | "harnessVersion" | "k"
->;
+> & { companyConnectionId: string; evalCaseIds: string[] };
 
-// DEV_NOTE: A Running run ends (Done or Failed) once, with its tallies and cost; a run that already ended is isNotFound
+// DEV_NOTE: A Running run ends (Done or Failed) once, with its tallies; a run that already ended is isNotFound
 export type FinishEvalRunDALRequest = Pick<
   EvalRun,
-  "companyId" | "id" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd"
+  "companyId" | "id" | "caseCount" | "passAllKCount" | "hasPassed"
 > & { status: EvalRunStatusIntEnum.Done | EvalRunStatusIntEnum.Failed };
+
+// DEV_NOTE: A model call of the run changed its cost: cost_usd + addUsd - subtractUsd, in the database (exact decimals).
+// A new call adds its cost; a backfilled one replaces the cost it was recorded with.
+export type AddEvalRunCostDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+  addUsd: string;
+  subtractUsd: string;
+};
 
 // DEV_NOTE: One graded attempt. A repeat of (run, case, attempt) is isConflict (append-only: never overwritten).
 export type CreateEvalResultDALRequest = {

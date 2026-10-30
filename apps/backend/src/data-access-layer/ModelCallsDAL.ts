@@ -169,45 +169,6 @@ export default class ModelCallsDAL {
     return response;
   }
 
-  // DEV_NOTE: An eval run's cost (M5-2): the run's model calls on the company key (tier Embed rows are the platform's),
-  // a Pending row's cost as it stands
-  async getEvalRunCostSum(
-    tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.GetEvalRunCostSumDALRequest,
-  ) {
-    const response: Schemas.ModelCallCostSumDALResponse = { isSuccess: false };
-
-    try {
-      const conditions = [
-        eq(modelCalls.companyId, params.companyId),
-        eq(modelCalls.evalRunId, params.evalRunId),
-        ne(modelCalls.tier, Schemas.ModelCallTierIntEnum.Embed),
-      ];
-      const [sum] = await tx
-        .select({
-          totalCostUsd: sql<string>`coalesce(sum(${modelCalls.costUsd}), 0)::numeric(12, 6)::text`,
-        })
-        .from(modelCalls)
-        .where(and(...conditions));
-
-      response.isSuccess = true;
-      response.message = "Eval run cost fetched successfully";
-      response.totalCostUsd = sum?.totalCostUsd ?? "0.000000";
-    } catch (error) {
-      const message = "Unknown error in fetching eval run cost";
-      AppLogger.error({
-        category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.GetEvalRunCostSum,
-        message,
-        error,
-        metadata: params,
-      });
-      response.message = message;
-    }
-
-    return response;
-  }
-
   // DEV_NOTE: Platform read (withPlatform) for the backfill sweep: Pending rows across companies, least recently tried
   // first (updated_at); the IDX_model_calls_created_at_pending partial index keeps the read to Pending rows
   async getPendingModelCalls(
