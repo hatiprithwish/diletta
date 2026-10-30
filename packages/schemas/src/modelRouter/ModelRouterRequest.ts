@@ -49,6 +49,8 @@ export interface ModelCallRecord {
 }
 
 // DEV_NOTE: Server-side only — the key-failure path (ModelKeyFailureProvider). usedKey null = there was no active key.
+// conversationId = the conversation the System issue links to; null for a call outside one and for an eval attempt's
+// (M5-2: the dashboard never shows those conversations, and the run records the failed attempt)
 export interface ModelKeyFailureRequest {
   companyId: string;
   conversationId: string | null;

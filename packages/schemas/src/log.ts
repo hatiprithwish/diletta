@@ -21,6 +21,8 @@ export enum LogCategory {
   Action = "Action",
   Rollup = "Rollup",
   Insights = "Insights",
+  // DEV_NOTE: The eval harness's /eval/* API (M5-2)
+  Eval = "Eval",
 }
 
 export enum LogAction {
@@ -421,4 +423,23 @@ export enum LogAction {
 
   // Cron
   DispatchCron = "DispatchCron",
+
+  // Eval harness (M5-2)
+  GetRunnableEvalCases = "GetRunnableEvalCases",
+  CreateEvalRun = "CreateEvalRun",
+  FinishEvalRun = "FinishEvalRun",
+  CreateEvalResult = "CreateEvalResult",
+  GetEvalRunTallies = "GetEvalRunTallies",
+  AddEvalRunCost = "AddEvalRunCost",
+  MarkEvalRunReset = "MarkEvalRunReset",
+  DecodeEvalJwt = "DecodeEvalJwt",
+  VerifyEvalJwt = "VerifyEvalJwt",
+  AuthenticateEval = "AuthenticateEval",
+  StartEvalRun = "StartEvalRun",
+  StartEvalConversation = "StartEvalConversation",
+  RunEvalAttempt = "RunEvalAttempt",
+  ReadBackEvalRecord = "ReadBackEvalRecord",
+  RecordEvalResult = "RecordEvalResult",
+  ResetEvalRun = "ResetEvalRun",
+  EndEvalRun = "EndEvalRun",
 }

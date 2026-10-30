@@ -58,6 +58,9 @@ export default class ModelRouterRepo {
       provider,
       model,
     };
+    // DEV_NOTE: The conversation a key failure's System issue links to: none for an eval attempt's (M5-2), whose
+    // conversation never shows on the dashboard; the key is still marked Invalid and the run records the failed attempt
+    const issueConversationId = params.evalRunId === null ? params.conversationId : null;
 
     const price = Schemas.getModelPrice(provider, model);
     if (!price) {
@@ -79,7 +82,7 @@ export default class ModelRouterRepo {
       }
       await this.handleKeyFailure({
         companyId: params.companyId,
-        conversationId: params.conversationId,
+        conversationId: issueConversationId,
         provider,
         usedKey: null,
         reason: Schemas.ModelKeyFailureReasonEnum.NoActiveKey,
@@ -122,7 +125,7 @@ export default class ModelRouterRepo {
         onRejectedKey: async () => {
           await this.handleKeyFailure({
             companyId: params.companyId,
-            conversationId: params.conversationId,
+            conversationId: issueConversationId,
             provider,
             usedKey: context.usedKey,
             reason: Schemas.ModelKeyFailureReasonEnum.RejectedByProvider,
@@ -228,15 +231,15 @@ export default class ModelRouterRepo {
   }
 
   // DEV_NOTE: cf-aig-metadata for cost attribution in the gateway's logs (5 entries max). Internal ids, as in our
-  // own logs: the gateway is platform infrastructure, never a client. Unset ids are left out. A call belongs to a
-  // conversation or an eval run, never both, so they share the one slot left.
+  // own logs: the gateway is platform infrastructure, never a client. Unset ids are left out. An eval attempt's call
+  // has both a conversation and its run (M5-2); they share the one slot left, the run first (its cost is the run's).
   private static gatewayMetadata(params: Schemas.GetModelRequest): Record<string, string> {
     const entries: [string, string | null][] = [
       ["companyId", params.companyId],
       ["chatbotId", params.chatbotId],
-      params.conversationId !== null
-        ? ["conversationId", params.conversationId]
-        : ["evalRunId", params.evalRunId],
+      params.evalRunId !== null
+        ? ["evalRunId", params.evalRunId]
+        : ["conversationId", params.conversationId],
       ["turnId", params.turnId],
       ["taskType", params.taskType],
     ];

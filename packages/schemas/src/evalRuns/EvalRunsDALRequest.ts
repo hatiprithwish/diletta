@@ -1,5 +1,10 @@
 import type { PageDALRequest } from "../common";
-import type { EvalRun, EvalRunCaseSortColumn, EvalRunSortColumn } from "./EvalRunsCommon";
+import type {
+  EvalRun,
+  EvalRunCaseSortColumn,
+  EvalRunSortColumn,
+  EvalRunStatusIntEnum,
+} from "./EvalRunsCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS. The Tests page
 // (M4-8) only reads runs; the eval harness (M5-2) writes them.
@@ -11,7 +16,11 @@ export type EvalRunsFilterDALRequest = Pick<EvalRun, "companyId"> & { chatbotId:
 export type GetEvalRunsDALRequest = EvalRunsFilterDALRequest &
   PageDALRequest & { sortColumn: EvalRunSortColumn };
 
-export type FindEvalRunDALRequest = Pick<EvalRun, "companyId" | "publicId">;
+// DEV_NOTE: isLocked = the run row under FOR UPDATE (the eval harness's steps): a result, an attempt start and the
+// finish of one run take turns, so nothing is recorded into a run after it ended
+export type FindEvalRunDALRequest = Pick<EvalRun, "companyId" | "publicId"> & {
+  isLocked?: boolean;
+};
 
 export type FindEvalRunByIdDALRequest = Pick<EvalRun, "companyId" | "id">;
 
@@ -42,3 +51,42 @@ export type GetEvalRunCaseAttemptsDALRequest = Pick<EvalRun, "companyId"> & {
   evalRunId: string;
   evalCasePublicId: string;
 };
+
+// ─── The eval harness's writes (M5-2) ───────────────────────────────────────
+
+// DEV_NOTE: A run starts Running: the harness creates it as it starts driving the attempts, with its token's staging
+// connection and the cases it hands out
+export type CreateEvalRunDALRequest = Pick<
+  EvalRun,
+  "companyId" | "chatbotConfigId" | "trigger" | "harnessVersion" | "k"
+> & { companyConnectionId: string; evalCaseIds: string[] };
+
+// DEV_NOTE: A Running run ends (Done or Failed) once, with its tallies; a run that already ended is isNotFound
+export type FinishEvalRunDALRequest = Pick<
+  EvalRun,
+  "companyId" | "id" | "caseCount" | "passAllKCount" | "hasPassed"
+> & { status: EvalRunStatusIntEnum.Done | EvalRunStatusIntEnum.Failed };
+
+// DEV_NOTE: The run's staging data was put back (or there was no reset_op to send): reset_at = now, only while Running
+export type MarkEvalRunResetDALRequest = Pick<EvalRun, "companyId" | "id">;
+
+// DEV_NOTE: A model call of the run changed its cost: cost_usd + addUsd - subtractUsd, in the database (exact decimals).
+// A new call adds its cost; a backfilled one replaces the cost it was recorded with.
+export type AddEvalRunCostDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+  addUsd: string;
+  subtractUsd: string;
+};
+
+// DEV_NOTE: One graded attempt. A repeat of (run, case, attempt) is isConflict (append-only: never overwritten).
+export type CreateEvalResultDALRequest = {
+  companyId: string;
+  evalRunId: string;
+  evalCaseId: string;
+  attempt: number;
+  hasPassed: boolean;
+  graderOutput: unknown;
+  latencyMs: number | null;
+};
+
+// DEV_NOTE: Every case's attempt tally in one run (the finish's pass^k)
+export type GetEvalRunTalliesDALRequest = Pick<EvalRun, "companyId"> & { evalRunId: string };

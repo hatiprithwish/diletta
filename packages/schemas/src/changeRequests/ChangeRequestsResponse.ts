@@ -98,3 +98,9 @@ export type ChangeRequestConversationCheck =
 export interface ResolveChangeRequestResponse extends ResolveChangeRequestApiResponse {
   outboxId?: string;
 }
+
+// DEV_NOTE: Server-side only — an eval readback's request (M5-2): the change request's tool on the eval's staging
+// connection and its payload (args, the commit's result)
+export interface EvalReadbackPlanResponse extends ApiResponse {
+  plan?: Pick<FollowUpPlan, "tool" | "payload">;
+}

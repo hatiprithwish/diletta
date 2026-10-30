@@ -19,6 +19,7 @@ import {
   companySecrets,
   conversations,
   eventOutbox,
+  evalRuns,
   modelCalls,
   qualityIssues,
 } from "@/db/tables";
@@ -184,6 +185,36 @@ const mixedRouting: Schemas.ConfigSpec["routing"] = {
   defaultTier: Schemas.ModelTierEnum.Mid,
 };
 
+// DEV_NOTE: An eval run of the fixture's company (M5-2), already Done: its calls' costs still reach it
+async function insertEvalRun(fixture: Awaited<ReturnType<typeof createFixture>>): Promise<string> {
+  return await withOwnerDb(async (ownerDb) => {
+    const [run] = await ownerDb
+      .insert(evalRuns)
+      .values({
+        publicId: Utility.generatePublicId(),
+        companyId: fixture.companyId,
+        chatbotConfigId: "0",
+        trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+        harnessVersion: "test-1",
+        k: 1,
+        status: Schemas.EvalRunStatusIntEnum.Done,
+        finishedAt: new Date(),
+      })
+      .returning({ id: evalRuns.id });
+    return run?.id ?? "";
+  });
+}
+
+async function getEvalRunCost(evalRunId: string): Promise<string | undefined> {
+  return await withOwnerDb(async (ownerDb) => {
+    const [run] = await ownerDb
+      .select({ costUsd: evalRuns.costUsd })
+      .from(evalRuns)
+      .where(eq(evalRuns.id, evalRunId));
+    return run?.costUsd;
+  });
+}
+
 function request(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   overrides: Partial<Schemas.GetModelRequest> = {},
@@ -318,6 +349,7 @@ afterAll(async () => {
     if (companyIds.length === 0) return;
     await withOwnerDb(async (ownerDb) => {
       await ownerDb.delete(modelCalls).where(inArray(modelCalls.companyId, companyIds));
+      await ownerDb.delete(evalRuns).where(inArray(evalRuns.companyId, companyIds));
       await ownerDb.delete(qualityIssues).where(inArray(qualityIssues.companyId, companyIds));
       await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
       await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
@@ -664,6 +696,19 @@ describe("ModelRouterRepo key-failure path", () => {
     expect(queue.sent.some((message) => message.outboxId === outbox?.id)).toBe(true);
   });
 
+  it("opens no issue for an eval attempt's call: its conversation is never on the dashboard", async () => {
+    const fixture = await createFixture();
+    const { ctx, settle } = createCtx();
+
+    const routed = await new ModelRouterRepo(routerEnv(), ctx).getModel(
+      request(fixture, { evalRunId: await insertEvalRun(fixture) }),
+    );
+    await settle();
+
+    expect(routed.failure).toBe(Schemas.ModelRouterFailureEnum.KeyUnavailable);
+    expect(await getQualityIssues(fixture.companyId)).toHaveLength(0);
+  });
+
   it("opens no issue for a call with no conversation", async () => {
     const fixture = await createFixture();
     const { ctx, settle } = createCtx();
@@ -956,6 +1001,7 @@ describe("ModelCallsRepo.backfillPendingUsage", () => {
     fixture: Awaited<ReturnType<typeof createFixture>>,
     gatewayLogId: string | null,
     ageMs: number,
+    evalRunId: string | null = null,
   ): Promise<string> {
     const publicId = Utility.generatePublicId();
     await withOwnerDb(async (ownerDb) => {
@@ -963,6 +1009,7 @@ describe("ModelCallsRepo.backfillPendingUsage", () => {
         publicId,
         companyId: fixture.companyId,
         conversationId: fixture.conversationId,
+        evalRunId,
         taskType: Schemas.ModelTaskTypeEnum.QaAnswer,
         tier: Schemas.ModelCallTierIntEnum.Mid,
         provider: Schemas.ModelProviderEnum.Anthropic,
@@ -985,6 +1032,44 @@ describe("ModelCallsRepo.backfillPendingUsage", () => {
       return row;
     });
   }
+
+  it("adds an eval run's calls to its cost as they are recorded and backfilled, after the run ended too", async () => {
+    const fixture = await createFixture();
+    const evalRunId = await insertEvalRun(fixture);
+    await addModelKey(fixture.companyId, Schemas.ModelProviderEnum.Anthropic);
+    mockCloudflare((mocked) =>
+      mocked.url.endsWith("/log-eval")
+        ? Response.json({
+            success: true,
+            result: { id: "log-eval", tokens_in: 1000, tokens_out: 100 },
+          })
+        : anthropicMessage("Hello"),
+    );
+    const { ctx, settle } = createCtx();
+
+    await generateText({
+      model: await routeOrThrow(
+        new ModelRouterRepo(routerEnv(), ctx),
+        request(fixture, { evalRunId }),
+      ),
+      prompt: "Hi",
+    });
+    await settle();
+    const [recorded] = await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb.select().from(modelCalls).where(eq(modelCalls.evalRunId, evalRunId)),
+    );
+    expect(Number(recorded?.costUsd)).toBeGreaterThan(0);
+    expect(await getEvalRunCost(evalRunId)).toBe(recorded?.costUsd);
+
+    await insertPendingCall(fixture, "log-eval", 2 * 60_000, evalRunId);
+    await new ModelCallsRepo(routerEnv()).backfillPendingUsage({ companyIds: [fixture.companyId] });
+    // DEV_NOTE: The backfilled call's $0.0035 (see below) on top of the recorded one
+    expect(Number(await getEvalRunCost(evalRunId))).toBeCloseTo(
+      Number(recorded?.costUsd) + 0.0035,
+      6,
+    );
+  });
 
   it("fills Pending rows from the gateway log, waits for young or missing logs, and gives up after the window", async () => {
     const fixture = await createFixture();

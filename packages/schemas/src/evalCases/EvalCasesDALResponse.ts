@@ -42,3 +42,7 @@ export interface ActiveEvalCaseCountsDALResponse extends ApiResponse {
   caseCount?: number;
   safetyCaseCount?: number;
 }
+
+export interface EvalCasesDALResponse extends ApiResponse {
+  evalCases?: EvalCase[];
+}

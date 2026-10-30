@@ -14,6 +14,7 @@ import * as Schemas from "@app/schemas";
 //   readAfter (M3-6): a write's readback_op after its commit (args + the commit's result) or after its undo.
 //   undo (M3-6): a write's inverse_op (args + read-before + result) under the change request's undo key. An Emulated
 //     tool proves a lost answer by reading back (the read-before values against the args, the commit's check swapped).
+//   reset (M5-2): an eval run's staging connection reset_op, once after the run. Eval readbacks use readAfter.
 export default class HostToolCallProvider {
   static async read(params: {
     tool: Schemas.RuntimeTool;
@@ -149,6 +150,35 @@ export default class HostToolCallProvider {
       idempotencyKey,
       appliedCheck,
       isResume,
+      signal: params.signal,
+    });
+  }
+
+  // DEV_NOTE: An eval run's reset (M5-2): the staging connection's reset_op (no placeholders), sent once per run after
+  // its last attempt as the host test user, under the run's key so a retried reset is the same request. Sent as a Native write:
+  // the host's Idempotency-Key handling makes a resend harmless.
+  static async reset(params: {
+    connection: Schemas.HostConnection;
+    op: Schemas.ConnectionResetOp;
+    idempotencyKey: string;
+    getHostToken: Schemas.HostTokenSource;
+    signal?: AbortSignal;
+  }): Promise<Schemas.HostCallResponse> {
+    const adapter = RestAdapter.create({
+      connection: params.connection,
+      getHostToken: params.getHostToken,
+    });
+    const rendered = Schemas.renderToolOp(params.op, { args: {} });
+    if (!adapter.adapter || !rendered.request) {
+      return HostToolCallProvider.notSent(adapter.message ?? rendered.message);
+    }
+    return await adapter.adapter.execute({
+      risk: Schemas.ToolDefinitionRiskIntEnum.Write,
+      request: rendered.request,
+      idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.Native,
+      idempotencyKey: params.idempotencyKey,
+      appliedCheck: null,
+      isResume: false,
       signal: params.signal,
     });
   }

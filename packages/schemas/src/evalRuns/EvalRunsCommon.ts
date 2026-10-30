@@ -42,12 +42,17 @@ export const EVAL_RUN_STATUS_LABEL_MAP: Record<EvalRunStatusIntEnum, EvalRunStat
 // Whole Eval Run Body — DB shape
 // DEV_NOTE: id, companyId and chatbotConfigId are internal bigint ids — used by DAL/Repo only, NEVER sent to a client.
 // Written by the eval harness (M5-2); the Tests page (M4-8) only reads runs. costUsd is an exact decimal string.
-// caseCount, passAllKCount and hasPassed stay null until the run is Done.
+// caseCount, passAllKCount and hasPassed stay null until the run is Done. companyConnectionId and evalCaseIds are internal
+// too: the staging connection and the cases the harness started the run with (null only on a run that never started).
 export const ZEvalRun = z.object({
   id: z.string(),
   publicId: z.string(),
   companyId: z.string(),
   chatbotConfigId: z.string(),
+  companyConnectionId: z.string().nullable(),
+  evalCaseIds: z.array(z.string()).nullable(),
+  // DEV_NOTE: When the harness's reset (the connection's reset_op, or none to send) went through; Done needs it
+  resetAt: z.date().nullable(),
   trigger: z.enum(EvalRunTriggerIntEnum),
   harnessVersion: z.string(),
   k: z.number().int(),

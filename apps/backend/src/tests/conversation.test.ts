@@ -1746,6 +1746,7 @@ describe("Conversation feedback", { timeout: END_TO_END_TIMEOUT_MS }, () => {
       chatbotUserId: conversation.chatbotUserId,
       conversationId: conversation.id,
       conversationPublicId: conversation.publicId,
+      eval: null,
     };
     const repo = new FeedbackRepo(env);
     const recorded = await repo.recordFeedback({

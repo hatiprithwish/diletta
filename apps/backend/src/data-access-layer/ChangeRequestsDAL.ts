@@ -498,6 +498,7 @@ export default class ChangeRequestsDAL {
         eq(changeRequests.companyId, params.companyId),
         eq(changeRequests.status, params.status),
         eq(conversations.companyId, params.companyId),
+        isNull(conversations.evalRunId),
       ];
       if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
       const [result] = await tx
@@ -580,6 +581,7 @@ export default class ChangeRequestsDAL {
     const conditions: SQL[] = [
       eq(changeRequests.companyId, params.companyId),
       eq(conversations.companyId, params.companyId),
+      isNull(conversations.evalRunId),
     ];
     if (params.chatbotUserId !== null) {
       conditions.push(eq(conversations.chatbotUserId, params.chatbotUserId));
@@ -713,6 +715,7 @@ export default class ChangeRequestsDAL {
       const conditions = [
         eq(changeRequests.companyId, params.companyId),
         isNull(chatbotUsers.erasedAt),
+        isNull(conversations.evalRunId),
       ];
       const changeCount = count(changeRequests.id);
       const requesters = await tx
@@ -760,6 +763,7 @@ export default class ChangeRequestsDAL {
       const conditions = [
         eq(changeRequests.publicId, params.publicId),
         eq(changeRequests.companyId, params.companyId),
+        isNull(conversations.evalRunId),
       ];
       const query = this.dashboardQuery(tx)
         .where(and(...conditions))

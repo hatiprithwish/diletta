@@ -9,6 +9,8 @@ import {
   chatbotUsers,
   chatbots,
   conversations,
+  evalCases,
+  evalRuns,
   feedback,
   messages,
   modelCalls,
@@ -19,9 +21,12 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
+const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
+
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). title is chat content (the first user
-// message), so it stays out of every log.
+// message), so it stays out of every log. An eval attempt's conversation (eval_run_id set, M5-2) is left out of every
+// dashboard read and rollup: it is a test of a config, not a user's chat.
 export default class ConversationsDAL {
   async createConversation(
     tx: NodePgTransaction<EmptyRelations>,
@@ -73,6 +78,76 @@ export default class ConversationsDAL {
         return response;
       }
 
+      const evalAttempt = params.eval;
+      if (evalAttempt) {
+        const runConditions = [
+          eq(evalRuns.id, evalAttempt.evalRunId),
+          eq(evalRuns.companyId, params.companyId),
+        ];
+        const [run] = await tx
+          .select({ id: evalRuns.id })
+          .from(evalRuns)
+          .where(and(...runConditions))
+          .limit(1);
+        if (!run) {
+          const message = "Eval run not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateConversation,
+            message,
+            metadata: params,
+          });
+          response.message = message;
+          return response;
+        }
+      }
+      if (evalAttempt) {
+        // DEV_NOTE: The company's own case or a platform one (company_id null)
+        const caseConditions = [
+          eq(evalCases.id, evalAttempt.evalCaseId),
+          or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)),
+        ];
+        const [evalCase] = await tx
+          .select({ id: evalCases.id })
+          .from(evalCases)
+          .where(and(...caseConditions))
+          .limit(1);
+        if (!evalCase) {
+          const message = "Eval case not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateConversation,
+            message,
+            metadata: params,
+          });
+          response.message = message;
+          return response;
+        }
+      }
+      if (evalAttempt?.chatbotConfigId) {
+        const configConditions = [
+          eq(chatbotConfigs.id, evalAttempt.chatbotConfigId),
+          eq(chatbotConfigs.chatbotId, params.chatbotId),
+          eq(chatbotConfigs.companyId, params.companyId),
+        ];
+        const [config] = await tx
+          .select({ id: chatbotConfigs.id })
+          .from(chatbotConfigs)
+          .where(and(...configConditions))
+          .limit(1);
+        if (!config) {
+          const message = "Chatbot config not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateConversation,
+            message,
+            metadata: params,
+          });
+          response.message = message;
+          return response;
+        }
+      }
+
       const [conversationResponse] = await tx
         .insert(conversations)
         .values({
@@ -80,6 +155,10 @@ export default class ConversationsDAL {
           companyId: params.companyId,
           chatbotId: params.chatbotId,
           chatbotUserId: params.chatbotUserId,
+          evalRunId: evalAttempt?.evalRunId ?? null,
+          evalCaseId: evalAttempt?.evalCaseId ?? null,
+          evalAttempt: evalAttempt?.evalAttempt ?? null,
+          chatbotConfigId: evalAttempt?.chatbotConfigId ?? null,
         })
         .returning();
 
@@ -87,6 +166,18 @@ export default class ConversationsDAL {
       response.message = "Conversation created successfully";
       response.conversation = conversationResponse;
     } catch (error) {
+      if (Utility.isUniqueViolation(error, EVAL_ATTEMPT_INDEX)) {
+        const message = "This eval attempt already ran";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateConversation,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isConflict = true;
+        return response;
+      }
       const message = "Unknown error in creating conversation";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
@@ -336,6 +427,7 @@ export default class ConversationsDAL {
         eq(conversations.companyId, params.companyId),
         gte(conversations.createdAt, params.start),
         lt(conversations.createdAt, params.end),
+        isNull(conversations.evalRunId),
       ];
       const groups = await tx
         .select({
@@ -445,7 +537,10 @@ export default class ConversationsDAL {
 
   // DEV_NOTE: The list's filters but the tab, shared by the list and its counts
   private dashboardConditions(params: Schemas.CountDashboardConversationsDALRequest): SQL[] {
-    const conditions: SQL[] = [eq(conversations.companyId, params.companyId)];
+    const conditions: SQL[] = [
+      eq(conversations.companyId, params.companyId),
+      isNull(conversations.evalRunId),
+    ];
     if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
     if (params.chatbotConfigId !== null) {
       conditions.push(eq(conversations.chatbotConfigId, params.chatbotConfigId));
@@ -613,6 +708,7 @@ export default class ConversationsDAL {
       const conditions = [
         eq(conversations.publicId, params.publicId),
         eq(conversations.companyId, params.companyId),
+        isNull(conversations.evalRunId),
       ];
       const [conversation] = await this.dashboardQuery(tx, params.companyId)
         .where(and(...conditions))
@@ -660,6 +756,7 @@ export default class ConversationsDAL {
       const conditions = [
         eq(conversations.companyId, params.companyId),
         gte(conversations.createdAt, params.since),
+        isNull(conversations.evalRunId),
       ];
       const counts = await tx
         .select({ chatbotId: conversations.chatbotId, conversationCount: count() })

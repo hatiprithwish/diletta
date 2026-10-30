@@ -1,12 +1,16 @@
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { EmptyRelations } from "drizzle-orm";
+import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import Constants from "@/config/Constants";
+import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
 import ModelCallsDAL from "@/data-access-layer/ModelCallsDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AiGatewayProvider from "@/providers/aiGateway";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
+
+type Tx = NodePgTransaction<EmptyRelations>;
 
 // DEV_NOTE: model_calls (M2-3): one row per call of a routed model, and the usage backfill.
 //
@@ -25,16 +29,22 @@ import * as Schemas from "@app/schemas";
 // MODEL_CALL_BACKFILL_CONCURRENCY at a time, so a batch of slow ones still finishes well inside a minute. A row that
 // stays Pending is marked as tried, and each sweep takes the least recently tried rows first, so rows whose log is
 // late take turns with the rest instead of filling every batch for the whole window.
+//
+// An eval run's cost (M5-2): a call with eval_run_id adds its cost to eval_runs.cost_usd in the transaction that
+// records it, and a backfill replaces the cost it was recorded with (addEvalRunCost), so the run's cost settles with
+// its calls, after the run ends too.
 export default class ModelCallsRepo {
   private env: Env;
   private db: NodePgDatabase;
   private dal: ModelCallsDAL;
+  private evalRunsDal: EvalRunsDAL;
 
   // DEV_NOTE: db is optional so the router can share its client (one pool per request)
   constructor(env: Env, db: NodePgDatabase = getDbClient(env)) {
     this.env = env;
     this.db = db;
     this.dal = new ModelCallsDAL();
+    this.evalRunsDal = new EvalRunsDAL();
   }
 
   // DEV_NOTE: Runs in the router's waitUntil, so it never throws: a failed write is logged and the call itself is
@@ -64,8 +74,8 @@ export default class ModelCallsRepo {
     }
 
     const usage = record.usage ?? Schemas.ZERO_MODEL_CALL_USAGE;
-    const result = await withTenant(this.db, request.companyId, async (tx) => {
-      return await this.dal.createModelCall(tx, {
+    const result: Schemas.ApiResponse = await withTenant(this.db, request.companyId, async (tx) => {
+      const created = await this.dal.createModelCall(tx, {
         companyId: request.companyId,
         chatbotId: request.chatbotId,
         chatbotUserId: request.chatbotUserId,
@@ -89,6 +99,8 @@ export default class ModelCallsRepo {
         errorCode: record.errorCode,
         usageStatus: record.usageStatus,
       });
+      if (!created.isSuccess || !created.modelCall) return created;
+      return await this.addEvalRunCost(tx, created.modelCall, "0");
     });
     if (!result.isSuccess) {
       AppLogger.error({
@@ -207,14 +219,42 @@ export default class ModelCallsRepo {
     modelCall: Schemas.ModelCall,
     settlement: Omit<Schemas.SettleModelCallUsageDALRequest, "companyId" | "publicId">,
   ): Promise<Schemas.ModelCallUsageStatusIntEnum> {
-    const settled = await withTenant(this.db, modelCall.companyId, async (tx) => {
-      return await this.dal.settleModelCallUsage(tx, {
-        companyId: modelCall.companyId,
-        publicId: modelCall.publicId,
-        ...settlement,
-      });
-    });
+    const settled: Schemas.ApiResponse = await withTenant(
+      this.db,
+      modelCall.companyId,
+      async (tx) => {
+        const updated = await this.dal.settleModelCallUsage(tx, {
+          companyId: modelCall.companyId,
+          publicId: modelCall.publicId,
+          ...settlement,
+        });
+        if (!updated.isSuccess || !updated.modelCall) return updated;
+        return await this.addEvalRunCost(tx, updated.modelCall, modelCall.costUsd);
+      },
+    );
     // DEV_NOTE: A row another sweep settled first, or a failed write (logged by the DAL), counts as still pending here
     return settled.isSuccess ? settlement.usageStatus : Schemas.ModelCallUsageStatusIntEnum.Pending;
+  }
+
+  // DEV_NOTE: An eval run's call: its cost now replaces recordedCostUsd (0 for a new call) in the run's cost. Not an eval
+  // call, or no change: nothing to do.
+  private async addEvalRunCost(
+    tx: Tx,
+    modelCall: Schemas.ModelCall,
+    recordedCostUsd: string,
+  ): Promise<Schemas.ApiResponse> {
+    if (modelCall.evalRunId === null || Number(modelCall.costUsd) === Number(recordedCostUsd)) {
+      return { isSuccess: true, message: "No eval run cost to add" };
+    }
+    const added = await this.evalRunsDal.addEvalRunCost(tx, {
+      companyId: modelCall.companyId,
+      id: modelCall.evalRunId,
+      addUsd: modelCall.costUsd,
+      subtractUsd: recordedCostUsd,
+    });
+    if (!added.isSuccess) {
+      throw new TenantRollbackError(added.message);
+    }
+    return added;
   }
 }

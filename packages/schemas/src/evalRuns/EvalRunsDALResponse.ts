@@ -71,3 +71,25 @@ export interface EvalRunCaseAttemptsDALResponse extends ApiResponse {
 export interface LatestEvalRunsByConfigDALResponse extends ApiResponse {
   runs?: Pick<EvalRun, "chatbotConfigId" | "status" | "hasPassed">[];
 }
+
+// ─── The eval harness's writes (M5-2) ───────────────────────────────────────
+
+export interface EvalRunDALResponse extends ApiResponse {
+  evalRun?: EvalRun;
+}
+
+// DEV_NOTE: isConflict = the attempt already has a result
+export interface CreateEvalResultDALResponse extends ApiResponse {
+  isConflict?: boolean;
+}
+
+// DEV_NOTE: One case's attempts in a run: how many were recorded and how many passed
+export interface EvalRunCaseTallyRow {
+  evalCaseId: string;
+  attemptCount: number;
+  passedAttemptCount: number;
+}
+
+export interface EvalRunTalliesDALResponse extends ApiResponse {
+  tallies?: EvalRunCaseTallyRow[];
+}

@@ -1,5 +1,5 @@
 import { and, asc, count, desc, eq, getColumns, inArray, max, ne, sql } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections, toolDefinitions } from "@/db/tables";
 import * as Schemas from "@app/schemas";
@@ -18,6 +18,19 @@ const connectionJoinConditions = [
   eq(companyConnections.id, toolDefinitions.connectionId),
   eq(companyConnections.companyId, toolDefinitions.companyId),
 ];
+
+// DEV_NOTE: The connection a host call runs on: the tool version's own, or an eval conversation's staging connection
+// (M5-2) in its place, so an eval never reaches the connection the tool names (production for a live tool)
+function runConnectionJoinConditions(evalConnectionId: string | null | undefined): SQL[] {
+  if (!evalConnectionId) return connectionJoinConditions;
+  // DEV_NOTE: Staging only, on top of the eval token's check: a production connection never joins, so an eval's tool
+  // has no connection and never runs
+  return [
+    eq(companyConnections.id, evalConnectionId),
+    eq(companyConnections.companyId, toolDefinitions.companyId),
+    eq(companyConnections.environment, Schemas.CompanyConnectionEnvironmentIntEnum.Staging),
+  ];
+}
 
 // DEV_NOTE: A tool row with the connection fields a host call needs (M3-4); connectionStatus null = connection gone
 const withConnectionSelection = {
@@ -599,7 +612,7 @@ export default class ToolDefinitionsDAL {
       const query = tx
         .select(withConnectionSelection)
         .from(toolDefinitions)
-        .leftJoin(companyConnections, and(...connectionJoinConditions))
+        .leftJoin(companyConnections, and(...runConnectionJoinConditions(params.evalConnectionId)))
         .where(and(...conditions))
         .orderBy(asc(toolDefinitions.name), asc(toolDefinitions.version));
       const selected = params.isForShare
@@ -642,7 +655,7 @@ export default class ToolDefinitionsDAL {
       const [selected] = await tx
         .select(withConnectionSelection)
         .from(toolDefinitions)
-        .leftJoin(companyConnections, and(...connectionJoinConditions))
+        .leftJoin(companyConnections, and(...runConnectionJoinConditions(params.evalConnectionId)))
         .where(and(...conditions))
         .limit(1);
 

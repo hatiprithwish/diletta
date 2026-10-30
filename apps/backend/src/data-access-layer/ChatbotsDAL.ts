@@ -70,7 +70,9 @@ export default class ChatbotsDAL {
 
     try {
       const conditions = [
-        eq(chatbots.publicId, params.publicId),
+        params.id !== undefined
+          ? eq(chatbots.id, params.id)
+          : eq(chatbots.publicId, params.publicId),
         eq(chatbots.companyId, params.companyId),
       ];
       const query = tx

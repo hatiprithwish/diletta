@@ -47,9 +47,11 @@ export const CONVERSATION_OUTCOME_LABEL_MAP: Record<
 };
 
 // Whole Conversation Body — DB shape (enums stored as integers)
-// DEV_NOTE: publicId is also the Conversation DO's name. id, companyId, chatbotUserId, chatbotId, chatbotConfigId and
-// rootLogId are internal bigint ids — used by DAL/Repo only, NEVER sent to a client. title comes from the first user
-// message (chat content: purged with it).
+// DEV_NOTE: publicId is also the Conversation DO's name. id, companyId, chatbotUserId, chatbotId, chatbotConfigId,
+// evalRunId (set = an eval attempt's conversation, M5-2: never on the dashboard), evalCaseId and rootLogId are
+// internal bigint ids — used by DAL/Repo only, NEVER sent to a client. evalCaseId + evalAttempt = which attempt of the
+// run it is (unique per run, so an attempt runs once). title comes from the first user message (chat content: purged
+// with it).
 export const ZConversation = z.object({
   id: z.string(),
   publicId: z.string(),
@@ -57,6 +59,9 @@ export const ZConversation = z.object({
   chatbotUserId: z.string(),
   chatbotId: z.string(),
   chatbotConfigId: z.string().nullable(),
+  evalRunId: z.string().nullable(),
+  evalCaseId: z.string().nullable(),
+  evalAttempt: z.number().int().nullable(),
   status: z.enum(ConversationStatusIntEnum),
   outcome: z.enum(ConversationOutcomeIntEnum).nullable(),
   title: z.string().nullable(),
@@ -72,6 +77,17 @@ export type Conversation = z.infer<typeof ZConversation>;
 // WidgetIdentity and the conversation row, and hands it to the DO in a header only the worker sets (the DO has no
 // public route). Internal ids, so it never reaches the widget; the DO keeps it in its own storage, never the host
 // token (there is none here).
+// DEV_NOTE: Server-side only — an eval attempt's conversation (M5-2): the run it belongs to (model calls carry it, so
+// the run's cost is theirs), the config under test (every turn runs it, not the published one) and the staging
+// connection every pinned tool runs against (whatever connection the tool version names: production is never called
+// from an eval). Internal ids.
+export const ZConversationEvalContext = z.object({
+  evalRunId: z.string().min(1),
+  chatbotConfigId: z.string().min(1),
+  connectionId: z.string().min(1),
+});
+export type ConversationEvalContext = z.infer<typeof ZConversationEvalContext>;
+
 export const ZConversationSession = z.object({
   companyId: z.string().min(1),
   chatbotId: z.string().min(1),
@@ -80,6 +96,8 @@ export const ZConversationSession = z.object({
   chatbotUserId: z.string().min(1),
   conversationId: z.string().min(1),
   conversationPublicId: z.string().min(1),
+  // DEV_NOTE: null = a widget conversation. Defaulted so a DO state stored before M5-2 still parses.
+  eval: ZConversationEvalContext.nullable().default(null),
 });
 export type ConversationSession = z.infer<typeof ZConversationSession>;
 

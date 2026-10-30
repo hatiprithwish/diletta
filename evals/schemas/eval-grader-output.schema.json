@@ -7,7 +7,7 @@
       "const": 1
     },
     "checks": {
-      "maxItems": 50,
+      "maxItems": 61,
       "type": "array",
       "items": {
         "type": "object",

@@ -563,6 +563,7 @@ describe("Action engine: proposal and durable pause", { timeout: END_TO_END_TIME
         before,
       }),
       isApprovalRequired: true,
+      isApprovedByEval: false,
       hasUntrustedContext: false,
       latencyMs: 1,
     });
@@ -885,6 +886,7 @@ describe("Action engine: races and recovery", { timeout: END_TO_END_TIMEOUT_MS }
         before,
       }),
       isApprovalRequired: false,
+      isApprovedByEval: false,
       hasUntrustedContext: false,
       latencyMs: 1,
     });
@@ -1951,6 +1953,7 @@ describe("Action engine: token refresh (M3-8)", { timeout: END_TO_END_TIMEOUT_MS
         before,
       }),
       isApprovalRequired: false,
+      isApprovedByEval: false,
       hasUntrustedContext: false,
       latencyMs: 1,
     });

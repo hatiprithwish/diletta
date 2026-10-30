@@ -1,6 +1,6 @@
 # Tests page
 
-The dashboard's Tests page (M4-8) shows the eval runs of a company's chatbot configs, what each case's attempts found, and the transcript of any attempt. Cases are written and edited there too. Running tests is not built yet: the harness (M5-2) starts runs and writes their results, and M5-3 writes the grader output and transcripts. Until then, runs only appear when something writes them (the backend tests seed them).
+The dashboard's Tests page (M4-8) shows the eval runs of a company's chatbot configs, what each case's attempts found, and the transcript of any attempt. Cases are written and edited there too. The eval harness starts runs and writes their results through `/eval/*` (M5-2, `docs/runbooks/evals.md`); M5-3 adds the judge and the transcripts. The dashboard has no Run button yet.
 
 ## What the page reads
 

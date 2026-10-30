@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
@@ -223,6 +223,7 @@ export default class ActivityLogDAL {
         eq(toolCalls.companyId, params.companyId),
         eq(toolDefinitions.companyId, params.companyId),
         eq(conversations.companyId, params.companyId),
+        isNull(conversations.evalRunId),
         eq(activityLog.entityType, Schemas.CHANGE_REQUEST_ENTITY_TYPE),
         inArray(activityLog.entityAction, [...Schemas.ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS]),
         gte(activityLog.createdAt, params.start),

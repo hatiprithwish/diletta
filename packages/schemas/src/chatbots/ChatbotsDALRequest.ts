@@ -7,11 +7,13 @@ export type CreateChatbotDALRequest = ChatbotBase & Pick<Chatbot, "companyId">;
 // Params to find a chatbot by its public ID within one company
 export type FindChatbotDALRequest = Pick<Chatbot, "publicId" | "companyId">;
 
-// DEV_NOTE: isForUpdate locks the row for the rest of the transaction (SELECT … FOR UPDATE), so an edit diffs its
-// audit rows (M4-9) against a row no concurrent edit can change in between
-export type GetChatbotDetailsDALRequest = FindChatbotDALRequest & {
-  isForUpdate?: boolean;
-};
+// DEV_NOTE: By public id, or by internal id (the chatbot of a config an eval run tests, M5-2). isForUpdate locks the
+// row for the rest of the transaction (SELECT … FOR UPDATE), so an edit diffs its audit rows (M4-9) against a row no
+// concurrent edit can change in between.
+export type GetChatbotDetailsDALRequest = Pick<Chatbot, "companyId"> &
+  ({ publicId: string; id?: undefined } | { id: string; publicId?: undefined }) & {
+    isForUpdate?: boolean;
+  };
 
 // The company's default chatbot (the widget loads it when the embed names no chatbot)
 export type FindDefaultChatbotDALRequest = Pick<Chatbot, "companyId">;

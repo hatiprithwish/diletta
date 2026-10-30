@@ -260,10 +260,13 @@ export default class ChatbotConfigsDAL {
 
     try {
       const conditions = [
-        eq(chatbotConfigs.publicId, params.publicId),
-        eq(chatbotConfigs.chatbotId, params.chatbotId),
+        params.id !== undefined
+          ? eq(chatbotConfigs.id, params.id)
+          : eq(chatbotConfigs.publicId, params.publicId),
         eq(chatbotConfigs.companyId, params.companyId),
       ];
+      if (params.chatbotId !== undefined)
+        conditions.push(eq(chatbotConfigs.chatbotId, params.chatbotId));
       const query = tx
         .select(this.versionSelection())
         .from(chatbotConfigs)

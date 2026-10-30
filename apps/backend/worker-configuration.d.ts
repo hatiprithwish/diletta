@@ -21,6 +21,7 @@ interface __BaseEnv_Env {
   AI_GATEWAY_NAME: "diletta-staging" | "diletta-production";
   CLERK_PUBLISHABLE_KEY: string;
   CLERK_SECRET_KEY: string;
+  EVAL_JWT_PUBLIC_JWKS: string;
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
   CONVERSATION_DO: DurableObjectNamespace<import("./src/index").ConversationDO>;
@@ -48,6 +49,7 @@ declare namespace Cloudflare {
     AI_GATEWAY_NAME: "diletta-staging";
     CLERK_PUBLISHABLE_KEY: string;
     CLERK_SECRET_KEY: string;
+    EVAL_JWT_PUBLIC_JWKS: string;
     CLOUDFLARE_API_TOKEN: string;
     CLOUDFLARE_ACCOUNT_ID: string;
     MASTER_KEY_V1: string;
@@ -72,6 +74,7 @@ declare namespace Cloudflare {
     AI_GATEWAY_NAME: "diletta-production";
     CLERK_PUBLISHABLE_KEY: string;
     CLERK_SECRET_KEY: string;
+    EVAL_JWT_PUBLIC_JWKS: string;
     CLOUDFLARE_API_TOKEN: string;
     CLOUDFLARE_ACCOUNT_ID: string;
     MASTER_KEY_V1: string;
@@ -98,6 +101,7 @@ declare namespace NodeJS {
       | "AI_GATEWAY_NAME"
       | "CLERK_PUBLISHABLE_KEY"
       | "CLERK_SECRET_KEY"
+      | "EVAL_JWT_PUBLIC_JWKS"
       | "CLOUDFLARE_API_TOKEN"
       | "CLOUDFLARE_ACCOUNT_ID"
       | "MASTER_KEY_V1"

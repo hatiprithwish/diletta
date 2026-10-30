@@ -111,7 +111,10 @@ export default class CompanyConnectionsRepo {
       // DEV_NOTE: A new auth_config must fit the stored auth type and credential scope (both fixed at create). A row saved
       // before M3-2 with an auth type that has no AuthStrategy yet can't take any auth_config: it can't serve tool calls
       // either way, so the fix is a new connection with a supported auth type.
-      if (companyConnection.authConfig !== undefined) {
+      // DEV_NOTE: A reset op (M5-2) only on a Staging connection: an eval never resets a production host
+      const hasResetOp =
+        companyConnection.resetOp !== undefined && companyConnection.resetOp !== null;
+      if (companyConnection.authConfig !== undefined || hasResetOp) {
         const found = await this.dal.getCompanyConnectionDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
@@ -119,12 +122,21 @@ export default class CompanyConnectionsRepo {
         if (!found.isSuccess || !found.companyConnection) {
           return this.withCompanyConnectionResponse(found);
         }
-        const issue = Schemas.getAuthConfigIssue({
-          authType: found.companyConnection.authType,
-          credentialScope: found.companyConnection.credentialScope,
-          authConfig: companyConnection.authConfig,
-        });
-        if (issue) return { isSuccess: false, message: issue };
+        if (companyConnection.authConfig !== undefined) {
+          const issue = Schemas.getAuthConfigIssue({
+            authType: found.companyConnection.authType,
+            credentialScope: found.companyConnection.credentialScope,
+            authConfig: companyConnection.authConfig,
+          });
+          if (issue) return { isSuccess: false, message: issue };
+        }
+        if (
+          hasResetOp &&
+          found.companyConnection.environment !==
+            Schemas.CompanyConnectionEnvironmentIntEnum.Staging
+        ) {
+          return { isSuccess: false, message: "Only a staging connection has a reset op" };
+        }
       }
       const result = await this.dal.updateCompanyConnection(tx, {
         companyId: params.companyId,
@@ -134,6 +146,7 @@ export default class CompanyConnectionsRepo {
         jwtIssuer: companyConnection.jwtIssuer ?? null,
         allowedOrigins: companyConnection.allowedOrigins ?? null,
         status: companyConnection.status ?? null,
+        resetOp: companyConnection.resetOp,
       });
       return this.withCompanyConnectionResponse(result);
     });
