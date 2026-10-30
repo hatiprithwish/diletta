@@ -15,8 +15,9 @@ import {
 // DEV_NOTE: Bodies the harness sends to /eval/* (M5-2). Every id is a public id; the company and the staging
 // connection come from the eval JWT, never from a body. Exported to evals/schemas/eval-api.schema.json.
 
-// DEV_NOTE: Starts a run of one config (any status: a Draft is what the gate tests) on the token's staging connection.
-// trigger: Manual from the CLI; Gate (M5-4) and Nightly (M5-5) start runs the same way.
+// DEV_NOTE: Starts a run of one config on the token's staging connection. trigger Gate (M5-4): the config must be
+// Testing (an admin sent it), else NotTesting; its finish moves the config to Ready or back to Draft. Manual and Nightly
+// (M5-5) run a config of any status and never move it.
 export const ZCreateEvalRunApiRequest = z
   .object({
     chatbotConfigId: z.string().min(1).max(64),

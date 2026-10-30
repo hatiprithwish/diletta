@@ -25,9 +25,9 @@ type Tx = NodePgTransaction<EmptyRelations>;
 // Every call is authenticated first (authenticateEval → EvalAuthRepo): the identity names one company and its active
 // Staging connection. Everything here is scoped to that company (withTenant), and a run to the connection it started
 // on: a step whose token names another connection is NotFound.
-//   startRun: a Running eval_runs row for one config (any status), its staging connection and its case set
-//     (eval_case_ids): the config's chatbot's active cases and every active platform case, upgraded to the current
-//     shapes (a case that won't load refuses the run: the gate must never pass on a case it skipped).
+//   startRun: a Running eval_runs row for one config, its staging connection and its case set (eval_case_ids): the
+//     config's chatbot's active cases and every active platform case, upgraded to the current shapes (a case that won't
+//     load refuses the run: the gate must never pass on a case it skipped). A Gate run needs a Testing config (M5-4).
 //   runAttempt: one attempt of one of the run's cases: a new conversation of the run (pinned to its config and the
 //     staging connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write
 //     auto-approved.
@@ -37,7 +37,9 @@ type Tx = NodePgTransaction<EmptyRelations>;
 //   recordResult: one graded attempt of one of the run's cases (eval_results, append-only), with its transcript (M5-3)
 //     when the attempt ran. Reading and storing transcripts is EvalTranscriptsRepo's.
 //   reset: the connection's reset_op, once after the attempts.
-//   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set.
+//   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set and the gate's
+//     verdict (Schemas.evalRunGateDecision: threshold + every safety case); a Gate run's finish moves its Testing config
+//     to Ready (approved_by_run_id) or back to Draft (M5-4).
 // Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
 // case's input with {case.tag} filled in), not compared to the stored case; the grading is the harness's too.
 // The host bearer token (the harness's, from the host's own login) only passes through: to the DO's memory or the
@@ -72,8 +74,9 @@ export default class EvalHarnessRepo {
   }
 
   // DEV_NOTE: A Running run of the config, and the cases it runs. The config's chatbot must be active and the config
-  // must load (loadConfigSpec), else nothing is created. Cases are read in the same transaction as the insert, which
-  // stores them as the run's case set, with the token's staging connection.
+  // must load (loadConfigSpec), else nothing is created. A Gate run (M5-4) needs the config Testing (an admin sent it),
+  // else NotTesting; its row is locked, so a Back to draft can't slip between the check and the insert. Cases are read
+  // in the same transaction as the insert, which stores them as the run's case set, with the token's staging connection.
   async startRun(params: {
     identity: Schemas.EvalIdentity;
     request: Schemas.CreateEvalRunApiRequest;
@@ -87,14 +90,24 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx) => {
+        const isGate = request.trigger === Schemas.EvalRunTriggerIntEnum.Gate;
         const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
           companyId,
           publicId: request.chatbotConfigId,
+          isForUpdate: isGate,
         });
         if (!config.isSuccess || !config.chatbotConfig) {
           return this.stepFailure(config.isNotFound, config.message);
         }
         const { chatbotConfig } = config;
+        if (isGate && chatbotConfig.status !== Schemas.ChatbotConfigStatusIntEnum.Testing) {
+          return {
+            isSuccess: false,
+            message:
+              "Only a config sent to testing can have a gate run; send it from Settings › Bots first",
+            failure: Schemas.EvalRunStepFailureEnum.NotTesting,
+          };
+        }
         const loaded = Schemas.loadConfigSpec({
           schemaVersion: chatbotConfig.schemaVersion,
           body: chatbotConfig.body,
@@ -664,9 +677,10 @@ export default class EvalHarnessRepo {
   // DEV_NOTE: Ends a Running run (its row locked, so no result lands after the tally). isComplete: every case of the
   // run's set has all k attempts and the reset went through (else Incomplete, nothing written) → Done; otherwise
   // Failed, with why the harness stopped it when it says (failure, M5-3). pass^k: a case passes when all k attempts
-  // did; the run passes when it is Done and every case of the set passed (the safety hard gate on top is M5-4's).
-  // case_count = the set's size. cost_usd is already the run's (every model call adds to it, ModelCallsRepo) and keeps
-  // settling after the finish.
+  // did; the run passes by Schemas.evalRunGateDecision (Done, EVAL_GATE_PASS_PERCENT of the set, and every safety case:
+  // the safety hard gate, M5-4). case_count = the set's size. A Gate run then moves its config (moveGatedConfig) in the
+  // same transaction. cost_usd is already the run's (every model call adds to it, ModelCallsRepo) and keeps settling
+  // after the finish.
   async finish(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -708,9 +722,15 @@ export default class EvalHarnessRepo {
             failure: Schemas.EvalRunStepFailureEnum.Incomplete,
           };
         }
-        const passAllKCount = caseIds.filter(
-          (caseId) => (tallies.get(caseId)?.passedAttemptCount ?? 0) >= run.k,
-        ).length;
+        const gate = Schemas.evalRunGateDecision({
+          isComplete: request.isComplete,
+          k: run.k,
+          caseCount: caseIds.length,
+          cases: caseIds.flatMap((caseId) => {
+            const tally = tallies.get(caseId);
+            return tally ? [tally] : [];
+          }),
+        });
 
         const finished = await this.evalRunsDal.finishEvalRun(tx, {
           companyId,
@@ -719,8 +739,8 @@ export default class EvalHarnessRepo {
             ? Schemas.EvalRunStatusIntEnum.Done
             : Schemas.EvalRunStatusIntEnum.Failed,
           caseCount: caseIds.length,
-          passAllKCount,
-          hasPassed: request.isComplete && passAllKCount === caseIds.length,
+          passAllKCount: gate.passAllKCount,
+          hasPassed: gate.hasPassed,
           // DEV_NOTE: ZFinishEvalRunApiRequest already refuses a failure on a complete run; kept as belt and braces, so
           // a Done run never stores one whoever calls finish
           failure: request.isComplete ? null : (request.failure ?? null),
@@ -735,6 +755,9 @@ export default class EvalHarnessRepo {
             : this.stepFailure(false, finished.message);
         }
         const { evalRun } = finished;
+        if (run.trigger === Schemas.EvalRunTriggerIntEnum.Gate) {
+          await this.moveGatedConfig(tx, { companyId, run, hasPassed: gate.hasPassed });
+        }
         return {
           isSuccess: true,
           message: "Eval run finished",
@@ -743,6 +766,7 @@ export default class EvalHarnessRepo {
             caseCount: evalRun.caseCount,
             passAllKCount: evalRun.passAllKCount,
             hasPassed: evalRun.hasPassed,
+            failedSafetyCaseCount: gate.failedSafetyCaseCount,
             costUsd: evalRun.costUsd,
           },
         };
@@ -763,6 +787,65 @@ export default class EvalHarnessRepo {
       metadata: { ...metadata, hasPassed: result.run?.hasPassed ?? null },
     });
     return result;
+  }
+
+  // DEV_NOTE: A Gate run's finish (M5-4), inside it: its config, locked, moves only while it is still Testing and was
+  // sent to testing no later than the run started (updated_at and created_at are both the database's now()), so a run
+  // left over from an earlier send (the admin took it back meanwhile) never moves it. Passed → Ready with
+  // approved_by_run_id = this run; failed or didn't finish → Draft, editable again. No admin made the move: no audit row,
+  // and updated_by stays who last edited it. A failed write rolls the finish back (TenantRollbackError → ServerError), so
+  // a run never ends without its gate's move.
+  private async moveGatedConfig(
+    tx: Tx,
+    params: { companyId: string; run: Schemas.DashboardEvalRunRow; hasPassed: boolean },
+  ): Promise<void> {
+    const { companyId, run } = params;
+    const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
+      companyId,
+      id: run.chatbotConfigId,
+      isForUpdate: true,
+    });
+    if (!config.isSuccess || !config.chatbotConfig) {
+      throw new TenantRollbackError(config.message ?? "Chatbot config not read");
+    }
+    const { chatbotConfig } = config;
+    const isThisSend =
+      chatbotConfig.status === Schemas.ChatbotConfigStatusIntEnum.Testing &&
+      chatbotConfig.updatedAt.getTime() <= run.createdAt.getTime();
+    const metadata = {
+      companyId,
+      runPublicId: run.publicId,
+      configPublicId: chatbotConfig.publicId,
+    };
+    if (!isThisSend) {
+      AppLogger.info({
+        category: Schemas.LogCategory.Eval,
+        action: Schemas.LogAction.GateChatbotConfig,
+        message: "Gate run finished for a config no longer waiting on it",
+        metadata: { ...metadata, status: chatbotConfig.status },
+      });
+      return;
+    }
+    const status = params.hasPassed
+      ? Schemas.ChatbotConfigStatusIntEnum.Ready
+      : Schemas.ChatbotConfigStatusIntEnum.Draft;
+    const moved = await this.chatbotConfigsDal.moveChatbotConfigStatus(tx, {
+      companyId,
+      chatbotId: chatbotConfig.chatbotId,
+      id: chatbotConfig.id,
+      fromStatuses: [Schemas.ChatbotConfigStatusIntEnum.Testing],
+      status,
+      approvedByRunId: params.hasPassed ? run.id : null,
+    });
+    if (!moved.isSuccess) {
+      throw new TenantRollbackError(moved.message ?? "Chatbot config not moved");
+    }
+    AppLogger.info({
+      category: Schemas.LogCategory.Eval,
+      action: Schemas.LogAction.GateChatbotConfig,
+      message: params.hasPassed ? "Config passed its gate" : "Config failed its gate",
+      metadata: { ...metadata, status },
+    });
   }
 
   // DEV_NOTE: isLocked: the run row FOR UPDATE for the rest of the step's transaction (results, attempt starts and the

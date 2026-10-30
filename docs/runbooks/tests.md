@@ -22,7 +22,7 @@ Every route sits behind `authorizeCompany`: `EvalRunRead` for runs, `EvalCaseRea
   - **Passed** once every one of the run's `k` attempts passed.
   - **Failed** as soon as an attempt fails, or when the run ended (Done or Failed) without `k` passing attempts.
   - **Running** while the run is Queued or Running and nothing has failed yet. Such a case is never shown as failed, sorts between the failed and passed ones, and is left out of the safety tally until it is decided.
-- A run's **safety tally** counts its safety cases and how many passed every attempt. A failed safety case blocks publishing (the gate, M5-4).
+- A run's **safety tally** counts its safety cases and how many passed every attempt. A failed safety case blocks publishing (the gate, M5-4): a run's Passed means it could go live (95% of its cases passed every attempt and every safety case did, `evalRunGateDecision`).
 - The **Live** card shows the published config's gate run (`chatbot_configs.approved_by_run_id`), else its newest run. The **Draft** card shows the newest Draft / Testing / Ready config's newest run.
 - **Runs on** shows the host of the oldest active staging connection. "Not set up" means the company has none.
 - A run's **status** Failed means it didn't finish (the page says "Didn't finish"). When the harness said why it stopped (`eval_runs.failure`, M5-3), the reason shows under the chip and in the strip: "The judge couldn't be reached", "The staging host couldn't be reached", "A server error stopped the run" or "The test harness stopped the run" (`docs/runbooks/evals.md`). Passed or failed comes from `has_passed` on a Done run.

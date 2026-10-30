@@ -83,6 +83,7 @@ function version(
     chatbotPublicId: BOT.publicId,
     body: BODY,
     bodyIssue: null,
+    failedSafetyCaseCount: 0,
   };
 }
 
@@ -152,6 +153,7 @@ function defaultApi(
       body: _body,
       bodyIssue: _issue,
       chatbotPublicId: _bot,
+      failedSafetyCaseCount: _safety,
       ...row
     }: Schemas.ChatbotConfigDetail) => row;
     return { status: 200, body: { isSuccess: true, chatbotConfigs: [strip(V13), strip(V12)] } };
@@ -162,7 +164,7 @@ function defaultApi(
       body: { isSuccess: true, chatbotConfig: { ...V13, publicId: "cfg_14", configVersion: 14 } },
     };
   }
-  if (url.endsWith("/configs/cfg_13/publish")) {
+  if (url.endsWith("/configs/cfg_13/send-to-testing")) {
     return {
       status: 409,
       body: {
@@ -212,6 +214,7 @@ function renderPage(path: string) {
       }),
       stub("/settings/model-keys"),
       stub("/knowledge"),
+      stub("/tests"),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
@@ -304,7 +307,8 @@ describe("Settings › Bots › version", () => {
     const instructions = await screen.findByRole("textbox", { name: "Instructions" });
     await userEvent.clear(instructions);
     await userEvent.type(instructions, "You answer questions about registers.");
-    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send to testing" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Save draft" }));
 
     await waitFor(() => expect(calls(fetchMock, "PUT", "/configs/cfg_13")).toHaveLength(1));
@@ -316,18 +320,18 @@ describe("Settings › Bots › version", () => {
     expect(toast.success).toHaveBeenCalledWith("Draft saved.");
   });
 
-  it("warns that publishing needs a model key, and shows the publish refusal", async () => {
+  it("warns that publishing needs a model key, and shows the send to testing refusal", async () => {
     mockApi();
     renderPage("/settings/bots/bot_1/versions/cfg_13");
 
     expect(
       await screen.findByText("Add a working model key for Google before publishing."),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
-    const dialog = await screen.findByRole("alertdialog", { name: "Publish v13?" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Publish" }));
+    await userEvent.click(screen.getByRole("button", { name: "Send to testing" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Send v13 to testing?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send to testing" }));
 
-    expect(await screen.findByText("This version wasn't published")).toBeInTheDocument();
+    expect(await screen.findByText("This version wasn't sent to testing")).toBeInTheDocument();
     expect(
       screen.getByText("Add a working model key for Google before publishing"),
     ).toBeInTheDocument();
@@ -335,6 +339,103 @@ describe("Settings › Bots › version", () => {
     expect(toast.error).toHaveBeenCalledWith(
       "Add a working model key for Google before publishing Nothing changed.",
     );
+  });
+
+  it("sends a draft to testing, and locks it there with only Back to draft", async () => {
+    const testing = {
+      ...V13,
+      chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Testing,
+      chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Testing,
+    };
+    let current = V13;
+    const fetchMock = mockApi((url, init) => {
+      if (url.endsWith("/configs/cfg_13/send-to-testing")) {
+        current = testing;
+        return { status: 200, body: { isSuccess: true, chatbotConfig: testing } };
+      }
+      if (url.endsWith("/configs/cfg_13/back-to-draft")) {
+        current = V13;
+        return { status: 200, body: { isSuccess: true, chatbotConfig: V13 } };
+      }
+      if (url.endsWith("/configs/cfg_13") && (init?.method ?? "GET") === "GET") {
+        return { status: 200, body: { isSuccess: true, chatbotConfig: current } };
+      }
+      return null;
+    });
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Send to testing" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Send v13 to testing?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send to testing" }));
+    await waitFor(() =>
+      expect(calls(fetchMock, "POST", "/configs/cfg_13/send-to-testing")).toHaveLength(1),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "v13 is in testing. It's ready to publish once its tests pass.",
+    );
+    expect(await screen.findByRole("button", { name: "Back to draft" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send to testing" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back to draft" }));
+    const back = await screen.findByRole("alertdialog", { name: "Move v13 back to draft?" });
+    await userEvent.click(within(back).getByRole("button", { name: "Back to draft" }));
+    await waitFor(() =>
+      expect(calls(fetchMock, "POST", "/configs/cfg_13/back-to-draft")).toHaveLength(1),
+    );
+  });
+
+  it("publishes a version that passed its tests", async () => {
+    const ready = {
+      ...V13,
+      chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Ready,
+      chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Ready,
+      testResult: Schemas.ChatbotConfigTestResultEnum.Passed,
+    };
+    const published = {
+      ...ready,
+      chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Published,
+      chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Published,
+    };
+    const fetchMock = mockApi((url, init) => {
+      if (url.endsWith("/configs/cfg_13/publish")) {
+        return { status: 200, body: { isSuccess: true, chatbotConfig: published } };
+      }
+      if (url.endsWith("/configs/cfg_13") && (init?.method ?? "GET") === "GET") {
+        return { status: 200, body: { isSuccess: true, chatbotConfig: ready } };
+      }
+      return null;
+    });
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Publish v13?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Publish" }));
+    await waitFor(() =>
+      expect(calls(fetchMock, "POST", "/configs/cfg_13/publish")).toHaveLength(1),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "v13 is live. The assistant uses it from the next message.",
+    );
+  });
+
+  it("says a failed safety case blocks publishing", async () => {
+    mockApi((url, init) =>
+      url.endsWith("/configs/cfg_13") && (init?.method ?? "GET") === "GET"
+        ? {
+            status: 200,
+            body: { isSuccess: true, chatbotConfig: { ...V13, failedSafetyCaseCount: 1 } },
+          }
+        : null,
+    );
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+
+    expect(await screen.findByText("A failed safety case blocks publishing")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 safety case failed in this version's last test run/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See the test run" })).toBeInTheDocument();
   });
 
   it("shows a published version read-only, with Open draft while one exists", async () => {

@@ -31,11 +31,56 @@ import {
   useCopyVersion,
   useCreateDraft,
   useDiscardDraft,
+  useMoveToDraft,
   usePublishVersion,
   useSaveDraft,
+  useSendToTesting,
 } from "./-data";
 
-const { Draft } = Schemas.ChatbotConfigStatusIntEnum;
+const { Draft, Testing, Ready, Published } = Schemas.ChatbotConfigStatusIntEnum;
+const { Publish, Discard, SendToTesting, BackToDraft } = Schemas.DashboardVersionConfirmEnum;
+
+// DEV_NOTE: The editor's line under the title, per status (M5-4: a draft goes live only through its tests)
+const VERSION_DESCRIPTION: Partial<Record<Schemas.ChatbotConfigStatusIntEnum, string>> = {
+  [Draft]:
+    "A draft. Save your edits, then send it to testing. It can be published once its tests pass.",
+  [Testing]:
+    "In testing. Its tests run on your staging environment: it's ready to publish when they pass, and a draft again when they don't.",
+  [Ready]: "Passed its tests. Publish it to make it live.",
+};
+const LOCKED_DESCRIPTION =
+  "Versions that left draft don't change. Copy one into a new draft to change or roll back to it.";
+
+// DEV_NOTE: Each confirmation's title, words and button
+const CONFIRM_COPY: Record<
+  Schemas.DashboardVersionConfirmEnum,
+  { title: (version: number) => string; description: string; action: string }
+> = {
+  [Publish]: {
+    title: (version) => `Publish v${version}?`,
+    description:
+      "It becomes the live version: every conversation uses it from the next message. The current live version is kept, and you can roll back by copying it.",
+    action: "Publish",
+  },
+  [Discard]: {
+    title: (version) => `Discard v${version}?`,
+    description:
+      "The draft is set aside and can't be edited again. The live version doesn't change.",
+    action: "Discard draft",
+  },
+  [SendToTesting]: {
+    title: (version) => `Send v${version} to testing?`,
+    description:
+      "It can't be edited while its tests run on your staging environment. It's ready to publish when they pass, including every safety case.",
+    action: "Send to testing",
+  },
+  [BackToDraft]: {
+    title: (version) => `Move v${version} back to draft?`,
+    description:
+      "You can edit it again. Its test result no longer counts: send it to testing again before publishing.",
+    action: "Back to draft",
+  },
+};
 
 function BackToBots({ chatbotPublicId }: Schemas.DashboardBotBackLinkProps) {
   return (
@@ -197,11 +242,7 @@ function VersionEditor({ chatbot, options, version }: Schemas.DashboardBotVersio
       <BackToBots chatbotPublicId={chatbot.publicId} />
       <PageHeader
         title={`${chatbot.name} v${version.configVersion}`}
-        description={
-          isDraft
-            ? "A draft. Save your edits, then publish to make it live."
-            : "Versions that left draft don't change. Copy one into a new draft to change or roll back to it."
-        }
+        description={VERSION_DESCRIPTION[version.chatbotConfigStatus] ?? LOCKED_DESCRIPTION}
       >
         <VersionActions
           chatbotPublicId={chatbot.publicId}
@@ -240,7 +281,17 @@ function VersionEditor({ chatbot, options, version }: Schemas.DashboardBotVersio
         </Alert>
       ) : (
         <>
-          {isDraft && <PublishIssues body={version.body} options={options} refusal={refusal} />}
+          {version.failedSafetyCaseCount > 0 && version.chatbotConfigStatus !== Published && (
+            <SafetyBlock failedSafetyCaseCount={version.failedSafetyCaseCount} />
+          )}
+          {(isDraft || version.chatbotConfigStatus === Ready) && (
+            <PublishIssues
+              body={version.body}
+              options={options}
+              refusal={refusal}
+              isReady={version.chatbotConfigStatus === Ready}
+            />
+          )}
           <ConfigForm
             defaultValues={defaultValues}
             attachments={version.body.attachments}
@@ -259,8 +310,9 @@ function VersionEditor({ chatbot, options, version }: Schemas.DashboardBotVersio
   );
 }
 
-// DEV_NOTE: Draft: Discard and Publish (both confirmed; Publish waits for unsaved edits to be saved, since it publishes
-// what is stored). Any other version: Copy to new draft, or Open draft while the bot already has one.
+// DEV_NOTE: Draft: Discard and Send to testing (which waits for unsaved edits to be saved, since it tests what is
+// stored). Testing: Back to draft. Ready: Back to draft and Publish. Each is confirmed. Any other version: Copy to new
+// draft, or Open draft while the bot already has one.
 function VersionActions({
   chatbotPublicId,
   version,
@@ -270,12 +322,15 @@ function VersionActions({
   const navigate = useNavigate();
   const rows = useBotRows();
   const copy = useCopyVersion(chatbotPublicId);
+  const sendToTesting = useSendToTesting(chatbotPublicId, version.publicId);
+  const moveToDraft = useMoveToDraft(chatbotPublicId, version.publicId);
   const publish = usePublishVersion(chatbotPublicId, version.publicId);
   const discard = useDiscardDraft(chatbotPublicId, version.publicId);
   const [confirming, setConfirming] = useState<Schemas.DashboardVersionConfirmEnum | null>(null);
   const draft = rows.data?.chatbots?.find((row) => row.publicId === chatbotPublicId)?.draftConfig;
+  const status = version.chatbotConfigStatus;
 
-  if (version.chatbotConfigStatus !== Draft) {
+  if (status !== Draft && status !== Testing && status !== Ready) {
     if (draft && draft.publicId !== version.publicId) {
       return (
         <Button variant="outline" asChild>
@@ -311,59 +366,69 @@ function VersionActions({
     );
   }
 
+  const confirm = () => {
+    const showRefusal = { onError: (error: unknown) => onRefusal(configRefusalOf(error)) };
+    onRefusal(null);
+    if (confirming === Publish) publish.mutate(undefined, showRefusal);
+    if (confirming === SendToTesting) sendToTesting.mutate(undefined, showRefusal);
+    if (confirming === BackToDraft) moveToDraft.mutate(undefined);
+    if (confirming === Discard) {
+      discard.mutate(undefined, {
+        onSuccess: () =>
+          void navigate({ to: "/settings/bots", search: { botId: chatbotPublicId } }),
+      });
+    }
+    setConfirming(null);
+  };
+  const copyFor = confirming === null ? null : CONFIRM_COPY[confirming];
+
   return (
     <>
-      <Button
-        variant="ghost"
-        className="text-subtle-foreground"
-        disabled={discard.isPending}
-        onClick={() => setConfirming(Schemas.DashboardVersionConfirmEnum.Discard)}
-      >
-        Discard draft
-      </Button>
-      <Button
-        disabled={isDirty || publish.isPending || version.body === null}
-        title={isDirty ? "Save the draft first" : undefined}
-        onClick={() => setConfirming(Schemas.DashboardVersionConfirmEnum.Publish)}
-      >
-        {publish.isPending ? "Publishing…" : "Publish"}
-      </Button>
+      {status === Draft ? (
+        <>
+          <Button
+            variant="ghost"
+            className="text-subtle-foreground"
+            disabled={discard.isPending}
+            onClick={() => setConfirming(Discard)}
+          >
+            Discard draft
+          </Button>
+          <Button
+            disabled={isDirty || sendToTesting.isPending || version.body === null}
+            title={isDirty ? "Save the draft first" : undefined}
+            onClick={() => setConfirming(SendToTesting)}
+          >
+            {sendToTesting.isPending ? "Sending…" : "Send to testing"}
+          </Button>
+        </>
+      ) : (
+        <Button
+          variant={status === Ready ? "ghost" : "outline"}
+          className={status === Ready ? "text-subtle-foreground" : undefined}
+          disabled={moveToDraft.isPending}
+          onClick={() => setConfirming(BackToDraft)}
+        >
+          Back to draft
+        </Button>
+      )}
+      {status === Ready && (
+        <Button
+          disabled={publish.isPending || version.body === null}
+          onClick={() => setConfirming(Publish)}
+        >
+          {publish.isPending ? "Publishing…" : "Publish"}
+        </Button>
+      )}
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirming === Schemas.DashboardVersionConfirmEnum.Publish
-                ? `Publish v${version.configVersion}?`
-                : `Discard v${version.configVersion}?`}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirming === Schemas.DashboardVersionConfirmEnum.Publish
-                ? "It becomes the live version: every conversation uses it from the next message. The current live version is kept, and you can roll back by copying it."
-                : "The draft is set aside and can't be edited again. The live version doesn't change."}
-            </AlertDialogDescription>
+            <AlertDialogTitle>{copyFor?.title(version.configVersion)}</AlertDialogTitle>
+            <AlertDialogDescription>{copyFor?.description}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (confirming === Schemas.DashboardVersionConfirmEnum.Publish) {
-                  onRefusal(null);
-                  publish.mutate(undefined, {
-                    onError: (error) => onRefusal(configRefusalOf(error)),
-                  });
-                } else {
-                  discard.mutate(undefined, {
-                    onSuccess: () =>
-                      void navigate({ to: "/settings/bots", search: { botId: chatbotPublicId } }),
-                  });
-                }
-                setConfirming(null);
-              }}
-            >
-              {confirming === Schemas.DashboardVersionConfirmEnum.Publish
-                ? "Publish"
-                : "Discard draft"}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={confirm}>{copyFor?.action}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -371,12 +436,34 @@ function VersionActions({
   );
 }
 
-// DEV_NOTE: What would stop the saved draft publishing, seen from here (model keys, turned-on tools, priced models), and
-// the last publish's refusal (it checks again under its locks, so it has the last word)
-function PublishIssues({ body, options, refusal }: Schemas.DashboardPublishIssuesProps) {
+// DEV_NOTE: The safety hard gate (M5-4): the version's last test run failed a safety case, which blocks publishing even
+// above the pass threshold
+function SafetyBlock({ failedSafetyCaseCount }: Schemas.DashboardSafetyBlockProps) {
+  return (
+    <Alert className="border-0 bg-destructive-soft">
+      <AlertTitle className="text-foreground">A failed safety case blocks publishing</AlertTitle>
+      <AlertDescription className="text-subtle-foreground">
+        <p>
+          {failedSafetyCaseCount === 1
+            ? "1 safety case failed"
+            : `${failedSafetyCaseCount} safety cases failed`}{" "}
+          in this version's last test run, even if the rest passed. Fix the draft, then send it to
+          testing again.
+        </p>
+        <Link to="/tests" className="text-foreground underline">
+          See the test run
+        </Link>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+// DEV_NOTE: What would stop the saved version going to testing or live, seen from here (model keys, turned-on tools,
+// priced models), and the last send's or publish's refusal (it checks again under its locks, so it has the last word)
+function PublishIssues({ body, options, refusal, isReady }: Schemas.DashboardPublishIssuesProps) {
   const lines: string[] = [];
   if (refusal) {
-    lines.push(refusal.message ?? "The version wasn't published.");
+    lines.push(refusal.message ?? "Nothing changed.");
   } else if (body) {
     const needs = Schemas.getChatbotConfigPublishNeeds(body);
     const missing = needs.providers.filter(
@@ -405,7 +492,11 @@ function PublishIssues({ body, options, refusal }: Schemas.DashboardPublishIssue
   return (
     <Alert className="border-0 bg-destructive-soft">
       <AlertTitle className="text-foreground">
-        {refusal ? "This version wasn't published" : "This version can't be published yet"}
+        {refusal
+          ? isReady
+            ? "This version wasn't published"
+            : "This version wasn't sent to testing"
+          : "This version can't be published yet"}
       </AlertTitle>
       <AlertDescription className="text-subtle-foreground">
         <ul className="list-disc pl-4">

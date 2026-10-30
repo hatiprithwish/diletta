@@ -149,7 +149,7 @@ export function useBotVersion(chatbotPublicId: string, publicId: string) {
   return useQuery(BotsQueries.version(chatbotPublicId, publicId, getToken));
 }
 
-// DEV_NOTE: The refusal a draft write or publish answered (409 / 400 with its failure), for the editor to show; null for
+// DEV_NOTE: The refusal a draft write, gate move or publish answered (409 / 400 with its failure), for the editor to show; null for
 // any other error
 export function configRefusalOf(error: unknown): Schemas.ChatbotConfigWriteApiResponse | null {
   if (!(error instanceof ApiError)) return null;
@@ -339,6 +339,48 @@ export function useDiscardDraft(chatbotPublicId: string, publicId: string) {
       toast.success("Draft discarded. The live version didn't change.");
     },
     onError: (error) => toastVersionError(error, "The draft wasn't discarded."),
+  });
+}
+
+// DEV_NOTE: The gate (M5-4): a draft goes to testing (its tests run on staging; their finish makes it Ready or a draft
+// again), and a version in testing or ready goes back to draft
+export function useSendToTesting(chatbotPublicId: string, publicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiClient<Schemas.ChatbotConfigWriteApiResponse>(
+        `${configsPath(chatbotPublicId)}/${encodeURIComponent(publicId)}/send-to-testing`,
+        getToken,
+        { method: "POST" },
+      ),
+    onSuccess: (response) => {
+      applyVersionWrite(queryClient, chatbotPublicId, response);
+      toast.success(
+        `v${response.chatbotConfig?.configVersion ?? ""} is in testing. It's ready to publish once its tests pass.`,
+      );
+    },
+    onError: (error) => toastVersionError(error, "The version wasn't sent to testing."),
+  });
+}
+
+export function useMoveToDraft(chatbotPublicId: string, publicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiClient<Schemas.ChatbotConfigWriteApiResponse>(
+        `${configsPath(chatbotPublicId)}/${encodeURIComponent(publicId)}/back-to-draft`,
+        getToken,
+        { method: "POST" },
+      ),
+    onSuccess: (response) => {
+      applyVersionWrite(queryClient, chatbotPublicId, response);
+      toast.success(
+        `v${response.chatbotConfig?.configVersion ?? ""} is a draft again. Send it to testing when it's ready.`,
+      );
+    },
+    onError: (error) => toastVersionError(error, "The version wasn't moved back to draft."),
   });
 }
 

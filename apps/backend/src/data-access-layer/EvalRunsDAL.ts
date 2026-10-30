@@ -507,7 +507,9 @@ export default class EvalRunsDAL {
       ];
       const runs = await tx
         .selectDistinctOn([evalRuns.chatbotConfigId], {
+          id: evalRuns.id,
           chatbotConfigId: evalRuns.chatbotConfigId,
+          k: evalRuns.k,
           status: evalRuns.status,
           hasPassed: evalRuns.hasPassed,
         })
@@ -909,12 +911,14 @@ export default class EvalRunsDAL {
       const tallies = await tx
         .select({
           evalCaseId: evalResults.evalCaseId,
+          isSafety: evalCases.isSafety,
           attemptCount: sql<number>`count(*)`.mapWith(Number),
           passedAttemptCount: this.passedAttemptCount(),
         })
         .from(evalResults)
+        .innerJoin(evalCases, and(...this.caseJoinConditions()))
         .where(and(...conditions))
-        .groupBy(evalResults.evalCaseId);
+        .groupBy(evalResults.evalCaseId, evalCases.isSafety);
 
       response.isSuccess = true;
       response.message = "Eval run tallies fetched successfully";

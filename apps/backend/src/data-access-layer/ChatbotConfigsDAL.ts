@@ -526,6 +526,56 @@ export default class ChatbotConfigsDAL {
 
   // DEV_NOTE: Draft → Published (the DAL matches Draft). The caller archives the old Published version first, in the
   // same transaction (UNQ_chatbot_configs_chatbot_id_published).
+  // DEV_NOTE: updated_at is the database's now(), the clock eval_runs.created_at uses, so a gate run's finish can tell
+  // whether it started after the version was sent to testing (EvalHarnessRepo.finish)
+  async moveChatbotConfigStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MoveChatbotConfigStatusDALRequest,
+  ) {
+    const response: Schemas.ChatbotConfigDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotConfigs.id, params.id),
+        eq(chatbotConfigs.chatbotId, params.chatbotId),
+        eq(chatbotConfigs.companyId, params.companyId),
+        inArray(chatbotConfigs.status, [...params.fromStatuses]),
+      ];
+      const [chatbotConfig] = await tx
+        .update(chatbotConfigs)
+        .set({
+          status: params.status,
+          approvedByRunId: params.approvedByRunId,
+          ...(params.updatedBy !== undefined ? { updatedBy: params.updatedBy } : {}),
+          updatedAt: sql`now()`,
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!chatbotConfig) {
+        response.message = "Chatbot config not found in that status";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Chatbot config status changed successfully";
+      response.chatbotConfig = chatbotConfig;
+    } catch (error) {
+      const message = "Unknown error in changing chatbot config status";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.MoveChatbotConfigStatus,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async publishChatbotConfig(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.PublishChatbotConfigDALRequest,
@@ -538,7 +588,7 @@ export default class ChatbotConfigsDAL {
         eq(chatbotConfigs.publicId, params.publicId),
         eq(chatbotConfigs.chatbotId, params.chatbotId),
         eq(chatbotConfigs.companyId, params.companyId),
-        eq(chatbotConfigs.status, Schemas.ChatbotConfigStatusIntEnum.Draft),
+        eq(chatbotConfigs.status, Schemas.ChatbotConfigStatusIntEnum.Ready),
       ];
       const [chatbotConfig] = await tx
         .update(chatbotConfigs)
@@ -553,7 +603,7 @@ export default class ChatbotConfigsDAL {
         .returning();
 
       if (!chatbotConfig) {
-        response.message = "Draft chatbot config not found";
+        response.message = "Ready chatbot config not found";
         response.isNotFound = true;
         return response;
       }

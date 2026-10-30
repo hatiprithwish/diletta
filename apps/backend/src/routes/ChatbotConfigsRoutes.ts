@@ -149,6 +149,46 @@ ChatbotConfigsRoutes.post(
   },
 );
 
+// The gate (M5-4): a draft goes to testing; its gate run's finish makes it Ready or a draft again
+ChatbotConfigsRoutes.post(
+  "/:publicId/send-to-testing",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotConfigUpdate),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new ChatbotConfigsRepo(c.env);
+    const { outboxIds, ...response } = await repo.sendChatbotConfigToTesting({
+      companyId,
+      chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
+      publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, writeStatus(response, 200));
+  },
+);
+
+ChatbotConfigsRoutes.post(
+  "/:publicId/back-to-draft",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotConfigUpdate),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new ChatbotConfigsRepo(c.env);
+    const { outboxIds, ...response } = await repo.moveChatbotConfigToDraft({
+      companyId,
+      chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
+      publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, writeStatus(response, 200));
+  },
+);
+
+// Only a Ready version, on its passed gate run
 ChatbotConfigsRoutes.post(
   "/:publicId/publish",
   checkAuth,

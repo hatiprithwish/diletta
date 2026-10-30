@@ -29,11 +29,13 @@ export type ChatbotConfigVersion = Pick<
 };
 
 // DEV_NOTE: One version with its body as the company stored it (upgraded, no platform defaults: readConfigBody). body
-// null = the stored body no longer reads (bodyIssue says why); such a version can't be copied.
+// null = the stored body no longer reads (bodyIssue says why); such a version can't be copied. failedSafetyCaseCount =
+// the safety cases its newest run decided failed (0 with no run, or none decided yet): any one blocks publishing (M5-4).
 export type ChatbotConfigDetail = ChatbotConfigVersion & {
   chatbotPublicId: string;
   body: ConfigSpecBody | null;
   bodyIssue: string | null;
+  failedSafetyCaseCount: number;
 };
 
 export interface GetChatbotConfigsApiResponse extends ApiResponse {
@@ -73,8 +75,9 @@ export interface ChatbotConfigPin {
   version: number;
 }
 
-// DEV_NOTE: Every draft write and the publish answer the same shape. A refusal names its failure, and a publish
-// refusal what to fix: the providers with no Active key, the pins that aren't Active, the models with no price.
+// DEV_NOTE: Every draft write, gate move and the publish answer the same shape. A refusal names its failure, and a
+// send to testing or publish refusal what to fix: the providers with no Active key, the pins that aren't Active, the
+// models with no price.
 export interface ChatbotConfigWriteApiResponse extends ApiResponse {
   chatbotConfig?: ChatbotConfigDetail;
   failure?: ChatbotConfigFailureEnum;

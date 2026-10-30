@@ -911,6 +911,11 @@
         "hasPassed": {
           "type": "boolean"
         },
+        "failedSafetyCaseCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
         "costUsd": {
           "type": "string"
         }
@@ -923,6 +928,7 @@
         "caseCount",
         "passAllKCount",
         "hasPassed",
+        "failedSafetyCaseCount",
         "costUsd"
       ]
     },
@@ -949,6 +955,7 @@
             "Invalid",
             "Duplicate",
             "Incomplete",
+            "NotTesting",
             "HostFailed",
             "JudgeUnavailable"
           ]

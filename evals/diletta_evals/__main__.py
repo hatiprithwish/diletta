@@ -1,6 +1,6 @@
 """The harness CLI (docs/runbooks/evals.md).
 
-    uv run --project evals python -m diletta_evals run --config <chatbotConfigPublicId> [--k 3]
+    uv run --project evals python -m diletta_evals run --config <chatbotConfigPublicId> [--k 3] [--trigger gate]
     uv run --project evals python -m diletta_evals keygen [--kid <kid>]
 
 run: exit 0 when the run passed, 1 when it ran and failed (the chatbot regressed), 2 when it couldn't run: settings,
@@ -82,7 +82,12 @@ def main() -> int:
     run = commands.add_parser("run", help="run a config's eval cases on the staging connection")
     run.add_argument("--config", required=True, help="the chatbot config's public id")
     run.add_argument("--k", type=_k, default=3, help="attempts per case (pass^k), default 3")
-    run.add_argument("--trigger", choices=sorted(TRIGGERS), default="manual")
+    run.add_argument(
+        "--trigger",
+        choices=sorted(TRIGGERS),
+        default="manual",
+        help="gate: the publish gate of a config sent to testing (its finish makes it Ready or a draft again)",
+    )
     run.set_defaults(handler=_run)
     keygen = commands.add_parser("keygen", help="a new platform eval signing key")
     keygen.add_argument("--kid", help="the key id (default eval-<date>)")

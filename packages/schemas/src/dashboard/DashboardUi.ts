@@ -756,12 +756,18 @@ export interface DashboardConfigSectionProps {
   description?: string;
 }
 
-// DEV_NOTE: What would stop this version publishing, checked in the browser against the editor options (the publish
-// checks it again), and the refusal the last publish answered
+// DEV_NOTE: What would stop this version going to testing or live, checked in the browser against the editor options
+// (the send to testing and the publish check it again), and the refusal the last of them answered
 export interface DashboardPublishIssuesProps {
   body: ConfigSpecBody | null;
   options: ChatbotConfigOptions;
   refusal: ChatbotConfigWriteApiResponse | null;
+  isReady: boolean;
+}
+
+// DEV_NOTE: The safety hard gate's banner (M5-4): the version's newest run failed this many safety cases
+export interface DashboardSafetyBlockProps {
+  failedSafetyCaseCount: number;
 }
 
 export interface DashboardVersionActionsProps {
@@ -788,10 +794,13 @@ export interface DashboardBotVersionEditorProps extends DashboardBotNewDraftProp
   version: ChatbotConfigDetail;
 }
 
-// DEV_NOTE: Which of a draft's confirmations is open
+// DEV_NOTE: Which of a version's confirmations is open: a draft's Discard and Send to testing, Back to draft (Testing,
+// Ready), a Ready version's Publish
 export enum DashboardVersionConfirmEnum {
   Publish = "publish",
   Discard = "discard",
+  SendToTesting = "send_to_testing",
+  BackToDraft = "back_to_draft",
 }
 
 // DEV_NOTE: One limit field of the editor: its config key, its label, and whether it holds dollars

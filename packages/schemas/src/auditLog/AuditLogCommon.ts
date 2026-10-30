@@ -50,6 +50,8 @@ export enum AuditEntityActionEnum {
   MadeDefault = "made_default",
   Discarded = "discarded",
   Published = "published",
+  SentToTesting = "sent_to_testing",
+  MovedToDraft = "moved_to_draft",
   BudgetChanged = "budget_changed",
   Revoked = "revoked",
   Removed = "removed",
@@ -112,6 +114,8 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Created,
     AuditEntityActionEnum.Updated,
     AuditEntityActionEnum.Discarded,
+    AuditEntityActionEnum.SentToTesting,
+    AuditEntityActionEnum.MovedToDraft,
     AuditEntityActionEnum.Published,
   ],
 } as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;

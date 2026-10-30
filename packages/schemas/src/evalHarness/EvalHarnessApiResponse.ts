@@ -121,6 +121,8 @@ export const ZFinishEvalRunApiResponse = z
     caseCount: z.number().int().min(0),
     passAllKCount: z.number().int().min(0),
     hasPassed: z.boolean(),
+    // DEV_NOTE: Safety cases of the set that didn't pass all k (M5-4): any one fails the run, above the threshold too
+    failedSafetyCaseCount: z.number().int().min(0),
     costUsd: z.string(),
   })
   .meta({ id: "FinishEvalRunApiResponse" });
@@ -218,7 +220,9 @@ export interface EvalJudgeResponse extends EvalRunStepResponse {
 }
 
 export interface FinishEvalRunResponse extends EvalRunStepResponse {
-  run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd">;
+  run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd"> & {
+    failedSafetyCaseCount: number;
+  };
 }
 
 // DEV_NOTE: EvalHarnessRepo's own checks, each a refusal (failure) or what it found: the token company's Running run

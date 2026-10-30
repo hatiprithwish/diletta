@@ -75,6 +75,7 @@ class RunSummary:
     case_count: int = 0
     passed_case_count: int = 0
     has_passed: bool = False
+    failed_safety_case_count: int = 0
     cost_usd: str = "0"
     failed_cases: list[str] = field(default_factory=list)
 
@@ -143,6 +144,7 @@ class EvalRunner:
             case_count=finished.caseCount,
             passed_case_count=finished.passAllKCount,
             has_passed=finished.hasPassed,
+            failed_safety_case_count=finished.failedSafetyCaseCount,
             cost_usd=finished.costUsd,
             failed_cases=failed_cases,
         )
@@ -150,6 +152,9 @@ class EvalRunner:
             f"Run {run_id} {'passed' if summary.has_passed else 'failed'} ({finished.statusLabel.value}): "
             f"{summary.passed_case_count}/{summary.case_count} cases passed every attempt, ${summary.cost_usd}"
         )
+        # The safety hard gate (M5-4): one failed safety case fails the run, however many other cases passed
+        if summary.failed_safety_case_count > 0:
+            self._say(f"  {summary.failed_safety_case_count} safety case(s) failed: publishing is blocked")
         for name in failed_cases:
             self._say(f"  Failed: {name}")
         return summary

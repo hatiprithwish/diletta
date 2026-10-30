@@ -230,6 +230,7 @@ EvalHarnessRoutes.post(
       caseCount: run.caseCount ?? 0,
       passAllKCount: run.passAllKCount ?? 0,
       hasPassed: run.hasPassed ?? false,
+      failedSafetyCaseCount: run.failedSafetyCaseCount,
       costUsd: run.costUsd,
     };
     return c.json(response, 200);
