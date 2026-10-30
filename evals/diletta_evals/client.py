@@ -159,7 +159,9 @@ class EvalApiClient:
             response = self._http.post(
                 f"{self._config.api_url}/eval{path}",
                 headers=headers,
-                content=body.model_dump_json() if body is not None else "{}",
+                # DEV_NOTE: An optional field left unset stays out of the body (the backend's optional fields refuse null);
+                # a field set to None, a nullable one, is sent as null
+                content=body.model_dump_json(exclude_unset=True) if body is not None else "{}",
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as error:

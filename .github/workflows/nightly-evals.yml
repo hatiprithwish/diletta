@@ -1,0 +1,72 @@
+name: Nightly Platform Suite
+
+# DEV_NOTE: The nightly platform suite (M5-5, docs/runbooks/nightly-suite.md): the eval harness runs our test company's
+# published config on the staging test host as a Nightly run: every active platform case (the safety cases every gate
+# runs) and the test company's own cases on the test host's tools, k attempts each. The job fails when the run fails
+# (exit 1: a regression) or couldn't run (exit 2), and GitHub notifies the workflow's owners. The backend alerts too:
+# a Nightly run that finishes without passing, and no Nightly run Done in the last 26 hours (NightlySuiteRepo). Only the
+# staging environment: an eval never drives a production host.
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      k:
+        description: "Attempts per case (pass^k)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-evals
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    name: Platform suite on the test company (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+
+    env:
+      DILETTA_API_URL: https://diletta-worker-staging.hatiprithwish.workers.dev
+      # Diletta Test Company and its staging test host connection (public ids)
+      DILETTA_COMPANY_ID: Ufli6o4w4WCEg5BOOEiOY
+      DILETTA_CONNECTION_ID: x1dUbuaD0MWR5vi0ztHy6
+      EVAL_HOST_KIND: test_host
+      EVAL_HOST_USER: nightly-suite
+      TEST_HOST_ISSUER: https://diletta-test-host-staging.hatiprithwish.workers.dev
+      EVAL_JWT_PRIVATE_KEY: ${{ secrets.EVAL_JWT_PRIVATE_KEY }}
+      TEST_HOST_ADMIN_SECRET: ${{ secrets.TEST_HOST_ADMIN_SECRET }}
+      NIGHTLY_CHATBOT_ID: ${{ vars.NIGHTLY_CHATBOT_ID }}
+      K: ${{ inputs.k || '3' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check settings
+        run: |
+          missing=()
+          for key in EVAL_JWT_PRIVATE_KEY TEST_HOST_ADMIN_SECRET NIGHTLY_CHATBOT_ID; do
+            [[ -z "${!key}" ]] && missing+=("$key")
+          done
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "❌ Missing in the staging environment: ${missing[*]}"
+            exit 2
+          fi
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          working-directory: evals
+
+      - name: Install the harness
+        run: uv sync --project evals --locked
+
+      - name: Run the suite
+        run: >-
+          uv run --project evals python -m diletta_evals run
+          --chatbot "$NIGHTLY_CHATBOT_ID" --trigger nightly --k "$K"

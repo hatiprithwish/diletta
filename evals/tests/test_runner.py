@@ -15,7 +15,7 @@ from diletta_evals.constants import (
 )
 from diletta_evals.graders import GradedAttempt
 from diletta_evals.hosts.base import HostLoginError
-from diletta_evals.runner import EvalRunner, JudgeUnavailableError
+from diletta_evals.runner import ChatbotTarget, ConfigTarget, EvalRunner, JudgeUnavailableError
 from diletta_evals.types import eval_api
 
 Failure = eval_api.Failure
@@ -84,6 +84,7 @@ class FakeClient:
 
     def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
         self.events.append("start")
+        self.started_with = request
         return eval_api.CreateEvalRunApiResponse.model_validate(
             {
                 "isSuccess": True,
@@ -202,8 +203,26 @@ class FakeClient:
 
 def run(client: FakeClient, host: FakeHost | None = None, k: int = 3):
     return EvalRunner(client, host or FakeHost(), out=client.out).run(
-        config_id="cfg_1", k=k, trigger=eval_api.Trigger.number_2
+        target=ConfigTarget(config_id="cfg_1"), k=k, trigger=eval_api.Trigger.number_2
     )
+
+
+def test_starts_on_the_named_config_or_on_a_chatbot_by_its_published_config() -> None:
+    client = FakeClient()
+    run(client)
+    assert client.started_with.model_dump(exclude_unset=True) == {
+        "chatbotConfigId": "cfg_1",
+        "k": 3,
+        "harnessVersion": client.started_with.harnessVersion,
+        "trigger": eval_api.Trigger.number_2,
+    }
+
+    nightly = FakeClient()
+    EvalRunner(nightly, FakeHost(), out=nightly.out).run(
+        target=ChatbotTarget(chatbot_id="bot_1"), k=1, trigger=eval_api.Trigger.number_3
+    )
+    assert nightly.started_with.chatbotId == "bot_1"
+    assert "chatbotConfigId" not in nightly.started_with.model_fields_set
 
 
 def test_runs_every_attempt_with_its_own_tag_then_resets_once_and_finishes() -> None:

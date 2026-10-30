@@ -1,4 +1,15 @@
-import { and, asc, countDistinct, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  countDistinct,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
@@ -214,6 +225,51 @@ export default class EvalRunsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetDashboardEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The company's newest Nightly run that reached Done, by finished_at (M5-5); isNotFound when it has none
+  async getLatestDoneNightlyEvalRun(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindLatestDoneNightlyEvalRunDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalRuns.companyId, params.companyId),
+        eq(evalRuns.trigger, Schemas.EvalRunTriggerIntEnum.Nightly),
+        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Done),
+        isNotNull(evalRuns.finishedAt),
+      ];
+      const [selected] = await tx
+        .select()
+        .from(evalRuns)
+        .where(and(...conditions))
+        .orderBy(desc(evalRuns.finishedAt), desc(evalRuns.id))
+        .limit(1);
+
+      if (!selected) {
+        response.message = "Company has no finished nightly run";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Latest nightly eval run fetched successfully";
+      response.evalRun = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching the latest nightly eval run";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLatestNightlyEvalRun,
         message,
         error,
         metadata: params,

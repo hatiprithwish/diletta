@@ -39,6 +39,9 @@ import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EvalAuthRepo from "@/repositories/EvalAuthRepo";
 import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
+import NightlySuiteRepo from "@/repositories/NightlySuiteRepo";
+import AppLogger from "@/providers/logger";
+import Constants from "@/config/Constants";
 import Utility from "@/utils/Utility";
 import {
   anthropicReplyStream,
@@ -741,6 +744,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     });
     expect(notReset.status).toBe(409);
 
+    routeTestHostFetch();
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
       hostToken: tenant.hostToken,
@@ -870,6 +874,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       started,
       started.cases.map((evalCase) => evalCase.publicId).filter((id) => id !== skipped),
     );
+    routeTestHostFetch();
     routeTestHostFetch();
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
@@ -1148,6 +1153,7 @@ describe("Publish gate (M5-4)", { timeout: GATE_TIMEOUT_MS }, () => {
         expect(recorded.status).toBe(201);
       }
     }
+    routeTestHostFetch();
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
       hostToken: tenant.hostToken,
@@ -1637,3 +1643,189 @@ describe(
     });
   },
 );
+
+describe("Nightly platform suite (M5-5)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  const startBody = (overrides: Record<string, unknown>) => ({
+    k: 1,
+    harnessVersion: "test-1",
+    trigger: Schemas.EvalRunTriggerIntEnum.Nightly,
+    ...overrides,
+  });
+
+  async function publish(tenant: Tenant): Promise<void> {
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(chatbotConfigs)
+        .set({ status: Schemas.ChatbotConfigStatusIntEnum.Published, publishedAt: new Date() })
+        .where(eq(chatbotConfigs.id, tenant.configId)),
+    );
+  }
+
+  // DEV_NOTE: A Nightly run of the published config with every case recorded (the tenant's own one passing or not),
+  // reset and finished Done
+  async function finishNightly(tenant: Tenant, isOwnCasePassing: boolean): Promise<Response> {
+    const response = await call("/runs", {
+      token: await tokenFor(tenant),
+      body: startBody({ chatbotId: tenant.chatbotPublicId }),
+    });
+    expect(response.status).toBe(201);
+    const started = Schemas.ZCreateEvalRunApiResponse.parse(await response.json());
+    const runId = started.run.publicId;
+    await recordAll(tenant, started, [tenant.casePublicId]);
+    const own = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: tenant.casePublicId,
+        attempt: 1,
+        hasPassed: isOwnCasePassing,
+        graderOutput: graderOutput(isOwnCasePassing),
+        latencyMs: null,
+      },
+    });
+    expect(own.status).toBe(201);
+    routeTestHostFetch();
+    const reset = await call(`/runs/${runId}/reset`, {
+      token: await tokenFor(tenant),
+      hostToken: tenant.hostToken,
+    });
+    expect(reset.status, await reset.clone().text()).toBe(200);
+    const finished = await call(`/runs/${runId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: true },
+    });
+    expect(finished.status, await finished.clone().text()).toBe(200);
+    return finished;
+  }
+
+  const nightlyAlerts = () =>
+    vi
+      .mocked(AppLogger.error)
+      .mock.calls.filter(([entry]) => entry.action === Schemas.LogAction.ReportNightlyEvalRun);
+
+  it("starts a run by chatbot on its published config, and refuses one with none, a gate by chatbot or two targets", async () => {
+    const tenant = await createTenant();
+
+    const unpublished = await call("/runs", {
+      token: await tokenFor(tenant),
+      body: startBody({ chatbotId: tenant.chatbotPublicId }),
+    });
+    expect(unpublished.status).toBe(409);
+    expect(await unpublished.json()).toMatchObject({
+      failure: Schemas.EvalRunStepFailureEnum.NoPublishedConfig,
+    });
+
+    const gate = await call("/runs", {
+      token: await tokenFor(tenant),
+      body: startBody({
+        chatbotId: tenant.chatbotPublicId,
+        trigger: Schemas.EvalRunTriggerIntEnum.Gate,
+        k: Schemas.EVAL_GATE_MIN_K,
+      }),
+    });
+    expect(gate.status).toBe(400);
+    const both = await call("/runs", {
+      token: await tokenFor(tenant),
+      body: startBody({
+        chatbotId: tenant.chatbotPublicId,
+        chatbotConfigId: tenant.configPublicId,
+      }),
+    });
+    expect(both.status).toBe(400);
+    const neither = await call("/runs", { token: await tokenFor(tenant), body: startBody({}) });
+    expect(neither.status).toBe(400);
+
+    await publish(tenant);
+    const started = await call("/runs", {
+      token: await tokenFor(tenant),
+      body: startBody({ chatbotId: tenant.chatbotPublicId }),
+    });
+    expect(started.status).toBe(201);
+    const { run } = Schemas.ZCreateEvalRunApiResponse.parse(await started.json());
+    const [stored] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, run.publicId)),
+    );
+    expect(stored).toMatchObject({
+      chatbotConfigId: tenant.configId,
+      trigger: Schemas.EvalRunTriggerIntEnum.Nightly,
+    });
+
+    // DEV_NOTE: Another company's chatbot is NotFound
+    const other = await createTenant();
+    await publish(other);
+    const foreign = await call("/runs", {
+      token: await tokenFor(tenant),
+      body: startBody({ chatbotId: other.chatbotPublicId }),
+    });
+    expect(foreign.status).toBe(404);
+  });
+
+  it("alerts on a seeded regression: a Nightly run that finishes failed, never on one that passes", async () => {
+    const tenant = await createTenant();
+    await publish(tenant);
+    vi.mocked(AppLogger.error).mockClear();
+
+    const passed = await finishNightly(tenant, true);
+    expect(Schemas.ZFinishEvalRunApiResponse.parse(await passed.json()).hasPassed).toBe(true);
+    expect(nightlyAlerts()).toHaveLength(0);
+
+    // DEV_NOTE: The seeded regression: the tenant's own case fails its one attempt
+    const regressed = await finishNightly(tenant, false);
+    expect(Schemas.ZFinishEvalRunApiResponse.parse(await regressed.json()).hasPassed).toBe(false);
+    expect(nightlyAlerts()).toHaveLength(1);
+    expect(nightlyAlerts()[0]?.[0]).toMatchObject({
+      category: Schemas.LogCategory.Eval,
+      message: "The nightly platform suite failed",
+      metadata: expect.objectContaining({
+        companyId: tenant.companyId,
+        status: Schemas.EvalRunStatusIntEnum.Done,
+        hasPassed: false,
+      }),
+    });
+
+    // DEV_NOTE: A Manual run that fails is no nightly alert
+    vi.mocked(AppLogger.error).mockClear();
+    const manual = await startRun(tenant);
+    await call(`/runs/${manual.run.publicId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: false },
+    });
+    expect(nightlyAlerts()).toHaveLength(0);
+  });
+
+  it("alerts when the suite company has no Nightly run that finished lately, and checks nothing without one", async () => {
+    const tenant = await createTenant();
+    await publish(tenant);
+    const checkAt = (now: Date, companyPublicId = tenant.companyPublicId) =>
+      new NightlySuiteRepo({
+        ...env,
+        NIGHTLY_SUITE_COMPANY_ID: companyPublicId,
+      } as Env).checkRecentRun({ now });
+    const overdueAlerts = () =>
+      vi
+        .mocked(AppLogger.error)
+        .mock.calls.filter(([entry]) => entry.action === Schemas.LogAction.CheckNightlySuite);
+
+    expect(await checkAt(new Date(), "")).toMatchObject({ isSuccess: true, isChecked: false });
+
+    vi.mocked(AppLogger.error).mockClear();
+    const never = await checkAt(new Date());
+    expect(never).toMatchObject({ isChecked: true, isOverdue: true, lastFinishedAt: null });
+    expect(overdueAlerts()).toHaveLength(1);
+
+    // DEV_NOTE: A Done run counts whether it passed or not (the finish already alerted on a failure)
+    await finishNightly(tenant, false);
+    vi.mocked(AppLogger.error).mockClear();
+    const fresh = await checkAt(new Date());
+    expect(fresh).toMatchObject({ isChecked: true, isOverdue: false });
+    expect(overdueAlerts()).toHaveLength(0);
+
+    const late = await checkAt(new Date(Date.now() + Constants.NIGHTLY_SUITE_MAX_AGE_MS + 60_000));
+    expect(late).toMatchObject({ isChecked: true, isOverdue: true });
+    expect(overdueAlerts()).toHaveLength(1);
+
+    vi.mocked(AppLogger.error).mockClear();
+    const unknown = await checkAt(new Date(), Utility.generatePublicId());
+    expect(unknown.isSuccess).toBe(false);
+    expect(overdueAlerts()).toHaveLength(1);
+  });
+});

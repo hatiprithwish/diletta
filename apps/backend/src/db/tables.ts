@@ -478,7 +478,8 @@ export const evalRuns = table(
 );
 
 // DEV_NOTE: company_id NULL = platform case (own RLS policy, M1-3); customer cases always name a chatbot.
-// Platform safety cases can't be deactivated.
+// Platform safety cases can't be deactivated. platform_key = the platform suite's name for a platform case it syncs
+// from code (M5-5, Schemas.PLATFORM_EVAL_CASES), unique; never set on a company's case.
 export const evalCases = table(
   "eval_cases",
   {
@@ -486,6 +487,7 @@ export const evalCases = table(
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }), // → companies.id, null = platform
     chatbotId: t.bigint("chatbot_id", { mode: "string" }), // → chatbots.id, null = platform
+    platformKey: t.text("platform_key"),
     name: t.text().notNull(),
     input: t.jsonb().notNull(),
     expectations: t.jsonb().notNull(),
@@ -496,6 +498,11 @@ export const evalCases = table(
   },
   (table) => [
     t.uniqueIndex("UNQ_eval_cases_public_id").on(table.publicId),
+    t.uniqueIndex("UNQ_eval_cases_platform_key").on(table.platformKey),
+    t.check(
+      "CHK_eval_cases_platform_key",
+      sql`${table.platformKey} IS NULL OR ${table.companyId} IS NULL`,
+    ),
     t.check(
       "CHK_eval_cases_platform_chatbot_id",
       sql`(${table.companyId} IS NULL) = (${table.chatbotId} IS NULL)`,

@@ -15,15 +15,25 @@ import {
 // DEV_NOTE: Bodies the harness sends to /eval/* (M5-2). Every id is a public id; the company and the staging
 // connection come from the eval JWT, never from a body. Exported to evals/schemas/eval-api.schema.json.
 
-// DEV_NOTE: Starts a run of one config on the token's staging connection. trigger Gate (M5-4): the config must be
-// Testing (an admin sent it), else NotTesting; its finish moves the config to Ready or back to Draft. Manual and Nightly
-// (M5-5) run a config of any status and never move it.
+// DEV_NOTE: Starts a run of one config on the token's staging connection, named by exactly one of chatbotConfigId (that
+// config) or chatbotId (the chatbot's published config when the run starts, else NoPublishedConfig: the nightly suite,
+// M5-5, follows what is live without a config id in its settings). trigger Gate (M5-4): the config must be Testing (an
+// admin sent it), else NotTesting, and is named by chatbotConfigId only; its finish moves the config to Ready or back to
+// Draft. Manual and Nightly run a config of any status and never move it.
 export const ZCreateEvalRunApiRequest = z
   .object({
-    chatbotConfigId: z.string().min(1).max(64),
+    chatbotConfigId: z.string().min(1).max(64).optional(),
+    chatbotId: z.string().min(1).max(64).optional(),
     k: z.number().int().min(1).max(EVAL_RUN_MAX_K),
     harnessVersion: z.string().trim().min(1).max(EVAL_HARNESS_VERSION_MAX_CHARS),
     trigger: z.enum(EvalRunTriggerIntEnum),
+  })
+  .refine((body) => (body.chatbotConfigId === undefined) !== (body.chatbotId === undefined), {
+    message: "Name either a config or a chatbot",
+  })
+  .refine((body) => body.trigger !== EvalRunTriggerIntEnum.Gate || body.chatbotId === undefined, {
+    message: "A gate run names its config",
+    path: ["chatbotId"],
   })
   .meta({ id: "CreateEvalRunApiRequest" });
 export type CreateEvalRunApiRequest = z.infer<typeof ZCreateEvalRunApiRequest>;

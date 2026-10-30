@@ -350,6 +350,14 @@ export interface TestHostSeedToolRow {
   inverse_op: unknown;
 }
 
+// DEV_NOTE: An eval_cases row as the seed script reads it with pg (M5-5: the test company's own cases, bodies untyped)
+export interface TestHostSeedEvalCaseRow {
+  id: string;
+  input: unknown;
+  expectations: unknown;
+  is_active: boolean;
+}
+
 // DEV_NOTE: The seed's connection row: what it checks (the fields fixed at create) and keeps across reruns (an
 // operator's status and origins)
 export interface TestHostSeedConnectionRow {

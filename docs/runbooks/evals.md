@@ -9,7 +9,7 @@ A case's rubric is graded by a pinned LLM judge on the company's key (M5-3), and
 ## How a run works
 
 1. **Sign in to the host.** The harness gets the host test user's bearer token from the host's own login (the test host: an admin-minted token in a fresh workspace). It sends that token with every call that reaches the host. The backend keeps it in memory only.
-2. **Start the run.** `POST /eval/runs` with the config's public id and `k`. The backend creates the run (Running) and answers its cases, already upgraded to the current shapes. If any active case can't be read, nothing is created (400 `Invalid`): the gate never passes on a case it skipped. The run keeps the cases it handed out (its case set) and the staging connection the token named. Every later step must use a token for that connection (another one is 404), and only cases of the set can be run or recorded (a case added or turned off after the start is 404).
+2. **Start the run.** `POST /eval/runs` with the config's public id (or a chatbot's, for its published config) and `k`. The backend creates the run (Running) and answers its cases, already upgraded to the current shapes. If any active case can't be read, nothing is created (400 `Invalid`): the gate never passes on a case it skipped. The run keeps the cases it handed out (its case set) and the staging connection the token named. Every later step must use a token for that connection (another one is 404), and only cases of the set can be run or recorded (a case added or turned off after the start is 404).
 3. **Run each attempt.** For every case and attempt, the harness fills `{case.tag}` with a new token and calls `POST /eval/runs/:runId/attempts`. The backend starts a new conversation pinned to the run's config and runs it in one turn:
    - every tool the config pins runs against the token's staging connection, whatever connection the tool version names;
    - a write the approval rules say needs a user's approval is approved by the eval on the user's behalf, then committed and verified in the turn (a Blocked rule still blocks). Each tool call says whether it needed approval (`wasApprovalRequired`), so a case can check the policy too;
@@ -126,7 +126,8 @@ Settings come from the environment:
 pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project evals --env-file evals/.env python -m diletta_evals run
 ```
 
-- `--trigger manual|gate|nightly` (default `manual`). `gate` runs the publish gate of a version sent to testing, and its finish moves the version (step 7); the nightly suite (M5-5) starts runs the same way.
+- `--trigger manual|gate|nightly` (default `manual`). `gate` runs the publish gate of a version sent to testing, and its finish moves the version (step 7).
+- `--chatbot <publicId>` instead of `--config`: runs the chatbot's published config at the start (409 `NoPublishedConfig` when it has none). Never with `--trigger gate`. The nightly platform suite runs this way (`docs/runbooks/nightly-suite.md`).
 - Exit code: 0 the run passed, 1 it failed, 2 it couldn't run (a setting, the backend or the host).
 - It prints each attempt (PASS / FAIL and why) and the run's result and cost. The details are on the Tests page.
 

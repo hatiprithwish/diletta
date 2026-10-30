@@ -15,7 +15,8 @@ class Trigger(Enum):
 
 
 class CreateEvalRunApiRequest(BaseModel):
-    chatbotConfigId: Annotated[str, Field(max_length=64, min_length=1)]
+    chatbotConfigId: Annotated[str | None, Field(max_length=64, min_length=1)] = None
+    chatbotId: Annotated[str | None, Field(max_length=64, min_length=1)] = None
     k: Annotated[int, Field(ge=1, le=10)]
     harnessVersion: Annotated[str, Field(max_length=64, min_length=1)]
     trigger: Trigger
@@ -269,6 +270,7 @@ class Failure(StrEnum):
     Duplicate = "Duplicate"
     Incomplete = "Incomplete"
     NotTesting = "NotTesting"
+    NoPublishedConfig = "NoPublishedConfig"
     HostFailed = "HostFailed"
     JudgeUnavailable = "JudgeUnavailable"
 

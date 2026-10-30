@@ -7,7 +7,7 @@ The test host (`apps/test-host`, M3-3) plays the customer app for our own test c
 - serves its JWKS
 - offers a REST API over records
 
-The M3 tests (the action engine against a real host) and the nightly platform suite (M5-5) run against it.
+The M3 tests (the action engine against a real host) and the nightly platform suite (M5-5, `docs/runbooks/nightly-suite.md`) run against it. The seed also gives the test company's default chatbot its own eval cases on these tools (`Schemas.TEST_HOST_EVAL_CASES`).
 
 It only runs on staging. There is no production test host, and its connection is a staging connection.
 

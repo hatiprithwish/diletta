@@ -80,19 +80,37 @@ class RunSummary:
     failed_cases: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ConfigTarget:
+    config_id: str
+
+
+@dataclass(frozen=True)
+class ChatbotTarget:
+    chatbot_id: str
+
+
+RunTarget = ConfigTarget | ChatbotTarget
+
+
 class EvalRunner:
     def __init__(self, client: EvalApi, host: HostLogin, out: TextIO = sys.stdout) -> None:
         self._client = client
         self._host = host
         self._out = out
 
-    def run(self, *, config_id: str, k: int, trigger: eval_api.Trigger) -> RunSummary:
+    def run(self, *, target: RunTarget, k: int, trigger: eval_api.Trigger) -> RunSummary:
+        """target: the config to run, or a chatbot whose published config the backend picks at the start (M5-5)."""
         self._host.prepare()
-        started = self._client.start_run(
-            eval_api.CreateEvalRunApiRequest(
-                chatbotConfigId=config_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
+        if isinstance(target, ChatbotTarget):
+            request = eval_api.CreateEvalRunApiRequest(
+                chatbotId=target.chatbot_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
             )
-        )
+        else:
+            request = eval_api.CreateEvalRunApiRequest(
+                chatbotConfigId=target.config_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
+            )
+        started = self._client.start_run(request)
         run_id = started.run.publicId
         self._say(f"Run {run_id}: {len(started.cases)} cases × {k} attempts")
 

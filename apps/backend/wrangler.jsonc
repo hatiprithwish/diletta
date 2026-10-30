@@ -16,6 +16,9 @@
     "DASHBOARD_URL": "http://localhost:3000",
     "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
     "AI_GATEWAY_NAME": "diletta-staging",
+    // DEV_NOTE: The nightly platform suite's company (M5-5, our test company's public id): the daily cron alerts when it
+    // has no Nightly run that finished lately. Empty = nothing to check (local and production).
+    "NIGHTLY_SUITE_COMPANY_ID": "",
   },
   "observability": {
     "logs": {
@@ -147,6 +150,8 @@
         "DASHBOARD_URL": "https://diletta-web-staging.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-staging",
+        // DEV_NOTE: Diletta Test Company (docs/runbooks/nightly-suite.md)
+        "NIGHTLY_SUITE_COMPANY_ID": "Ufli6o4w4WCEg5BOOEiOY",
       },
       "observability": {
         "logs": {
@@ -219,6 +224,7 @@
         "DASHBOARD_URL": "https://diletta-web.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-production",
+        "NIGHTLY_SUITE_COMPANY_ID": "",
       },
       "observability": {
         "logs": {

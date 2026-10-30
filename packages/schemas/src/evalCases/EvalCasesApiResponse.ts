@@ -44,3 +44,12 @@ export interface WriteEvalCaseApiResponse extends ApiResponse {
   evalCase?: EvalCaseDetail;
   failure?: EvalCaseUpdateFailureEnum;
 }
+
+// DEV_NOTE: What a platform suite sync did (M5-5): cases inserted, rewritten, turned off, and the keys of safety cases
+// no longer in code that it left active (a platform safety case can't be turned off; it alerts instead)
+export interface SyncPlatformEvalCasesResponse extends ApiResponse {
+  createdCount?: number;
+  updatedCount?: number;
+  deactivatedCount?: number;
+  keptSafetyKeys?: string[];
+}

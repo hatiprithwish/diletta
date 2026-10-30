@@ -248,6 +248,12 @@ export interface EvalRunChatbotResponse extends EvalRunStepResponse {
   chatbot?: Chatbot;
 }
 
+// DEV_NOTE: The config a run starts on (M5-5): by the public id the request named, or by the internal id of the chatbot's
+// published config
+export interface EvalRunConfigTargetResponse extends EvalRunStepResponse {
+  target?: { publicId: string; id?: undefined } | { id: string; publicId?: undefined };
+}
+
 export interface EvalRunConversationResponse extends EvalRunStepResponse {
   conversationId?: string;
 }

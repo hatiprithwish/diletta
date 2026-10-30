@@ -70,6 +70,11 @@
           "minLength": 1,
           "maxLength": 64
         },
+        "chatbotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
         "k": {
           "type": "integer",
           "minimum": 1,
@@ -90,7 +95,6 @@
         }
       },
       "required": [
-        "chatbotConfigId",
         "k",
         "harnessVersion",
         "trigger"
@@ -956,6 +960,7 @@
             "Duplicate",
             "Incomplete",
             "NotTesting",
+            "NoPublishedConfig",
             "HostFailed",
             "JudgeUnavailable"
           ]

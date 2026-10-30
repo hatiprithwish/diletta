@@ -106,3 +106,6 @@ export type GetEvalRunTalliesDALRequest = Pick<EvalRun, "companyId"> & {
   evalRunId: string;
   evalCaseIds: string[];
 };
+
+// DEV_NOTE: The company's newest Nightly run that reached Done (M5-5, the missed-suite check)
+export type FindLatestDoneNightlyEvalRunDALRequest = Pick<EvalRun, "companyId">;

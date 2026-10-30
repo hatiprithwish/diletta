@@ -10,7 +10,9 @@ import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
+import runNightlySuiteCheck from "@/crons/NightlySuiteCheckCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
+import runPlatformEvalCaseSync from "@/crons/PlatformEvalCaseSyncCron";
 import worker from "@/index";
 
 // Declare env type for this test suite
@@ -42,6 +44,12 @@ vi.mock("@/crons/ActivityRollupsCron", () => ({ default: vi.fn().mockResolvedVal
 vi.mock("@/crons/EvalTranscriptSweepCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/crons/PlatformEvalCaseSyncCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/crons/NightlySuiteCheckCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 
 const {
   OutboxSweep,
@@ -50,7 +58,9 @@ const {
   KnowledgeResync,
   ActivityRollups,
   EvalTranscriptSweep,
+  PlatformEvalCaseSync,
   ActivityLogPartitions,
+  NightlySuiteCheck,
 } = Schemas.CronJobEnum;
 const at = (iso: string) => Date.parse(iso);
 
@@ -63,7 +73,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
     ]);
   });
 
-  it("adds the knowledge re-sync, the activity rollups and the eval transcript sweep at the top of every hour", () => {
+  it("adds the knowledge re-sync, the activity rollups, the eval transcript sweep and the platform case sync at the top of every hour", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:00:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
@@ -71,6 +81,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
+      PlatformEvalCaseSync,
     ]);
   });
 
@@ -82,6 +93,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
+      PlatformEvalCaseSync,
       ActivityLogPartitions,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:01:00Z"))).not.toContain(
@@ -89,6 +101,25 @@ describe("CronScheduleProvider.getDueJobs", () => {
     );
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T15:00:00Z"))).not.toContain(
       ActivityLogPartitions,
+    );
+  });
+
+  it("adds the nightly suite's missed-run check at 06:00 UTC only", () => {
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:00:00Z"))).toEqual([
+      OutboxSweep,
+      ModelCallUsageBackfill,
+      ChangeRequestPurge,
+      KnowledgeResync,
+      ActivityRollups,
+      EvalTranscriptSweep,
+      PlatformEvalCaseSync,
+      NightlySuiteCheck,
+    ]);
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:01:00Z"))).not.toContain(
+      NightlySuiteCheck,
+    );
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:00:00Z"))).not.toContain(
+      NightlySuiteCheck,
     );
   });
 
@@ -126,7 +157,9 @@ describe("scheduled()", () => {
     expect(runKnowledgeResync).toHaveBeenCalledTimes(1);
     expect(runActivityRollups).toHaveBeenCalledTimes(1);
     expect(runEvalTranscriptSweep).toHaveBeenCalledTimes(1);
+    expect(runPlatformEvalCaseSync).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
+    expect(runNightlySuiteCheck).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     await run(Constants.CRON_TRIGGER, "2026-10-11T03:01:00Z");
@@ -135,6 +168,7 @@ describe("scheduled()", () => {
     expect(runKnowledgeResync).not.toHaveBeenCalled();
     expect(runActivityRollups).not.toHaveBeenCalled();
     expect(runEvalTranscriptSweep).not.toHaveBeenCalled();
+    expect(runPlatformEvalCaseSync).not.toHaveBeenCalled();
     expect(runActivityLogPartitions).not.toHaveBeenCalled();
   });
 

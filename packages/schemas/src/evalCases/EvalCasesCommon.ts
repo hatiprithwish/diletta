@@ -280,7 +280,8 @@ export function loadEvalCaseExpectations(value: unknown): EvalCaseExpectations |
 
 // Whole Eval Case Body — DB shape
 // DEV_NOTE: id, companyId and chatbotId are internal bigint ids — used by DAL/Repo only, NEVER sent to a client.
-// companyId and chatbotId are both null for a platform case (CHK_eval_cases_platform_chatbot_id); input and
+// companyId and chatbotId are both null for a platform case (CHK_eval_cases_platform_chatbot_id); platformKey names a
+// platform case the platform suite syncs (M5-5, PlatformEvalCases.ts), null otherwise; input and
 // expectations are jsonb (read untyped): read them through ZEvalCaseInputV1 /
 // loadEvalCaseExpectations.
 export const ZEvalCase = z.object({
@@ -288,6 +289,7 @@ export const ZEvalCase = z.object({
   publicId: z.string(),
   companyId: z.string().nullable(),
   chatbotId: z.string().nullable(),
+  platformKey: z.string().nullable(),
   name: z.string(),
   input: z.unknown(),
   expectations: z.unknown(),
