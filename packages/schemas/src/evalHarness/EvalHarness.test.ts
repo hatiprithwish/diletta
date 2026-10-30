@@ -4,8 +4,21 @@ import { EVAL_GRADER_OUTPUT_SCHEMA_VERSION, EvalCheckKindEnum } from "../evalRes
 import { HostCallOutcomeEnum } from "../hostAdapter";
 import { ToolOpMethodEnum } from "../toolDefinitions";
 import { TEST_HOST_RESET_OP } from "../testHost";
-import { ZRecordEvalResultApiRequest } from "./EvalHarnessApiRequest";
-import { EvalReadbackVerdictEnum, ZEvalJwtClaims, checkEvalReadback } from "./EvalHarnessCommon";
+import { ModelProviderEnum } from "../companySecrets";
+import { ModelTierEnum } from "../configSpec";
+import { EvalRunFailureIntEnum } from "../evalRuns";
+import { getModelPrice } from "../modelRouter";
+import { HostToolStatusEnum } from "../toolCalls";
+import { ZFinishEvalRunApiRequest, ZRecordEvalResultApiRequest } from "./EvalHarnessApiRequest";
+import {
+  EVAL_JUDGE_MODELS,
+  pickEvalJudgeModel,
+  EVAL_TRANSCRIPT_TOOL_STATUS_MAP,
+  EvalReadbackVerdictEnum,
+  ZEvalJudgeOutput,
+  ZEvalJwtClaims,
+  checkEvalReadback,
+} from "./EvalHarnessCommon";
 
 const readbackOp = {
   method: ToolOpMethodEnum.Get as const,
@@ -131,5 +144,79 @@ describe("eval API requests", () => {
       false,
     );
     expect(ZEvalJwtClaims.safeParse({ ...claims, connection: undefined }).success).toBe(false);
+  });
+});
+
+describe("the pinned judge (M5-3)", () => {
+  it("pins two different priced models for every provider, so every judge call can be costed", () => {
+    for (const provider of Object.values(ModelProviderEnum)) {
+      const { primary, alternate } = EVAL_JUDGE_MODELS[provider];
+      expect(primary).not.toBe(alternate);
+      expect(getModelPrice(provider, primary)).not.toBeNull();
+      expect(getModelPrice(provider, alternate)).not.toBeNull();
+    }
+  });
+
+  it("never picks a judge the config answers with: the primary, else the alternate", () => {
+    const { Anthropic, OpenAI } = ModelProviderEnum;
+    const { primary, alternate } = EVAL_JUDGE_MODELS[Anthropic];
+    const routing = (mid: string, top = "claude-fable-5-1") => ({
+      small: { provider: Anthropic, model: "claude-haiku-4-5" },
+      mid: { provider: Anthropic, model: mid },
+      top: { provider: Anthropic, model: top },
+      defaultTier: ModelTierEnum.Mid,
+    });
+    expect(pickEvalJudgeModel(routing("claude-haiku-4-5"))).toEqual({
+      provider: Anthropic,
+      model: primary,
+    });
+    // DEV_NOTE: A config on the primary (any tier) is graded by the alternate
+    expect(pickEvalJudgeModel(routing(primary)).model).toBe(alternate);
+    expect(pickEvalJudgeModel(routing("claude-haiku-4-5", primary)).model).toBe(alternate);
+    // DEV_NOTE: Both named: never the default tier's own model
+    expect(pickEvalJudgeModel(routing(primary, alternate)).model).toBe(alternate);
+    expect(pickEvalJudgeModel(routing(alternate, primary)).model).toBe(primary);
+    // DEV_NOTE: The provider is the default tier's; another provider's tiers don't count
+    expect(
+      pickEvalJudgeModel({
+        ...routing("claude-haiku-4-5"),
+        top: { provider: OpenAI, model: primary },
+      }).model,
+    ).toBe(primary);
+  });
+
+  it("holds the judge's answer to a verdict and a reason", () => {
+    expect(
+      ZEvalJudgeOutput.safeParse({ hasPassed: true, reason: "Explains the refund rule." }).success,
+    ).toBe(true);
+    expect(ZEvalJudgeOutput.safeParse({ hasPassed: true, reason: "  " }).success).toBe(false);
+    expect(ZEvalJudgeOutput.safeParse({ reason: "No verdict" }).success).toBe(false);
+  });
+
+  it("maps every way a tool call ends to a transcript status", () => {
+    for (const status of Object.values(HostToolStatusEnum)) {
+      expect(EVAL_TRANSCRIPT_TOOL_STATUS_MAP[status].text.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("finishing a run with a failure (M5-3)", () => {
+  it("takes a failure only on a run that didn't complete", () => {
+    expect(
+      ZFinishEvalRunApiRequest.safeParse({
+        isComplete: false,
+        failure: EvalRunFailureIntEnum.JudgeUnavailable,
+      }).success,
+    ).toBe(true);
+    expect(ZFinishEvalRunApiRequest.safeParse({ isComplete: true }).success).toBe(true);
+    expect(ZFinishEvalRunApiRequest.safeParse({ isComplete: true, failure: null }).success).toBe(
+      true,
+    );
+    expect(
+      ZFinishEvalRunApiRequest.safeParse({
+        isComplete: true,
+        failure: EvalRunFailureIntEnum.ServerError,
+      }).success,
+    ).toBe(false);
   });
 });

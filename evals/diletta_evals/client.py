@@ -2,10 +2,11 @@
 (an attempt, a readback, the reset) also carry the host test user's bearer in X-Host-Token. Every answer is parsed
 with the generated types (diletta_evals.types.eval_api), so a shape the backend changed fails here, loudly.
 
-Retries: a readback, a result and the reset are safe to send again (a read; append-only, where a repeat after a lost
-answer is Duplicate, meaning the first one landed; one idempotency key per run), so they are retried on a dropped
-connection or a 5xx. Starting a run, an attempt (it runs a turn and writes to the host: a repeat is refused) and the
-finish are sent once.
+Retries: a readback, a judge, a result and the reset are safe to send again (a read; a read and a model call; append-
+only, where a repeat after a lost answer is Duplicate, meaning the first one landed; one idempotency key per run), so
+they are retried on a dropped connection or a 5xx. A judge refused as JudgeUnavailable isn't: the backend already gave
+the model its own retries, and the run stops on it. Starting a run, an attempt (it runs a turn and writes to the host:
+a repeat is refused) and the finish are sent once.
 """
 
 import time
@@ -56,6 +57,8 @@ class EvalApi(Protocol):
         self, run_id: str, request: eval_api.EvalReadbackApiRequest, host_token: str
     ) -> eval_api.EvalReadbackApiResponse: ...
 
+    def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse: ...
+
     def record_result(
         self, run_id: str, request: eval_api.RecordEvalResultApiRequest
     ) -> eval_api.RecordEvalResultApiResponse: ...
@@ -92,6 +95,12 @@ class EvalApiClient:
             )
         )
 
+    def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse:
+        return self._retried(
+            lambda: self._post(f"/runs/{run_id}/judge", request, eval_api.EvalJudgeApiResponse),
+            final_failures=frozenset({eval_api.Failure.JudgeUnavailable}),
+        )
+
     def record_result(
         self, run_id: str, request: eval_api.RecordEvalResultApiRequest
     ) -> eval_api.RecordEvalResultApiResponse:
@@ -112,7 +121,12 @@ class EvalApiClient:
     ) -> eval_api.FinishEvalRunApiResponse:
         return self._post(f"/runs/{run_id}/finish", request, eval_api.FinishEvalRunApiResponse)
 
-    def _retried(self, send: Callable[[], Answer], on_retry_duplicate: Answer | None = None) -> Answer:
+    def _retried(
+        self,
+        send: Callable[[], Answer],
+        on_retry_duplicate: Answer | None = None,
+        final_failures: frozenset[eval_api.Failure] = frozenset(),
+    ) -> Answer:
         attempt = 0
         while True:
             try:
@@ -120,7 +134,7 @@ class EvalApiClient:
             except EvalApiError as error:
                 if attempt > 0 and on_retry_duplicate is not None and error.failure is eval_api.Failure.Duplicate:
                     return on_retry_duplicate
-                if not error.is_transient or attempt == RETRIES:
+                if not error.is_transient or error.failure in final_failures or attempt == RETRIES:
                     raise
                 attempt += 1
                 self._sleep(RETRY_BACKOFF_SECONDS * attempt)

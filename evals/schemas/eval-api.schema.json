@@ -20,6 +20,12 @@
     "readbackResponse": {
       "$ref": "#/$defs/EvalReadbackApiResponse"
     },
+    "judgeRequest": {
+      "$ref": "#/$defs/EvalJudgeApiRequest"
+    },
+    "judgeResponse": {
+      "$ref": "#/$defs/EvalJudgeApiResponse"
+    },
     "recordResultRequest": {
       "$ref": "#/$defs/RecordEvalResultApiRequest"
     },
@@ -46,6 +52,8 @@
     "runAttemptResponse",
     "readbackRequest",
     "readbackResponse",
+    "judgeRequest",
+    "judgeResponse",
     "recordResultRequest",
     "recordResultResponse",
     "resetResponse",
@@ -625,6 +633,70 @@
         "isFound"
       ]
     },
+    "EvalJudgeApiRequest": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "rubric": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "conversationId",
+        "rubric"
+      ]
+    },
+    "EvalJudgeApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "hasPassed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "google",
+            "openai",
+            "anthropic"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "promptVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "hasPassed",
+        "reason",
+        "provider",
+        "model",
+        "promptVersion"
+      ]
+    },
     "RecordEvalResultApiRequest": {
       "type": "object",
       "properties": {
@@ -773,10 +845,29 @@
       "properties": {
         "isComplete": {
           "type": "boolean"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvalRunFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "isComplete"
+      ]
+    },
+    "EvalRunFailure": {
+      "type": "number",
+      "enum": [
+        1,
+        2,
+        3,
+        4
       ]
     },
     "FinishEvalRunApiResponse": {
@@ -858,7 +949,8 @@
             "Invalid",
             "Duplicate",
             "Incomplete",
-            "HostFailed"
+            "HostFailed",
+            "JudgeUnavailable"
           ]
         }
       },

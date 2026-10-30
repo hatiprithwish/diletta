@@ -20,6 +20,7 @@ import {
   evalResults,
   evalRuns,
   eventOutbox,
+  files,
   messages,
   modelCalls,
   toolCalls,
@@ -34,6 +35,7 @@ import ChangeRequestsRepo from "@/repositories/ChangeRequestsRepo";
 import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EvalAuthRepo from "@/repositories/EvalAuthRepo";
+import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
 import Utility from "@/utils/Utility";
 import {
   anthropicReplyStream,
@@ -77,6 +79,9 @@ const ownerDatabaseUrl =
 const END_TO_END_TIMEOUT_MS = 120_000;
 const PRODUCTION_BASE_URL = "https://production.unreachable.invalid/v1/";
 const HOST_USER = "eval-test-user";
+// DEV_NOTE: The config's default tier (Mid). No tier names Anthropic's primary judge, so the judge is the primary, and
+// a judge that took the config's own model would be told apart from it
+const CHATBOT_MODEL = "claude-opus-5-5";
 const createdCompanyIds: string[] = [];
 let ownerPool: Pool | null = null;
 let evalKey: Awaited<ReturnType<typeof createKey>>;
@@ -162,8 +167,8 @@ async function createTenant() {
       approvalRules: [],
       routing: {
         small: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-haiku-4-5" },
-        mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-sonnet-5-5" },
-        top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-opus-5-5" },
+        mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: CHATBOT_MODEL },
+        top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-fable-5-1" },
         defaultTier: Schemas.ModelTierEnum.Mid,
       },
       knowledge: { sourceIds: [] },
@@ -314,6 +319,30 @@ const updateAlpha = (amount: number) => (model: string) =>
     },
   ]);
 const reply = (text: string) => (model: string) => anthropicReplyStream(model, text);
+// DEV_NOTE: The judge's answer: a structured output (native, so the verdict is the message's text)
+const judgeAnswer = (verdict: Schemas.EvalJudgeOutput) => (model: string) =>
+  Response.json(
+    {
+      id: "msg_judge",
+      type: "message",
+      role: "assistant",
+      model,
+      content: [{ type: "text", text: JSON.stringify(verdict) }],
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage: {
+        input_tokens: 800,
+        output_tokens: 40,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    },
+    { headers: { "cf-aig-log-id": "log-judge" } },
+  );
+// DEV_NOTE: AI Gateway unreachable for this request (and its retries)
+const unreachable = (): Response => {
+  throw new TypeError("fetch failed");
+};
 
 async function runAttempt(tenant: Tenant, runId: string, attempt = 1) {
   return await call(`/runs/${runId}/attempts`, {
@@ -416,6 +445,7 @@ afterAll(async () => {
     if (companyIds.length === 0) return;
     await withOwnerDb(async (ownerDb) => {
       await ownerDb.delete(evalResults).where(inArray(evalResults.companyId, companyIds));
+      await ownerDb.delete(files).where(inArray(files.companyId, companyIds));
       await ownerDb.delete(evalRuns).where(inArray(evalRuns.companyId, companyIds));
       await ownerDb.delete(evalCases).where(inArray(evalCases.companyId, companyIds));
       await ownerDb.delete(changeRequests).where(inArray(changeRequests.companyId, companyIds));
@@ -1020,3 +1050,363 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     });
   });
 });
+
+describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  const RUBRIC = `Says Alpha's amount is now 300 (tag-1)`;
+
+  it("judges an attempt with the pinned model on the run's key and budget, and records its transcript in R2", async () => {
+    const tenant = await createTenant();
+    const started = await startRun(tenant);
+    const runId = started.run.publicId;
+    scriptModel([
+      updateAlpha(300),
+      reply("Done: Alpha's amount is now 300."),
+      judgeAnswer({ hasPassed: true, reason: "The reply confirms the new amount of 300." }),
+    ]);
+    routeTestHostFetch();
+    const ran = await runAttempt(tenant, runId);
+    expect(ran.status).toBe(200);
+    const attempt = Schemas.ZRunEvalAttemptApiResponse.parse(await ran.json());
+
+    const judged = await call(`/runs/${runId}/judge`, {
+      token: await tokenFor(tenant),
+      body: { conversationId: attempt.conversationId, rubric: RUBRIC },
+    });
+    expect(judged.status).toBe(200);
+    // DEV_NOTE: The config's default tier is Anthropic's (Mid: CHATBOT_MODEL); the judge is Anthropic's pinned model,
+    // which none of the config's tiers name
+    const judgeModel = Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary;
+    expect([CHATBOT_MODEL, "claude-haiku-4-5", "claude-fable-5-1"]).not.toContain(judgeModel);
+    expect(Schemas.ZEvalJudgeApiResponse.parse(await judged.json())).toMatchObject({
+      hasPassed: true,
+      reason: "The reply confirms the new amount of 300.",
+      provider: Schemas.ModelProviderEnum.Anthropic,
+      model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
+      promptVersion: Schemas.EVAL_JUDGE_PROMPT_VERSION,
+    });
+    const judgeRequest = gatewayRequests().at(-1);
+    expect(judgeRequest?.body?.model).toBe(
+      Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
+    );
+    // DEV_NOTE: The judge reads the transcript the backend built (the case's message, the write, the reply) and the
+    // rubric, each fenced as data
+    const judgePrompt = JSON.stringify(judgeRequest?.body?.messages);
+    expect(judgePrompt).toContain("<transcript>");
+    expect(judgePrompt).toContain("Set Alpha's amount to 300 (tag-1)");
+    expect(judgePrompt).toContain('<tool_call name=\\"update_record\\"');
+    expect(judgePrompt).toContain("Done: Alpha's amount is now 300.");
+    expect(judgePrompt).toContain(RUBRIC);
+
+    // DEV_NOTE: The judge's call is the run's: its task, the run's id, the company budget only
+    const [run] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, runId)),
+    );
+    const judgeCalls = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select()
+        .from(modelCalls)
+        .where(eq(modelCalls.taskType, Schemas.ModelTaskTypeEnum.EvalJudge)),
+    ).then((rows) => rows.filter((row) => row.companyId === tenant.companyId));
+    expect(judgeCalls).toHaveLength(1);
+    expect(judgeCalls[0]).toMatchObject({
+      evalRunId: run?.id,
+      chatbotUserId: null,
+      model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
+    });
+    expect(Number(run?.costUsd)).toBeGreaterThan(0);
+    // DEV_NOTE: The chatbot's own calls ran on the config's model, the judge's on the pinned one
+    const chatCalls = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(modelCalls).where(eq(modelCalls.companyId, tenant.companyId)),
+    ).then((rows) => rows.filter((row) => row.taskType !== Schemas.ModelTaskTypeEnum.EvalJudge));
+    expect(chatCalls.length).toBeGreaterThan(0);
+    expect(chatCalls.every((row) => row.model === CHATBOT_MODEL)).toBe(true);
+
+    const recorded = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: tenant.casePublicId,
+        attempt: 1,
+        hasPassed: true,
+        graderOutput: graderOutput(true),
+        latencyMs: attempt.latencyMs,
+      },
+    });
+    expect(recorded.status).toBe(201);
+
+    // DEV_NOTE: The result points at its transcript's files row, owned by the result, and the R2 object reads back as
+    // transcript v1: the case's message, the write (its pinned version, how it ended, no args) and the reply
+    const [result] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select()
+        .from(evalResults)
+        .where(eq(evalResults.evalRunId, run?.id ?? "")),
+    );
+    expect(result?.transcriptFileId).toEqual(expect.any(String));
+    const [file] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select()
+        .from(files)
+        .where(eq(files.id, result?.transcriptFileId ?? "")),
+    );
+    expect(file).toMatchObject({
+      ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
+      ownerId: result?.id,
+      mime: Schemas.EVAL_TRANSCRIPT_MIME,
+      createdBy: null,
+    });
+    const object = await env.FILES_BUCKET.get(
+      Schemas.fileR2Key(tenant.companyPublicId, file?.publicId ?? ""),
+    );
+    const bytes = new Uint8Array((await object?.arrayBuffer()) ?? new ArrayBuffer(0));
+    expect(bytes.byteLength).toBe(file?.sizeBytes);
+    const transcript = Schemas.parseEvalTranscript(bytes);
+    expect(transcript?.entries).toEqual([
+      {
+        kind: Schemas.EvalTranscriptEntryKindEnum.Message,
+        role: Schemas.EvalCaseMessageRoleEnum.User,
+        text: "Set Alpha's amount to 300 (tag-1)",
+      },
+      {
+        kind: Schemas.EvalTranscriptEntryKindEnum.ToolCall,
+        toolName: "update_record",
+        toolVersion: 1,
+        status: Schemas.ToolCallStatusIntEnum.Ok,
+        summary: expect.stringContaining(
+          Schemas.EVAL_TRANSCRIPT_TOOL_STATUS_MAP[Schemas.HostToolStatusEnum.Verified].text,
+        ),
+      },
+      {
+        kind: Schemas.EvalTranscriptEntryKindEnum.Message,
+        role: Schemas.EvalCaseMessageRoleEnum.Assistant,
+        text: "Done: Alpha's amount is now 300.",
+      },
+    ]);
+    expect(new TextDecoder().decode(bytes)).not.toContain("rec_alpha");
+
+    // DEV_NOTE: A repeat of the result is Duplicate before the DO is read or anything stored: one row, one object
+    const repeated = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: tenant.casePublicId,
+        attempt: 1,
+        hasPassed: true,
+        graderOutput: graderOutput(true),
+        latencyMs: attempt.latencyMs,
+      },
+    });
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({
+      failure: Schemas.EvalRunStepFailureEnum.Duplicate,
+    });
+    const companyFiles = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(files).where(eq(files.companyId, tenant.companyId)),
+    );
+    expect(companyFiles).toHaveLength(1);
+    const objects = await env.FILES_BUCKET.list({ prefix: `t/${tenant.companyPublicId}/` });
+    expect(objects.objects).toHaveLength(1);
+
+    // DEV_NOTE: An attempt that never started has no conversation, so no transcript
+    const otherCase = await addCase(tenant);
+    const restarted = await startRun(tenant);
+    expect(restarted.cases.some((evalCase) => evalCase.publicId === otherCase)).toBe(true);
+    const unrun = await call(`/runs/${restarted.run.publicId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: otherCase,
+        attempt: 1,
+        hasPassed: false,
+        graderOutput: { ...graderOutput(false), checks: [], error: "The attempt didn't run" },
+        latencyMs: null,
+      },
+    });
+    expect(unrun.status).toBe(201);
+    const [restartedRun] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, restarted.run.publicId)),
+    );
+    const [unrunResult] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select()
+        .from(evalResults)
+        .where(eq(evalResults.evalRunId, restartedRun?.id ?? "")),
+    );
+    expect(unrunResult?.transcriptFileId).toBeNull();
+  });
+
+  it("answers JudgeUnavailable when the judge can't be reached, and the stopped run keeps why", async () => {
+    const tenant = await createTenant();
+    const started = await startRun(tenant);
+    const runId = started.run.publicId;
+    scriptModel([
+      updateAlpha(300),
+      reply("Done: Alpha's amount is now 300."),
+      unreachable,
+      unreachable,
+      unreachable,
+      unreachable,
+    ]);
+    routeTestHostFetch();
+    const ran = await runAttempt(tenant, runId);
+    const attempt = Schemas.ZRunEvalAttemptApiResponse.parse(await ran.json());
+
+    const judged = await call(`/runs/${runId}/judge`, {
+      token: await tokenFor(tenant),
+      body: { conversationId: attempt.conversationId, rubric: RUBRIC },
+    });
+    expect(judged.status).toBe(503);
+    const refusal = Schemas.ZEvalRefusalApiResponse.parse(await judged.json());
+    expect(refusal.failure).toBe(Schemas.EvalRunStepFailureEnum.JudgeUnavailable);
+    expect(refusal.message).toContain(
+      Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic].primary,
+    );
+
+    // DEV_NOTE: Not this run's conversation (or none at all) is NotFound, before any model call
+    const requestsBefore = gatewayRequests().length;
+    const unknown = await call(`/runs/${runId}/judge`, {
+      token: await tokenFor(tenant),
+      body: { conversationId: Utility.generatePublicId(), rubric: RUBRIC },
+    });
+    expect(unknown.status).toBe(404);
+    expect(gatewayRequests()).toHaveLength(requestsBefore);
+
+    // DEV_NOTE: The harness records the attempt failed with why, resets, and ends the run Failed with the reason
+    const recorded = await call(`/runs/${runId}/results`, {
+      token: await tokenFor(tenant),
+      body: {
+        caseId: tenant.casePublicId,
+        attempt: 1,
+        hasPassed: false,
+        graderOutput: {
+          ...graderOutput(false),
+          error: `The judge couldn't be reached: ${refusal.message}`,
+        },
+        latencyMs: attempt.latencyMs,
+      },
+    });
+    expect(recorded.status).toBe(201);
+    const finished = await call(`/runs/${runId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: false, failure: Schemas.EvalRunFailureIntEnum.JudgeUnavailable },
+    });
+    expect(Schemas.ZFinishEvalRunApiResponse.parse(await finished.json())).toMatchObject({
+      status: Schemas.EvalRunStatusIntEnum.Failed,
+      hasPassed: false,
+    });
+    const [run] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(evalRuns).where(eq(evalRuns.publicId, runId)),
+    );
+    expect(run?.failure).toBe(Schemas.EvalRunFailureIntEnum.JudgeUnavailable);
+
+    // DEV_NOTE: A complete run can't carry a failure
+    const second = await startRun(tenant);
+    const refused = await call(`/runs/${second.run.publicId}/finish`, {
+      token: await tokenFor(tenant),
+      body: { isComplete: true, failure: Schemas.EvalRunFailureIntEnum.ServerError },
+    });
+    expect(refused.status).toBe(400);
+  });
+});
+
+describe(
+  "Eval graders across companies and the transcript sweep (M5-3)",
+  { timeout: END_TO_END_TIMEOUT_MS },
+  () => {
+    it("never judges or records another company's run or conversation", async () => {
+      const owner = await createTenant();
+      const other = await createTenant();
+      const started = await startRun(owner);
+      const runId = started.run.publicId;
+      scriptModel([updateAlpha(300), reply("Done: Alpha's amount is now 300.")]);
+      routeTestHostFetch();
+      const ran = await runAttempt(owner, runId);
+      const attempt = Schemas.ZRunEvalAttemptApiResponse.parse(await ran.json());
+      const requestsBefore = gatewayRequests().length;
+
+      // DEV_NOTE: Another company's token can't reach this run, and its own run can't reach this conversation
+      const judgedOther = await call(`/runs/${runId}/judge`, {
+        token: await tokenFor(other),
+        body: { conversationId: attempt.conversationId, rubric: "Says 300" },
+      });
+      expect(judgedOther.status).toBe(404);
+      const recordedOther = await call(`/runs/${runId}/results`, {
+        token: await tokenFor(other),
+        body: {
+          caseId: owner.casePublicId,
+          attempt: 1,
+          hasPassed: true,
+          graderOutput: graderOutput(true),
+          latencyMs: null,
+        },
+      });
+      expect(recordedOther.status).toBe(404);
+      const otherRun = await startRun(other);
+      const judgedAcross = await call(`/runs/${otherRun.run.publicId}/judge`, {
+        token: await tokenFor(other),
+        body: { conversationId: attempt.conversationId, rubric: "Says 300" },
+      });
+      expect(judgedAcross.status).toBe(404);
+      expect(gatewayRequests()).toHaveLength(requestsBefore);
+      const otherFiles = await withOwnerDb((ownerDb) =>
+        ownerDb.select().from(files).where(eq(files.companyId, other.companyId)),
+      );
+      expect(otherFiles).toHaveLength(0);
+    });
+
+    it("sweeps transcripts still pending their result after an hour, with their objects, and nothing else", async () => {
+      const tenant = await createTenant();
+      const now = Date.now();
+      const pending = async (
+        minutesAgo: number,
+        ownerId: string = Schemas.FILE_PENDING_OWNER_ID,
+      ) => {
+        const publicId = Utility.generatePublicId();
+        const key = Schemas.fileR2Key(tenant.companyPublicId, publicId);
+        await env.FILES_BUCKET.put(key, "{}");
+        const [row] = await withOwnerDb((ownerDb) =>
+          ownerDb
+            .insert(files)
+            .values({
+              publicId,
+              companyId: tenant.companyId,
+              ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
+              ownerId,
+              mime: Schemas.EVAL_TRANSCRIPT_MIME,
+              sizeBytes: 2,
+              sha256: "test",
+              createdAt: new Date(now - minutesAgo * 60_000),
+              updatedAt: new Date(now - minutesAgo * 60_000),
+            })
+            .returning({ id: files.id }),
+        );
+        return { id: row?.id ?? "", key };
+      };
+      const stale = await pending(90);
+      const fresh = await pending(10);
+      const attached = await pending(90, "123");
+
+      const swept = await new EvalTranscriptsRepo(env).sweepPending({ now });
+      expect(swept.isSuccess).toBe(true);
+      expect(swept.sweptCount).toBeGreaterThanOrEqual(1);
+
+      const left = await withOwnerDb((ownerDb) =>
+        ownerDb.select({ id: files.id }).from(files).where(eq(files.companyId, tenant.companyId)),
+      );
+      expect(left.map((row) => row.id).sort()).toEqual([fresh.id, attached.id].sort());
+      expect(await env.FILES_BUCKET.head(stale.key)).toBeNull();
+      expect(await env.FILES_BUCKET.head(fresh.key)).not.toBeNull();
+      expect(await env.FILES_BUCKET.head(attached.key)).not.toBeNull();
+
+      // DEV_NOTE: A discard (or a sweep) of a row attached since it was read leaves the row and its object: the delete
+      // re-checks it is still pending
+      const discarded = await new EvalTranscriptsRepo(env).discard({
+        companyId: tenant.companyId,
+        stored: { fileId: attached.id, fileR2Key: attached.key },
+      });
+      expect(discarded.isSuccess).toBe(true);
+      const kept = await withOwnerDb((ownerDb) =>
+        ownerDb.select({ id: files.id }).from(files).where(eq(files.id, attached.id)),
+      );
+      expect(kept).toHaveLength(1);
+      expect(await env.FILES_BUCKET.head(attached.key)).not.toBeNull();
+    });
+  },
+);

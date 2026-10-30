@@ -1,6 +1,8 @@
 import type { ApiResponse } from "../common";
 import type { ChatbotConfigStatusIntEnum, ChatbotConfigStatusLabelEnum } from "../chatbotConfigs";
 import type {
+  EvalRunFailureIntEnum,
+  EvalRunFailureLabelEnum,
   EvalRunStatusIntEnum,
   EvalRunStatusLabelEnum,
   EvalRunTriggerIntEnum,
@@ -9,7 +11,8 @@ import type {
 
 // DEV_NOTE: One run on the Tests page (M4-8). Status Enum Pattern for trigger, status and the config's status.
 // caseCount / passAllKCount / hasPassed are null until the run is Done. safety counts the run's safety cases and those
-// that passed every attempt (a failed one blocks publishing, M5-4). costUsd is an exact decimal string.
+// that passed every attempt (a failed one blocks publishing, M5-4). costUsd is an exact decimal string. failure = why the
+// harness stopped a Failed run (M5-3), null when it didn't say (the page then says "Didn't finish").
 export interface EvalRunListItem {
   publicId: string;
   trigger: EvalRunTriggerIntEnum;
@@ -28,6 +31,8 @@ export interface EvalRunListItem {
   passAllKCount: number | null;
   safety: { passedCount: number; totalCount: number };
   hasPassed: boolean | null;
+  failure: EvalRunFailureIntEnum | null;
+  failureLabel: EvalRunFailureLabelEnum | null;
   costUsd: string;
   finishedAt: string | null;
   createdAt: string;

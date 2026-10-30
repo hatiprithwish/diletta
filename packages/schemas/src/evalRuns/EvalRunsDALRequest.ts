@@ -61,10 +61,11 @@ export type CreateEvalRunDALRequest = Pick<
   "companyId" | "chatbotConfigId" | "trigger" | "harnessVersion" | "k"
 > & { companyConnectionId: string; evalCaseIds: string[] };
 
-// DEV_NOTE: A Running run ends (Done or Failed) once, with its tallies; a run that already ended is isNotFound
+// DEV_NOTE: A Running run ends (Done or Failed) once, with its tallies; a run that already ended is isNotFound. failure
+// = why the harness stopped it (a Failed run only, else null)
 export type FinishEvalRunDALRequest = Pick<
   EvalRun,
-  "companyId" | "id" | "caseCount" | "passAllKCount" | "hasPassed"
+  "companyId" | "id" | "caseCount" | "passAllKCount" | "hasPassed" | "failure"
 > & { status: EvalRunStatusIntEnum.Done | EvalRunStatusIntEnum.Failed };
 
 // DEV_NOTE: The run's staging data was put back (or there was no reset_op to send): reset_at = now, only while Running
@@ -78,6 +79,7 @@ export type AddEvalRunCostDALRequest = Pick<EvalRun, "companyId" | "id"> & {
 };
 
 // DEV_NOTE: One graded attempt. A repeat of (run, case, attempt) is isConflict (append-only: never overwritten).
+// transcriptFileId = its transcript's files row (M5-3), created just before it; null = the attempt never ran.
 export type CreateEvalResultDALRequest = {
   companyId: string;
   evalRunId: string;
@@ -85,8 +87,15 @@ export type CreateEvalResultDALRequest = {
   attempt: number;
   hasPassed: boolean;
   graderOutput: unknown;
+  transcriptFileId: string | null;
   latencyMs: number | null;
 };
+
+// DEV_NOTE: Whether one attempt of a case of the run already has its result (the /results pre-check, M5-3)
+export type HasEvalResultDALRequest = Pick<
+  CreateEvalResultDALRequest,
+  "companyId" | "evalRunId" | "evalCaseId" | "attempt"
+>;
 
 // DEV_NOTE: Every case's attempt tally in one run (the finish's pass^k)
 export type GetEvalRunTalliesDALRequest = Pick<EvalRun, "companyId"> & { evalRunId: string };

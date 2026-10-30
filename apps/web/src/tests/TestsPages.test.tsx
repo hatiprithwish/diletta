@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -48,6 +48,8 @@ const run = (
   passAllKCount: 44,
   safety: { passedCount: 3, totalCount: 3 },
   hasPassed: true,
+  failure: null,
+  failureLabel: null,
   costUsd: "6.400000",
   finishedAt: "2026-09-28T10:05:00.000Z",
   createdAt: "2026-09-28T10:00:00.000Z",
@@ -75,6 +77,19 @@ const NIGHTLY_RUN = run("run_nightly", {
   passAllKCount: null,
   safety: { passedCount: 12, totalCount: 12 },
   costUsd: "0.000000",
+});
+
+// DEV_NOTE: A run the harness stopped because the judge couldn't be reached (M5-3)
+const STOPPED_RUN = run("run_stopped", {
+  trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+  evalRunStatus: Schemas.EvalRunStatusIntEnum.Failed,
+  evalRunStatusLabel: Schemas.EvalRunStatusLabelEnum.Failed,
+  caseCount: null,
+  passAllKCount: null,
+  hasPassed: false,
+  failure: Schemas.EvalRunFailureIntEnum.JudgeUnavailable,
+  failureLabel: Schemas.EvalRunFailureLabelEnum.JudgeUnavailable,
+  finishedAt: null,
 });
 
 const SUMMARY: Schemas.EvalRunsSummary = {
@@ -692,6 +707,37 @@ describe("Test run page", () => {
     await userEvent.click(await within(card).findByRole("button", { name: "View transcript" }));
     const sheet = await screen.findByRole("dialog", { name: "Transcript" });
     expect(await within(sheet).findByText("This transcript can't be read.")).toBeInTheDocument();
+  });
+
+  it("says why the harness stopped a run, in the list and on the run", async () => {
+    const stoppedApi: Handler = (url, init) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/eval-runs")) {
+        return {
+          status: 200,
+          body: { isSuccess: true, evalRuns: [STOPPED_RUN, GATE_RUN], totalRecords: 2 },
+        };
+      }
+      if (path.endsWith("/eval-runs/run_stopped")) {
+        return { status: 200, body: { isSuccess: true, evalRun: STOPPED_RUN } };
+      }
+      if (path.endsWith("/eval-runs/run_stopped/cases")) {
+        return { status: 200, body: { ...RUN_CASES, cases: [], totalRecords: 0 } };
+      }
+      return defaultApi(url, init);
+    };
+    mockApi(stoppedApi);
+    renderPage("/tests");
+    const table = await screen.findByRole("table", { name: "Runs" });
+    const [, stopped, gate] = within(table).getAllByRole("row");
+    expect(within(stopped!).getByText("Didn't finish")).toBeInTheDocument();
+    expect(within(stopped!).getByText("The judge couldn't be reached")).toBeInTheDocument();
+    expect(within(gate!).queryByText(/couldn't be reached/)).not.toBeInTheDocument();
+    cleanup();
+
+    renderPage("/tests/run_stopped");
+    expect(await screen.findByText("Didn't finish")).toBeInTheDocument();
+    expect(screen.getByText("The judge couldn't be reached")).toBeInTheDocument();
   });
 
   it("says when the run is gone", async () => {

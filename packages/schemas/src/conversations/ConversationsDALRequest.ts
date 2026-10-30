@@ -24,6 +24,13 @@ export type CreateConversationDALRequest = Pick<
 // Params to find a conversation by its public ID within one company
 export type FindConversationDALRequest = Pick<Conversation, "publicId" | "companyId">;
 
+// DEV_NOTE: An eval attempt's conversation (M5-3), by its unique (run, case, attempt); none = the attempt never started
+export type FindEvalAttemptConversationDALRequest = Pick<Conversation, "companyId"> & {
+  evalRunId: string;
+  evalCaseId: string;
+  evalAttempt: number;
+};
+
 // DEV_NOTE: The activity root, set once right after create (the critical event needs the conversation's id first)
 export type SetConversationRootLogDALRequest = FindConversationDALRequest & {
   rootLogId: string;

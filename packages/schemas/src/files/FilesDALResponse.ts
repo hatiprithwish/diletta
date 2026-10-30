@@ -14,3 +14,15 @@ export interface FilesDALResponse extends ApiResponse {
 export interface FileWithCompanyDALResponse extends FileDALResponse {
   companyPublicId?: string;
 }
+
+// DEV_NOTE: A pending files row with what its R2 key needs (the company's public id)
+export interface PendingOwnerFileRow {
+  id: string;
+  companyId: string;
+  publicId: string;
+  companyPublicId: string;
+}
+
+export interface PendingOwnerFilesDALResponse extends ApiResponse {
+  files?: PendingOwnerFileRow[];
+}

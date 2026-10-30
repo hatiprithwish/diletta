@@ -5,6 +5,7 @@ until the types are regenerated.
 
 import typing
 
+from diletta_evals.types.eval_api import EvalRunFailure
 from diletta_evals.types.eval_constants import EvalHarnessConstants
 
 
@@ -19,3 +20,9 @@ EVAL_JWT_MAX_LIFETIME_SECONDS: int = _literal("evalJwtMaxLifetimeSeconds")
 EVAL_HOST_TOKEN_HEADER: str = _literal("evalHostTokenHeader")
 TEST_HOST_ADMIN_HEADER: str = _literal("testHostAdminHeader")
 TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS: int = _literal("testHostTokenMaxLifetimeSeconds")
+
+# packages/schemas EvalRunFailureIntEnum by name (the generated EvalRunFailure only numbers its values)
+RUN_FAILURE_JUDGE_UNAVAILABLE = EvalRunFailure(_literal("evalRunFailureJudgeUnavailable"))
+RUN_FAILURE_HOST_UNAVAILABLE = EvalRunFailure(_literal("evalRunFailureHostUnavailable"))
+RUN_FAILURE_SERVER_ERROR = EvalRunFailure(_literal("evalRunFailureServerError"))
+RUN_FAILURE_HARNESS_ERROR = EvalRunFailure(_literal("evalRunFailureHarnessError"))

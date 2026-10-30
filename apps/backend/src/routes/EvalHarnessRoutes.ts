@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import authenticateEval from "@/middlewares/EvalAuthMiddleware";
 import EvalHarnessRepo from "@/repositories/EvalHarnessRepo";
+import EvalJudgeRepo from "@/repositories/EvalJudgeRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import type AppContext from "@/config/AppContext";
 import type { EvalVariables } from "@/config/AppContext";
@@ -118,6 +119,34 @@ EvalHarnessRoutes.post(
       isSuccess: true,
       message: result.message ?? "Record read back",
       ...result.check,
+    };
+    return c.json(response, 200);
+  },
+);
+
+// DEV_NOTE: The pinned judge (M5-3), EvalJudgeRepo. No host token: it reads the attempt's transcript from its DO and
+// calls the model router, never the host. JudgeUnavailable is 503.
+EvalHarnessRoutes.post(
+  "/runs/:runId/judge",
+  authenticateEval,
+  zValidator("param", Schemas.ZEvalRunParam),
+  zValidator("json", Schemas.ZEvalJudgeApiRequest),
+  async (c) => {
+    const result = await new EvalJudgeRepo(c.env, c.executionCtx).judge({
+      identity: c.get("evalIdentity"),
+      runPublicId: c.req.valid("param").runId,
+      request: c.req.valid("json"),
+    });
+    if (!result.isSuccess || !result.verdict) {
+      return c.json(
+        { isSuccess: false, message: result.message, failure: result.failure },
+        stepStatus(result.failure),
+      );
+    }
+    const response: Schemas.EvalJudgeApiResponse = {
+      isSuccess: true,
+      message: result.message ?? "Attempt judged",
+      ...result.verdict,
     };
     return c.json(response, 200);
   },

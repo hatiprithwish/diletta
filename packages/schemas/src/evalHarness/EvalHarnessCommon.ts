@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
+import { type ConfigSpec, ModelTierEnum } from "../configSpec";
 import {
+  EvalCaseMessageRoleEnum,
   ZEvalCaseExpectationsV2,
   ZEvalCaseInputV1,
   ZEvalCaseJsonValue,
@@ -14,7 +17,8 @@ import {
   TEST_HOST_ADMIN_HEADER,
   TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS,
 } from "../testHost/TestHostCommon";
-import { HostToolStatusEnum } from "../toolCalls/ToolCallsCommon";
+import { EvalRunFailureIntEnum } from "../evalRuns/EvalRunsCommon";
+import { HostToolStatusEnum, ToolCallStatusIntEnum } from "../toolCalls/ToolCallsCommon";
 import { readValueAtPath } from "../toolDefinitions/ToolOpPlaceholders";
 import { compareReadback, type ReadbackExpectation } from "../toolDefinitions/ToolReadbackCompare";
 import type { ToolReadbackOp } from "../toolDefinitions/ToolOpsRegistry";
@@ -185,7 +189,7 @@ export const EVAL_ATTEMPT_FAILURE_HTTP_STATUS_MAP: Record<EvalAttemptFailureEnum
 // (NotFound), the run isn't Running any more (NotRunning), a body that doesn't fit the run (Invalid: an attempt past
 // k, a readback of another tool, a config that doesn't load, no case or too many to run), an attempt already started
 // or graded (Duplicate), a Done run still missing an attempt or its reset (Incomplete), the host reset failed
-// (HostFailed)
+// (HostFailed), the pinned judge gave no verdict (JudgeUnavailable, M5-3: the harness stops the run on it)
 export enum EvalRunStepFailureEnum {
   NotFound = "NotFound",
   NotRunning = "NotRunning",
@@ -193,12 +197,13 @@ export enum EvalRunStepFailureEnum {
   Duplicate = "Duplicate",
   Incomplete = "Incomplete",
   HostFailed = "HostFailed",
+  JudgeUnavailable = "JudgeUnavailable",
   ServerError = "ServerError",
 }
 
 export const EVAL_RUN_STEP_FAILURE_HTTP_STATUS_MAP: Record<
   EvalRunStepFailureEnum,
-  400 | 404 | 409 | 502 | 500
+  400 | 404 | 409 | 502 | 503 | 500
 > = {
   [EvalRunStepFailureEnum.NotFound]: 404,
   [EvalRunStepFailureEnum.NotRunning]: 409,
@@ -206,6 +211,7 @@ export const EVAL_RUN_STEP_FAILURE_HTTP_STATUS_MAP: Record<
   [EvalRunStepFailureEnum.Duplicate]: 409,
   [EvalRunStepFailureEnum.Incomplete]: 409,
   [EvalRunStepFailureEnum.HostFailed]: 502,
+  [EvalRunStepFailureEnum.JudgeUnavailable]: 503,
   [EvalRunStepFailureEnum.ServerError]: 500,
 };
 
@@ -217,6 +223,150 @@ export const EVAL_REFUSAL_FAILURES = [
     ...Object.values(EvalRunStepFailureEnum),
   ]),
 ] as [string, ...string[]];
+
+// ─── The judge (M5-3) ───────────────────────────────────────────────────────
+
+// DEV_NOTE: The pinned LLM judge: two models per provider, fixed here, never chosen by the config under test, so changing
+// a config's models never changes how it is graded beyond picking between the two. The provider is the run config's
+// default tier's (the company has a key for it, or the chatbot couldn't answer either). The judge is the primary model,
+// unless a tier of the config names it: then the alternate, so a model never grades its own replies
+// (pickEvalJudgeModel). Each must be in MODEL_PRICES (EvalHarness.test.ts), and the two must differ. The prompt
+// (EvalJudgeProvider) is versioned: a change to it bumps EVAL_JUDGE_PROMPT_VERSION, so a verdict names the judge that
+// gave it. No temperature is set: the pinned models don't all accept one; the model and the prompt are the pin.
+export const EVAL_JUDGE_MODELS: Record<ModelProviderEnum, { primary: string; alternate: string }> =
+  {
+    [ModelProviderEnum.Anthropic]: { primary: "claude-sonnet-5-5", alternate: "claude-opus-5-5" },
+    [ModelProviderEnum.OpenAI]: { primary: "gpt-6.1-sol", alternate: "gpt-6-astra" },
+    [ModelProviderEnum.Google]: {
+      primary: "gemini-3.1-pro-preview",
+      alternate: "gemini-3.8-flash",
+    },
+  };
+
+// DEV_NOTE: The judge for a run config's routing, pure: its default tier's provider, and of that provider's two pinned
+// models the first one no tier of the routing names. A config that names both gets the one its default tier doesn't
+// answer with, so the judge is never the model that answers by default.
+export function pickEvalJudgeModel(routing: ConfigSpec["routing"]): {
+  provider: ModelProviderEnum;
+  model: string;
+} {
+  const { provider, model: answering } = routing[routing.defaultTier];
+  const { primary, alternate } = EVAL_JUDGE_MODELS[provider];
+  const named = new Set(
+    Object.values(ModelTierEnum).map((tier) => `${routing[tier].provider}:${routing[tier].model}`),
+  );
+  const unused = [primary, alternate].find((model) => !named.has(`${provider}:${model}`));
+  return { provider, model: unused ?? (primary === answering ? alternate : primary) };
+}
+
+export const EVAL_JUDGE_PROMPT_VERSION = 1;
+export const EVAL_JUDGE_REASON_MAX_CHARS = 600;
+// DEV_NOTE: The judge's view of an attempt, in characters (about 30k tokens): inside every pinned model's context with
+// room for the instructions and the answer. The last reply is always kept whole; earlier entries are kept newest first
+// until the budget is spent, and the view says how many were left out (EvalTranscriptProvider.judgeView).
+export const EVAL_JUDGE_TRANSCRIPT_MAX_CHARS = 120_000;
+// DEV_NOTE: A judge answer that doesn't hold to ZEvalJudgeOutput is asked again this many times, then JudgeUnavailable
+export const EVAL_JUDGE_MAX_TRIES = 2;
+
+// DEV_NOTE: What the judge model must answer (structured output): does the reply meet the rubric, and why, in one or
+// two sentences an admin reads on the Tests page
+export const ZEvalJudgeOutput = z.object({
+  hasPassed: z.boolean(),
+  reason: z.string().trim().min(1).max(EVAL_JUDGE_REASON_MAX_CHARS),
+});
+export type EvalJudgeOutput = z.infer<typeof ZEvalJudgeOutput>;
+
+// ─── An attempt's transcript (M5-3) ─────────────────────────────────────────
+
+export enum EvalAttemptEntryKindEnum {
+  Message = "message",
+  ToolCall = "tool_call",
+}
+
+// DEV_NOTE: Server-side only — an attempt's conversation as the Conversation DO holds it (getEvalTranscript, JSON text
+// over DO RPC), oldest first: every user and assistant message with text, and every tool call with how it ended and its
+// change request. The Repo turns it into transcript v1 (EvalTranscriptProvider) for R2 and the judge.
+export const ZEvalAttemptEntry = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal(EvalAttemptEntryKindEnum.Message),
+    role: z.enum(EvalCaseMessageRoleEnum),
+    text: z.string(),
+  }),
+  z.object({
+    kind: z.literal(EvalAttemptEntryKindEnum.ToolCall),
+    toolName: z.string(),
+    status: z.enum(HostToolStatusEnum).nullable(),
+    changeRequestId: z.string().nullable(),
+  }),
+]);
+export type EvalAttemptEntry = z.infer<typeof ZEvalAttemptEntry>;
+
+export const ZEvalAttemptTranscriptResponse = z.object({
+  isSuccess: z.boolean(),
+  message: z.string(),
+  entries: z.array(ZEvalAttemptEntry).optional(),
+});
+export type EvalAttemptTranscriptResponse = z.infer<typeof ZEvalAttemptTranscriptResponse>;
+
+// DEV_NOTE: Server-side only — an attempt entry the stored transcript lists: a message, or a call of a tool the run's
+// config pins, with the version it pins (EvalTranscriptProvider.build)
+export type EvalAttemptEntryOf<K extends EvalAttemptEntryKindEnum> = Extract<
+  EvalAttemptEntry,
+  { kind: K }
+>;
+export type EvalTranscriptListedEntry =
+  | {
+      kind: EvalAttemptEntryKindEnum.Message;
+      entry: EvalAttemptEntryOf<EvalAttemptEntryKindEnum.Message>;
+    }
+  | {
+      kind: EvalAttemptEntryKindEnum.ToolCall;
+      entry: EvalAttemptEntryOf<EvalAttemptEntryKindEnum.ToolCall>;
+      toolVersion: number;
+    };
+
+// DEV_NOTE: Server-side only — an attempt as its DO and change requests hold it, read once per step
+// (EvalTranscriptsRepo.read): the entries, and each change request's summary (no values) by public id
+export interface EvalAttemptRecord {
+  entries: EvalAttemptEntry[];
+  changeRequestSummaries: Record<string, string>;
+}
+
+// DEV_NOTE: Server-side only — what the judge reads (EvalTranscriptProvider.judgeView): every message and every tool call
+// (pinned or not, e.g. search_help_docs) with how it ended, never args; held to EVAL_JUDGE_TRANSCRIPT_MAX_CHARS with the
+// last reply whole. omittedCount = earlier entries left out for the budget.
+export type EvalJudgeEntry =
+  | { kind: EvalAttemptEntryKindEnum.Message; role: EvalCaseMessageRoleEnum; text: string }
+  | { kind: EvalAttemptEntryKindEnum.ToolCall; toolName: string; outcome: string };
+
+export interface EvalJudgeTranscript {
+  entries: EvalJudgeEntry[];
+  omittedCount: number;
+}
+
+// DEV_NOTE: A tool call's end in the transcript: tool_calls' own status and the words the Tests page shows after the
+// change request's summary. null = the call never finished.
+export const EVAL_TRANSCRIPT_TOOL_STATUS_MAP: Record<
+  HostToolStatusEnum | "unfinished",
+  { status: ToolCallStatusIntEnum; text: string }
+> = {
+  [HostToolStatusEnum.Ok]: { status: ToolCallStatusIntEnum.Ok, text: "Ran" },
+  [HostToolStatusEnum.NoChange]: { status: ToolCallStatusIntEnum.Ok, text: "Nothing to change" },
+  [HostToolStatusEnum.Committed]: { status: ToolCallStatusIntEnum.Ok, text: "Saved" },
+  [HostToolStatusEnum.Verified]: { status: ToolCallStatusIntEnum.Ok, text: "Saved and checked" },
+  [HostToolStatusEnum.Undone]: { status: ToolCallStatusIntEnum.Ok, text: "Undone" },
+  [HostToolStatusEnum.NeedsReview]: {
+    status: ToolCallStatusIntEnum.Ok,
+    text: "Saved, but the check didn't match",
+  },
+  [HostToolStatusEnum.Blocked]: {
+    status: ToolCallStatusIntEnum.Blocked,
+    text: "Blocked by the approval rules",
+  },
+  [HostToolStatusEnum.Error]: { status: ToolCallStatusIntEnum.Error, text: "Failed" },
+  [HostToolStatusEnum.Failed]: { status: ToolCallStatusIntEnum.Error, text: "Failed" },
+  unfinished: { status: ToolCallStatusIntEnum.Error, text: "Didn't finish" },
+};
 
 // ─── Readbacks ──────────────────────────────────────────────────────────────
 
@@ -311,6 +461,11 @@ export const ZEvalHarnessConstants = z
     evalHostTokenHeader: z.literal(EVAL_HOST_TOKEN_HEADER),
     testHostAdminHeader: z.literal(TEST_HOST_ADMIN_HEADER),
     testHostTokenMaxLifetimeSeconds: z.literal(TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS),
+    // DEV_NOTE: EvalRunFailureIntEnum by name: the generated enum only numbers its values (number_1…)
+    evalRunFailureJudgeUnavailable: z.literal(EvalRunFailureIntEnum.JudgeUnavailable),
+    evalRunFailureHostUnavailable: z.literal(EvalRunFailureIntEnum.HostUnavailable),
+    evalRunFailureServerError: z.literal(EvalRunFailureIntEnum.ServerError),
+    evalRunFailureHarnessError: z.literal(EvalRunFailureIntEnum.HarnessError),
   })
   .meta({ id: "EvalHarnessConstants" });
 export type EvalHarnessConstants = z.infer<typeof ZEvalHarnessConstants>;

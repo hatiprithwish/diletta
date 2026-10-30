@@ -3,16 +3,19 @@ import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgre
 import { getAgentByName } from "agents";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
+import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import EvalRefusalProvider from "@/providers/evalRefusal";
+import EvalTranscriptFilesProvider from "@/providers/evalTranscriptFiles";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
+import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -29,7 +32,10 @@ type Tx = NodePgTransaction<EmptyRelations>;
 //     staging connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write
 //     auto-approved.
 //   readBack: a readback assert, the same request live verification sends, on the staging connection.
-//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only).
+//   getRunConversationSource: a conversation of a Running run with what its transcript needs, for EvalJudgeRepo (M5-3:
+//     the judge is its own Repo, so only /judge builds the model router).
+//   recordResult: one graded attempt of one of the run's cases (eval_results, append-only), with its transcript (M5-3)
+//     when the attempt ran. Reading and storing transcripts is EvalTranscriptsRepo's.
 //   reset: the connection's reset_op, once after the attempts.
 //   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set.
 // Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
@@ -44,20 +50,25 @@ export default class EvalHarnessRepo {
   private evalCasesDal: EvalCasesDAL;
   private evalRunsDal: EvalRunsDAL;
   private conversationsDal: ConversationsDAL;
+  private companiesDal: CompaniesDAL;
   private conversationsRepo: ConversationsRepo;
   private actionEngineRepo: ActionEngineRepo;
+  private evalTranscriptsRepo: EvalTranscriptsRepo;
 
-  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan) are built once, here
-  constructor(env: Env) {
+  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan, a transcript) are built once,
+  // here. db = the caller's client when it has one (EvalJudgeRepo), so one request uses one pool.
+  constructor(env: Env, db: NodePgDatabase = getDbClient(env)) {
     this.env = env;
-    this.db = getDbClient(env);
+    this.db = db;
     this.chatbotsDal = new ChatbotsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.evalCasesDal = new EvalCasesDAL();
     this.evalRunsDal = new EvalRunsDAL();
     this.conversationsDal = new ConversationsDAL();
+    this.companiesDal = new CompaniesDAL();
     this.conversationsRepo = new ConversationsRepo(env);
     this.actionEngineRepo = new ActionEngineRepo(env);
+    this.evalTranscriptsRepo = new EvalTranscriptsRepo(env, this.db);
   }
 
   // DEV_NOTE: A Running run of the config, and the cases it runs. The config's chatbot must be active and the config
@@ -407,7 +418,50 @@ export default class EvalHarnessRepo {
     return { isSuccess: true, message: "Record read back", check };
   }
 
-  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate (append-only)
+  // DEV_NOTE: A conversation of this run (else NotFound) with what its transcript and judge need (transcriptSource),
+  // for EvalJudgeRepo. Read-only; answers the step refusal as is, the caller logs it.
+  async getRunConversationSource(params: {
+    identity: Schemas.EvalIdentity;
+    runPublicId: string;
+    conversationPublicId: string;
+  }): Promise<Schemas.EvalRunTranscriptSourceResponse> {
+    const { identity } = params;
+    const companyId = identity.companyId;
+    return await withTenant(
+      this.db,
+      companyId,
+      async (tx): Promise<Schemas.EvalRunTranscriptSourceResponse> => {
+        const running = await this.runningRun(tx, identity, params.runPublicId);
+        if (!running.isSuccess || !running.run || !running.chatbotId) return running;
+        const conversation = await this.conversationsDal.getConversationDetails(tx, {
+          companyId,
+          publicId: params.conversationPublicId,
+        });
+        if (!conversation.isSuccess || !conversation.conversation) {
+          return this.stepFailure(conversation.isNotFound, conversation.message);
+        }
+        if (conversation.conversation.evalRunId !== running.run.id) {
+          return this.stepFailure(true, "Conversation is not this run's");
+        }
+        return await this.transcriptSource(tx, companyId, {
+          run: running.run,
+          chatbotId: running.chatbotId,
+          conversation: conversation.conversation,
+        });
+      },
+    );
+  }
+
+  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate
+  // (append-only), answered in the first transaction, before the DO is read or anything is stored. An attempt that ran
+  // (it has a conversation) gets its transcript (M5-3): EvalTranscriptsRepo stores it (files row pending its owner,
+  // then the R2 object), and the result's own withTenant (run row locked) writes the result pointing at it and attaches
+  // the row. When that transaction is known not to have written the result (a refusal it answered, or a rollback it
+  // threw), the stored transcript is discarded. When its outcome is unknown (the commit's answer lost), nothing is
+  // touched: if it committed, the row is attached and the harness's retry answers Duplicate; if not, the row is still
+  // pending and the hourly sweep removes it with its object. A transcript that can't be read or stored is a ServerError
+  // (the harness retries the result: nothing was written). An attempt that never started has no conversation and no
+  // transcript.
   async recordResult(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -416,46 +470,110 @@ export default class EvalHarnessRepo {
     const { identity, request } = params;
     const companyId = identity.companyId;
     const metadata = { companyId, runPublicId: params.runPublicId, attempt: request.attempt };
+    const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
+      this.refuseStep(Schemas.LogAction.RecordEvalResult, failure, message, metadata);
 
-    const result: Schemas.EvalRunStepResponse = await withTenant(this.db, companyId, async (tx) => {
-      const running = await this.runningRun(tx, identity, params.runPublicId, true);
-      if (!running.isSuccess || !running.run) return running;
-      if (request.attempt > running.run.k) {
-        return {
-          isSuccess: false,
-          message: "Attempt is past the run's k",
-          failure: Schemas.EvalRunStepFailureEnum.Invalid,
+    const found: Schemas.EvalResultSourceResponse = await withTenant(
+      this.db,
+      companyId,
+      async (tx): Promise<Schemas.EvalResultSourceResponse> => {
+        const checked = await this.resultCase(tx, identity, params.runPublicId, request);
+        if (!checked.isSuccess || !checked.run || !checked.chatbotId || !checked.evalCaseId) {
+          return checked;
+        }
+        const attempt = {
+          companyId,
+          evalRunId: checked.run.id,
+          evalCaseId: checked.evalCaseId,
+          attempt: request.attempt,
         };
-      }
-      const evalCase = await this.runCase(tx, companyId, running.run, request.caseId);
-      if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
+        const existing = await this.evalRunsDal.hasEvalResult(tx, attempt);
+        if (!existing.isSuccess) return this.stepFailure(false, existing.message);
+        if (existing.hasResult) return this.duplicateResult();
+        const conversation = await this.conversationsDal.getEvalAttemptConversation(tx, {
+          companyId,
+          evalRunId: checked.run.id,
+          evalCaseId: checked.evalCaseId,
+          evalAttempt: request.attempt,
+        });
+        if (conversation.isNotFound) return { isSuccess: true, hasConversation: false };
+        if (!conversation.isSuccess || !conversation.conversation) {
+          return this.stepFailure(false, conversation.message);
+        }
+        const source = await this.transcriptSource(tx, companyId, {
+          run: checked.run,
+          chatbotId: checked.chatbotId,
+          conversation: conversation.conversation,
+        });
+        return { ...source, hasConversation: true };
+      },
+    );
+    if (!found.isSuccess || (found.hasConversation && !found.source)) {
+      return refuse(found.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, found.message);
+    }
 
+    let stored: { fileId: string; fileR2Key: string } | null = null;
+    if (found.source) {
+      const read = await this.evalTranscriptsRepo.read({ companyId, source: found.source });
+      if (!read.isSuccess || !read.record) {
+        return refuse(read.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, read.message);
+      }
+      const saved = await this.evalTranscriptsRepo.store({
+        companyId,
+        source: found.source,
+        record: read.record,
+      });
+      if (!saved.isSuccess || !saved.stored) {
+        return refuse(saved.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, saved.message);
+      }
+      stored = saved.stored;
+    }
+
+    // DEV_NOTE: Set on every path of the callback that answers or throws on purpose: the result wasn't written. Unset
+    // when withTenant failed on its own (a lost connection, a failed commit), whose outcome is unknown.
+    let isKnownNotWritten = false;
+    const result: Schemas.EvalRunStepResponse = await withTenant(this.db, companyId, async (tx) => {
+      const checked = await this.resultCase(tx, identity, params.runPublicId, request, true);
+      if (!checked.isSuccess || !checked.run || !checked.evalCaseId) {
+        isKnownNotWritten = true;
+        return checked;
+      }
       const created = await this.evalRunsDal.createEvalResult(tx, {
         companyId,
-        evalRunId: running.run.id,
-        evalCaseId: evalCase.evalCaseId,
+        evalRunId: checked.run.id,
+        evalCaseId: checked.evalCaseId,
         attempt: request.attempt,
         hasPassed: request.hasPassed,
         graderOutput: request.graderOutput,
+        transcriptFileId: stored?.fileId ?? null,
         latencyMs: request.latencyMs,
       });
       if (created.isConflict) {
-        return {
-          isSuccess: false,
-          message: created.message,
-          failure: Schemas.EvalRunStepFailureEnum.Duplicate,
-        };
+        isKnownNotWritten = true;
+        return this.duplicateResult();
       }
-      if (!created.isSuccess) return this.stepFailure(false, created.message);
+      if (!created.isSuccess || !created.evalResultId) {
+        isKnownNotWritten = true;
+        return this.stepFailure(false, created.message);
+      }
+      if (stored) {
+        const attached = await EvalTranscriptFilesProvider.attach(tx, {
+          companyId,
+          fileId: stored.fileId,
+          evalResultId: created.evalResultId,
+        });
+        if (!attached.isSuccess) {
+          isKnownNotWritten = true;
+          throw new TenantRollbackError(attached.message ?? "The transcript couldn't be attached");
+        }
+      }
       return { isSuccess: true, message: "Eval result recorded" };
     });
     if (!result.isSuccess) {
-      return this.refuseStep(
-        Schemas.LogAction.RecordEvalResult,
-        result.failure ?? Schemas.EvalRunStepFailureEnum.ServerError,
-        result.message,
-        metadata,
-      );
+      if (stored && isKnownNotWritten) {
+        await this.evalTranscriptsRepo.discard({ companyId, stored });
+      }
+      return refuse(result.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, result.message);
     }
     return result;
   }
@@ -545,9 +663,10 @@ export default class EvalHarnessRepo {
 
   // DEV_NOTE: Ends a Running run (its row locked, so no result lands after the tally). isComplete: every case of the
   // run's set has all k attempts and the reset went through (else Incomplete, nothing written) → Done; otherwise
-  // Failed. pass^k: a case passes when all k attempts did; the run passes when it is Done
-  // and every case of the set passed (the safety hard gate on top is M5-4's). case_count = the set's size. cost_usd is
-  // already the run's (every model call adds to it, ModelCallsRepo) and keeps settling after the finish.
+  // Failed, with why the harness stopped it when it says (failure, M5-3). pass^k: a case passes when all k attempts
+  // did; the run passes when it is Done and every case of the set passed (the safety hard gate on top is M5-4's).
+  // case_count = the set's size. cost_usd is already the run's (every model call adds to it, ModelCallsRepo) and keeps
+  // settling after the finish.
   async finish(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -602,6 +721,9 @@ export default class EvalHarnessRepo {
           caseCount: caseIds.length,
           passAllKCount,
           hasPassed: request.isComplete && passAllKCount === caseIds.length,
+          // DEV_NOTE: ZFinishEvalRunApiRequest already refuses a failure on a complete run; kept as belt and braces, so
+          // a Done run never stores one whoever calls finish
+          failure: request.isComplete ? null : (request.failure ?? null),
         });
         if (!finished.isSuccess || !finished.evalRun) {
           return finished.isNotFound
@@ -644,8 +766,8 @@ export default class EvalHarnessRepo {
   }
 
   // DEV_NOTE: isLocked: the run row FOR UPDATE for the rest of the step's transaction (results, attempt starts and the
-  // finish take turns). The token company's run by public id, started on the token's connection (another connection's run is
-  // NotFound, so one run's attempts and reset never go to two hosts), still Running, with its config's chatbot
+  // finish take turns). The token company's run by public id, started on the token's connection (another connection's
+  // run is NotFound, so one run's attempts and reset never go to two hosts), still Running, with its config's chatbot
   private async runningRun(
     tx: Tx,
     identity: Schemas.EvalIdentity,
@@ -716,6 +838,78 @@ export default class EvalHarnessRepo {
       };
     }
     return { isSuccess: true, chatbot: found.chatbot };
+  }
+
+  // DEV_NOTE: The run (Running, the token's connection), its config's chatbot and the case of the run a result is for,
+  // with the attempt within k. isLocked: the run row FOR UPDATE, as runningRun.
+  private async resultCase(
+    tx: Tx,
+    identity: Schemas.EvalIdentity,
+    runPublicId: string,
+    request: Pick<Schemas.RecordEvalResultApiRequest, "caseId" | "attempt">,
+    isLocked = false,
+  ): Promise<Schemas.EvalResultCaseResponse> {
+    const running = await this.runningRun(tx, identity, runPublicId, isLocked);
+    if (!running.isSuccess || !running.run) return running;
+    if (request.attempt > running.run.k) {
+      return {
+        isSuccess: false,
+        message: "Attempt is past the run's k",
+        failure: Schemas.EvalRunStepFailureEnum.Invalid,
+      };
+    }
+    const evalCase = await this.runCase(tx, identity.companyId, running.run, request.caseId);
+    if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
+    return { ...running, evalCaseId: evalCase.evalCaseId };
+  }
+
+  // DEV_NOTE: What an attempt's transcript and judge need besides its DO: the company's public id (the R2 key), the run
+  // config's tool pins (the versions the attempt ran) and routing (the judge's provider). A config that no longer
+  // loads is a ServerError: the run started on it.
+  private async transcriptSource(
+    tx: Tx,
+    companyId: string,
+    params: {
+      run: Pick<Schemas.EvalRun, "id" | "chatbotConfigId">;
+      chatbotId: string;
+      conversation: Pick<Schemas.Conversation, "id" | "publicId">;
+    },
+  ): Promise<Schemas.EvalRunTranscriptSourceResponse> {
+    const company = await this.companiesDal.getCompanyDetails(tx, { companyId });
+    if (!company.isSuccess || !company.company) return this.stepFailure(false, company.message);
+    const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
+      companyId,
+      id: params.run.chatbotConfigId,
+    });
+    if (!config.isSuccess || !config.chatbotConfig) return this.stepFailure(false, config.message);
+    const loaded = Schemas.loadConfigSpec({
+      schemaVersion: config.chatbotConfig.schemaVersion,
+      body: config.chatbotConfig.body,
+    });
+    if (!loaded.isSuccess || !loaded.spec) {
+      return this.stepFailure(false, "The run's config doesn't load");
+    }
+    return {
+      isSuccess: true,
+      source: {
+        evalRunId: params.run.id,
+        chatbotId: params.chatbotId,
+        conversationId: params.conversation.id,
+        conversationPublicId: params.conversation.publicId,
+        companyPublicId: company.company.publicId,
+        toolVersions: Object.fromEntries(loaded.spec.tools.map((pin) => [pin.name, pin.version])),
+        routing: loaded.spec.routing,
+      },
+    };
+  }
+
+  // DEV_NOTE: The attempt already has its result (append-only): the harness reads Duplicate as "the first one landed"
+  private duplicateResult(): Schemas.EvalRunStepResponse {
+    return {
+      isSuccess: false,
+      message: "This attempt already has a result",
+      failure: Schemas.EvalRunStepFailureEnum.Duplicate,
+    };
   }
 
   private stepFailure(

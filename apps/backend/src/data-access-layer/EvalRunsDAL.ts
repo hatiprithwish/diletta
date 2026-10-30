@@ -63,6 +63,7 @@ export default class EvalRunsDAL {
         caseCount: evalRuns.caseCount,
         passAllKCount: evalRuns.passAllKCount,
         hasPassed: evalRuns.hasPassed,
+        failure: evalRuns.failure,
         costUsd: evalRuns.costUsd,
         finishedAt: evalRuns.finishedAt,
         createdAt: evalRuns.createdAt,
@@ -626,6 +627,7 @@ export default class EvalRunsDAL {
           caseCount: params.caseCount,
           passAllKCount: params.passAllKCount,
           hasPassed: params.hasPassed,
+          failure: params.failure,
           finishedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -764,6 +766,44 @@ export default class EvalRunsDAL {
     return response;
   }
 
+  // DEV_NOTE: Whether the attempt already has its result: /results answers Duplicate before reading the DO or writing R2
+  async hasEvalResult(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.HasEvalResultDALRequest,
+  ) {
+    const response: Schemas.HasEvalResultDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalResults.companyId, params.companyId),
+        eq(evalResults.evalRunId, params.evalRunId),
+        eq(evalResults.evalCaseId, params.evalCaseId),
+        eq(evalResults.attempt, params.attempt),
+      ];
+      const [found] = await tx
+        .select({ id: evalResults.id })
+        .from(evalResults)
+        .where(and(...conditions))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = found ? "The attempt has a result" : "The attempt has no result";
+      response.hasResult = found !== undefined;
+    } catch (error) {
+      const message = "Unknown error in checking an eval result";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.HasEvalResult,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: One graded attempt (append-only). The run must be the company's and the case the company's own or a
   // platform case (the Repo checks it belongs to the run's chatbot). grader_output is stored as given: the Repo
   // validated it against the current schema. Its text is the harness's, never logged here.
@@ -810,18 +850,23 @@ export default class EvalRunsDAL {
         return response;
       }
 
-      await tx.insert(evalResults).values({
-        companyId: params.companyId,
-        evalRunId: params.evalRunId,
-        evalCaseId: params.evalCaseId,
-        attempt: params.attempt,
-        hasPassed: params.hasPassed,
-        graderOutput: params.graderOutput,
-        latencyMs: params.latencyMs,
-      });
+      const [created] = await tx
+        .insert(evalResults)
+        .values({
+          companyId: params.companyId,
+          evalRunId: params.evalRunId,
+          evalCaseId: params.evalCaseId,
+          attempt: params.attempt,
+          hasPassed: params.hasPassed,
+          graderOutput: params.graderOutput,
+          transcriptFileId: params.transcriptFileId,
+          latencyMs: params.latencyMs,
+        })
+        .returning({ id: evalResults.id });
 
       response.isSuccess = true;
       response.message = "Eval result created successfully";
+      response.evalResultId = created?.id;
     } catch (error) {
       if (Utility.isUniqueViolation(error, RESULT_ATTEMPT_INDEX)) {
         const message = "This attempt already has a result";

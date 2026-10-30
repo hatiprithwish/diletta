@@ -9,6 +9,7 @@ export enum CronJobEnum {
   // Every hour, at minute Constants.CRON_HOURLY_MINUTE
   KnowledgeResync = "KnowledgeResync",
   ActivityRollups = "ActivityRollups",
+  EvalTranscriptSweep = "EvalTranscriptSweep",
   // Daily, at Constants.ACTIVITY_LOG_PARTITIONS_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)
   ActivityLogPartitions = "ActivityLogPartitions",
 }

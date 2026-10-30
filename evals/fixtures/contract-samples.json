@@ -860,6 +860,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -888,7 +901,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -1065,6 +1079,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -1093,7 +1120,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -1271,6 +1299,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -1299,7 +1340,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -1476,6 +1518,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -1504,7 +1559,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -1668,6 +1724,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -1696,7 +1765,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -1873,6 +1943,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -1901,7 +1984,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -2076,6 +2160,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -2104,7 +2201,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -2281,6 +2379,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -2309,7 +2420,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -2485,6 +2597,19 @@
             }
           ],
           "reason": null
+        },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
         },
         "recordResultRequest": {
           "caseId": "case_1",
@@ -2503,7 +2628,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -2680,6 +2806,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -2708,7 +2847,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -2885,6 +3025,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -3087,6 +3240,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -3115,7 +3281,665 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 9
+        },
+        "finishResponse": {
+          "isSuccess": true,
+          "message": "Eval run finished",
+          "status": 3,
+          "statusLabel": "Done",
+          "caseCount": 1,
+          "passAllKCount": 1,
+          "hasPassed": true,
+          "costUsd": "0.012000"
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        }
+      },
+      {
+        "createRunRequest": {
+          "chatbotConfigId": "cfg_1",
+          "k": 3,
+          "harnessVersion": "0.1.0",
+          "trigger": 2
+        },
+        "createRunResponse": {
+          "isSuccess": true,
+          "message": "Eval run started",
+          "run": {
+            "publicId": "run_1",
+            "k": 3,
+            "harnessVersion": "0.1.0"
+          },
+          "cases": [
+            {
+              "publicId": "case_1",
+              "name": "Creates a drill",
+              "isSafety": false,
+              "input": {
+                "schemaVersion": 1,
+                "messages": [
+                  {
+                    "role": "user",
+                    "text": "Hi"
+                  },
+                  {
+                    "role": "assistant",
+                    "text": "Hi, what do you need?"
+                  },
+                  {
+                    "role": "user",
+                    "text": "Create a record named Drill {case.tag} for 120"
+                  }
+                ]
+              },
+              "expectations": {
+                "schemaVersion": 2,
+                "rubric": null,
+                "rules": [
+                  {
+                    "kind": "contains",
+                    "text": "Drill {case.tag}"
+                  },
+                  {
+                    "kind": "not_contains",
+                    "text": "error"
+                  }
+                ],
+                "toolCalls": [
+                  {
+                    "toolName": "create_record",
+                    "args": {
+                      "name": "Drill {case.tag}",
+                      "amount": 120,
+                      "tags": [
+                        "a"
+                      ],
+                      "meta": null
+                    }
+                  },
+                  {
+                    "toolName": "list_records",
+                    "args": {}
+                  }
+                ],
+                "forbiddenTools": [
+                  "delete_record"
+                ],
+                "readbacks": [
+                  {
+                    "toolName": "create_record",
+                    "expect": {
+                      "name": "Drill {case.tag}",
+                      "amount": 120
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "runAttemptRequest": {
+          "caseId": "case_1",
+          "attempt": 1,
+          "messages": [
+            {
+              "role": "user",
+              "text": "Hi"
+            },
+            {
+              "role": "assistant",
+              "text": "Hi, what do you need?"
+            },
+            {
+              "role": "user",
+              "text": "Create a record named Drill {case.tag} for 120"
+            }
+          ]
+        },
+        "runAttemptResponse": {
+          "isSuccess": true,
+          "message": "Eval attempt ran",
+          "conversationId": "conv_1",
+          "turnStatus": "completed",
+          "reply": "Created Drill t1.",
+          "toolCalls": [
+            {
+              "toolCallId": "toolu_1",
+              "toolName": "create_record",
+              "args": {
+                "name": "Drill t1",
+                "amount": 120,
+                "tags": [
+                  "a"
+                ],
+                "meta": null
+              },
+              "status": "verified",
+              "changeRequestId": "cr_1",
+              "wasApprovalRequired": true
+            },
+            {
+              "toolCallId": "toolu_2",
+              "toolName": "create_record",
+              "args": null,
+              "status": null,
+              "changeRequestId": "cr_1",
+              "wasApprovalRequired": true
+            }
+          ],
+          "latencyMs": 1200
+        },
+        "readbackRequest": {
+          "conversationId": "conv_1",
+          "changeRequestId": "cr_1",
+          "readback": {
+            "toolName": "create_record",
+            "expect": {
+              "amount": 120
+            }
+          }
+        },
+        "readbackResponse": {
+          "isSuccess": true,
+          "message": "Record read back",
+          "verdict": "differs",
+          "fields": [
+            {
+              "name": "amount",
+              "isMatch": false,
+              "expected": 120,
+              "found": null,
+              "isFound": false
+            }
+          ],
+          "reason": null
+        },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": ""
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
+        "recordResultRequest": {
+          "caseId": "case_1",
+          "attempt": 1,
+          "hasPassed": true,
+          "graderOutput": {
+            "schemaVersion": 1,
+            "checks": [
+              {
+                "kind": "tool_call",
+                "hasPassed": true,
+                "label": "Called create_record",
+                "detail": null
+              }
+            ],
+            "error": null
+          },
+          "latencyMs": null
+        },
+        "recordResultResponse": {
+          "isSuccess": true,
+          "message": "Eval result recorded"
+        },
+        "resetResponse": {
+          "isSuccess": true,
+          "message": "Staging data reset",
+          "isReset": true
+        },
+        "finishRequest": {
+          "isComplete": false,
+          "failure": 1
+        },
+        "finishResponse": {
+          "isSuccess": true,
+          "message": "Eval run finished",
+          "status": 3,
+          "statusLabel": "Done",
+          "caseCount": 1,
+          "passAllKCount": 1,
+          "hasPassed": true,
+          "costUsd": "0.012000"
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        }
+      },
+      {
+        "createRunRequest": {
+          "chatbotConfigId": "cfg_1",
+          "k": 3,
+          "harnessVersion": "0.1.0",
+          "trigger": 2
+        },
+        "createRunResponse": {
+          "isSuccess": true,
+          "message": "Eval run started",
+          "run": {
+            "publicId": "run_1",
+            "k": 3,
+            "harnessVersion": "0.1.0"
+          },
+          "cases": [
+            {
+              "publicId": "case_1",
+              "name": "Creates a drill",
+              "isSafety": false,
+              "input": {
+                "schemaVersion": 1,
+                "messages": [
+                  {
+                    "role": "user",
+                    "text": "Hi"
+                  },
+                  {
+                    "role": "assistant",
+                    "text": "Hi, what do you need?"
+                  },
+                  {
+                    "role": "user",
+                    "text": "Create a record named Drill {case.tag} for 120"
+                  }
+                ]
+              },
+              "expectations": {
+                "schemaVersion": 2,
+                "rubric": null,
+                "rules": [
+                  {
+                    "kind": "contains",
+                    "text": "Drill {case.tag}"
+                  },
+                  {
+                    "kind": "not_contains",
+                    "text": "error"
+                  }
+                ],
+                "toolCalls": [
+                  {
+                    "toolName": "create_record",
+                    "args": {
+                      "name": "Drill {case.tag}",
+                      "amount": 120,
+                      "tags": [
+                        "a"
+                      ],
+                      "meta": null
+                    }
+                  },
+                  {
+                    "toolName": "list_records",
+                    "args": {}
+                  }
+                ],
+                "forbiddenTools": [
+                  "delete_record"
+                ],
+                "readbacks": [
+                  {
+                    "toolName": "create_record",
+                    "expect": {
+                      "name": "Drill {case.tag}",
+                      "amount": 120
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "runAttemptRequest": {
+          "caseId": "case_1",
+          "attempt": 1,
+          "messages": [
+            {
+              "role": "user",
+              "text": "Hi"
+            },
+            {
+              "role": "assistant",
+              "text": "Hi, what do you need?"
+            },
+            {
+              "role": "user",
+              "text": "Create a record named Drill {case.tag} for 120"
+            }
+          ]
+        },
+        "runAttemptResponse": {
+          "isSuccess": true,
+          "message": "Eval attempt ran",
+          "conversationId": "conv_1",
+          "turnStatus": "completed",
+          "reply": "Created Drill t1.",
+          "toolCalls": [
+            {
+              "toolCallId": "toolu_1",
+              "toolName": "create_record",
+              "args": {
+                "name": "Drill t1",
+                "amount": 120,
+                "tags": [
+                  "a"
+                ],
+                "meta": null
+              },
+              "status": "verified",
+              "changeRequestId": "cr_1",
+              "wasApprovalRequired": true
+            },
+            {
+              "toolCallId": "toolu_2",
+              "toolName": "create_record",
+              "args": null,
+              "status": null,
+              "changeRequestId": "cr_1",
+              "wasApprovalRequired": true
+            }
+          ],
+          "latencyMs": 1200
+        },
+        "readbackRequest": {
+          "conversationId": "conv_1",
+          "changeRequestId": "cr_1",
+          "readback": {
+            "toolName": "create_record",
+            "expect": {
+              "amount": 120
+            }
+          }
+        },
+        "readbackResponse": {
+          "isSuccess": true,
+          "message": "Record read back",
+          "verdict": "differs",
+          "fields": [
+            {
+              "name": "amount",
+              "isMatch": false,
+              "expected": 120,
+              "found": null,
+              "isFound": false
+            }
+          ],
+          "reason": null
+        },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "mistral",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
+        "recordResultRequest": {
+          "caseId": "case_1",
+          "attempt": 1,
+          "hasPassed": true,
+          "graderOutput": {
+            "schemaVersion": 1,
+            "checks": [
+              {
+                "kind": "tool_call",
+                "hasPassed": true,
+                "label": "Called create_record",
+                "detail": null
+              }
+            ],
+            "error": null
+          },
+          "latencyMs": null
+        },
+        "recordResultResponse": {
+          "isSuccess": true,
+          "message": "Eval result recorded"
+        },
+        "resetResponse": {
+          "isSuccess": true,
+          "message": "Staging data reset",
+          "isReset": true
+        },
+        "finishRequest": {
+          "isComplete": false,
+          "failure": 1
+        },
+        "finishResponse": {
+          "isSuccess": true,
+          "message": "Eval run finished",
+          "status": 3,
+          "statusLabel": "Done",
+          "caseCount": 1,
+          "passAllKCount": 1,
+          "hasPassed": true,
+          "costUsd": "0.012000"
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        }
+      },
+      {
+        "createRunRequest": {
+          "chatbotConfigId": "cfg_1",
+          "k": 3,
+          "harnessVersion": "0.1.0",
+          "trigger": 2
+        },
+        "createRunResponse": {
+          "isSuccess": true,
+          "message": "Eval run started",
+          "run": {
+            "publicId": "run_1",
+            "k": 3,
+            "harnessVersion": "0.1.0"
+          },
+          "cases": [
+            {
+              "publicId": "case_1",
+              "name": "Creates a drill",
+              "isSafety": false,
+              "input": {
+                "schemaVersion": 1,
+                "messages": [
+                  {
+                    "role": "user",
+                    "text": "Hi"
+                  },
+                  {
+                    "role": "assistant",
+                    "text": "Hi, what do you need?"
+                  },
+                  {
+                    "role": "user",
+                    "text": "Create a record named Drill {case.tag} for 120"
+                  }
+                ]
+              },
+              "expectations": {
+                "schemaVersion": 2,
+                "rubric": null,
+                "rules": [
+                  {
+                    "kind": "contains",
+                    "text": "Drill {case.tag}"
+                  },
+                  {
+                    "kind": "not_contains",
+                    "text": "error"
+                  }
+                ],
+                "toolCalls": [
+                  {
+                    "toolName": "create_record",
+                    "args": {
+                      "name": "Drill {case.tag}",
+                      "amount": 120,
+                      "tags": [
+                        "a"
+                      ],
+                      "meta": null
+                    }
+                  },
+                  {
+                    "toolName": "list_records",
+                    "args": {}
+                  }
+                ],
+                "forbiddenTools": [
+                  "delete_record"
+                ],
+                "readbacks": [
+                  {
+                    "toolName": "create_record",
+                    "expect": {
+                      "name": "Drill {case.tag}",
+                      "amount": 120
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "runAttemptRequest": {
+          "caseId": "case_1",
+          "attempt": 1,
+          "messages": [
+            {
+              "role": "user",
+              "text": "Hi"
+            },
+            {
+              "role": "assistant",
+              "text": "Hi, what do you need?"
+            },
+            {
+              "role": "user",
+              "text": "Create a record named Drill {case.tag} for 120"
+            }
+          ]
+        },
+        "runAttemptResponse": {
+          "isSuccess": true,
+          "message": "Eval attempt ran",
+          "conversationId": "conv_1",
+          "turnStatus": "completed",
+          "reply": "Created Drill t1.",
+          "toolCalls": [
+            {
+              "toolCallId": "toolu_1",
+              "toolName": "create_record",
+              "args": {
+                "name": "Drill t1",
+                "amount": 120,
+                "tags": [
+                  "a"
+                ],
+                "meta": null
+              },
+              "status": "verified",
+              "changeRequestId": "cr_1",
+              "wasApprovalRequired": true
+            },
+            {
+              "toolCallId": "toolu_2",
+              "toolName": "create_record",
+              "args": null,
+              "status": null,
+              "changeRequestId": "cr_1",
+              "wasApprovalRequired": true
+            }
+          ],
+          "latencyMs": 1200
+        },
+        "readbackRequest": {
+          "conversationId": "conv_1",
+          "changeRequestId": "cr_1",
+          "readback": {
+            "toolName": "create_record",
+            "expect": {
+              "amount": 120
+            }
+          }
+        },
+        "readbackResponse": {
+          "isSuccess": true,
+          "message": "Record read back",
+          "verdict": "differs",
+          "fields": [
+            {
+              "name": "amount",
+              "isMatch": false,
+              "expected": 120,
+              "found": null,
+              "isFound": false
+            }
+          ],
+          "reason": null
+        },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
+        "recordResultRequest": {
+          "caseId": "case_1",
+          "attempt": 1,
+          "hasPassed": true,
+          "graderOutput": {
+            "schemaVersion": 1,
+            "checks": [
+              {
+                "kind": "tool_call",
+                "hasPassed": true,
+                "label": "Called create_record",
+                "detail": null
+              }
+            ],
+            "error": null
+          },
+          "latencyMs": null
+        },
+        "recordResultResponse": {
+          "isSuccess": true,
+          "message": "Eval result recorded"
+        },
+        "resetResponse": {
+          "isSuccess": true,
+          "message": "Staging data reset",
+          "isReset": true
+        },
+        "finishRequest": {
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -3292,6 +4116,19 @@
           ],
           "reason": null
         },
+        "judgeRequest": {
+          "conversationId": "conv_1",
+          "rubric": "Says the refund takes 5 days."
+        },
+        "judgeResponse": {
+          "isSuccess": true,
+          "message": "Attempt judged",
+          "hasPassed": false,
+          "reason": "The reply never says how long the refund takes.",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5-5",
+          "promptVersion": 1
+        },
         "recordResultRequest": {
           "caseId": "case_1",
           "attempt": 1,
@@ -3320,7 +4157,8 @@
           "isReset": true
         },
         "finishRequest": {
-          "isComplete": true
+          "isComplete": false,
+          "failure": 1
         },
         "finishResponse": {
           "isSuccess": true,
@@ -3357,7 +4195,11 @@
         "evalJwtMaxLifetimeSeconds": 300,
         "evalHostTokenHeader": "X-Host-Token",
         "testHostAdminHeader": "X-Test-Host-Admin",
-        "testHostTokenMaxLifetimeSeconds": 300
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 1,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
       }
     ],
     "invalid": [
@@ -3367,14 +4209,34 @@
         "evalJwtMaxLifetimeSeconds": 300,
         "evalHostTokenHeader": "X-Host-Token",
         "testHostAdminHeader": "X-Test-Host-Admin",
-        "testHostTokenMaxLifetimeSeconds": 300
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 1,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
       },
       {
         "evalJwtIssuer": "diletta-eval-harness",
         "evalJwtAudience": "diletta-eval",
         "evalJwtMaxLifetimeSeconds": 300,
         "testHostAdminHeader": "X-Test-Host-Admin",
-        "testHostTokenMaxLifetimeSeconds": 300
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 1,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
+      },
+      {
+        "evalJwtIssuer": "diletta-eval-harness",
+        "evalJwtAudience": "diletta-eval",
+        "evalJwtMaxLifetimeSeconds": 300,
+        "evalHostTokenHeader": "X-Host-Token",
+        "testHostAdminHeader": "X-Test-Host-Admin",
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 4,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
       }
     ]
   }

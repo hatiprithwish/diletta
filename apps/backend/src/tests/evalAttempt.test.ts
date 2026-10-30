@@ -63,4 +63,68 @@ describe("EvalAttemptProvider", () => {
       EvalAttemptProvider.summarize(messages, "m3", new Set()).toolCalls[0]?.wasApprovalRequired,
     ).toBe(false);
   });
+
+  it("lists the whole conversation for its transcript, a tool call where it ran, never its args", () => {
+    const messages: UIMessage[] = [
+      text("m1", "user", "Set Alpha to 300"),
+      {
+        id: "m2",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Updating it now. " },
+          {
+            type: "dynamic-tool",
+            toolName: "update_record",
+            toolCallId: "call_1",
+            state: "output-available",
+            input: { recordId: "rec_alpha", amount: 300 },
+            output: {
+              status: Schemas.HostToolStatusEnum.Verified,
+              message: "Done",
+              changeRequestId: "cr_1",
+            },
+          },
+          {
+            type: "dynamic-tool",
+            toolName: "get_record",
+            toolCallId: "call_2",
+            state: "input-available",
+            input: { recordId: "rec_alpha" },
+          },
+          { type: "text", text: "Alpha is now 300." },
+        ],
+      },
+      { id: "m3", role: "system", parts: [{ type: "text", text: "Not part of the chat" }] },
+      text("m4", "assistant", "   "),
+    ];
+    expect(EvalAttemptProvider.entries(messages)).toEqual([
+      {
+        kind: Schemas.EvalAttemptEntryKindEnum.Message,
+        role: Schemas.EvalCaseMessageRoleEnum.User,
+        text: "Set Alpha to 300",
+      },
+      {
+        kind: Schemas.EvalAttemptEntryKindEnum.Message,
+        role: Schemas.EvalCaseMessageRoleEnum.Assistant,
+        text: "Updating it now.",
+      },
+      {
+        kind: Schemas.EvalAttemptEntryKindEnum.ToolCall,
+        toolName: "update_record",
+        status: Schemas.HostToolStatusEnum.Verified,
+        changeRequestId: "cr_1",
+      },
+      {
+        kind: Schemas.EvalAttemptEntryKindEnum.ToolCall,
+        toolName: "get_record",
+        status: null,
+        changeRequestId: null,
+      },
+      {
+        kind: Schemas.EvalAttemptEntryKindEnum.Message,
+        role: Schemas.EvalCaseMessageRoleEnum.Assistant,
+        text: "Alpha is now 300.",
+      },
+    ]);
+  });
 });

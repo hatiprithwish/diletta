@@ -36,7 +36,7 @@ export default class Constants {
   // Workers Free plan allows 5 cron triggers in total, so jobs that run less often are picked by time in
   // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
   //   every minute: outbox sweep + model_calls usage backfill + change request values purge
-  //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync + activity rollups (today and yesterday)
+  //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync + activity rollups (today and yesterday) + eval transcript sweep
   //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
   static readonly CRON_TRIGGER = "* * * * *";
   static readonly CRON_HOURLY_MINUTE = 0;
@@ -149,6 +149,18 @@ export default class Constants {
   // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
   static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;
   static readonly CHANGE_REQUEST_PURGE_MAX_BATCHES = 10;
+
+  // DEV_NOTE: Eval transcripts (M5-3). getEvalTranscript waits up to EVAL_TRANSCRIPT_IDLE_WAIT_MS (checking every
+  // EVAL_TRANSCRIPT_IDLE_POLL_MS) for the attempt's DO to finish a commit or verify still running, then answers; an
+  // idle eval conversation never changes again, so the judge and the stored transcript read the same one. A transcript
+  // files row still pending its owner EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS after it was written was never attached (its
+  // /results failed or the Worker died): the hourly sweep removes it and its R2 object, EVAL_TRANSCRIPT_SWEEP_BATCH_SIZE
+  // rows per transaction, EVAL_TRANSCRIPT_SWEEP_MAX_BATCHES per run.
+  static readonly EVAL_TRANSCRIPT_IDLE_WAIT_MS = 30_000;
+  static readonly EVAL_TRANSCRIPT_IDLE_POLL_MS = 250;
+  static readonly EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS = 60 * 60_000;
+  static readonly EVAL_TRANSCRIPT_SWEEP_BATCH_SIZE = 200;
+  static readonly EVAL_TRANSCRIPT_SWEEP_MAX_BATCHES = 10;
 
   // DEV_NOTE: Knowledge ingestion (M2-5). One KnowledgeSyncWorkflow per source sync lists the source's items (at most
   // KNOWLEDGE_MAX_ITEMS_PER_SYNC: a sitemap's same-site page URLs, following nested sitemap indexes

@@ -2,12 +2,14 @@ import { z } from "zod";
 import type { ApiResponse } from "../common";
 import {
   ZCreateEvalRunApiRequest,
+  ZEvalJudgeApiRequest,
   ZEvalReadbackApiRequest,
   ZFinishEvalRunApiRequest,
   ZRecordEvalResultApiRequest,
   ZRunEvalAttemptApiRequest,
 } from "./EvalHarnessApiRequest";
 import type { Chatbot } from "../chatbots/ChatbotsCommon";
+import type { ConfigSpec } from "../configSpec";
 import type { ConversationSession } from "../conversations/ConversationsCommon";
 import {
   EvalRunStatusIntEnum,
@@ -15,7 +17,11 @@ import {
   type EvalRun,
 } from "../evalRuns/EvalRunsCommon";
 import type { DashboardEvalRunRow } from "../evalRuns/EvalRunsDALResponse";
+import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
+import type { EvalTranscript } from "../evalResults/EvalResultsCommon";
 import {
+  type EvalAttemptRecord,
+  EVAL_JUDGE_REASON_MAX_CHARS,
   EvalReadbackVerdictEnum,
   EvalTurnStatusEnum,
   ZEvalAttemptToolCall,
@@ -72,6 +78,21 @@ export const ZEvalReadbackApiResponse = z
   })
   .meta({ id: "EvalReadbackApiResponse" });
 export type EvalReadbackApiResponse = z.infer<typeof ZEvalReadbackApiResponse>;
+
+// DEV_NOTE: The pinned judge's verdict on one attempt (M5-3): whether the reply meets the rubric and why, and which
+// judge gave it (the provider's pinned model, the prompt version). Its model call is the run's (cost, budget).
+export const ZEvalJudgeApiResponse = z
+  .object({
+    isSuccess: z.literal(true),
+    message: z.string(),
+    hasPassed: z.boolean(),
+    reason: z.string().min(1).max(EVAL_JUDGE_REASON_MAX_CHARS),
+    provider: z.enum(ModelProviderEnum),
+    model: z.string(),
+    promptVersion: z.number().int().min(1),
+  })
+  .meta({ id: "EvalJudgeApiResponse" });
+export type EvalJudgeApiResponse = z.infer<typeof ZEvalJudgeApiResponse>;
 
 export const ZRecordEvalResultApiResponse = z
   .object({
@@ -192,6 +213,10 @@ export interface ResetEvalRunResponse extends EvalRunStepResponse {
   isReset?: boolean;
 }
 
+export interface EvalJudgeResponse extends EvalRunStepResponse {
+  verdict?: Omit<EvalJudgeApiResponse, "isSuccess" | "message">;
+}
+
 export interface FinishEvalRunResponse extends EvalRunStepResponse {
   run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd">;
 }
@@ -221,6 +246,63 @@ export interface EvalRunConversationResponse extends EvalRunStepResponse {
   conversationId?: string;
 }
 
+// DEV_NOTE: A conversation of the run with what its transcript and judge need: the run and its config's chatbot
+// (internal ids: the judge's model call is the run's), the conversation (internal id and public id, the DO's name), the
+// company's public id (the R2 key), and the run config's tool pins (name → version: a transcript tool call names the
+// version it ran) and routing (the judge's provider)
+export interface EvalRunTranscriptSourceResponse extends EvalRunStepResponse {
+  source?: EvalRunTranscriptSource;
+}
+
+export interface EvalRunTranscriptSource {
+  evalRunId: string;
+  chatbotId: string;
+  conversationId: string;
+  conversationPublicId: string;
+  companyPublicId: string;
+  toolVersions: Record<string, number>;
+  routing: ConfigSpec["routing"];
+}
+
+// DEV_NOTE: A recorded attempt's source: hasConversation false = it never started (no transcript to store)
+export interface EvalResultSourceResponse extends EvalRunTranscriptSourceResponse {
+  hasConversation?: boolean;
+}
+
+// DEV_NOTE: The Running run, its chatbot and the case of the run a result is for
+export interface EvalResultCaseResponse extends EvalRunningRunResponse {
+  evalCaseId?: string;
+}
+
+// DEV_NOTE: An attempt as its DO and change requests hold it (EvalTranscriptsRepo.read)
+export interface EvalAttemptRecordResponse extends EvalRunStepResponse {
+  record?: EvalAttemptRecord;
+}
+
+// DEV_NOTE: An attempt's transcript stored (EvalTranscriptsRepo.store): its files row, still pending its owner, and the
+// R2 object written after it. The result's transaction attaches it (EvalTranscriptFilesProvider.attach).
+export interface StoredEvalTranscriptResponse extends EvalRunStepResponse {
+  stored?: { fileId: string; fileR2Key: string };
+}
+
+// DEV_NOTE: Transcript v1 as stored: the parsed transcript and the exact text of its R2 file (the parsed one, serialized)
+export interface BuiltEvalTranscript {
+  transcript: EvalTranscript;
+  text: string;
+  bytes: Uint8Array;
+}
+
+// DEV_NOTE: Why a transcript couldn't be built (EvalTranscriptProvider.build): it doesn't hold to ZEvalTranscriptV1 (a
+// bug), or it is still over EVAL_TRANSCRIPT_MAX_BYTES at the smallest text cap
+export enum EvalTranscriptBuildFailureEnum {
+  Invalid = "Invalid",
+  TooLarge = "TooLarge",
+}
+
+export type BuildEvalTranscriptResponse =
+  | { isSuccess: true; built: BuiltEvalTranscript }
+  | { isSuccess: false; failure: EvalTranscriptBuildFailureEnum };
+
 // DEV_NOTE: The whole /eval/* API as one object, for the JSON Schema export (evals/schemas/eval-api.schema.json): each
 // message is a $def named by its meta id, so the generated Python module has one model per message. Never sent.
 export const ZEvalApiContract = z.object({
@@ -230,6 +312,8 @@ export const ZEvalApiContract = z.object({
   runAttemptResponse: ZRunEvalAttemptApiResponse,
   readbackRequest: ZEvalReadbackApiRequest,
   readbackResponse: ZEvalReadbackApiResponse,
+  judgeRequest: ZEvalJudgeApiRequest,
+  judgeResponse: ZEvalJudgeApiResponse,
   recordResultRequest: ZRecordEvalResultApiRequest,
   recordResultResponse: ZRecordEvalResultApiResponse,
   resetResponse: ZResetEvalRunApiResponse,
@@ -237,3 +321,13 @@ export const ZEvalApiContract = z.object({
   finishResponse: ZFinishEvalRunApiResponse,
   refusal: ZEvalRefusalApiResponse,
 });
+
+// DEV_NOTE: The transcript sweep (EvalTranscriptsRepo.sweepPending): pending transcript rows removed with their objects
+export interface SweepEvalTranscriptsResponse extends ApiResponse {
+  sweptCount?: number;
+}
+
+// DEV_NOTE: One sweep batch's transaction: the R2 keys of the rows it actually removed (still pending at the delete)
+export interface SweptEvalTranscriptsResponse extends ApiResponse {
+  keys?: string[];
+}

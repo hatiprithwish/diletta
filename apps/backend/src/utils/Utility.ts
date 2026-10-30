@@ -95,6 +95,20 @@ export default class Utility {
     );
   }
 
+  // DEV_NOTE: Waits until isDone says yes, checking every pollMs for at most timeoutMs. true = done; false = still not done
+  // at the deadline. sleep is injected so tests don't wait.
+  static async waitUntil(
+    isDone: () => boolean,
+    params: { timeoutMs: number; pollMs: number; sleep: (ms: number) => Promise<void> },
+  ): Promise<boolean> {
+    const deadline = Date.now() + params.timeoutMs;
+    while (!isDone()) {
+      if (Date.now() >= deadline) return false;
+      await params.sleep(params.pollMs);
+    }
+    return true;
+  }
+
   // DEV_NOTE: base64url without padding (RFC 4648 §5), as JWTs and JWKs encode their parts. null when the input
   // isn't base64url, so a malformed token is a rejection, not an exception.
   static decodeBase64Url(encoded: string): Uint8Array<ArrayBuffer> | null {

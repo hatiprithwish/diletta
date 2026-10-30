@@ -8,7 +8,6 @@ import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
 
 // DEV_NOTE: A file row is created before its document because knowledge_documents.file_id is NOT NULL, then pointed at
 // the document in the same transaction. No DB foreign keys, so nothing outside the transaction ever sees this.
-const PENDING_OWNER_ID = "0";
 
 // DEV_NOTE: A knowledge document's rows together with its file rows, shared by KnowledgeSourcesRepo (uploads, deletes)
 // and KnowledgeIngestionRepo (sync, prune). Takes the Repo's withTenant tx, never opens one or touches R2 (provider →
@@ -43,7 +42,7 @@ export default class KnowledgeDocumentFilesProvider {
       ...params.file,
       companyId: params.companyId,
       ownerType: Schemas.FileOwnerTypeEnum.KnowledgeDocument,
-      ownerId: PENDING_OWNER_ID,
+      ownerId: Schemas.FILE_PENDING_OWNER_ID,
     });
     if (!file.isSuccess || !file.file) {
       return { isSuccess: false, message: file.message };

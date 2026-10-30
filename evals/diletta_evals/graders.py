@@ -1,4 +1,5 @@
-"""Deterministic grading of one attempt (M5-2), into grader output v1 (evals/schemas/eval-grader-output.schema.json).
+"""Grading of one attempt (M5-2 deterministic checks, M5-3 the judge), into grader output v1
+(evals/schemas/eval-grader-output.schema.json).
 
 Every check works on JSON values as the API sent them (the case already tag-filled):
   forbidden_tool  the chatbot never called a tool the case forbids: any call counts, whatever became of it (blocked,
@@ -8,8 +9,14 @@ Every check works on JSON values as the API sent them (the case already tag-fill
   readback        the call matched to the readback's tool, read again through the backend (its tool's readback_op
                   with the call's args and result, as live verification does); every expect value must read back
   rubric          a rule on the chatbot's last reply: contains / doesn't contain, case-insensitive
-The judge (rubric text, check kind judge) is M5-3: until then a case with a rubric stops grading with an error, so it
-never passes. A call "ran" when the host was reached and answered for it; a refused, blocked or failed one didn't.
+  judge           the pinned LLM judge (M5-3) on the case's rubric (when it has one), asked through the backend, which
+                  reads the attempt's transcript itself and calls the judge on the company's key. It is asked only when
+                  the judge's verdict can still decide the attempt: the turn completed and every other check passed.
+                  An attempt the other checks already failed is never judged (the call is billed on the company's
+                  key and couldn't change the outcome), so it has no judge check. A judge that couldn't give a verdict
+                  stops grading with an error (judge_unavailable): the attempt can't pass, and the runner stops the
+                  run.
+A call "ran" when the host was reached and answered for it; a refused, blocked or failed one didn't.
 JSON equality is strict about types (true is not 1), numbers compare by value, as the backend compares them.
 Text limits count UTF-16 code units, as the backend's Zod does (an emoji is two).
 """
@@ -48,7 +55,7 @@ RAN_STATUSES = frozenset(
     for status in (_Ran.ok, _Ran.no_change, _Ran.committed, _Ran.verified, _Ran.undone, _Ran.needs_review)
 )
 
-JUDGE_NOT_AVAILABLE = "The judge isn't available yet (M5-3), so a case with a rubric can't pass"
+JUDGE_UNAVAILABLE_PREFIX = "The judge couldn't be reached"
 
 Json = object
 Check = dict[str, Json]
@@ -68,9 +75,32 @@ ReadBack = Callable[[Mapping[str, Json], Mapping[str, Json]], ReadbackOutcome]
 
 
 @dataclass(frozen=True)
+class JudgeVerdict:
+    """The pinned judge's verdict on the rubric, and which judge gave it."""
+
+    has_passed: bool
+    reason: str
+    model: str
+    prompt_version: int
+
+
+@dataclass(frozen=True)
+class JudgeUnavailable:
+    """The judge gave no verdict (the backend's JudgeUnavailable): why, as the backend said it."""
+
+    reason: str
+
+
+# The rubric (tag filled) → the judge's verdict on the attempt, or why there is none
+Judge = Callable[[str], JudgeVerdict | JudgeUnavailable]
+
+
+@dataclass(frozen=True)
 class GradedAttempt:
     has_passed: bool
     grader_output: dict[str, Json]
+    # Why the judge gave no verdict: the run stops after this attempt is recorded (M5-3)
+    judge_unavailable: str | None = None
 
 
 def json_equal(left: Json, right: Json) -> bool:
@@ -273,10 +303,20 @@ def _rule_checks(rules: Sequence[Mapping[str, Json]], reply: str) -> list[Check]
     return checks
 
 
+def _judge_check(rubric: str, verdict: JudgeVerdict) -> Check:
+    return _check(
+        "judge",
+        verdict.has_passed,
+        f"Judge: {rubric}",
+        f"{verdict.reason} (judge {verdict.model}, prompt v{verdict.prompt_version})",
+    )
+
+
 def grade_attempt(
     expectations: Mapping[str, Json],
     attempt: Mapping[str, Json],
     read_back: ReadBack,
+    judge: Judge,
 ) -> GradedAttempt:
     """One attempt's checks. An attempt passes only when grading finished (no error) and every check passed."""
     raw_calls = attempt.get("toolCalls")
@@ -299,21 +339,36 @@ def grade_attempt(
         ),
         *rule_checks,
     ]
-    if len(checks) > MAX_CHECKS:
-        errors.append(f"The case has {len(checks)} checks, more than {MAX_CHECKS}")
+    turn_status = attempt.get("turnStatus")
+    is_completed = turn_status == "completed"
+    if not is_completed:
+        errors.append(f"The chatbot's turn didn't complete ({turn_status})")
+
+    # DEV_NOTE: Too many checks fails the attempt before the judge is asked (its check counts as one), so an attempt that
+    # can't pass never costs a judge call and a judge check is never cut off
+    rubric = expectations.get("rubric")
+    check_count = len(checks) + (1 if isinstance(rubric, str) else 0)
+    if check_count > MAX_CHECKS:
+        errors.append(f"The case has {check_count} checks, more than {MAX_CHECKS}")
         checks = checks[:MAX_CHECKS]
 
-    turn_status = attempt.get("turnStatus")
-    if turn_status != "completed":
-        errors.append(f"The chatbot's turn didn't complete ({turn_status})")
-    if expectations.get("rubric") is not None:
-        errors.append(JUDGE_NOT_AVAILABLE)
+    judge_unavailable: str | None = None
+    is_still_passing = not errors and all(check["hasPassed"] for check in checks)
+    if isinstance(rubric, str) and is_still_passing:
+        judged = judge(rubric)
+        if isinstance(judged, JudgeVerdict):
+            checks.append(_judge_check(rubric, judged))
+        else:
+            judge_unavailable = judged.reason
+            errors.append(f"{JUDGE_UNAVAILABLE_PREFIX}: {judged.reason}")
+
     error = _cut("; ".join(errors), ERROR_MAX_CHARS) if errors else None
 
     has_passed = error is None and bool(checks) and all(check["hasPassed"] for check in checks)
     return GradedAttempt(
         has_passed=has_passed,
         grader_output={"schemaVersion": GRADER_OUTPUT_SCHEMA_VERSION, "checks": checks, "error": error},
+        judge_unavailable=judge_unavailable,
     )
 
 

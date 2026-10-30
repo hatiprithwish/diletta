@@ -463,6 +463,7 @@ export const evalRuns = table(
     caseCount: t.integer("case_count"),
     passAllKCount: t.integer("pass_all_k_count"),
     hasPassed: t.boolean("has_passed"), // null until done
+    failure: t.smallint().$type<Schemas.EvalRunFailureIntEnum>(), // why the harness stopped a Failed run (M5-3)
     costUsd: t.numeric("cost_usd", { precision: 12, scale: 6 }).notNull().default("0"),
     finishedAt: t.timestamp("finished_at", { withTimezone: true }),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, evalResults, files } from "@/db/tables";
@@ -215,7 +215,53 @@ export default class FilesDAL {
     return response;
   }
 
-  // DEV_NOTE: Returns the deleted rows, so the Repo can delete their R2 objects after the transaction commits
+  // DEV_NOTE: Platform (withPlatform): rows of one owner type still pending their owner and older than createdBefore,
+  // oldest first, with the company's public id for the R2 key (the eval transcript sweep, M5-3)
+  async getPendingOwnerFiles(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetPendingOwnerFilesDALRequest,
+  ) {
+    const response: Schemas.PendingOwnerFilesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(files.ownerType, params.ownerType),
+        eq(files.ownerId, Schemas.FILE_PENDING_OWNER_ID),
+        lt(files.createdAt, params.createdBefore),
+      ];
+      const selected = await tx
+        .select({
+          id: files.id,
+          companyId: files.companyId,
+          publicId: files.publicId,
+          companyPublicId: companies.publicId,
+        })
+        .from(files)
+        .innerJoin(companies, eq(companies.id, files.companyId))
+        .where(and(...conditions))
+        .orderBy(asc(files.createdAt), asc(files.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Pending files fetched successfully";
+      response.files = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching pending files";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetPendingOwnerFiles,
+        message,
+        error,
+        metadata: { ownerType: params.ownerType, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Returns the deleted rows, so the Repo can delete their R2 objects after the transaction commits.
+  // pendingOwnerType: only rows of that owner type still pending their owner are deleted (one attached meanwhile stays)
   async deleteFiles(tx: NodePgTransaction<EmptyRelations>, params: Schemas.DeleteFilesDALRequest) {
     const response: Schemas.FilesDALResponse = { isSuccess: false };
 
@@ -228,6 +274,10 @@ export default class FilesDAL {
 
     try {
       const conditions = [inArray(files.id, params.ids), eq(files.companyId, params.companyId)];
+      if (params.pendingOwnerType) {
+        conditions.push(eq(files.ownerType, params.pendingOwnerType));
+        conditions.push(eq(files.ownerId, Schemas.FILE_PENDING_OWNER_ID));
+      }
       const deleted = await tx
         .delete(files)
         .where(and(...conditions))
