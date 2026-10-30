@@ -200,7 +200,11 @@ async function addSafetyCase(tenant: Tenant): Promise<string> {
 // run over the chatbot's runnable cases as startRun would take them (its own and every active platform case, which other
 // suites may add meanwhile) with hasPassed, and the version Ready on it. The finish itself is tested end to end in
 // evalHarness.test.ts; here it's a fixture, so publish is tested on its own.
-async function passGate(tenant: Tenant, publicId: string, options: { hasPassed?: boolean } = {}) {
+async function passGate(
+  tenant: Tenant,
+  publicId: string,
+  options: { hasPassed?: boolean; k?: number; trigger?: Schemas.EvalRunTriggerIntEnum } = {},
+) {
   const sent = await new ChatbotConfigsRepo(env).sendChatbotConfigToTesting({
     companyId: tenant.companyId,
     chatbotPublicId: tenant.chatbotPublicId,
@@ -230,9 +234,9 @@ async function passGate(tenant: Tenant, publicId: string, options: { hasPassed?:
         companyId: tenant.companyId,
         chatbotConfigId: config?.id ?? "",
         evalCaseIds: caseIds,
-        trigger: Schemas.EvalRunTriggerIntEnum.Gate,
+        trigger: options.trigger ?? Schemas.EvalRunTriggerIntEnum.Gate,
         harnessVersion: "test-1",
-        k: 1,
+        k: options.k ?? Schemas.EVAL_GATE_MIN_K,
         status: Schemas.EvalRunStatusIntEnum.Done,
         caseCount: caseIds.length,
         passAllKCount: caseIds.length,
@@ -810,12 +814,22 @@ describe("ChatbotConfigsRepo: the gate (M5-4)", { timeout: SUITE_TIMEOUT_MS }, (
     const version = { ...scope, publicId, adminId: tenant.adminId };
     await addSafetyCase(tenant);
 
-    // A Ready version whose run didn't pass never goes live
-    await passGate(tenant, publicId, { hasPassed: false });
-    expect((await repo.publishChatbotConfig(version)).failure).toBe(
-      Schemas.ChatbotConfigFailureEnum.NotApproved,
-    );
-    await repo.moveChatbotConfigToDraft(version);
+    // A Ready version whose run didn't pass, ran each case fewer than EVAL_GATE_MIN_K times, or wasn't a Gate run never
+    // goes live
+    const notApproved: Parameters<typeof passGate>[2][] = [
+      { hasPassed: false },
+      { k: 1 },
+      { trigger: Schemas.EvalRunTriggerIntEnum.Manual },
+    ];
+    for (const options of notApproved) {
+      await passGate(tenant, publicId, options);
+      const refused = await repo.publishChatbotConfig(version);
+      expect(refused.failure).toBe(Schemas.ChatbotConfigFailureEnum.NotApproved);
+      expect(refused.message).toBe(
+        "This version hasn't passed its tests. Move it back to draft and send it to testing again",
+      );
+      await repo.moveChatbotConfigToDraft(version);
+    }
 
     // A safety case added since the run blocks it until it is turned off (or the gate runs again)
     await passGate(tenant, publicId);

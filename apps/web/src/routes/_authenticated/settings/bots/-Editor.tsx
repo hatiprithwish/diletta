@@ -37,7 +37,7 @@ import {
   useSendToTesting,
 } from "./-data";
 
-const { Draft, Testing, Ready, Published } = Schemas.ChatbotConfigStatusIntEnum;
+const { Draft, Testing, Ready } = Schemas.ChatbotConfigStatusIntEnum;
 const { Publish, Discard, SendToTesting, BackToDraft } = Schemas.DashboardVersionConfirmEnum;
 
 // DEV_NOTE: The editor's line under the title, per status (M5-4: a draft goes live only through its tests)
@@ -281,15 +281,18 @@ function VersionEditor({ chatbot, options, version }: Schemas.DashboardBotVersio
         </Alert>
       ) : (
         <>
-          {version.failedSafetyCaseCount > 0 && version.chatbotConfigStatus !== Published && (
-            <SafetyBlock failedSafetyCaseCount={version.failedSafetyCaseCount} />
+          {isDraft && version.failedSafetyCaseCount > 0 && version.gateRunPublicId && (
+            <SafetyBlock
+              failedSafetyCaseCount={version.failedSafetyCaseCount}
+              gateRunPublicId={version.gateRunPublicId}
+            />
           )}
           {(isDraft || version.chatbotConfigStatus === Ready) && (
             <PublishIssues
               body={version.body}
               options={options}
               refusal={refusal}
-              isReady={version.chatbotConfigStatus === Ready}
+              refusalAction={isDraft ? SendToTesting : Publish}
             />
           )}
           <ConfigForm
@@ -436,9 +439,12 @@ function VersionActions({
   );
 }
 
-// DEV_NOTE: The safety hard gate (M5-4): the version's last test run failed a safety case, which blocks publishing even
-// above the pass threshold
-function SafetyBlock({ failedSafetyCaseCount }: Schemas.DashboardSafetyBlockProps) {
+// DEV_NOTE: The safety hard gate (M5-4), on a draft only: its last gate run failed a safety case, which blocks publishing
+// even above the pass threshold. Links to that run.
+function SafetyBlock({
+  failedSafetyCaseCount,
+  gateRunPublicId,
+}: Schemas.DashboardSafetyBlockProps) {
   return (
     <Alert className="border-0 bg-destructive-soft">
       <AlertTitle className="text-foreground">A failed safety case blocks publishing</AlertTitle>
@@ -450,7 +456,12 @@ function SafetyBlock({ failedSafetyCaseCount }: Schemas.DashboardSafetyBlockProp
           in this version's last test run, even if the rest passed. Fix the draft, then send it to
           testing again.
         </p>
-        <Link to="/tests" className="text-foreground underline">
+        <Link
+          to="/tests/$id"
+          params={{ id: gateRunPublicId }}
+          search={{}}
+          className="text-foreground underline"
+        >
           See the test run
         </Link>
       </AlertDescription>
@@ -458,9 +469,16 @@ function SafetyBlock({ failedSafetyCaseCount }: Schemas.DashboardSafetyBlockProp
   );
 }
 
-// DEV_NOTE: What would stop the saved version going to testing or live, seen from here (model keys, turned-on tools,
-// priced models), and the last send's or publish's refusal (it checks again under its locks, so it has the last word)
-function PublishIssues({ body, options, refusal, isReady }: Schemas.DashboardPublishIssuesProps) {
+// DEV_NOTE: What would stop the saved version going to testing (a draft) or live (Ready), seen from here (model keys,
+// turned-on tools, priced models), and the refusal of its last send or publish (it checks again under its locks, so it
+// has the last word)
+function PublishIssues({
+  body,
+  options,
+  refusal,
+  refusalAction,
+}: Schemas.DashboardPublishIssuesProps) {
+  const isPublish = refusalAction === Publish;
   const lines: string[] = [];
   if (refusal) {
     lines.push(refusal.message ?? "Nothing changed.");
@@ -493,10 +511,12 @@ function PublishIssues({ body, options, refusal, isReady }: Schemas.DashboardPub
     <Alert className="border-0 bg-destructive-soft">
       <AlertTitle className="text-foreground">
         {refusal
-          ? isReady
+          ? isPublish
             ? "This version wasn't published"
             : "This version wasn't sent to testing"
-          : "This version can't be published yet"}
+          : isPublish
+            ? "This version can't be published yet"
+            : "This version can't be sent to testing yet"}
       </AlertTitle>
       <AlertDescription className="text-subtle-foreground">
         <ul className="list-disc pl-4">

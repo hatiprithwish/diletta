@@ -285,12 +285,17 @@ export default class ActivityLogDAL {
     return response;
   }
 
-  // DEV_NOTE: The audit log (M4-9): the company's rows written by an admin or an operator, with the admin's name (left
-  // join on an admin of the same company, so a removed admin's row still reads; an operator's name is never read: RLS
-  // hides operators from a tenant). The actor types are inlined, not bound, so the planner matches the partial index
-  // IDX_activity_log_company_id_created_at_audit.
+  // DEV_NOTE: The audit log (M4-9): the company's rows written by an admin or an operator, and the System rows of
+  // Schemas.AUDIT_SYSTEM_ENTITY_TYPES (M5-4: a gate run moving a chatbot version), with the admin's name (left join on an
+  // admin of the same company, so a removed admin's row still reads; an operator's name is never read: RLS hides
+  // operators from a tenant; a System row has none). The values are inlined, not bound, so the planner matches the
+  // partial index IDX_activity_log_company_id_created_at_audit (the same predicate, tables.ts).
   private auditActorCondition() {
-    return sql`${activityLog.actorType} IN (${sql.raw(String(Schemas.ActivityLogActorTypeIntEnum.Admin))}, ${sql.raw(String(Schemas.ActivityLogActorTypeIntEnum.Operator))})`;
+    const { Admin, Operator, System } = Schemas.ActivityLogActorTypeIntEnum;
+    const systemEntityTypes = Schemas.AUDIT_SYSTEM_ENTITY_TYPES.map((type) => `'${type}'`).join(
+      ", ",
+    );
+    return sql`(${activityLog.actorType} IN (${sql.raw(String(Admin))}, ${sql.raw(String(Operator))}) OR (${activityLog.actorType} = ${sql.raw(String(System))} AND ${activityLog.entityType} IN (${sql.raw(systemEntityTypes)})))`;
   }
 
   async getAuditLog(tx: NodePgTransaction<EmptyRelations>, params: Schemas.GetAuditLogDALRequest) {

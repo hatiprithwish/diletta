@@ -762,12 +762,14 @@ export interface DashboardPublishIssuesProps {
   body: ConfigSpecBody | null;
   options: ChatbotConfigOptions;
   refusal: ChatbotConfigWriteApiResponse | null;
-  isReady: boolean;
+  // The write the version's next step is (and the refusal answered): a draft's send to testing, a Ready version's publish
+  refusalAction: DashboardVersionConfirmEnum.SendToTesting | DashboardVersionConfirmEnum.Publish;
 }
 
-// DEV_NOTE: The safety hard gate's banner (M5-4): the version's newest run failed this many safety cases
+// DEV_NOTE: The safety hard gate's banner on a draft (M5-4): its newest gate run failed this many safety cases
 export interface DashboardSafetyBlockProps {
   failedSafetyCaseCount: number;
+  gateRunPublicId: string;
 }
 
 export interface DashboardVersionActionsProps {

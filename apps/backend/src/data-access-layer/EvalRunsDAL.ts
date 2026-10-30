@@ -505,9 +505,11 @@ export default class EvalRunsDAL {
         eq(evalRuns.companyId, params.companyId),
         inArray(evalRuns.chatbotConfigId, params.chatbotConfigIds),
       ];
+      if (params.trigger !== undefined) conditions.push(eq(evalRuns.trigger, params.trigger));
       const runs = await tx
         .selectDistinctOn([evalRuns.chatbotConfigId], {
           id: evalRuns.id,
+          publicId: evalRuns.publicId,
           chatbotConfigId: evalRuns.chatbotConfigId,
           k: evalRuns.k,
           status: evalRuns.status,
@@ -588,6 +590,9 @@ export default class EvalRunsDAL {
           harnessVersion: params.harnessVersion,
           k: params.k,
           status: Schemas.EvalRunStatusIntEnum.Running,
+          // DEV_NOTE: When the row is written, after startRun's lock on its config (not its transaction's start), the
+          // clock chatbot_configs.updated_at uses for a gate move (moveChatbotConfigStatus)
+          createdAt: sql`clock_timestamp()`,
         })
         .returning();
 
@@ -897,28 +902,42 @@ export default class EvalRunsDAL {
   }
 
   // DEV_NOTE: Per case of the run: attempts recorded and how many passed (grouped from its results)
+  // DEV_NOTE: From the run's case set (eval_cases, the company's or a platform case), each left-joined to its results in
+  // this run, so a case that never ran is a row with 0 attempts (the gate counts a safety case that never ran as failed)
   async getEvalRunTallies(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetEvalRunTalliesDALRequest,
   ) {
     const response: Schemas.EvalRunTalliesDALResponse = { isSuccess: false };
 
+    if (params.evalCaseIds.length === 0) {
+      response.isSuccess = true;
+      response.message = "No eval cases to tally";
+      response.tallies = [];
+      return response;
+    }
+
     try {
       const conditions = [
-        eq(evalResults.companyId, params.companyId),
+        inArray(evalCases.id, params.evalCaseIds),
+        or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)),
+      ];
+      const resultJoinConditions = [
+        eq(evalResults.evalCaseId, evalCases.id),
         eq(evalResults.evalRunId, params.evalRunId),
+        eq(evalResults.companyId, params.companyId),
       ];
       const tallies = await tx
         .select({
-          evalCaseId: evalResults.evalCaseId,
+          evalCaseId: evalCases.id,
           isSafety: evalCases.isSafety,
-          attemptCount: sql<number>`count(*)`.mapWith(Number),
+          attemptCount: sql<number>`count(${evalResults.id})`.mapWith(Number),
           passedAttemptCount: this.passedAttemptCount(),
         })
-        .from(evalResults)
-        .innerJoin(evalCases, and(...this.caseJoinConditions()))
+        .from(evalCases)
+        .leftJoin(evalResults, and(...resultJoinConditions))
         .where(and(...conditions))
-        .groupBy(evalResults.evalCaseId, evalCases.isSafety);
+        .groupBy(evalCases.id, evalCases.isSafety);
 
       response.isSuccess = true;
       response.message = "Eval run tallies fetched successfully";

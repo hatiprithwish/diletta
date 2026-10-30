@@ -28,6 +28,7 @@ import {
   toolDefinitions,
 } from "@/db/tables";
 import worker from "@/index";
+import AuditLogRepo from "@/repositories/AuditLogRepo";
 import ChatbotConfigsRepo from "@/repositories/ChatbotConfigsRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
@@ -1057,7 +1058,10 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
 // DEV_NOTE: The publish gate (M5-4) end to end: an admin sends the draft to testing (ChatbotConfigsRepo), the harness
 // runs it with trigger Gate through /eval/*, and the finish moves the version. Results are recorded straight (the
 // grading is the harness's); the staging connection has no reset_op, so the reset needs no host call.
-describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+// DEV_NOTE: Each gate run records EVAL_GATE_MIN_K results for every case of its set over HTTP (three runs in one test)
+const GATE_TIMEOUT_MS = 300_000;
+
+describe("Publish gate (M5-4)", { timeout: GATE_TIMEOUT_MS }, () => {
   async function createGateTenant() {
     const tenant = await createTenant();
     const adminId = await withOwnerDb(async (ownerDb) => {
@@ -1108,19 +1112,20 @@ describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     });
   }
 
-  async function startGateRun(tenant: Tenant) {
+  async function startGateRun(tenant: Tenant, k: number = Schemas.EVAL_GATE_MIN_K) {
     return await call("/runs", {
       token: await tokenFor(tenant),
       body: {
         chatbotConfigId: tenant.configPublicId,
-        k: 1,
+        k,
         harnessVersion: "test-1",
         trigger: Schemas.EvalRunTriggerIntEnum.Gate,
       },
     });
   }
 
-  // DEV_NOTE: Every case of the run recorded (the failing ones failed), reset, and finished complete
+  // DEV_NOTE: Every attempt of every case of the run recorded (a failing case fails its last attempt only: pass^k), reset,
+  // and finished complete
   async function gradeAndFinish(
     tenant: Tenant,
     started: Schemas.CreateEvalRunApiResponse,
@@ -1128,18 +1133,20 @@ describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
   ) {
     const runId = started.run.publicId;
     for (const evalCase of started.cases) {
-      const hasPassed = !failing.includes(evalCase.publicId);
-      const recorded = await call(`/runs/${runId}/results`, {
-        token: await tokenFor(tenant),
-        body: {
-          caseId: evalCase.publicId,
-          attempt: 1,
-          hasPassed,
-          graderOutput: graderOutput(hasPassed),
-          latencyMs: null,
-        },
-      });
-      expect(recorded.status).toBe(201);
+      for (let attempt = 1; attempt <= started.run.k; attempt += 1) {
+        const hasPassed = !(failing.includes(evalCase.publicId) && attempt === started.run.k);
+        const recorded = await call(`/runs/${runId}/results`, {
+          token: await tokenFor(tenant),
+          body: {
+            caseId: evalCase.publicId,
+            attempt,
+            hasPassed,
+            graderOutput: graderOutput(hasPassed),
+            latencyMs: null,
+          },
+        });
+        expect(recorded.status).toBe(201);
+      }
     }
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
@@ -1152,6 +1159,12 @@ describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     });
     expect(finished.status).toBe(200);
     return Schemas.ZFinishEvalRunApiResponse.parse(await finished.json());
+  }
+
+  // DEV_NOTE: The company's audit log as the Security page reads it (AuditLogRepo, as diletta_app)
+  async function auditActions(tenant: Tenant) {
+    const read = await new AuditLogRepo(env).getAuditLog({ companyId: tenant.companyId });
+    return (read.auditLog ?? []).map((entry) => `${entry.actorTypeLabel}: ${entry.action}`);
   }
 
   async function configRow(tenant: Tenant) {
@@ -1177,6 +1190,10 @@ describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(sent.chatbotConfig?.chatbotConfigStatus).toBe(
       Schemas.ChatbotConfigStatusIntEnum.Testing,
     );
+    // pass^1 never gates: a safety case must hold EVAL_GATE_MIN_K times
+    const once = await startGateRun(tenant, 1);
+    expect(once.status).toBe(400);
+    expect(await once.json()).toMatchObject({ failure: Schemas.EvalRunStepFailureEnum.Invalid });
     const response = await startGateRun(tenant);
     expect(response.status).toBe(201);
     const started = Schemas.ZCreateEvalRunApiResponse.parse(await response.json());
@@ -1198,6 +1215,21 @@ describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     expect(detail.chatbotConfig).toMatchObject({
       chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Draft,
       testResult: Schemas.ChatbotConfigTestResultEnum.Failed,
+      gateRunPublicId: started.run.publicId,
+      failedSafetyCaseCount: 1,
+    });
+    // The move is in the audit log as the platform's
+    expect((await auditActions(tenant)).slice(0, 2)).toEqual([
+      "System: Failed its tests, back to draft",
+      "Admin: Sent a version to testing",
+    ]);
+    // A later Manual run that passes doesn't hide the gate's verdict
+    const manual = await startRun(tenant);
+    await gradeAndFinish(tenant, manual);
+    const afterManual = await repo.getChatbotConfigDetails(tenant.version);
+    expect(afterManual.chatbotConfig).toMatchObject({
+      testResult: Schemas.ChatbotConfigTestResultEnum.Passed,
+      gateRunPublicId: started.run.publicId,
       failedSafetyCaseCount: 1,
     });
     const published = await repo.publishChatbotConfig(tenant.version);
@@ -1234,6 +1266,7 @@ describe("Publish gate (M5-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
     const ready = await configRow(tenant);
     expect(ready?.status).toBe(Schemas.ChatbotConfigStatusIntEnum.Ready);
     expect(ready?.approvedByRunId).toBe(gateRun?.id);
+    expect((await auditActions(tenant))[0]).toBe("System: Passed its tests, ready to publish");
 
     const published = await repo.publishChatbotConfig(tenant.version);
     expect(published.isSuccess).toBe(true);

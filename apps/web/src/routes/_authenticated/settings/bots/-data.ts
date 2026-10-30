@@ -102,9 +102,16 @@ export class BotsQueries {
     });
   }
 
+  // DEV_NOTE: A version in testing is reread every CHATBOT_CONFIG_TESTING_REFETCH_MS, so the editor shows Ready or Draft
+  // once its gate run finishes
   static version(chatbotPublicId: string, publicId: string, getToken: GetToken) {
-    return queryOptions({
+    return queryOptions<Schemas.GetChatbotConfigApiResponse>({
       queryKey: BotsQueries.keys.version(chatbotPublicId, publicId),
+      refetchInterval: (query) =>
+        query.state.data?.chatbotConfig?.chatbotConfigStatus ===
+        Schemas.ChatbotConfigStatusIntEnum.Testing
+          ? Schemas.CHATBOT_CONFIG_TESTING_REFETCH_MS
+          : false,
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetChatbotConfigApiResponse>(
           `${configsPath(chatbotPublicId)}/${encodeURIComponent(publicId)}`,

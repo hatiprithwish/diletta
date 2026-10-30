@@ -210,10 +210,16 @@ EvalHarnessRoutes.post(
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZFinishEvalRunApiRequest),
   async (c) => {
+    const identity = c.get("evalIdentity");
     const result = await new EvalHarnessRepo(c.env).finish({
-      identity: c.get("evalIdentity"),
+      identity,
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
+    });
+    // DEV_NOTE: A Gate run's move of its version has its audit row (M5-4), relayed after the commit
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, {
+      companyId: identity.companyId,
+      outboxIds: result.outboxIds ?? [],
     });
     if (!result.isSuccess || !result.run) {
       return c.json(

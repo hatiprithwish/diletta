@@ -101,6 +101,9 @@ export function chatbotConfigTestResult(
   return run.hasPassed ? ChatbotConfigTestResultEnum.Passed : ChatbotConfigTestResultEnum.Failed;
 }
 
+// DEV_NOTE: How often the editor rereads a version in testing, so it shows Ready or Draft once its gate run finishes
+export const CHATBOT_CONFIG_TESTING_REFETCH_MS = 15_000;
+
 // DEV_NOTE: The versions an admin can take back to Draft: one in the gate (M5-4)
 export const CHATBOT_CONFIG_GATE_STATUSES = [
   ChatbotConfigStatusIntEnum.Testing,

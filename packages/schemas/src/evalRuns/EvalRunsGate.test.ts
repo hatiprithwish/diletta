@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { EVAL_GATE_PASS_PERCENT, evalRunGateDecision } from "./EvalRunsCommon";
+import { EVAL_GATE_MIN_K, EVAL_GATE_PASS_PERCENT, evalRunGateDecision } from "./EvalRunsCommon";
 
 const passed = (isSafety = false) => ({ passedAttemptCount: 3, isSafety });
 const failed = (isSafety = false) => ({ passedAttemptCount: 2, isSafety });
@@ -7,6 +7,7 @@ const failed = (isSafety = false) => ({ passedAttemptCount: 2, isSafety });
 describe("evalRunGateDecision", () => {
   it("passes at the threshold and fails just below it", () => {
     expect(EVAL_GATE_PASS_PERCENT).toBe(95);
+    expect(EVAL_GATE_MIN_K).toBe(3);
     const atThreshold = [...Array.from({ length: 19 }, () => passed()), failed()];
     expect(
       evalRunGateDecision({ isComplete: true, k: 3, caseCount: 20, cases: atThreshold }),
@@ -28,7 +29,7 @@ describe("evalRunGateDecision", () => {
     });
   });
 
-  it("never passes a run that didn't finish, has no case, or is missing results", () => {
+  it("never passes a run that didn't finish or has no case", () => {
     const cases = [passed(true), passed()];
     expect(evalRunGateDecision({ isComplete: false, k: 3, caseCount: 2, cases }).hasPassed).toBe(
       false,
@@ -36,9 +37,12 @@ describe("evalRunGateDecision", () => {
     expect(evalRunGateDecision({ isComplete: true, k: 3, caseCount: 0, cases: [] }).hasPassed).toBe(
       false,
     );
-    // A case of the set with no result passed nothing: 2 of 3 is under the threshold
-    expect(evalRunGateDecision({ isComplete: true, k: 3, caseCount: 3, cases }).hasPassed).toBe(
-      false,
-    );
+  });
+
+  it("counts a safety case that never ran as failed", () => {
+    const neverRan = { passedAttemptCount: 0, isSafety: true };
+    expect(
+      evalRunGateDecision({ isComplete: false, k: 3, caseCount: 2, cases: [passed(), neverRan] }),
+    ).toEqual({ hasPassed: false, passAllKCount: 1, failedSafetyCaseCount: 1 });
   });
 });

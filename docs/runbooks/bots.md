@@ -20,8 +20,8 @@ New bot (a name), Rename, Make default and Pause / Resume, each with its audit r
 A version goes live only through its tests (M5-4). It runs them on the company's staging connection (`docs/runbooks/evals.md`).
 
 1. **Send to testing** (Draft → Testing, `POST …/configs/:publicId/send-to-testing`). The version is locked: it can't be edited, discarded or published. It is refused, with nothing changed, for the same reasons as a publish (below), so a version that couldn't go live isn't tested. Audit row "Sent a version to testing".
-2. **The gate run.** We start it with the harness: `pnpm evals:run --config <configPublicId> --trigger gate [--k 3]`. A Gate run of a version that isn't Testing is refused (409 `NotTesting`). A Manual or Nightly run of any version never moves it.
-3. **The finish moves it.** Passed → **Ready** (`approved_by_run_id` = that run). Failed or didn't finish → back to **Draft**, editable again. A run passes when it finished, at least `EVAL_GATE_PASS_PERCENT` (95%) of its cases passed every attempt, **and every safety case passed every attempt**: one failed safety case blocks publishing even above the threshold. The editor then shows "A failed safety case blocks publishing".
+2. **The gate run.** We start it with the harness: `pnpm evals:run --config <configPublicId> --trigger gate [--k 3]`. A Gate run of a version that isn't Testing is refused (409 `NotTesting`), and so is one with `--k` below 3 (400 `Invalid`: every safety case must hold three times, not once). The editor rereads a version in testing every 15 s, so it changes to Ready or Draft once the run finishes. A Manual or Nightly run of any version never moves it.
+3. **The finish moves it.** Passed → **Ready** (`approved_by_run_id` = that run). Failed or didn't finish → back to **Draft**, editable again. The audit log shows the move as System: "Passed its tests, ready to publish" or "Failed its tests, back to draft". A run passes when it finished, at least `EVAL_GATE_PASS_PERCENT` (95%) of its cases passed every attempt, **and every safety case passed every attempt** (one that never ran counts as failed): one failed safety case blocks publishing even above the threshold. The draft then shows "A failed safety case blocks publishing", linking to that run; it reads the version's newest Gate run only, so a later Manual or Nightly run never changes it.
 4. **Back to draft** (Testing or Ready → Draft, `POST …/back-to-draft`): to edit it, or when a gate run never finished. Its approval is cleared. A gate run started before this never moves it again (the finish moves only a version sent to testing before the run started). Audit row "Moved a version back to draft".
 
 ## Publish
@@ -29,7 +29,7 @@ A version goes live only through its tests (M5-4). It runs them on the company's
 Publish makes a **Ready** version the live version in one transaction, and every conversation uses it from its next message (the runtime reads the Published config at every turn). It is refused, with nothing changed, when:
 
 - the version isn't Ready (409 `NotReady`): send it to testing first;
-- its approving run isn't its own finished, passed run (409 `NotApproved`);
+- its approving run isn't its own finished, passed Gate run with at least 3 attempts per case (409 `NotApproved`): move it back to draft and send it to testing again;
 - an active safety case (the chatbot's own or the platform's) wasn't in that run, i.e. one was added or turned on since (409 `GateOutdated`): move it back to draft and send it to testing again;
 - a provider the routing uses has no **Active** model key (409 `ModelKeyMissing`; an Invalid or Revoked key counts as none). Add or fix the key on Settings › Model keys;
 - a tier's model isn't in `MODEL_PRICES` (409 `ModelNotPriced`): the router would refuse every call;

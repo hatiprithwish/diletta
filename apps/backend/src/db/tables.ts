@@ -1033,13 +1033,14 @@ export const activityLog = table(
     // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2); on the
     // partitioned parent, so every partition (and every one the maintenance function adds) gets it
     t.index("IDX_activity_log_company_id_created_at").on(table.companyId, table.createdAt),
-    // DEV_NOTE: The audit log (M4-9): a company's rows written by an admin or an operator, newest first, without reading
-    // its chatbot-user and system events
+    // DEV_NOTE: The audit log (M4-9): a company's rows written by an admin or an operator, and the System rows of the
+    // audit's system entity types (M5-4: a gate run moving a chatbot version), newest first, without reading its
+    // chatbot-user and other system events. The predicate is ActivityLogDAL.auditActorCondition's, word for word.
     t
       .index("IDX_activity_log_company_id_created_at_audit")
       .on(table.companyId, table.createdAt)
       .where(
-        sql`${table.actorType} IN (${lit(Schemas.ActivityLogActorTypeIntEnum.Admin)}, ${lit(Schemas.ActivityLogActorTypeIntEnum.Operator)})`,
+        sql`${table.actorType} IN (${lit(Schemas.ActivityLogActorTypeIntEnum.Admin)}, ${lit(Schemas.ActivityLogActorTypeIntEnum.Operator)}) OR (${table.actorType} = ${lit(Schemas.ActivityLogActorTypeIntEnum.System)} AND ${table.entityType} IN (${sql.raw(Schemas.AUDIT_SYSTEM_ENTITY_TYPES.map((type) => `'${type}'`).join(", "))}))`,
       ),
     t.index("IDX_activity_log_actor_id").on(table.actorId),
     t.index("IDX_activity_log_entity_id").on(table.entityId),

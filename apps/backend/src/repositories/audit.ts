@@ -47,3 +47,10 @@ export const operatorAuditActor = (adminId: string): Schemas.AuditActor => ({
   actorType: Schemas.ActivityLogActorTypeIntEnum.Operator,
   actorId: adminId,
 });
+
+// DEV_NOTE: The platform as an audit actor: a change no person made, on Schemas.AUDIT_SYSTEM_ENTITY_TYPES only (M5-4: a
+// gate run's finish moving a chatbot version, ChatbotConfigsRepo.applyGateResult)
+export const systemAuditActor = (): Schemas.AuditActor => ({
+  actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+  actorId: null,
+});

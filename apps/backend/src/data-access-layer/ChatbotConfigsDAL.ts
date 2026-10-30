@@ -524,10 +524,9 @@ export default class ChatbotConfigsDAL {
     return response;
   }
 
-  // DEV_NOTE: Draft → Published (the DAL matches Draft). The caller archives the old Published version first, in the
-  // same transaction (UNQ_chatbot_configs_chatbot_id_published).
-  // DEV_NOTE: updated_at is the database's now(), the clock eval_runs.created_at uses, so a gate run's finish can tell
-  // whether it started after the version was sent to testing (EvalHarnessRepo.finish)
+  // DEV_NOTE: The gate's moves (M5-4). updated_at is clock_timestamp(), taken when the row is written (after its lock),
+  // the clock eval_runs.created_at uses too, so a gate run's finish can tell whether the run started after the version
+  // was sent to testing, whatever order the two transactions began in (ChatbotConfigsRepo.applyGateResult)
   async moveChatbotConfigStatus(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.MoveChatbotConfigStatusDALRequest,
@@ -547,7 +546,7 @@ export default class ChatbotConfigsDAL {
           status: params.status,
           approvedByRunId: params.approvedByRunId,
           ...(params.updatedBy !== undefined ? { updatedBy: params.updatedBy } : {}),
-          updatedAt: sql`now()`,
+          updatedAt: sql`clock_timestamp()`,
         })
         .where(and(...conditions))
         .returning();
@@ -576,6 +575,8 @@ export default class ChatbotConfigsDAL {
     return response;
   }
 
+  // DEV_NOTE: Ready → Published (the DAL matches Ready: a version goes live only through its gate). The caller archives the
+  // old Published version first, in the same transaction (UNQ_chatbot_configs_chatbot_id_published).
   async publishChatbotConfig(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.PublishChatbotConfigDALRequest,

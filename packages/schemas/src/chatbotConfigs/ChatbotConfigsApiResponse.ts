@@ -29,12 +29,14 @@ export type ChatbotConfigVersion = Pick<
 };
 
 // DEV_NOTE: One version with its body as the company stored it (upgraded, no platform defaults: readConfigBody). body
-// null = the stored body no longer reads (bodyIssue says why); such a version can't be copied. failedSafetyCaseCount =
-// the safety cases its newest run decided failed (0 with no run, or none decided yet): any one blocks publishing (M5-4).
+// null = the stored body no longer reads (bodyIssue says why); such a version can't be copied. gateRunPublicId = its
+// newest Gate run (M5-4, null = never through the gate), failedSafetyCaseCount = the safety cases that run decided failed
+// (0 with none): any one blocks publishing, and the editor shows it on a draft.
 export type ChatbotConfigDetail = ChatbotConfigVersion & {
   chatbotPublicId: string;
   body: ConfigSpecBody | null;
   bodyIssue: string | null;
+  gateRunPublicId: string | null;
   failedSafetyCaseCount: number;
 };
 

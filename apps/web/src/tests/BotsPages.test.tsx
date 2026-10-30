@@ -83,6 +83,7 @@ function version(
     chatbotPublicId: BOT.publicId,
     body: BODY,
     bodyIssue: null,
+    gateRunPublicId: null,
     failedSafetyCaseCount: 0,
   };
 }
@@ -154,6 +155,7 @@ function defaultApi(
       bodyIssue: _issue,
       chatbotPublicId: _bot,
       failedSafetyCaseCount: _safety,
+      gateRunPublicId: _gateRun,
       ...row
     }: Schemas.ChatbotConfigDetail) => row;
     return { status: 200, body: { isSuccess: true, chatbotConfigs: [strip(V13), strip(V12)] } };
@@ -214,7 +216,7 @@ function renderPage(path: string) {
       }),
       stub("/settings/model-keys"),
       stub("/knowledge"),
-      stub("/tests"),
+      stub("/tests/$id"),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
@@ -327,6 +329,7 @@ describe("Settings › Bots › version", () => {
     expect(
       await screen.findByText("Add a working model key for Google before publishing."),
     ).toBeInTheDocument();
+    expect(screen.getByText("This version can't be sent to testing yet")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Send to testing" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Send v13 to testing?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Send to testing" }));
@@ -392,6 +395,9 @@ describe("Settings › Bots › version", () => {
       chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Ready,
       chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Ready,
       testResult: Schemas.ChatbotConfigTestResultEnum.Passed,
+      // A Manual run after the gate failed a safety case: the banner is a draft's only
+      failedSafetyCaseCount: 1,
+      gateRunPublicId: "run_8",
     };
     const published = {
       ...ready,
@@ -410,6 +416,7 @@ describe("Settings › Bots › version", () => {
     renderPage("/settings/bots/bot_1/versions/cfg_13");
 
     await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+    expect(screen.queryByText("A failed safety case blocks publishing")).toBeNull();
     const dialog = await screen.findByRole("alertdialog", { name: "Publish v13?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Publish" }));
     await waitFor(() =>
@@ -425,7 +432,10 @@ describe("Settings › Bots › version", () => {
       url.endsWith("/configs/cfg_13") && (init?.method ?? "GET") === "GET"
         ? {
             status: 200,
-            body: { isSuccess: true, chatbotConfig: { ...V13, failedSafetyCaseCount: 1 } },
+            body: {
+              isSuccess: true,
+              chatbotConfig: { ...V13, failedSafetyCaseCount: 1, gateRunPublicId: "run_7" },
+            },
           }
         : null,
     );
@@ -435,7 +445,10 @@ describe("Settings › Bots › version", () => {
     expect(
       screen.getByText(/1 safety case failed in this version's last test run/),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "See the test run" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See the test run" })).toHaveAttribute(
+      "href",
+      "/tests/run_7",
+    );
   });
 
   it("shows a published version read-only, with Open draft while one exists", async () => {

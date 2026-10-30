@@ -79,6 +79,8 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Discarded]: "Discarded a draft version",
     [Schemas.AuditEntityActionEnum.SentToTesting]: "Sent a version to testing",
     [Schemas.AuditEntityActionEnum.MovedToDraft]: "Moved a version back to draft",
+    [Schemas.AuditEntityActionEnum.PassedGate]: "Passed its tests, ready to publish",
+    [Schemas.AuditEntityActionEnum.FailedGate]: "Failed its tests, back to draft",
     [Schemas.AuditEntityActionEnum.Published]: "Published a version",
   },
 };
