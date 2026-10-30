@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import * as Schemas from "@app/schemas";
-import EvalAttemptProvider from "@/providers/evalAttempt";
 import EvalJudgeProvider from "@/providers/evalJudge";
 import EvalTranscriptProvider from "@/providers/evalTranscript";
+import Utility from "@/utils/Utility";
 
 // DEV_NOTE: The pure parts of grading (M5-3): an attempt's transcript v1 as it is stored in R2, the judge's budgeted view
 // of it and the judge's prompt (where the transcript is data that can't break out of its fence), and the DO's wait for
@@ -25,6 +25,10 @@ const record = (
   changeRequestSummaries: Record<string, string> = {},
 ): Schemas.EvalAttemptRecord => ({ entries, changeRequestSummaries });
 
+// DEV_NOTE: The built transcript, or undefined when build refused (the test's expectations then fail on it)
+const builtOf = (result: Schemas.BuildEvalTranscriptResponse) =>
+  result.isSuccess ? result.built : undefined;
+
 const CLOSE_ALPHA = record(
   [
     user("Close Alpha"),
@@ -39,10 +43,12 @@ const CLOSE_ALPHA = record(
 
 describe("EvalTranscriptProvider.build", () => {
   it("names each pinned tool's version and how it ended, after its change's summary, and leaves out unpinned tools", () => {
-    const built = EvalTranscriptProvider.build({
-      record: CLOSE_ALPHA,
-      toolVersions: { update_record: 3, delete_record: 1, get_record: 2 },
-    });
+    const built = builtOf(
+      EvalTranscriptProvider.build({
+        record: CLOSE_ALPHA,
+        toolVersions: { update_record: 3, delete_record: 1, get_record: 2 },
+      }),
+    );
     expect(built?.transcript).toEqual({
       schemaVersion: Schemas.EVAL_TRANSCRIPT_SCHEMA_VERSION,
       entries: [
@@ -85,14 +91,16 @@ describe("EvalTranscriptProvider.build", () => {
 
   it("holds a long attempt to the entry cap (keeping the last reply) and the file to its byte cap", () => {
     const long = "é".repeat(Schemas.EVAL_TRANSCRIPT_TEXT_MAX_CHARS + 50);
-    const built = EvalTranscriptProvider.build({
-      record: record([
-        ...Array.from({ length: Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES + 20 }, () => user(long)),
-        assistant("The last reply"),
-      ]),
-      toolVersions: {},
-    });
-    expect(built).not.toBeNull();
+    const built = builtOf(
+      EvalTranscriptProvider.build({
+        record: record([
+          ...Array.from({ length: Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES + 20 }, () => user(long)),
+          assistant("The last reply"),
+        ]),
+        toolVersions: {},
+      }),
+    );
+    expect(built).toBeDefined();
     expect(built?.transcript.entries).toHaveLength(Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES);
     expect(built?.transcript.entries.at(-1)).toMatchObject({ text: "The last reply" });
     expect(built?.bytes.byteLength).toBeLessThanOrEqual(Schemas.EVAL_TRANSCRIPT_MAX_BYTES);
@@ -100,6 +108,49 @@ describe("EvalTranscriptProvider.build", () => {
     expect(
       first?.kind === Schemas.EvalTranscriptEntryKindEnum.Message && first.text.endsWith("…"),
     ).toBe(true);
+  });
+});
+
+describe("EvalTranscriptProvider.build caps", () => {
+  it("keeps the chatbot's last reply under the entry cap even when a tool call comes after it", () => {
+    const built = builtOf(
+      EvalTranscriptProvider.build({
+        record: record([
+          ...Array.from({ length: Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES + 5 }, () => user("Hi")),
+          assistant("The last reply"),
+          toolCall("get_record", null),
+        ]),
+        toolVersions: { get_record: 1 },
+      }),
+    );
+    expect(built?.transcript.entries).toHaveLength(Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES);
+    expect(built?.transcript.entries.at(-1)).toMatchObject({
+      role: Assistant,
+      text: "The last reply",
+    });
+  });
+
+  it("says why it couldn't build: over the byte cap at every cut", () => {
+    // DEV_NOTE: "€" is one UTF-16 unit but three UTF-8 bytes: 500 calls at full name and summary size are over 1 MiB
+    const toolName = "€".repeat(Schemas.EVAL_CHECK_LABEL_MAX_CHARS);
+    const result = EvalTranscriptProvider.build({
+      record: record(
+        Array.from({ length: Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES }, (_value, index) =>
+          toolCall(toolName, Schemas.HostToolStatusEnum.Verified, `cr_${index}`),
+        ),
+        Object.fromEntries(
+          Array.from({ length: Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES }, (_value, index) => [
+            `cr_${index}`,
+            "€".repeat(Schemas.EVAL_TRANSCRIPT_SUMMARY_MAX_CHARS),
+          ]),
+        ),
+      ),
+      toolVersions: { [toolName]: 1 },
+    });
+    // Tool names and summaries aren't cut by the text caps, so they stay too big at every cap
+    expect(result.isSuccess ? null : result.failure).toBe(
+      Schemas.EvalTranscriptBuildFailureEnum.TooLarge,
+    );
   });
 });
 
@@ -205,7 +256,7 @@ describe("EvalJudgeProvider", () => {
   });
 });
 
-describe("EvalAttemptProvider.waitUntilIdle", () => {
+describe("Utility.waitUntil", () => {
   const options = (sleeps: number[]) => ({
     timeoutMs: 1_000,
     pollMs: 100,
@@ -214,28 +265,28 @@ describe("EvalAttemptProvider.waitUntilIdle", () => {
     },
   });
 
-  it("answers at once when the DO is idle, and waits while a commit or verify retry runs", async () => {
+  it("answers at once when already done, and waits while a commit or verify retry runs", async () => {
     const idle: number[] = [];
-    expect(await EvalAttemptProvider.waitUntilIdle(() => false, options(idle))).toBe(true);
+    expect(await Utility.waitUntil(() => true, options(idle))).toBe(true);
     expect(idle).toEqual([]);
 
     const waited: number[] = [];
     let busyChecks = 3;
-    const isBusy = () => {
+    const isIdle = () => {
       busyChecks -= 1;
-      return busyChecks >= 0;
+      return busyChecks < 0;
     };
-    expect(await EvalAttemptProvider.waitUntilIdle(isBusy, options(waited))).toBe(true);
+    expect(await Utility.waitUntil(isIdle, options(waited))).toBe(true);
     expect(waited).toEqual([100, 100, 100]);
   });
 
-  it("gives up at the deadline while the DO stays busy", async () => {
+  it("gives up at the deadline while it stays not done", async () => {
     const realNow = Date.now;
     let now = 0;
     Date.now = () => now;
     try {
       const sleeps: number[] = [];
-      const isIdle = await EvalAttemptProvider.waitUntilIdle(() => true, {
+      const isDone = await Utility.waitUntil(() => false, {
         timeoutMs: 1_000,
         pollMs: 100,
         sleep: async (ms) => {
@@ -243,7 +294,7 @@ describe("EvalAttemptProvider.waitUntilIdle", () => {
           now += ms;
         },
       });
-      expect(isIdle).toBe(false);
+      expect(isDone).toBe(false);
       expect(sleeps).toHaveLength(10);
     } finally {
       Date.now = realNow;

@@ -18,3 +18,7 @@ class EvalHarnessConstants(BaseModel):
     evalHostTokenHeader: Literal["X-Host-Token"]
     testHostAdminHeader: Literal["X-Test-Host-Admin"]
     testHostTokenMaxLifetimeSeconds: Literal[300]
+    evalRunFailureJudgeUnavailable: Literal[1]
+    evalRunFailureHostUnavailable: Literal[2]
+    evalRunFailureServerError: Literal[3]
+    evalRunFailureHarnessError: Literal[4]

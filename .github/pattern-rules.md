@@ -2188,16 +2188,16 @@ EvalHarnessRoutes\.(get|post|put|patch|delete)\((?![^)]*authenticateEval)
 
 ### 3.52 The Eval Judge Is Pinned and Routed; a Transcript Is Built by the Backend [CRITICAL]
 
-**Rule:** The LLM judge (M5-3) runs only in the backend, through `POST /eval/runs/:runId/judge` → `EvalHarnessRepo.judge` → `ModelRouterRepo.getModel` (`taskType` `EvalJudge`, the run's `evalRunId`, the attempt's conversation, no chatbot user, no caps) → `EvalJudgeProvider`. Its model is `Schemas.EVAL_JUDGE_MODELS[provider]` for the run config's default tier's provider, never a model of the config under test, and every pinned model is in `MODEL_PRICES`. A change to the judge's prompt bumps `EVAL_JUDGE_PROMPT_VERSION`. The judge reads `EvalTranscriptProvider.judgeView` (every tool call, the last reply whole, held to `EVAL_JUDGE_TRANSCRIPT_MAX_CHARS`), never the stored file's cut-down v1. The view and rubric reach the model fenced as data (`EvalJudgeProvider.prompt`, tags defused). The judge never takes the transcript from the harness: the backend reads the attempt from its DO (`EvalTranscriptsRepo.read` → `getEvalTranscript`, eval sessions only, once the DO is idle). Any failure to get a verdict (router, provider, gateway, budget, an answer that won't parse after `EVAL_JUDGE_MAX_TRIES`) is `JudgeUnavailable` (503), never a pass and never a fail verdict. The harness never retries it: it records that attempt failed with the reason, stops the run, resets, and finishes it Failed with `failure` `JudgeUnavailable` (`eval_runs.failure`, only on an incomplete run). `/results` answers Duplicate before any DO read or R2 write when the attempt has its result (`EvalRunsDAL.hasEvalResult`). An attempt's transcript is built by `EvalTranscriptProvider.build` (v1: messages, and pinned tool calls with version, status and change summary, never args or values) and stored by `EvalTranscriptsRepo.store`: the `files` row pending its owner (`FILE_PENDING_OWNER_ID`, its own transaction) **before** the R2 object, then attached in the result's transaction (`EvalTranscriptFilesProvider.attach`). It is discarded only when that transaction is known not to have written the result; an unknown outcome is left to the hourly `EvalTranscriptSweep`, which removes rows still pending after `EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS` with their objects. No refusal is told apart by its message text. `eval_runs.failure` names what actually stopped the run (`stop_reason`): ServerError only for a backend 5xx or no answer, HarnessError for the harness's own stops.
+**Rule:** The LLM judge (M5-3) runs only in the backend, through `POST /eval/runs/:runId/judge` → `EvalJudgeRepo.judge` → `ModelRouterRepo.getModel` (`taskType` `EvalJudge`, the run's `evalRunId`, the attempt's conversation, no chatbot user, no caps) → `EvalJudgeProvider`. Its model is `Schemas.EVAL_JUDGE_MODELS[provider]` for the run config's default tier's provider, never a model of the config under test, and every pinned model is in `MODEL_PRICES`. A change to the judge's prompt bumps `EVAL_JUDGE_PROMPT_VERSION`. The judge reads `EvalTranscriptProvider.judgeView` (every tool call, the last reply whole, held to `EVAL_JUDGE_TRANSCRIPT_MAX_CHARS`), never the stored file's cut-down v1. The view and rubric reach the model fenced as data (`EvalJudgeProvider.prompt`, tags defused). The judge never takes the transcript from the harness: the backend reads the attempt from its DO (`EvalTranscriptsRepo.read` → `getEvalTranscript`, eval sessions only, once the DO is idle). Any failure to get a verdict (router, provider, gateway, budget, an answer that won't parse after `EVAL_JUDGE_MAX_TRIES`) is `JudgeUnavailable` (503), never a pass and never a fail verdict. The harness never retries it: it records that attempt failed with the reason, stops the run, resets, and finishes it Failed with `failure` `JudgeUnavailable` (`eval_runs.failure`, only on an incomplete run). `/results` answers Duplicate before any DO read or R2 write when the attempt has its result (`EvalRunsDAL.hasEvalResult`). An attempt's transcript is built by `EvalTranscriptProvider.build` (v1: messages, and pinned tool calls with version, status and change summary, never args or values) and stored by `EvalTranscriptsRepo.store`: the `files` row pending its owner (`FILE_PENDING_OWNER_ID`, its own transaction) **before** the R2 object, then attached in the result's transaction (`EvalTranscriptFilesProvider.attach`). It is discarded only when that transaction is known not to have written the result; an unknown outcome is left to the hourly `EvalTranscriptSweep`, which removes rows still pending after `EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS` with their objects. Both remove rows first, through a delete that re-checks they are still pending (`deleteFiles` `pendingOwnerType`), then only the objects of the rows actually removed. No refusal is told apart by its message text. `eval_runs.failure` names what actually stopped the run (`stop_reason`): ServerError only for a backend 5xx or no answer, HarnessError for the harness's own stops.
 
 **Violations:**
 
-- A judge model call from Python, from `evals/`, or anywhere but `EvalHarnessRepo.judge` through the model router
+- A judge model call from Python, from `evals/`, or anywhere but `EvalJudgeRepo.judge` through the model router
 - A judge model taken from the config's routing (`routing[tier].model`) instead of `EVAL_JUDGE_MODELS`, or a pinned model missing from `MODEL_PRICES`
 - A `/judge` or `/results` body that carries the transcript, or a transcript with tool args or host values
 - Grading a rubric as passed (or failed) when the judge gave no verdict, or retrying `JudgeUnavailable` in the harness
 - An `eval_results` row pointing at a transcript file that isn't in R2, or an R2 transcript left behind by a refused result
-- An R2 transcript put before its pending `files` row exists, deleting a transcript when the result's commit outcome is unknown, or deciding a refusal by comparing `message` strings
+- An R2 transcript put before its pending `files` row exists, deleting a transcript when the result's commit outcome is unknown, deleting a transcript row without re-checking it is still pending (or its object before its row), or deciding a refusal by comparing `message` strings
 - The judge graded on `EvalTranscriptProvider.build`'s stored transcript, or a judge prompt with no size budget
 - `failure` set on a Done run
 
@@ -2207,7 +2207,7 @@ EvalHarnessRoutes\.(get|post|put|patch|delete)\((?![^)]*authenticateEval)
 ModelTaskTypeEnum\.EvalJudge
 ```
 
-- As a model call's `taskType`, legitimate only in `repositories/EvalHarnessRepo.ts` (and tests); the Insights usage label map (`InsightsCommon.ts`) only names it. Anywhere else is a violation.
+- As a model call's `taskType`, legitimate only in `repositories/EvalJudgeRepo.ts` (and tests); the Insights usage label map (`InsightsCommon.ts`) only names it. Anywhere else is a violation.
 
 **Examples:**
 
@@ -2218,7 +2218,7 @@ ModelTaskTypeEnum\.EvalJudge
 - ✅ return refuse(Schemas.EvalRunStepFailureEnum.JudgeUnavailable, message)
 ```
 
-**Fix:** Mirror `EvalHarnessRepo.judge` / `recordResult`, `EvalJudgeProvider` and `EvalTranscriptProvider` (`docs/runbooks/evals.md`).
+**Fix:** Mirror `EvalJudgeRepo.judge`, `EvalHarnessRepo.recordResult`, `EvalJudgeProvider` and `EvalTranscriptProvider` (`docs/runbooks/evals.md`).
 
 ---
 

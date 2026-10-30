@@ -8,11 +8,13 @@ const MIDDLE_CUT = "\n…\n";
 // DEV_NOTE: An eval attempt's two views (M5-3), pure, both from what its Conversation DO and change requests hold
 // (Schemas.EvalAttemptRecord: messages and tool calls, oldest first, and each change request's summary). Never args or
 // host data (rule: the Conversations transcript's).
-//   build: transcript v1, the file the Tests page reads from R2. A tool call names the version the run's config pinned
-//     (the attempt ran exactly those pins); a tool the config doesn't pin (search_help_docs) has no version, so v1 can't
-//     list it. Sizes are held to the schema's: texts and summaries cut with …, entries capped (the first ones and the
-//     last, the chatbot's reply), texts cut further until the file fits EVAL_TRANSCRIPT_MAX_BYTES. The file is the
-//     parsed transcript serialized, so its bytes are exactly what the page will parse.
+//   build: transcript v1, the file the Tests page reads from R2. A tool call names the version the run's config
+//     pinned (the attempt ran exactly those pins); a tool the config doesn't pin (search_help_docs) has no version, so
+//     v1 can't list it. Sizes are held to the schema's: texts and summaries cut with …, entries capped (the first ones
+//     and the chatbot's last reply, wherever it sits: a turn that didn't complete can end on a tool call), texts cut
+//     further until the file fits EVAL_TRANSCRIPT_MAX_BYTES. The file is the parsed transcript serialized, so its
+//     bytes are exactly what the page will parse. A failure says why: Invalid (a bug) or TooLarge (over the cap at
+//     every cut).
 //   judgeView: what the judge grades. Every tool call (search_help_docs too: a rubric may ask for answers from the help
 //     docs) with how it ended; held to EVAL_JUDGE_TRANSCRIPT_MAX_CHARS so the prompt always fits the pinned models. The
 //     chatbot's last reply is kept whole (cut in the middle only if it alone is over the budget), then earlier entries
@@ -21,7 +23,7 @@ export default class EvalTranscriptProvider {
   static build(params: {
     record: Schemas.EvalAttemptRecord;
     toolVersions: Record<string, number>;
-  }): Schemas.BuiltEvalTranscript | null {
+  }): Schemas.BuildEvalTranscriptResponse {
     const { record, toolVersions } = params;
     const listed = record.entries.flatMap((entry): Schemas.EvalTranscriptListedEntry[] => {
       if (entry.kind === Schemas.EvalAttemptEntryKindEnum.Message) {
@@ -32,8 +34,7 @@ export default class EvalTranscriptProvider {
         : undefined;
       return toolVersion === undefined ? [] : [{ kind: entry.kind, entry, toolVersion }];
     });
-    const max = Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES;
-    const kept = listed.length > max ? [...listed.slice(0, max - 1), ...listed.slice(-1)] : listed;
+    const kept = EvalTranscriptProvider.capEntries(listed);
 
     const encoder = new TextEncoder();
     for (const textCap of TEXT_CAPS) {
@@ -43,14 +44,42 @@ export default class EvalTranscriptProvider {
           EvalTranscriptProvider.toStoredEntry(listedEntry, record.changeRequestSummaries, textCap),
         ),
       });
-      if (!parsed.success) return null;
+      if (!parsed.success) {
+        return { isSuccess: false, failure: Schemas.EvalTranscriptBuildFailureEnum.Invalid };
+      }
       const text = JSON.stringify(parsed.data);
       const bytes = encoder.encode(text);
       if (bytes.byteLength <= Schemas.EVAL_TRANSCRIPT_MAX_BYTES) {
-        return { transcript: parsed.data, text, bytes };
+        return { isSuccess: true, built: { transcript: parsed.data, text, bytes } };
       }
     }
-    return null;
+    return { isSuccess: false, failure: Schemas.EvalTranscriptBuildFailureEnum.TooLarge };
+  }
+
+  // DEV_NOTE: At most EVAL_TRANSCRIPT_MAX_ENTRIES: the first ones, and the chatbot's last reply when it would be cut
+  // off
+  private static capEntries(
+    listed: Schemas.EvalTranscriptListedEntry[],
+  ): Schemas.EvalTranscriptListedEntry[] {
+    const max = Schemas.EVAL_TRANSCRIPT_MAX_ENTRIES;
+    if (listed.length <= max) return listed;
+    const lastReply = EvalTranscriptProvider.lastIndex(
+      listed,
+      (listedEntry) =>
+        listedEntry.kind === Schemas.EvalAttemptEntryKindEnum.Message &&
+        listedEntry.entry.role === Schemas.EvalCaseMessageRoleEnum.Assistant,
+    );
+    const reply = lastReply >= max - 1 ? listed[lastReply] : undefined;
+    return reply ? [...listed.slice(0, max - 1), reply] : listed.slice(0, max);
+  }
+
+  // DEV_NOTE: The index of the last item that matches, -1 when none (Array.findLastIndex isn't in the worker's lib)
+  private static lastIndex<T>(items: T[], matches: (item: T) => boolean): number {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item !== undefined && matches(item)) return index;
+    }
+    return -1;
   }
 
   static judgeView(record: Schemas.EvalAttemptRecord): Schemas.EvalJudgeTranscript {
@@ -58,15 +87,12 @@ export default class EvalTranscriptProvider {
       EvalTranscriptProvider.toJudgeEntry(entry, record.changeRequestSummaries),
     );
     const budget = Schemas.EVAL_JUDGE_TRANSCRIPT_MAX_CHARS;
-    let lastReply = -1;
-    entries.forEach((entry, index) => {
-      if (
+    const lastReply = EvalTranscriptProvider.lastIndex(
+      entries,
+      (entry) =>
         entry.kind === Schemas.EvalAttemptEntryKindEnum.Message &&
-        entry.role === Schemas.EvalCaseMessageRoleEnum.Assistant
-      ) {
-        lastReply = index;
-      }
-    });
+        entry.role === Schemas.EvalCaseMessageRoleEnum.Assistant,
+    );
 
     const kept = new Set<number>();
     let spent = 0;

@@ -21,6 +21,12 @@ from typing import TextIO
 from pydantic import ValidationError
 
 from diletta_evals.client import EvalApi, EvalApiError
+from diletta_evals.constants import (
+    RUN_FAILURE_HARNESS_ERROR,
+    RUN_FAILURE_HOST_UNAVAILABLE,
+    RUN_FAILURE_JUDGE_UNAVAILABLE,
+    RUN_FAILURE_SERVER_ERROR,
+)
 from diletta_evals.graders import (
     JUDGE_UNAVAILABLE_PREFIX,
     GradedAttempt,
@@ -52,15 +58,15 @@ def stop_reason(error: BaseException | None) -> eval_api.EvalRunFailure | None:
     if error is None:
         return None
     if isinstance(error, JudgeUnavailableError):
-        return eval_api.EvalRunFailure.number_1
+        return RUN_FAILURE_JUDGE_UNAVAILABLE
     if isinstance(error, HostLoginError):
-        return eval_api.EvalRunFailure.number_2
+        return RUN_FAILURE_HOST_UNAVAILABLE
     if isinstance(error, EvalApiError):
         if error.failure is eval_api.Failure.HostFailed:
-            return eval_api.EvalRunFailure.number_2
+            return RUN_FAILURE_HOST_UNAVAILABLE
         if error.is_transient:
-            return eval_api.EvalRunFailure.number_3
-    return eval_api.EvalRunFailure.number_4
+            return RUN_FAILURE_SERVER_ERROR
+    return RUN_FAILURE_HARNESS_ERROR
 
 
 @dataclass
@@ -102,6 +108,9 @@ class EvalRunner:
                         f"  {'PASS' if graded.has_passed else 'FAIL'} {case.name} (attempt {attempt})"
                         + (f": {error}" if error else "")
                     )
+                    # DEV_NOTE: After its line is printed, so the CLI shows the attempt that stopped the run
+                    if graded.judge_unavailable is not None:
+                        raise JudgeUnavailableError(f"{JUDGE_UNAVAILABLE_PREFIX}: {graded.judge_unavailable}")
                 if not has_case_passed:
                     failed_cases.append(case.name)
         except BaseException as error:
@@ -216,8 +225,6 @@ class EvalRunner:
 
         graded = grade_attempt(expectations, attempt_json, read_back, judge)
         self._record(run_id, case.publicId, attempt, graded, answered.latencyMs)
-        if graded.judge_unavailable is not None:
-            raise JudgeUnavailableError(f"{JUDGE_UNAVAILABLE_PREFIX}: {graded.judge_unavailable}")
         return graded
 
     def _record(

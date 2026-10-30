@@ -344,8 +344,15 @@ def grade_attempt(
     if not is_completed:
         errors.append(f"The chatbot's turn didn't complete ({turn_status})")
 
-    judge_unavailable: str | None = None
+    # DEV_NOTE: Too many checks fails the attempt before the judge is asked (its check counts as one), so an attempt that
+    # can't pass never costs a judge call and a judge check is never cut off
     rubric = expectations.get("rubric")
+    check_count = len(checks) + (1 if isinstance(rubric, str) else 0)
+    if check_count > MAX_CHECKS:
+        errors.append(f"The case has {check_count} checks, more than {MAX_CHECKS}")
+        checks = checks[:MAX_CHECKS]
+
+    judge_unavailable: str | None = None
     is_still_passing = not errors and all(check["hasPassed"] for check in checks)
     if isinstance(rubric, str) and is_still_passing:
         judged = judge(rubric)
@@ -355,9 +362,6 @@ def grade_attempt(
             judge_unavailable = judged.reason
             errors.append(f"{JUDGE_UNAVAILABLE_PREFIX}: {judged.reason}")
 
-    if len(checks) > MAX_CHECKS:
-        errors.append(f"The case has {len(checks)} checks, more than {MAX_CHECKS}")
-        checks = checks[:MAX_CHECKS]
     error = _cut("; ".join(errors), ERROR_MAX_CHARS) if errors else None
 
     has_passed = error is None and bool(checks) and all(check["hasPassed"] for check in checks)

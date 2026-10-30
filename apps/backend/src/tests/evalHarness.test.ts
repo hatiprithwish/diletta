@@ -79,6 +79,9 @@ const ownerDatabaseUrl =
 const END_TO_END_TIMEOUT_MS = 120_000;
 const PRODUCTION_BASE_URL = "https://production.unreachable.invalid/v1/";
 const HOST_USER = "eval-test-user";
+// DEV_NOTE: The config's default tier (Mid). No tier names Anthropic's pinned judge, so a judge that took the config's
+// own model would be told apart from the pinned one
+const CHATBOT_MODEL = "claude-opus-5-5";
 const createdCompanyIds: string[] = [];
 let ownerPool: Pool | null = null;
 let evalKey: Awaited<ReturnType<typeof createKey>>;
@@ -164,8 +167,8 @@ async function createTenant() {
       approvalRules: [],
       routing: {
         small: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-haiku-4-5" },
-        mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-sonnet-5-5" },
-        top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-opus-5-5" },
+        mid: { provider: Schemas.ModelProviderEnum.Anthropic, model: CHATBOT_MODEL },
+        top: { provider: Schemas.ModelProviderEnum.Anthropic, model: "claude-fable-5-1" },
         defaultTier: Schemas.ModelTierEnum.Mid,
       },
       knowledge: { sourceIds: [] },
@@ -1070,8 +1073,10 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
       body: { conversationId: attempt.conversationId, rubric: RUBRIC },
     });
     expect(judged.status).toBe(200);
-    // DEV_NOTE: The config's default tier is Anthropic's (Mid: claude-sonnet-5-5); the judge is Anthropic's pinned model,
-    // whatever the config's own tiers name
+    // DEV_NOTE: The config's default tier is Anthropic's (Mid: CHATBOT_MODEL); the judge is Anthropic's pinned model,
+    // which none of the config's tiers name
+    const judgeModel = Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic];
+    expect([CHATBOT_MODEL, "claude-haiku-4-5", "claude-fable-5-1"]).not.toContain(judgeModel);
     expect(Schemas.ZEvalJudgeApiResponse.parse(await judged.json())).toMatchObject({
       hasPassed: true,
       reason: "The reply confirms the new amount of 300.",
@@ -1109,6 +1114,12 @@ describe("Eval graders (M5-3)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
       model: Schemas.EVAL_JUDGE_MODELS[Schemas.ModelProviderEnum.Anthropic],
     });
     expect(Number(run?.costUsd)).toBeGreaterThan(0);
+    // DEV_NOTE: The chatbot's own calls ran on the config's model, the judge's on the pinned one
+    const chatCalls = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(modelCalls).where(eq(modelCalls.companyId, tenant.companyId)),
+    ).then((rows) => rows.filter((row) => row.taskType !== Schemas.ModelTaskTypeEnum.EvalJudge));
+    expect(chatCalls.length).toBeGreaterThan(0);
+    expect(chatCalls.every((row) => row.model === CHATBOT_MODEL)).toBe(true);
 
     const recorded = await call(`/runs/${runId}/results`, {
       token: await tokenFor(tenant),
@@ -1382,6 +1393,19 @@ describe(
       expect(left.map((row) => row.id).sort()).toEqual([fresh.id, attached.id].sort());
       expect(await env.FILES_BUCKET.head(stale.key)).toBeNull();
       expect(await env.FILES_BUCKET.head(fresh.key)).not.toBeNull();
+      expect(await env.FILES_BUCKET.head(attached.key)).not.toBeNull();
+
+      // DEV_NOTE: A discard (or a sweep) of a row attached since it was read leaves the row and its object: the delete
+      // re-checks it is still pending
+      const discarded = await new EvalTranscriptsRepo(env).discard({
+        companyId: tenant.companyId,
+        stored: { fileId: attached.id, fileR2Key: attached.key },
+      });
+      expect(discarded.isSuccess).toBe(true);
+      const kept = await withOwnerDb((ownerDb) =>
+        ownerDb.select({ id: files.id }).from(files).where(eq(files.id, attached.id)),
+      );
+      expect(kept).toHaveLength(1);
       expect(await env.FILES_BUCKET.head(attached.key)).not.toBeNull();
     });
   },

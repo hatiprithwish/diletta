@@ -304,3 +304,18 @@ def test_the_most_checks_a_valid_case_can_have_still_fit_the_grader_output() -> 
     )
     assert len(graded.grader_output["checks"]) == 60 <= MAX_CHECKS
     EvalGraderOutput.model_validate(graded.grader_output)
+
+
+def test_a_case_with_too_many_checks_fails_before_the_judge_is_asked() -> None:
+    # DEV_NOTE: The other checks fill every slot, so the judge's would be one too many: no judge call, nothing cut off
+    graded = grade_attempt(
+        expectations(
+            rubric="Says it saved.",
+            rules=[{"kind": "contains", "text": "Saved"} for _ in range(MAX_CHECKS)],
+        ),
+        attempt(reply="Saved."),
+        no_readback,
+        no_judge,
+    )
+    assert not graded.has_passed
+    assert graded.grader_output["error"] == f"The case has {MAX_CHECKS + 1} checks, more than {MAX_CHECKS}"

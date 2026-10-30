@@ -16,6 +16,7 @@ import {
   TEST_HOST_ADMIN_HEADER,
   TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS,
 } from "../testHost/TestHostCommon";
+import { EvalRunFailureIntEnum } from "../evalRuns/EvalRunsCommon";
 import { HostToolStatusEnum, ToolCallStatusIntEnum } from "../toolCalls/ToolCallsCommon";
 import { readValueAtPath } from "../toolDefinitions/ToolOpPlaceholders";
 import { compareReadback, type ReadbackExpectation } from "../toolDefinitions/ToolReadbackCompare";
@@ -436,6 +437,11 @@ export const ZEvalHarnessConstants = z
     evalHostTokenHeader: z.literal(EVAL_HOST_TOKEN_HEADER),
     testHostAdminHeader: z.literal(TEST_HOST_ADMIN_HEADER),
     testHostTokenMaxLifetimeSeconds: z.literal(TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS),
+    // DEV_NOTE: EvalRunFailureIntEnum by name: the generated enum only numbers its values (number_1…)
+    evalRunFailureJudgeUnavailable: z.literal(EvalRunFailureIntEnum.JudgeUnavailable),
+    evalRunFailureHostUnavailable: z.literal(EvalRunFailureIntEnum.HostUnavailable),
+    evalRunFailureServerError: z.literal(EvalRunFailureIntEnum.ServerError),
+    evalRunFailureHarnessError: z.literal(EvalRunFailureIntEnum.HarnessError),
   })
   .meta({ id: "EvalHarnessConstants" });
 export type EvalHarnessConstants = z.infer<typeof ZEvalHarnessConstants>;

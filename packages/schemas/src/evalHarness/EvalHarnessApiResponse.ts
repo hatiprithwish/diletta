@@ -292,6 +292,17 @@ export interface BuiltEvalTranscript {
   bytes: Uint8Array;
 }
 
+// DEV_NOTE: Why a transcript couldn't be built (EvalTranscriptProvider.build): it doesn't hold to ZEvalTranscriptV1 (a
+// bug), or it is still over EVAL_TRANSCRIPT_MAX_BYTES at the smallest text cap
+export enum EvalTranscriptBuildFailureEnum {
+  Invalid = "Invalid",
+  TooLarge = "TooLarge",
+}
+
+export type BuildEvalTranscriptResponse =
+  | { isSuccess: true; built: BuiltEvalTranscript }
+  | { isSuccess: false; failure: EvalTranscriptBuildFailureEnum };
+
 // DEV_NOTE: The whole /eval/* API as one object, for the JSON Schema export (evals/schemas/eval-api.schema.json): each
 // message is a $def named by its meta id, so the generated Python module has one model per message. Never sent.
 export const ZEvalApiContract = z.object({
@@ -314,4 +325,9 @@ export const ZEvalApiContract = z.object({
 // DEV_NOTE: The transcript sweep (EvalTranscriptsRepo.sweepPending): pending transcript rows removed with their objects
 export interface SweepEvalTranscriptsResponse extends ApiResponse {
   sweptCount?: number;
+}
+
+// DEV_NOTE: One sweep batch's transaction: the R2 keys of the rows it actually removed (still pending at the delete)
+export interface SweptEvalTranscriptsResponse extends ApiResponse {
+  keys?: string[];
 }

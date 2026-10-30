@@ -625,7 +625,7 @@ export class ConversationDO extends Think<Env> {
     if (!state || !state.session.eval) {
       return JSON.stringify({ isSuccess: false, message: "Not an eval conversation" });
     }
-    const isIdle = await EvalAttemptProvider.waitUntilIdle(() => this.isBusy(), {
+    const isIdle = await Utility.waitUntil(() => !this.isBusy(), {
       timeoutMs: Constants.EVAL_TRANSCRIPT_IDLE_WAIT_MS,
       pollMs: Constants.EVAL_TRANSCRIPT_IDLE_POLL_MS,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

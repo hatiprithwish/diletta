@@ -214,6 +214,10 @@ const evalConstants = {
   evalHostTokenHeader: EVAL_HOST_TOKEN_HEADER,
   testHostAdminHeader: TEST_HOST_ADMIN_HEADER,
   testHostTokenMaxLifetimeSeconds: TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS,
+  evalRunFailureJudgeUnavailable: EvalRunFailureIntEnum.JudgeUnavailable,
+  evalRunFailureHostUnavailable: EvalRunFailureIntEnum.HostUnavailable,
+  evalRunFailureServerError: EvalRunFailureIntEnum.ServerError,
+  evalRunFailureHarnessError: EvalRunFailureIntEnum.HarnessError,
 };
 
 export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamples> = {
@@ -349,6 +353,7 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
     invalid: [
       { ...evalConstants, evalJwtAudience: "diletta-widget" },
       { ...evalConstants, evalHostTokenHeader: undefined },
+      { ...evalConstants, evalRunFailureJudgeUnavailable: EvalRunFailureIntEnum.HarnessError },
     ],
   },
 };

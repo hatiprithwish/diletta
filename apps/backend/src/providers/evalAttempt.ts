@@ -49,20 +49,6 @@ export default class EvalAttemptProvider {
     };
   }
 
-  // DEV_NOTE: Waits until isBusy says the DO is idle (a commit or verify retry of the attempt still running ends), checking
-  // every pollMs for at most timeoutMs. true = idle; false = still busy at the deadline. sleep is injected for tests.
-  static async waitUntilIdle(
-    isBusy: () => boolean,
-    params: { timeoutMs: number; pollMs: number; sleep: (ms: number) => Promise<void> },
-  ): Promise<boolean> {
-    const deadline = Date.now() + params.timeoutMs;
-    while (isBusy()) {
-      if (Date.now() >= deadline) return false;
-      await params.sleep(params.pollMs);
-    }
-    return true;
-  }
-
   // DEV_NOTE: The attempt's whole conversation for its transcript (M5-3), oldest first: each user or assistant message's
   // text, split where a tool part sits so a tool call stays where it ran, and each tool call with how it ended and its
   // change request (toolCall). Empty text and other roles are left out; args never leave here.

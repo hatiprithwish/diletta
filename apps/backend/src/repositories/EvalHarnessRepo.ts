@@ -9,16 +9,13 @@ import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import EvalJudgeProvider from "@/providers/evalJudge";
 import EvalRefusalProvider from "@/providers/evalRefusal";
-import EvalTranscriptProvider from "@/providers/evalTranscript";
 import EvalTranscriptFilesProvider from "@/providers/evalTranscriptFiles";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
-import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -35,9 +32,8 @@ type Tx = NodePgTransaction<EmptyRelations>;
 //     staging connection) that the Conversation DO runs in one turn over DO RPC (runEvalAttempt), every write
 //     auto-approved.
 //   readBack: a readback assert, the same request live verification sends, on the staging connection.
-//   judge: the pinned LLM judge (M5-3) on one attempt's transcript (the judge's view) and its case's rubric, through
-//     the model router on the company's key (the run's model call: budget held, cost on the run). No verdict =
-//     JudgeUnavailable.
+//   getRunConversationSource: a conversation of a Running run with what its transcript needs, for EvalJudgeRepo (M5-3:
+//     the judge is its own Repo, so only /judge builds the model router).
 //   recordResult: one graded attempt of one of the run's cases (eval_results, append-only), with its transcript (M5-3)
 //     when the attempt ran. Reading and storing transcripts is EvalTranscriptsRepo's.
 //   reset: the connection's reset_op, once after the attempts.
@@ -57,14 +53,13 @@ export default class EvalHarnessRepo {
   private companiesDal: CompaniesDAL;
   private conversationsRepo: ConversationsRepo;
   private actionEngineRepo: ActionEngineRepo;
-  private modelRouterRepo: ModelRouterRepo;
   private evalTranscriptsRepo: EvalTranscriptsRepo;
 
-  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan, the judge's model, a
-  // transcript) are built once, here. ctx is the request's: the judge's model_calls row is written in its waitUntil.
-  constructor(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
+  // DEV_NOTE: The Repos it hands a step to (an attempt's conversation, a readback's plan, a transcript) are built once,
+  // here. db = the caller's client when it has one (EvalJudgeRepo), so one request uses one pool.
+  constructor(env: Env, db: NodePgDatabase = getDbClient(env)) {
     this.env = env;
-    this.db = getDbClient(env);
+    this.db = db;
     this.chatbotsDal = new ChatbotsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.evalCasesDal = new EvalCasesDAL();
@@ -73,8 +68,7 @@ export default class EvalHarnessRepo {
     this.companiesDal = new CompaniesDAL();
     this.conversationsRepo = new ConversationsRepo(env);
     this.actionEngineRepo = new ActionEngineRepo(env);
-    this.modelRouterRepo = new ModelRouterRepo(env, ctx);
-    this.evalTranscriptsRepo = new EvalTranscriptsRepo(env);
+    this.evalTranscriptsRepo = new EvalTranscriptsRepo(env, this.db);
   }
 
   // DEV_NOTE: A Running run of the config, and the cases it runs. The config's chatbot must be active and the config
@@ -424,25 +418,16 @@ export default class EvalHarnessRepo {
     return { isSuccess: true, message: "Record read back", check };
   }
 
-  // DEV_NOTE: The pinned judge on one attempt (M5-3). The conversation must be one of this run's. The attempt is read
-  // from its DO (never taken from the harness) and graded on the judge's view (EvalTranscriptProvider.judgeView: every
-  // tool call, the last reply whole, held to the model-safe budget). The judge is the pinned model
-  // (Schemas.EVAL_JUDGE_MODELS) of the run config's default tier's provider, called through the model router: the
-  // company's key, the company budget (no per-user caps: an eval has none), the run's id (its cost adds to the run),
-  // the attempt's conversation. Any router, provider or answer failure is JudgeUnavailable (503): the harness stops the
-  // run on it, so a case with a rubric never passes ungraded.
-  async judge(params: {
+  // DEV_NOTE: A conversation of this run (else NotFound) with what its transcript and judge need (transcriptSource),
+  // for EvalJudgeRepo. Read-only; answers the step refusal as is, the caller logs it.
+  async getRunConversationSource(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
-    request: Schemas.EvalJudgeApiRequest;
-  }): Promise<Schemas.EvalJudgeResponse> {
-    const { identity, request } = params;
+    conversationPublicId: string;
+  }): Promise<Schemas.EvalRunTranscriptSourceResponse> {
+    const { identity } = params;
     const companyId = identity.companyId;
-    const metadata = { companyId, runPublicId: params.runPublicId };
-    const refuse = (failure: Schemas.EvalRunStepFailureEnum, message: string | undefined) =>
-      this.refuseStep(Schemas.LogAction.JudgeEvalAttempt, failure, message, metadata);
-
-    const found: Schemas.EvalRunTranscriptSourceResponse = await withTenant(
+    return await withTenant(
       this.db,
       companyId,
       async (tx): Promise<Schemas.EvalRunTranscriptSourceResponse> => {
@@ -450,7 +435,7 @@ export default class EvalHarnessRepo {
         if (!running.isSuccess || !running.run || !running.chatbotId) return running;
         const conversation = await this.conversationsDal.getConversationDetails(tx, {
           companyId,
-          publicId: request.conversationId,
+          publicId: params.conversationPublicId,
         });
         if (!conversation.isSuccess || !conversation.conversation) {
           return this.stepFailure(conversation.isNotFound, conversation.message);
@@ -465,74 +450,18 @@ export default class EvalHarnessRepo {
         });
       },
     );
-    if (!found.isSuccess || !found.source) {
-      return refuse(found.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, found.message);
-    }
-    const { source } = found;
-
-    const read = await this.evalTranscriptsRepo.read({ companyId, source });
-    if (!read.isSuccess || !read.record) {
-      return refuse(read.failure ?? Schemas.EvalRunStepFailureEnum.ServerError, read.message);
-    }
-
-    const { provider } = source.routing[source.routing.defaultTier];
-    const pinned = { provider, model: Schemas.EVAL_JUDGE_MODELS[provider] };
-    const routed = await this.modelRouterRepo.getModel({
-      companyId,
-      chatbotId: source.chatbotId,
-      chatbotUserId: null,
-      conversationId: source.conversationId,
-      evalRunId: source.evalRunId,
-      turnId: null,
-      taskType: Schemas.ModelTaskTypeEnum.EvalJudge,
-      tier: Schemas.ModelTierEnum.Top,
-      routing: {
-        small: pinned,
-        mid: pinned,
-        top: pinned,
-        defaultTier: Schemas.ModelTierEnum.Top,
-      },
-      caps: null,
-    });
-    if (!routed.isSuccess) {
-      return refuse(
-        Schemas.EvalRunStepFailureEnum.JudgeUnavailable,
-        `The judge (${pinned.model}) couldn't be reached: ${routed.failure}`,
-      );
-    }
-    const judged = await EvalJudgeProvider.judge(
-      routed.model,
-      { transcript: EvalTranscriptProvider.judgeView(read.record), rubric: request.rubric },
-      { ...metadata, provider, model: pinned.model },
-    );
-    if (!judged.isSuccess) {
-      return refuse(
-        Schemas.EvalRunStepFailureEnum.JudgeUnavailable,
-        `${judged.message} (${pinned.model})`,
-      );
-    }
-    return {
-      isSuccess: true,
-      message: "Attempt judged",
-      verdict: {
-        hasPassed: judged.verdict.hasPassed,
-        reason: judged.verdict.reason,
-        provider,
-        model: pinned.model,
-        promptVersion: Schemas.EVAL_JUDGE_PROMPT_VERSION,
-      },
-    };
   }
 
-  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate (append-only),
-  // answered in the first transaction, before the DO is read or anything is stored. An attempt that ran (it has a
-  // conversation) gets its transcript (M5-3): EvalTranscriptsRepo stores it (files row pending its owner, then the R2
-  // object), and the result's own withTenant (run row locked) writes the result pointing at it and attaches the row.
-  // When that transaction is known not to have written the result (a refusal it answered, or a rollback it threw), the
-  // stored transcript is discarded. When its outcome is unknown (the commit's answer lost), nothing is touched: if it
-  // committed, the row is attached and the harness's retry answers Duplicate; if not, the row is still pending and the
-  // hourly sweep removes it with its object. A transcript that can't be read or stored is a ServerError (the harness
-  // retries the result: nothing was written). An attempt that never started has no conversation and no transcript.
+  // DEV_NOTE: One graded attempt of a case of this run; a second result for the same attempt is Duplicate
+  // (append-only), answered in the first transaction, before the DO is read or anything is stored. An attempt that ran
+  // (it has a conversation) gets its transcript (M5-3): EvalTranscriptsRepo stores it (files row pending its owner,
+  // then the R2 object), and the result's own withTenant (run row locked) writes the result pointing at it and attaches
+  // the row. When that transaction is known not to have written the result (a refusal it answered, or a rollback it
+  // threw), the stored transcript is discarded. When its outcome is unknown (the commit's answer lost), nothing is
+  // touched: if it committed, the row is attached and the harness's retry answers Duplicate; if not, the row is still
+  // pending and the hourly sweep removes it with its object. A transcript that can't be read or stored is a ServerError
+  // (the harness retries the result: nothing was written). An attempt that never started has no conversation and no
+  // transcript.
   async recordResult(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -734,9 +663,10 @@ export default class EvalHarnessRepo {
 
   // DEV_NOTE: Ends a Running run (its row locked, so no result lands after the tally). isComplete: every case of the
   // run's set has all k attempts and the reset went through (else Incomplete, nothing written) → Done; otherwise
-  // Failed, with why the harness stopped it when it says (failure, M5-3). pass^k: a case passes when all k attempts did; the run passes when it is Done
-  // and every case of the set passed (the safety hard gate on top is M5-4's). case_count = the set's size. cost_usd is
-  // already the run's (every model call adds to it, ModelCallsRepo) and keeps settling after the finish.
+  // Failed, with why the harness stopped it when it says (failure, M5-3). pass^k: a case passes when all k attempts
+  // did; the run passes when it is Done and every case of the set passed (the safety hard gate on top is M5-4's).
+  // case_count = the set's size. cost_usd is already the run's (every model call adds to it, ModelCallsRepo) and keeps
+  // settling after the finish.
   async finish(params: {
     identity: Schemas.EvalIdentity;
     runPublicId: string;
@@ -791,6 +721,8 @@ export default class EvalHarnessRepo {
           caseCount: caseIds.length,
           passAllKCount,
           hasPassed: request.isComplete && passAllKCount === caseIds.length,
+          // DEV_NOTE: ZFinishEvalRunApiRequest already refuses a failure on a complete run; kept as belt and braces, so
+          // a Done run never stores one whoever calls finish
           failure: request.isComplete ? null : (request.failure ?? null),
         });
         if (!finished.isSuccess || !finished.evalRun) {
@@ -834,8 +766,8 @@ export default class EvalHarnessRepo {
   }
 
   // DEV_NOTE: isLocked: the run row FOR UPDATE for the rest of the step's transaction (results, attempt starts and the
-  // finish take turns). The token company's run by public id, started on the token's connection (another connection's run is
-  // NotFound, so one run's attempts and reset never go to two hosts), still Running, with its config's chatbot
+  // finish take turns). The token company's run by public id, started on the token's connection (another connection's
+  // run is NotFound, so one run's attempts and reset never go to two hosts), still Running, with its config's chatbot
   private async runningRun(
     tx: Tx,
     identity: Schemas.EvalIdentity,

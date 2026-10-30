@@ -4195,7 +4195,11 @@
         "evalJwtMaxLifetimeSeconds": 300,
         "evalHostTokenHeader": "X-Host-Token",
         "testHostAdminHeader": "X-Test-Host-Admin",
-        "testHostTokenMaxLifetimeSeconds": 300
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 1,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
       }
     ],
     "invalid": [
@@ -4205,14 +4209,34 @@
         "evalJwtMaxLifetimeSeconds": 300,
         "evalHostTokenHeader": "X-Host-Token",
         "testHostAdminHeader": "X-Test-Host-Admin",
-        "testHostTokenMaxLifetimeSeconds": 300
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 1,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
       },
       {
         "evalJwtIssuer": "diletta-eval-harness",
         "evalJwtAudience": "diletta-eval",
         "evalJwtMaxLifetimeSeconds": 300,
         "testHostAdminHeader": "X-Test-Host-Admin",
-        "testHostTokenMaxLifetimeSeconds": 300
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 1,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
+      },
+      {
+        "evalJwtIssuer": "diletta-eval-harness",
+        "evalJwtAudience": "diletta-eval",
+        "evalJwtMaxLifetimeSeconds": 300,
+        "evalHostTokenHeader": "X-Host-Token",
+        "testHostAdminHeader": "X-Test-Host-Admin",
+        "testHostTokenMaxLifetimeSeconds": 300,
+        "evalRunFailureJudgeUnavailable": 4,
+        "evalRunFailureHostUnavailable": 2,
+        "evalRunFailureServerError": 3,
+        "evalRunFailureHarnessError": 4
       }
     ]
   }

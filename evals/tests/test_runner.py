@@ -7,13 +7,18 @@ import pytest
 
 from diletta_evals import runner as runner_module
 from diletta_evals.client import EvalApiError
+from diletta_evals.constants import (
+    RUN_FAILURE_HARNESS_ERROR,
+    RUN_FAILURE_HOST_UNAVAILABLE,
+    RUN_FAILURE_JUDGE_UNAVAILABLE,
+    RUN_FAILURE_SERVER_ERROR,
+)
 from diletta_evals.graders import GradedAttempt
 from diletta_evals.hosts.base import HostLoginError
 from diletta_evals.runner import EvalRunner, JudgeUnavailableError
 from diletta_evals.types import eval_api
 
 Failure = eval_api.Failure
-RunFailure = eval_api.EvalRunFailure
 
 CASE = {
     "publicId": "case_1",
@@ -63,6 +68,8 @@ class FakeClient:
         refuse_judge: EvalApiError | None = None,
     ) -> None:
         self.events: list[str] = []
+        # DEV_NOTE: What the runner printed (the CLI's output)
+        self.out = io.StringIO()
         self.results: list[eval_api.RecordEvalResultApiRequest] = []
         self.readbacks: list[eval_api.EvalReadbackApiRequest] = []
         self.finish_request: eval_api.FinishEvalRunApiRequest | None = None
@@ -193,7 +200,7 @@ class FakeClient:
 
 
 def run(client: FakeClient, host: FakeHost | None = None, k: int = 3):
-    return EvalRunner(client, host or FakeHost(), out=io.StringIO()).run(
+    return EvalRunner(client, host or FakeHost(), out=client.out).run(
         config_id="cfg_1", k=k, trigger=eval_api.Trigger.number_2
     )
 
@@ -239,9 +246,9 @@ def test_an_attempt_the_chatbot_couldnt_answer_fails_and_the_run_goes_on() -> No
     [
         # DEV_NOTE: A backend fault is never read as the chatbot failing: it stops the run (exit 2), and the page blames
         # the backend only for what it failed to answer; a refusal it answered (4xx) is the harness's own stop
-        (EvalApiError(0, "The backend is unreachable"), RunFailure.number_3),
-        (EvalApiError(500, "Server error", Failure.ServerError), RunFailure.number_3),
-        (EvalApiError(409, "This eval attempt already ran", Failure.Duplicate), RunFailure.number_4),
+        (EvalApiError(0, "The backend is unreachable"), RUN_FAILURE_SERVER_ERROR),
+        (EvalApiError(500, "Server error", Failure.ServerError), RUN_FAILURE_SERVER_ERROR),
+        (EvalApiError(409, "This eval attempt already ran", Failure.Duplicate), RUN_FAILURE_HARNESS_ERROR),
     ],
 )
 def test_anything_else_stops_the_run_which_still_resets_and_ends_failed(
@@ -277,9 +284,9 @@ def test_an_unreachable_readback_stops_the_run() -> None:
 @pytest.mark.parametrize(
     ("fail", "reason"),
     [
-        ("host refused the reset", RunFailure.number_2),
-        ("host login", RunFailure.number_2),
-        ("backend failed the reset", RunFailure.number_3),
+        ("host refused the reset", RUN_FAILURE_HOST_UNAVAILABLE),
+        ("host login", RUN_FAILURE_HOST_UNAVAILABLE),
+        ("backend failed the reset", RUN_FAILURE_SERVER_ERROR),
     ],
 )
 def test_a_failed_reset_still_ends_the_run_never_done_with_its_own_reason(
@@ -348,12 +355,14 @@ def test_an_unreachable_judge_records_the_attempt_failed_then_stops_the_run_with
     # DEV_NOTE: The judge is asked once (the backend already retried the model), the attempt is recorded failed with
     # why, and no later attempt runs
     assert client.events == ["start", "attempt 1", "judge", "result 1", "reset", "finish"]
+    # DEV_NOTE: The attempt that stopped the run is printed before the run ends
+    assert "FAIL Updates Alpha (attempt 1): The judge couldn't be reached: HTTP 503" in client.out.getvalue()
     [result] = client.results
     assert not result.hasPassed
     assert result.graderOutput.error is not None
     assert result.graderOutput.error.root.startswith("The judge couldn't be reached: HTTP 503")
     assert client.finish_request is not None and not client.finish_request.isComplete
-    assert client.finish_request.failure is RunFailure.number_1
+    assert client.finish_request.failure is RUN_FAILURE_JUDGE_UNAVAILABLE
 
 
 def test_any_other_judge_refusal_stops_the_run_with_its_own_reason() -> None:
@@ -361,12 +370,12 @@ def test_any_other_judge_refusal_stops_the_run_with_its_own_reason() -> None:
     with pytest.raises(EvalApiError):
         run(refused, k=1)
     assert refused.results == []
-    assert refused.finish_request is not None and refused.finish_request.failure is RunFailure.number_4
+    assert refused.finish_request is not None and refused.finish_request.failure is RUN_FAILURE_HARNESS_ERROR
 
     failed = FakeClient(case=RUBRIC_CASE, refuse_judge=EvalApiError(500, "Server error", Failure.ServerError))
     with pytest.raises(EvalApiError):
         run(failed, k=1)
-    assert failed.finish_request is not None and failed.finish_request.failure is RunFailure.number_3
+    assert failed.finish_request is not None and failed.finish_request.failure is RUN_FAILURE_SERVER_ERROR
 
 
 def test_a_stop_of_the_harness_own_is_never_blamed_on_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -378,4 +387,5 @@ def test_a_stop_of_the_harness_own_is_never_blamed_on_the_backend(monkeypatch: p
     with pytest.raises(TypeError):
         run(client, k=1)
     assert client.events[-2:] == ["reset", "finish"]
-    assert client.finish_request is not None and client.finish_request.failure is RunFailure.number_4
+    assert client.finish_request is not None and client.finish_request.failure is RUN_FAILURE_HARNESS_ERROR
+

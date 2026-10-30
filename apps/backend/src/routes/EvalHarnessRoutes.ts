@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import authenticateEval from "@/middlewares/EvalAuthMiddleware";
 import EvalHarnessRepo from "@/repositories/EvalHarnessRepo";
+import EvalJudgeRepo from "@/repositories/EvalJudgeRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import type AppContext from "@/config/AppContext";
 import type { EvalVariables } from "@/config/AppContext";
@@ -36,7 +37,7 @@ EvalHarnessRoutes.post(
   authenticateEval,
   zValidator("json", Schemas.ZCreateEvalRunApiRequest),
   async (c) => {
-    const repo = new EvalHarnessRepo(c.env, c.executionCtx);
+    const repo = new EvalHarnessRepo(c.env);
     const result = await repo.startRun({
       identity: c.get("evalIdentity"),
       request: c.req.valid("json"),
@@ -66,7 +67,7 @@ EvalHarnessRoutes.post(
     const hostToken = hostTokenOf(c);
     if (!hostToken) return c.json(HOST_TOKEN_REQUIRED, 400);
     const identity = c.get("evalIdentity");
-    const result = await new EvalHarnessRepo(c.env, c.executionCtx).runAttempt({
+    const result = await new EvalHarnessRepo(c.env).runAttempt({
       identity,
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -102,7 +103,7 @@ EvalHarnessRoutes.post(
   async (c) => {
     const hostToken = hostTokenOf(c);
     if (!hostToken) return c.json(HOST_TOKEN_REQUIRED, 400);
-    const result = await new EvalHarnessRepo(c.env, c.executionCtx).readBack({
+    const result = await new EvalHarnessRepo(c.env).readBack({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -123,15 +124,15 @@ EvalHarnessRoutes.post(
   },
 );
 
-// DEV_NOTE: The pinned judge (M5-3). No host token: it reads the attempt's transcript from its DO and calls the model
-// router, never the host. JudgeUnavailable is 503.
+// DEV_NOTE: The pinned judge (M5-3), EvalJudgeRepo. No host token: it reads the attempt's transcript from its DO and
+// calls the model router, never the host. JudgeUnavailable is 503.
 EvalHarnessRoutes.post(
   "/runs/:runId/judge",
   authenticateEval,
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZEvalJudgeApiRequest),
   async (c) => {
-    const result = await new EvalHarnessRepo(c.env, c.executionCtx).judge({
+    const result = await new EvalJudgeRepo(c.env, c.executionCtx).judge({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -157,7 +158,7 @@ EvalHarnessRoutes.post(
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZRecordEvalResultApiRequest),
   async (c) => {
-    const result = await new EvalHarnessRepo(c.env, c.executionCtx).recordResult({
+    const result = await new EvalHarnessRepo(c.env).recordResult({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
@@ -183,7 +184,7 @@ EvalHarnessRoutes.post(
   async (c) => {
     const hostToken = hostTokenOf(c);
     if (!hostToken) return c.json(HOST_TOKEN_REQUIRED, 400);
-    const result = await new EvalHarnessRepo(c.env, c.executionCtx).reset({
+    const result = await new EvalHarnessRepo(c.env).reset({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       hostToken,
@@ -209,7 +210,7 @@ EvalHarnessRoutes.post(
   zValidator("param", Schemas.ZEvalRunParam),
   zValidator("json", Schemas.ZFinishEvalRunApiRequest),
   async (c) => {
-    const result = await new EvalHarnessRepo(c.env, c.executionCtx).finish({
+    const result = await new EvalHarnessRepo(c.env).finish({
       identity: c.get("evalIdentity"),
       runPublicId: c.req.valid("param").runId,
       request: c.req.valid("json"),
