@@ -38,6 +38,7 @@ export * from "./docGapClusters";
 export * from "./docGaps";
 export * from "./activityLog";
 export * from "./activityRollups";
+export * from "./chatbotHealth";
 export * from "./auditLog";
 export * from "./security";
 export * from "./insights";

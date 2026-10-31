@@ -15,16 +15,35 @@ import {
 // DEV_NOTE: Bodies the harness sends to /eval/* (M5-2). Every id is a public id; the company and the staging
 // connection come from the eval JWT, never from a body. Exported to evals/schemas/eval-api.schema.json.
 
-// DEV_NOTE: Starts a run of one config on the token's staging connection. trigger Gate (M5-4): the config must be
-// Testing (an admin sent it), else NotTesting; its finish moves the config to Ready or back to Draft. Manual and Nightly
-// (M5-5) run a config of any status and never move it.
-export const ZCreateEvalRunApiRequest = z
-  .object({
+const CREATE_EVAL_RUN_FIELDS = {
+  k: z.number().int().min(1).max(EVAL_RUN_MAX_K),
+  harnessVersion: z.string().trim().min(1).max(EVAL_HARNESS_VERSION_MAX_CHARS),
+};
+
+// DEV_NOTE: Starts a run of one config on the token's staging connection, named one of two ways. By chatbotConfigId:
+// that config. trigger Gate (M5-4) only this way: the config must be Testing (an admin sent it), else NotTesting; its
+// finish moves the config to Ready or back to Draft. By chatbotId (M5-5): the chatbot's published config when the run
+// starts, else NoPublishedConfig, so the nightly suite follows what is live without a config id in its settings. Manual
+// and Nightly run a config of any status and never move it. A union of strict objects, not refinements, so "exactly one
+// target" and "a gate names its config" reach the JSON Schema and the Python types (evals:check holds both sides).
+export const ZCreateEvalRunByConfigApiRequest = z
+  .strictObject({
     chatbotConfigId: z.string().min(1).max(64),
-    k: z.number().int().min(1).max(EVAL_RUN_MAX_K),
-    harnessVersion: z.string().trim().min(1).max(EVAL_HARNESS_VERSION_MAX_CHARS),
+    ...CREATE_EVAL_RUN_FIELDS,
     trigger: z.enum(EvalRunTriggerIntEnum),
   })
+  .meta({ id: "CreateEvalRunByConfigApiRequest" });
+
+export const ZCreateEvalRunByChatbotApiRequest = z
+  .strictObject({
+    chatbotId: z.string().min(1).max(64),
+    ...CREATE_EVAL_RUN_FIELDS,
+    trigger: z.literal([EvalRunTriggerIntEnum.Manual, EvalRunTriggerIntEnum.Nightly]),
+  })
+  .meta({ id: "CreateEvalRunByChatbotApiRequest" });
+
+export const ZCreateEvalRunApiRequest = z
+  .union([ZCreateEvalRunByConfigApiRequest, ZCreateEvalRunByChatbotApiRequest])
   .meta({ id: "CreateEvalRunApiRequest" });
 export type CreateEvalRunApiRequest = z.infer<typeof ZCreateEvalRunApiRequest>;
 

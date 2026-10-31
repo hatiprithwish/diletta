@@ -21,6 +21,7 @@ import {
   qualityIssues,
 } from "@/db/tables";
 import worker from "@/index";
+import { setQualityIssueChatbots } from "@/tests/helpers/qualityIssues";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -426,6 +427,7 @@ beforeAll(async () => {
         }),
       ])
       .returning({ id: qualityIssues.id, publicId: qualityIssues.publicId });
+    await setQualityIssueChatbots(ownerDb, [companyA, companyB]);
     [
       fixedIssue,
       dismissedIssue,
@@ -494,7 +496,7 @@ describe("GET /dashboard/quality-issues", () => {
       ratedReply: null,
     });
     // DEV_NOTE: A purged chat keeps its issue, not its title
-    expect(byId.get(purgedIssue)?.conversation.title).toBeNull();
+    expect(byId.get(purgedIssue)?.conversation?.title).toBeNull();
   });
 
   it("filters by tab and by chatbot, keeping the counts under the chatbot filter", async () => {
@@ -558,6 +560,8 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
     expect(status).toBe(200);
     expect(body.qualityIssue).toMatchObject({
       publicId: userIssue,
+      isChatbotWide: false,
+      chatbotName: "Support",
       rating: Schemas.FeedbackRatingIntEnum.Down,
       excerpt: [
         { role: Schemas.MessageRoleIntEnum.User, text: QUESTION },
@@ -565,7 +569,6 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
       ],
       conversation: {
         title: "Fire drill frequency",
-        chatbotName: "Support",
         userName: "Priya Shah",
       },
       changeRequestPublicId: null,
@@ -779,6 +782,7 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
           createdBy: adminAId,
         })
         .returning({ publicId: qualityIssues.publicId });
+      await setQualityIssueChatbots(ownerDb, [companyA]);
       await ownerDb.delete(chatbots).where(eq(chatbots.id, bot!.id));
       return issue!.publicId;
     });

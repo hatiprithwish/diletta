@@ -16,7 +16,9 @@ import type {
 
 // DEV_NOTE: One row of the Quality list (M4-6). Status Enum Pattern for source, status and type (issueType null = not
 // triaged yet). ratedReply = the start of the reply a user rated down (user issues; null for the others and once the
-// chat is purged). conversation.title null = purged or none.
+// chat is purged). conversation null = a chatbot-wide system issue (a health drop, M5-5); its title null = purged or
+// none. isChatbotWide says which it is, so a client never reads it from a missing conversation. chatbotName = the chatbot
+// the issue is about (null once it is removed).
 export interface QualityIssueListItem {
   publicId: string;
   source: QualityIssueSourceIntEnum;
@@ -27,10 +29,12 @@ export interface QualityIssueListItem {
   issueTypeLabel: QualityIssueTypeLabelEnum | null;
   note: string | null;
   ratedReply: string | null;
+  chatbotName: string | null;
+  isChatbotWide: boolean;
   conversation: {
     publicId: string;
     title: string | null;
-  };
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -52,9 +56,8 @@ export interface QualityIssueDetail extends Omit<QualityIssueListItem, "conversa
   conversation: {
     publicId: string;
     title: string | null;
-    chatbotName: string | null;
     userName: string | null;
-  };
+  } | null;
   changeRequestPublicId: string | null;
   evalCase: { publicId: string; name: string } | null;
 }

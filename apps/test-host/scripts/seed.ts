@@ -19,7 +19,10 @@ import { readOwnerDatabaseUrl } from "../../backend/src/db/ownerDatabaseUrl.ts";
 // 2. Each tool definition, Active at its newest version: a new version is added only when the definition changed, so
 //    configs pinned to an older version keep it. Refused while a Draft of the name exists (an operator is editing it).
 //    Skipped while the connection isn't Active (a tool needs an Active connection), with a message saying so.
-// 3. Says what a chat with the tools still needs, and the {name, version} pins for the config.
+// 3. The test company's own eval cases (Schemas.TEST_HOST_EVAL_CASES, M5-5: the nightly suite's cases on these tools) on
+//    its active default chatbot, matched by name: a new one inserted, one whose bodies differ rewritten, each turned on.
+//    The chatbot's other cases (an admin's) are left alone. Skipped, with a message, while there is no default chatbot.
+// 4. Says what a chat with the tools still needs, and the {name, version} pins for the config.
 
 // DEV_NOTE: The connection id, and whether it is Active (a tool can be activated only on an Active connection)
 async function upsertConnection(
@@ -183,6 +186,64 @@ async function seedTool(
   return { name: tool.name, version, change: latest ? "new version" : "created" };
 }
 
+// DEV_NOTE: Each case's change ("created", "updated", "unchanged"), or null when the company has no active default
+// chatbot to hold them. Bodies are compared as canonical JSON (jsonb doesn't keep key order).
+async function seedEvalCases(
+  client: pg.Client,
+  companyId: string,
+): Promise<{ chatbotPublicId: string; cases: { name: string; change: string }[] } | null> {
+  const chatbot = await client.query<{ id: string; public_id: string }>(
+    "SELECT id, public_id FROM chatbots WHERE company_id = $1 AND is_default AND status = $2",
+    [companyId, Schemas.ChatbotStatusIntEnum.Active],
+  );
+  const chatbotId = chatbot.rows[0]?.id;
+  const chatbotPublicId = chatbot.rows[0]?.public_id;
+  if (!chatbotId || !chatbotPublicId) return null;
+
+  const seeded = [];
+  for (const definition of Schemas.TEST_HOST_EVAL_CASES) {
+    const written = Schemas.toEvalCase(definition.body);
+    if (!written.isSuccess) {
+      throw new Error(`Eval case "${definition.name}" is invalid: ${written.message}`);
+    }
+    const existing = await client.query<Schemas.TestHostSeedEvalCaseRow>(
+      `SELECT id, input, expectations, is_active FROM eval_cases
+        WHERE company_id = $1 AND chatbot_id = $2 AND name = $3 ORDER BY id LIMIT 1 FOR UPDATE`,
+      [companyId, chatbotId, definition.name],
+    );
+    const row = existing.rows[0];
+    if (!row) {
+      await client.query(
+        `INSERT INTO eval_cases (public_id, company_id, chatbot_id, name, input, expectations)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          Utility.generatePublicId(),
+          companyId,
+          chatbotId,
+          definition.name,
+          JSON.stringify(written.input),
+          JSON.stringify(written.expectations),
+        ],
+      );
+      seeded.push({ name: definition.name, change: "created" });
+      continue;
+    }
+    if (
+      row.is_active &&
+      canonical([row.input, row.expectations]) === canonical([written.input, written.expectations])
+    ) {
+      seeded.push({ name: definition.name, change: "unchanged" });
+      continue;
+    }
+    await client.query(
+      `UPDATE eval_cases SET input = $1, expectations = $2, is_active = true, updated_at = now() WHERE id = $3`,
+      [JSON.stringify(written.input), JSON.stringify(written.expectations), row.id],
+    );
+    seeded.push({ name: definition.name, change: "updated" });
+  }
+  return { chatbotPublicId, cases: seeded };
+}
+
 // DEV_NOTE: What a chat with these tools needs that the seed doesn't make: reported, not created
 async function reportGaps(client: pg.Client, companyId: string): Promise<string[]> {
   const gaps: string[] = [];
@@ -245,6 +306,7 @@ async function main() {
         seeded.push(await seedTool(client, companyRow.id, connectionId, tool));
       }
     }
+    const seededCases = isActive ? await seedEvalCases(client, companyRow.id) : null;
     await client.query("COMMIT");
 
     if (!isActive) {
@@ -259,6 +321,10 @@ async function main() {
       [
         `Test host ${issuer} is connected to company ${values.company}.`,
         ...seeded.map(({ name, version, change }) => `  ${name} v${version}: ${change}`),
+        seededCases === null
+          ? "No eval cases seeded: the company has no active default chatbot yet. Rerun after creating it."
+          : `Eval cases on the default chatbot ${seededCases.chatbotPublicId} (set NIGHTLY_CHATBOT_ID to it):`,
+        ...(seededCases?.cases ?? []).map(({ name, change }) => `  ${name}: ${change}`),
         "Pin these in the chatbot's config (tools):",
         JSON.stringify(seeded.map(({ name, version }) => ({ name, version }))),
         gaps.length > 0

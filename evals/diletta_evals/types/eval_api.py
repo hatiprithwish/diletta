@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum, StrEnum
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, RootModel, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints
 
 
 class Trigger(Enum):
@@ -14,11 +14,29 @@ class Trigger(Enum):
     number_3 = 3
 
 
-class CreateEvalRunApiRequest(BaseModel):
+class CreateEvalRunByConfigApiRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
     chatbotConfigId: Annotated[str, Field(max_length=64, min_length=1)]
     k: Annotated[int, Field(ge=1, le=10)]
     harnessVersion: Annotated[str, Field(max_length=64, min_length=1)]
     trigger: Trigger
+
+
+class Trigger1(Enum):
+    number_2 = 2
+    number_3 = 3
+
+
+class CreateEvalRunByChatbotApiRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    chatbotId: Annotated[str, Field(max_length=64, min_length=1)]
+    k: Annotated[int, Field(ge=1, le=10)]
+    harnessVersion: Annotated[str, Field(max_length=64, min_length=1)]
+    trigger: Trigger1
 
 
 class EvalHarnessRun(BaseModel):
@@ -269,6 +287,7 @@ class Failure(StrEnum):
     Duplicate = "Duplicate"
     Incomplete = "Incomplete"
     NotTesting = "NotTesting"
+    NoPublishedConfig = "NoPublishedConfig"
     HostFailed = "HostFailed"
     JudgeUnavailable = "JudgeUnavailable"
 
@@ -277,6 +296,12 @@ class EvalRefusalApiResponse(BaseModel):
     isSuccess: Literal[False]
     message: str
     failure: Failure | None = None
+
+
+class CreateEvalRunApiRequest(
+    RootModel[CreateEvalRunByConfigApiRequest | CreateEvalRunByChatbotApiRequest]
+):
+    root: CreateEvalRunByConfigApiRequest | CreateEvalRunByChatbotApiRequest
 
 
 class ToolCall(BaseModel):

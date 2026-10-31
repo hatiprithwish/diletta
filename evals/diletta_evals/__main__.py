@@ -1,6 +1,7 @@
 """The harness CLI (docs/runbooks/evals.md).
 
     uv run --project evals python -m diletta_evals run --config <chatbotConfigPublicId> [--k 3] [--trigger gate]
+    uv run --project evals python -m diletta_evals run --chatbot <chatbotPublicId> --trigger nightly
     uv run --project evals python -m diletta_evals keygen [--kid <kid>]
 
 run: exit 0 when the run passed, 1 when it ran and failed (the chatbot regressed), 2 when it couldn't run: settings,
@@ -21,7 +22,7 @@ from diletta_evals.client import EvalApiClient
 from diletta_evals.config import ConfigError, load_config
 from diletta_evals.eval_jwt import generate_key_pair
 from diletta_evals.hosts import host_login_for
-from diletta_evals.runner import EvalRunner
+from diletta_evals.runner import ChatbotTarget, ConfigTarget, EvalRunner
 from diletta_evals.types import eval_api
 
 EXIT_PASSED = 0
@@ -30,7 +31,7 @@ EXIT_COULD_NOT_RUN = 2
 
 # packages/schemas EVAL_RUN_MAX_K, read from the generated type
 MAX_K = next(
-    meta.le for meta in eval_api.CreateEvalRunApiRequest.model_fields["k"].metadata if isinstance(meta, Le)
+    meta.le for meta in eval_api.CreateEvalRunByConfigApiRequest.model_fields["k"].metadata if isinstance(meta, Le)
 )
 TRIGGERS = {
     "manual": eval_api.Trigger.number_2,
@@ -48,7 +49,10 @@ def _run(args: argparse.Namespace) -> int:
     with httpx.Client() as http:
         try:
             runner = EvalRunner(EvalApiClient(config, http), host_login_for(config, http))
-            summary = runner.run(config_id=args.config, k=args.k, trigger=TRIGGERS[args.trigger])
+            target = ChatbotTarget(chatbot_id=args.chatbot) if args.chatbot else ConfigTarget(config_id=args.config)
+            summary = runner.run(
+                target=target, k=args.k, trigger=TRIGGERS[args.trigger], require_tool_cases=args.require_tool_cases
+            )
         except Exception as error:
             # DEV_NOTE: Every error that stops a run is "couldn't run" (CI must never read it as a regression); the
             # expected ones (settings, backend, host) say why, anything else names its type
@@ -80,7 +84,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="diletta_evals")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="run a config's eval cases on the staging connection")
-    run.add_argument("--config", required=True, help="the chatbot config's public id")
+    target = run.add_mutually_exclusive_group(required=True)
+    target.add_argument("--config", help="the chatbot config's public id")
+    target.add_argument(
+        "--chatbot",
+        help="a chatbot's public id: runs its published config at the start (the nightly suite); never a gate",
+    )
     run.add_argument("--k", type=_k, default=3, help="attempts per case (pass^k), default 3")
     run.add_argument(
         "--trigger",
@@ -88,11 +97,19 @@ def main() -> int:
         default="manual",
         help="gate: the publish gate of a config sent to testing (its finish makes it Ready or a draft again)",
     )
+    run.add_argument(
+        "--require-tool-cases",
+        action="store_true",
+        help="stop the run (exit 2) if no case expects a tool call: the nightly suite must test the action engine",
+    )
     run.set_defaults(handler=_run)
     keygen = commands.add_parser("keygen", help="a new platform eval signing key")
     keygen.add_argument("--kid", help="the key id (default eval-<date>)")
     keygen.set_defaults(handler=_keygen)
     args = parser.parse_args()
+    # DEV_NOTE: A gate run tests the version an admin sent to testing, never whatever is published
+    if args.command == "run" and args.chatbot and args.trigger == "gate":
+        parser.error("--trigger gate needs --config")
     return int(args.handler(args))
 
 

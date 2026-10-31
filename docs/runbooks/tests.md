@@ -91,7 +91,7 @@ A shape change adds a v2 with an upgrader next to the v1 parser. A stored v1 bod
   - `NothingToCheck` (409): the rubric was cleared on a case with no other check.
   - `TooLong` (400): the new rubric takes the expectations over `EVAL_CASE_EXPECTATIONS_MAX_CHARS` (20 000 characters as JSON, rubric included).
   - Turning the case on or off still works either way.
-- **Platform cases** (`company_id` null) show on every company's list, marked Platform. They are read-only: an edit answers 404.
+- **Platform cases** (`company_id` null) show on every company's list, marked Platform. They are read-only: an edit answers 404. They are defined in code and synced by the worker (`docs/runbooks/nightly-suite.md`).
 - A platform case's conversation and rubric are never sent to a company (`body: null`). They include the safety cases that gate publishing (M5-4), and a company that could read the exact prompts and pass criteria could tune a config to the test instead of to the behaviour.
 - With `botId`, a case's **Last result** comes only from that chatbot's runs, since a platform case runs against every chatbot.
 - Editing a case changes it for future runs only. Past results still point at the same row, so they show its current name.

@@ -5,6 +5,7 @@ import type {
   EvalCaseInputV1,
   EvalCaseSortColumn,
 } from "./EvalCasesCommon";
+import type { PlatformEvalCase } from "./PlatformEvalCases";
 
 // DEV_NOTE: A customer case (M4-6, from a quality issue): always one company's and one chatbot's, never a safety case,
 // active. The DAL generates publicId and checks the chatbot exists in the company.
@@ -58,3 +59,12 @@ export type GetRunnableEvalCasesDALRequest = {
   limit: number;
   isSafetyOnly?: boolean;
 };
+
+// DEV_NOTE: The platform suite's sync (M5-5), in withPlatform: a new keyed platform case (company and chatbot null), and
+// an existing one by its id rewritten to the case in code, turned on again. The DAL generates publicId on insert.
+export type CreatePlatformEvalCaseDALRequest = PlatformEvalCase;
+export type UpdatePlatformEvalCaseDALRequest = PlatformEvalCase & Pick<EvalCase, "id">;
+
+// DEV_NOTE: Keyed platform cases no longer in code, turned off. Safety ones are left alone (the CHECK keeps a platform
+// safety case active); the sync plan never lists one.
+export type DeactivatePlatformEvalCasesDALRequest = { ids: string[] };

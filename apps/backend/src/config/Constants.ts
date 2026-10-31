@@ -37,10 +37,21 @@ export default class Constants {
   // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
   //   every minute: outbox sweep + model_calls usage backfill + change request values purge
   //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync + activity rollups (today and yesterday) + eval transcript sweep
+  //   every hour at CRON_HOURLY_MINUTE: also the platform suite's case sync (M5-5)
   //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
+  //   daily at NIGHTLY_SUITE_CHECK_UTC_HOUR:CRON_HOURLY_MINUTE: the nightly platform suite's missed-run check (M5-5)
+  //   daily at CHATBOT_HEALTH_CHECK_UTC_HOUR:CRON_HOURLY_MINUTE: production health per chatbot (M5-5), after the hourly
+  //     rollups have rebuilt yesterday a few times
   static readonly CRON_TRIGGER = "* * * * *";
   static readonly CRON_HOURLY_MINUTE = 0;
   static readonly ACTIVITY_LOG_PARTITIONS_UTC_HOUR = 3;
+  static readonly NIGHTLY_SUITE_CHECK_UTC_HOUR = 6;
+  static readonly CHATBOT_HEALTH_CHECK_UTC_HOUR = 4;
+
+  // DEV_NOTE: The nightly platform suite (M5-5, .github/workflows/nightly-evals.yml, 02:00 UTC) alerts when the test
+  // company (NIGHTLY_SUITE_COMPANY_ID) has no Nightly run that reached Done within this long of the check: a day plus
+  // the run's own time, so one missed night alerts on the next morning's check.
+  static readonly NIGHTLY_SUITE_MAX_AGE_MS = 26 * 60 * 60_000;
 
   // DEV_NOTE: Widget auth (M2-1, ADR 0001). The companion JWT rides in Sec-WebSocket-Protocol on the upgrade. A token
   // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of

@@ -318,10 +318,44 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
     ],
   },
   "eval-api.schema.json": {
-    valid: [evalApi, { ...evalApi, refusal: { isSuccess: false, message: "Unauthorized" } }],
+    valid: [
+      evalApi,
+      { ...evalApi, refusal: { isSuccess: false, message: "Unauthorized" } },
+      {
+        ...evalApi,
+        createRunRequest: {
+          chatbotId: "bot_1",
+          k: 3,
+          harnessVersion: "test",
+          trigger: EvalRunTriggerIntEnum.Nightly,
+        },
+      },
+    ],
     invalid: [
       { ...evalApi, createRunRequest: { ...evalApi.createRunRequest, k: 0 } },
       { ...evalApi, createRunRequest: { ...evalApi.createRunRequest, trigger: 9 } },
+      // DEV_NOTE: M5-5: exactly one target, and a gate names its config
+      {
+        ...evalApi,
+        createRunRequest: {
+          k: 3,
+          harnessVersion: "test",
+          trigger: EvalRunTriggerIntEnum.Nightly,
+        },
+      },
+      {
+        ...evalApi,
+        createRunRequest: { ...evalApi.createRunRequest, chatbotId: "bot_1" },
+      },
+      {
+        ...evalApi,
+        createRunRequest: {
+          chatbotId: "bot_1",
+          k: 3,
+          harnessVersion: "test",
+          trigger: EvalRunTriggerIntEnum.Gate,
+        },
+      },
       { ...evalApi, runAttemptRequest: { ...evalApi.runAttemptRequest, messages: [] } },
       { ...evalApi, runAttemptResponse: { ...evalApi.runAttemptResponse, turnStatus: "done" } },
       {

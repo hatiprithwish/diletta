@@ -38,6 +38,15 @@ import {
 const UNTITLED = "Untitled conversation";
 const NOT_TRIAGED = "Not triaged";
 
+// DEV_NOTE: An issue's title: its conversation's, or for a check on the whole chatbot (a health drop, M5-5, no
+// conversation) the chatbot it is about
+function issueTitle(qualityIssue: Schemas.QualityIssueListItem): string {
+  if (qualityIssue.isChatbotWide) {
+    return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
+  }
+  return qualityIssue.conversation?.title ?? UNTITLED;
+}
+
 const TABS: { value: Schemas.QualityIssueListTabEnum; label: string }[] = [
   { value: Schemas.QualityIssueListTabEnum.Open, label: "Open" },
   { value: Schemas.QualityIssueListTabEnum.Converted, label: "Converted" },
@@ -60,7 +69,7 @@ const SOURCE_ICON: Record<Schemas.QualityIssueSourceIntEnum, ComponentType<IconP
 
 const EMPTY_TEXT: Record<Schemas.QualityIssueListTabEnum, string> = {
   [Schemas.QualityIssueListTabEnum.Open]:
-    "Nothing to triage. Issues show up here when a user rates a reply down, an admin flags a conversation or a check fails.",
+    "Nothing to triage. Issues show up here when a user rates a reply down, an admin flags a conversation, a check fails or a chatbot's day goes worse than usual.",
   [Schemas.QualityIssueListTabEnum.Converted]: "No issue has become a test yet.",
   [Schemas.QualityIssueListTabEnum.Fixed]: "No issue was marked fixed yet.",
   [Schemas.QualityIssueListTabEnum.Dismissed]: "No issue was dismissed yet.",
@@ -264,7 +273,7 @@ function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQuali
             className="text-body font-medium break-words text-foreground after:absolute after:inset-0"
             aria-current={isSelected ? "true" : undefined}
           >
-            {qualityIssue.conversation.title ?? UNTITLED}
+            {issueTitle(qualityIssue)}
           </Link>
           <TypeChip issueTypeLabel={qualityIssue.issueTypeLabel} />
         </div>
@@ -319,7 +328,8 @@ function QualityDetailCard({ publicId, search }: Schemas.DashboardQualityDetailC
 }
 
 // DEV_NOTE: One issue: where it came from, the question and reply it is about, its triage and, while Open, Create test,
-// Mark fixed and Dismiss
+// Mark fixed and Dismiss. A chatbot-wide check (a health drop, M5-5) has no conversation: no excerpt, no Create test, no
+// Open conversation; its note says what dropped.
 export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailProps) {
   const { conversation } = qualityIssue;
   const isOpen = qualityIssue.qualityIssueStatus === Schemas.QualityIssueStatusIntEnum.Open;
@@ -327,7 +337,7 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
   const draftTest = useDraftQualityTest(qualityIssue.publicId);
   const [draft, setDraft] = useState<Schemas.QualityTestDraft | null>(null);
   const isBusy = close.isPending || draftTest.isPending;
-  const speaker = conversation.userName?.split(" ")[0] || "User";
+  const speaker = conversation?.userName?.split(" ")[0] || "User";
 
   const createTest = () => {
     draftTest
@@ -342,9 +352,7 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
         <p className="text-caption text-muted-foreground">
           {SOURCE_TEXT[qualityIssue.source]}, {Utilities.formatWhenWithTime(qualityIssue.createdAt)}
         </p>
-        <h2 className="text-section break-words text-foreground">
-          {conversation.title ?? UNTITLED}
-        </h2>
+        <h2 className="text-section break-words text-foreground">{issueTitle(qualityIssue)}</h2>
         {!isOpen && (
           <StatusChip
             label={qualityIssue.qualityIssueStatusLabel}
@@ -356,7 +364,11 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
       <div className="mx-[22px] mb-4 flex flex-col gap-2.5 rounded-lg bg-surface-subtle px-3.5 py-3">
         {qualityIssue.excerpt.length === 0 && (
           <p className="text-body text-muted-foreground">
-            {qualityIssue.isContentPurged ? "The chat's content was deleted." : "No messages yet."}
+            {qualityIssue.isChatbotWide
+              ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
+              : qualityIssue.isContentPurged
+                ? "The chat's content was deleted."
+                : "No messages yet."}
           </p>
         )}
         {qualityIssue.excerpt.map((message) => (
@@ -404,15 +416,19 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
 
       {isOpen && (
         <div className="flex flex-col gap-3 border-t px-[22px] py-4">
-          <p className="text-caption text-muted-foreground">
-            Creating a test rewrites this chat without personal details. You review it before it's
-            saved.
-          </p>
+          {!qualityIssue.isChatbotWide && (
+            <p className="text-caption text-muted-foreground">
+              Creating a test rewrites this chat without personal details. You review it before it's
+              saved.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button disabled={isBusy} onClick={createTest}>
-              <Plus aria-hidden />
-              {draftTest.isPending ? "Rewriting…" : "Create test"}
-            </Button>
+            {!qualityIssue.isChatbotWide && (
+              <Button disabled={isBusy} onClick={createTest}>
+                <Plus aria-hidden />
+                {draftTest.isPending ? "Rewriting…" : "Create test"}
+              </Button>
+            )}
             <Button
               variant="outline"
               disabled={isBusy}
@@ -433,20 +449,24 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 border-t px-[22px] py-4">
-        <Button variant="outline" asChild>
-          <Link to="/conversations/$id" params={{ id: conversation.publicId }}>
-            Open conversation
-          </Link>
-        </Button>
-        {qualityIssue.changeRequestPublicId && (
-          <Button variant="outline" asChild>
-            <Link to="/changes/$id" params={{ id: qualityIssue.changeRequestPublicId }}>
-              Open change
-            </Link>
-          </Button>
-        )}
-      </div>
+      {(conversation || qualityIssue.changeRequestPublicId) && (
+        <div className="flex flex-wrap gap-2 border-t px-[22px] py-4">
+          {conversation && (
+            <Button variant="outline" asChild>
+              <Link to="/conversations/$id" params={{ id: conversation.publicId }}>
+                Open conversation
+              </Link>
+            </Button>
+          )}
+          {qualityIssue.changeRequestPublicId && (
+            <Button variant="outline" asChild>
+              <Link to="/changes/$id" params={{ id: qualityIssue.changeRequestPublicId }}>
+                Open change
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
 
       <QualityTestDialog
         publicId={qualityIssue.publicId}

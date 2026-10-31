@@ -52,6 +52,7 @@ export enum QualityIssueTypeIntEnum {
   ToolBug = 3,
   ModelError = 4,
   Injection = 5,
+  HealthDrop = 6,
 }
 
 export enum QualityIssueTypeLabelEnum {
@@ -60,6 +61,7 @@ export enum QualityIssueTypeLabelEnum {
   ToolBug = "Tool bug",
   ModelError = "Model error",
   Injection = "Prompt injection",
+  HealthDrop = "Health drop",
 }
 
 export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
@@ -71,6 +73,7 @@ export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
   [QualityIssueTypeIntEnum.ToolBug]: QualityIssueTypeLabelEnum.ToolBug,
   [QualityIssueTypeIntEnum.ModelError]: QualityIssueTypeLabelEnum.ModelError,
   [QualityIssueTypeIntEnum.Injection]: QualityIssueTypeLabelEnum.Injection,
+  [QualityIssueTypeIntEnum.HealthDrop]: QualityIssueTypeLabelEnum.HealthDrop,
 };
 
 // DEV_NOTE: The activity_log / event_outbox names of quality issue events, shared by every writer (ModelKeyFailureProvider,
@@ -80,6 +83,8 @@ export const QUALITY_ISSUE_ENTITY_TYPE = "quality_issue";
 export enum QualityIssueEntityActionEnum {
   Opened = "opened",
   ProviderAdded = "provider_added",
+  // DEV_NOTE: The daily health check (M5-5) found another day's drop while the chatbot's Health drop issue is open
+  HealthDropAdded = "health_drop_added",
   // DEV_NOTE: An admin's work on the Quality page (M4-6): the type and note set, closed as fixed or dismissed, or
   // turned into a test
   Triaged = "triaged",
@@ -99,14 +104,18 @@ export const qualityIssueEventDedupeKey = (
 ): string => [qualityIssueEventType(action), qualityIssuePublicId, ...parts].join(":");
 
 // Whole Quality Issue Body — DB shape (enums stored as integers)
-// DEV_NOTE: id, companyId, conversationId, changeRequestId, feedbackId, evalCaseId, createdBy and updatedBy are
-// internal bigint ids — used by DAL/Repo only, NEVER sent to a client. CHECKs tie feedbackId to source = User,
-// createdBy to source = Admin and evalCaseId to status = Converted.
+// DEV_NOTE: id, companyId, chatbotId, conversationId, changeRequestId, feedbackId, evalCaseId, createdBy and updatedBy
+// are internal bigint ids — used by DAL/Repo only, NEVER sent to a client. CHECKs tie feedbackId to source = User,
+// createdBy to source = Admin, evalCaseId to status = Converted, and a missing conversation to source = System (a
+// chatbot-wide issue such as a health drop, M5-5, which always names its chatbot). chatbotId = the conversation's
+// chatbot, or the chatbot a chatbot-wide issue is about; every write sets it (null only on an issue older than M5-5 whose
+// conversation row is gone).
 export const ZQualityIssue = z.object({
   id: z.string(),
   publicId: z.string(),
   companyId: z.string(),
-  conversationId: z.string(),
+  chatbotId: z.string().nullable(),
+  conversationId: z.string().nullable(),
   changeRequestId: z.string().nullable(),
   feedbackId: z.string().nullable(),
   source: z.enum(QualityIssueSourceIntEnum),
@@ -182,6 +191,8 @@ export enum QualityIssueUpdateFailureEnum {
   NotOpen = "NotOpen",
   // DEV_NOTE: Convert only: the conversation's chatbot was removed, so there is no chatbot to own the test
   ChatbotNotFound = "ChatbotNotFound",
+  // DEV_NOTE: Convert only: a chatbot-wide system issue (a health drop, M5-5) has no conversation to turn into a test
+  NoConversation = "NoConversation",
 }
 
 // DEV_NOTE: Why Create test produced no draft. NotOpen: the issue was closed meanwhile. NoConversation: the chat has

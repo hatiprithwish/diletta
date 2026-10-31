@@ -20,6 +20,7 @@ export enum LogCategory {
   Feedback = "Feedback",
   Action = "Action",
   Rollup = "Rollup",
+  Health = "Health",
   Insights = "Insights",
   // DEV_NOTE: The eval harness's /eval/* API (M5-2)
   Eval = "Eval",
@@ -454,4 +455,21 @@ export enum LogAction {
   HasEvalResult = "HasEvalResult",
   GetPendingOwnerFiles = "GetPendingOwnerFiles",
   SweepEvalTranscripts = "SweepEvalTranscripts",
+  // Nightly platform suite (M5-5)
+  LockPlatformEvalCases = "LockPlatformEvalCases",
+  GetPlatformEvalCases = "GetPlatformEvalCases",
+  CreatePlatformEvalCase = "CreatePlatformEvalCase",
+  UpdatePlatformEvalCase = "UpdatePlatformEvalCase",
+  DeactivatePlatformEvalCases = "DeactivatePlatformEvalCases",
+  SyncPlatformEvalCases = "SyncPlatformEvalCases",
+  GetLatestNightlyEvalRun = "GetLatestNightlyEvalRun",
+  CheckNightlySuite = "CheckNightlySuite",
+  ReportNightlyEvalRun = "ReportNightlyEvalRun",
+  // Production health per chatbot (M5-5)
+  GetChatbotHealthRollups = "GetChatbotHealthRollups",
+  HasChatbotHealthDay = "HasChatbotHealthDay",
+  LockOpenChatbotWideQualityIssue = "LockOpenChatbotWideQualityIssue",
+  GetOpenChatbotWideQualityIssue = "GetOpenChatbotWideQualityIssue",
+  CheckChatbotHealth = "CheckChatbotHealth",
+  RecordChatbotHealthDrop = "RecordChatbotHealthDrop",
 }
