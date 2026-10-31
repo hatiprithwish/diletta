@@ -66,10 +66,11 @@ export default class JwksProvider {
     const url = JwksProvider.getJwksUrl(issuer);
 
     try {
-      // DEV_NOTE: No redirects: the keys must come from the issuer's own origin, over https (jwt_issuer is https-only)
+      // DEV_NOTE: No redirects: the keys must come from the issuer's own origin, over https (jwt_issuer is https-only).
+      // Workers refuses redirect: "error"; "manual" hands a 3xx back unfollowed, and it fails on !fetched.ok
       const fetched = await fetch(url, {
         headers: { Accept: "application/json" },
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(Constants.JWKS_FETCH_TIMEOUT_MS),
       });
 

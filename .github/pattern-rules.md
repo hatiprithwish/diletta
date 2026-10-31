@@ -1130,7 +1130,7 @@ SECURITY DEFINER|GRANT CREATE|OWNER TO diletta_app
 - A query validator (`zValidator`, a 400) that runs before the token is authenticated on a `/widget` route
 - Routing the Conversation DO publicly (`routeAgentRequest`, `/agents/*`): it must be reachable only through `GET /widget/ws`
 - Trusting a decoded claim (`iss`, `sub`, `roles`, a `company` claim) before the signature and claims checks pass, other than `iss` to find the connection row
-- Fetching a JWKS (or any URL built from a token) for an issuer with no `company_connections` row, or with `redirect` other than `"error"`
+- Fetching a JWKS (or any URL built from a token) for an issuer with no `company_connections` row, or with `redirect` other than `"manual"` (Workers throws on `"error"`; a 3xx must fail on `!ok`, never be followed)
 - Adding `none`, `HS*` or any symmetric algorithm to the allowlist, or picking the verify algorithm from the JWK instead of the pinned header `alg`
 - Importing a JWK with its private members, as extractable, or with usages beyond `["verify"]`
 - A check that answers anything but 401 before the signature and claims pass (an issuer, connection-status or origin oracle)
