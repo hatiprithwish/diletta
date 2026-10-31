@@ -46,6 +46,7 @@ export interface DocGapSampleQuestionsDALResponse extends ApiResponse {
 
 export interface ReopenDocGapClustersDALResponse extends ApiResponse {
   reopenedCount?: number;
+  reopenedIds?: string[];
 }
 
 // DEV_NOTE: The closest group a question may join, with its distance as cosine similarity. isSuccess with no group =

@@ -368,7 +368,7 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
         {qualityIssue.excerpt.length === 0 && (
           <p className="text-body text-muted-foreground">
             {qualityIssue.docGapCluster
-              ? "Several people asked this and the help docs had no answer. Add a document for it on the Knowledge page; that closes this item too."
+              ? "Several people asked this and the help docs had no answer. Use Add a document on this group in Knowledge; that closes this item too."
               : qualityIssue.isChatbotWide
                 ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
                 : qualityIssue.isContentPurged

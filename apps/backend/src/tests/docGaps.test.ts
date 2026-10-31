@@ -24,7 +24,9 @@ import {
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
 import worker from "@/index";
+import DocGapClustersDAL from "@/data-access-layer/DocGapClustersDAL";
 import ChatbotHealthProvider from "@/providers/chatbotHealth";
+import DocGapQualityProvider from "@/providers/docGapQuality";
 import consumeEvents from "@/queues/EventsConsumer";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import Utility from "@/utils/Utility";
@@ -160,14 +162,26 @@ const session = (
   ...overrides,
 });
 
-async function newConversation(chatbotId = botId) {
+async function newUser() {
+  return await withOwnerDb(async (ownerDb) => {
+    const [user] = await ownerDb
+      .insert(chatbotUsers)
+      .values({ companyId: companyA, hostUserId: `host_${crypto.randomUUID()}` })
+      .returning({ id: chatbotUsers.id });
+    return user!.id;
+  });
+}
+
+// DEV_NOTE: A new user by default: the Quality floor counts users, so a test shares one only on purpose
+async function newConversation(chatbotId = botId, chatbotUserId?: string) {
+  const owner = chatbotUserId ?? (await newUser());
   return await withOwnerDb(async (ownerDb) => {
     const [row] = await ownerDb
       .insert(conversations)
       .values({
         publicId: Utility.generatePublicId(),
         companyId: companyA,
-        chatbotUserId: userId,
+        chatbotUserId: owner,
         chatbotId,
       })
       .returning({ id: conversations.id, publicId: conversations.publicId });
@@ -472,6 +486,21 @@ describe("consumer: a candidate becomes a gap", () => {
     expect(await countGaps()).toBe(0);
   });
 
+  it("doesn't pay for the rewrite again when a retry follows a failed embed", async () => {
+    const question = label();
+    const prompts = mockVerdict(unanswered(question));
+    const recorded = await recordQuestion(await newConversation());
+    const outboxId = recorded.outboxIds![0]!;
+    const failed = await deliver(outboxId, null);
+    expect(failed.retry).toHaveBeenCalledOnce();
+    expect(prompts).toHaveLength(1);
+
+    const retried = await deliver(outboxId, newTopic());
+    expect(retried.ack).toHaveBeenCalledOnce();
+    expect(prompts).toHaveLength(1);
+    expect((await clusterFor(question))[0]?.questionCount).toBe(1);
+  });
+
   it("writes nothing on a redelivered event", async () => {
     const question = label();
     mockVerdict(unanswered(question));
@@ -560,7 +589,7 @@ describe("clustering", () => {
     expect(salesGroup?.questionCount).toBe(1);
   });
 
-  it("opens one item at 5 questions from 3 chats, not before, and no second one as it grows", async () => {
+  it("opens one item at 5 questions from 3 users, not before, and no second one as it grows", async () => {
     const topic = newTopic();
     const first = label();
     mockVerdict(unanswered(first));
@@ -599,6 +628,19 @@ describe("clustering", () => {
     await ask(await newConversation(), topic);
     expect(await itemsOf(cluster!.id)).toHaveLength(1);
     expect((await clusterFor(first))[0]?.questionCount).toBe(7);
+  });
+
+  it("opens no item for one user asking across several chats", async () => {
+    const topic = newTopic();
+    const first = label();
+    mockVerdict(unanswered(first));
+    const persistent = await newUser();
+    for (let index = 0; index < 5; index++) {
+      await ask(await newConversation(botId, persistent), topic);
+    }
+    const [cluster] = await clusterFor(first);
+    expect(cluster?.questionCount).toBe(5);
+    expect(await itemsOf(cluster!.id)).toHaveLength(0);
   });
 
   it("opens no item for many questions from one chat", async () => {
@@ -702,6 +744,52 @@ describe("the item follows its group", () => {
     expect(events[0]?.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.Admin);
   });
 
+  it("removing the answering document reopens the group's Fixed item, and it can close again", async () => {
+    const { cluster, item } = await groupWithItem();
+    const db = getDbClient(env);
+    const documentId = "999999998";
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(docGapClusters)
+        .set({ status: Answered, answeredByDocumentId: documentId })
+        .where(eq(docGapClusters.id, cluster.id));
+      await ownerDb
+        .update(qualityIssues)
+        .set({ status: Schemas.QualityIssueStatusIntEnum.Fixed })
+        .where(eq(qualityIssues.id, item.id));
+    });
+    const reopened = await withTenant(db, companyA, async (tx) => {
+      const groups = await new DocGapClustersDAL().reopenDocGapClustersByDocuments(tx, {
+        companyId: companyA,
+        knowledgeDocumentIds: [documentId],
+      });
+      return await DocGapQualityProvider.reopenForClusters(tx, {
+        companyId: companyA,
+        docGapClusterIds: groups.reopenedIds ?? [],
+      });
+    });
+    expect(reopened.isSuccess).toBe(true);
+    expect((await itemsOf(cluster.id))[0]?.status).toBe(Schemas.QualityIssueStatusIntEnum.Open);
+
+    const dismissed = await post(`/dashboard/doc-gap-clusters/${cluster.publicId}/dismiss`);
+    expect(dismissed.status).toBe(200);
+    expect((await itemsOf(cluster.id))[0]?.status).toBe(
+      Schemas.QualityIssueStatusIntEnum.Dismissed,
+    );
+
+    // DEV_NOTE: An item an admin dismissed stays dismissed when its group reopens
+    const untouched = await withTenant(db, companyA, async (tx) => {
+      return await DocGapQualityProvider.reopenForClusters(tx, {
+        companyId: companyA,
+        docGapClusterIds: [cluster.id],
+      });
+    });
+    expect(untouched.isSuccess).toBe(true);
+    expect((await itemsOf(cluster.id))[0]?.status).toBe(
+      Schemas.QualityIssueStatusIntEnum.Dismissed,
+    );
+  });
+
   it("closing the item leaves the group alone, and the growing group opens no second item", async () => {
     const { cluster, item, topic } = await groupWithItem();
     const closed = await post(`/dashboard/quality-issues/${item.publicId}/dismiss`);
@@ -728,10 +816,7 @@ describe("the item follows its group", () => {
     );
     await waitOnExecutionContext(ctx);
     const body = await response.json<Schemas.GetQualityIssueApiResponse>();
-    expect(body.qualityIssue?.docGapCluster).toEqual({
-      publicId: cluster.publicId,
-      label: cluster.label,
-    });
+    expect(body.qualityIssue?.docGapCluster).toEqual({ label: cluster.label });
     expect(body.qualityIssue?.isChatbotWide).toBe(true);
     expect((await post(`/dashboard/quality-issues/${item.publicId}/test-draft`)).status).toBe(409);
 
@@ -781,6 +866,17 @@ describe("closeConversation: the outcome", () => {
       outcome: Schemas.ConversationOutcomeIntEnum.Answered,
     });
     expect(await outcomeOf(answeredLater.id)).toBe(Schemas.ConversationOutcomeIntEnum.Answered);
+
+    // DEV_NOTE: The verdict arrives after the close
+    const closedFirst = await newConversation();
+    const late = await recordQuestion(closedFirst);
+    await repo.closeConversation({
+      session: session(closedFirst),
+      outcome: Schemas.ConversationOutcomeIntEnum.Answered,
+    });
+    expect(await outcomeOf(closedFirst.id)).toBe(Schemas.ConversationOutcomeIntEnum.Answered);
+    await deliver(late.outboxIds![0]!, newTopic());
+    expect(await outcomeOf(closedFirst.id)).toBe(Schemas.ConversationOutcomeIntEnum.Idk);
 
     const abandoned = await newConversation();
     await ask(abandoned, newTopic());

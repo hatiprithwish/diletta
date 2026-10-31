@@ -372,6 +372,43 @@ export default class ConversationsDAL {
     );
   }
 
+  // DEV_NOTE: Doc gaps (M5-6): a conversation that closed Answered before the verdict on its last question came in. Only
+  // from Closed + Answered; no such row is a success that changes nothing.
+  async markClosedConversationUnanswered(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MarkClosedConversationUnansweredDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.id, params.id),
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.status, Schemas.ConversationStatusIntEnum.Closed),
+        eq(conversations.outcome, Schemas.ConversationOutcomeIntEnum.Answered),
+      ];
+      await tx
+        .update(conversations)
+        .set({ outcome: Schemas.ConversationOutcomeIntEnum.Idk, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Closed conversation checked for its unanswered question";
+    } catch (error) {
+      const message = "Unknown error in marking closed conversation unanswered";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.MarkClosedConversationUnanswered,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: A reference check before an update: the failed response when lookup finds no row (or fails), else null
   private async findMissing(
     tx: NodePgTransaction<EmptyRelations>,

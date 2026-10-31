@@ -207,6 +207,7 @@ export interface TranscriptEntry {
   text: string;
   searchCitations: KnowledgeCitation[];
   searchStatuses: SearchHelpDocsStatusEnum[];
+  hasUnfinishedTool: boolean;
 }
 
 // DEV_NOTE: Server-side only — the next slice of the transcript to write to the read model: one turn (a user message

@@ -77,10 +77,7 @@ export default class QualityIssuesRepo {
       chatbotName: row.chatbotName,
       isChatbotWide:
         row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
-      docGapCluster:
-        row.docGapClusterPublicId !== null && row.docGapClusterLabel !== null
-          ? { publicId: row.docGapClusterPublicId, label: row.docGapClusterLabel }
-          : null,
+      docGapCluster: row.docGapClusterLabel !== null ? { label: row.docGapClusterLabel } : null,
       conversation:
         row.conversationPublicId === null
           ? null
@@ -305,7 +302,8 @@ export default class QualityIssuesRepo {
       const outboxId = await this.recordEvent(tx, params, row, {
         action: Schemas.QUALITY_ISSUE_CLOSE_ENTITY_ACTION_MAP[params.status],
         detail: { status: params.status, issueType: row.issueType },
-        dedupeParts: [],
+        // DEV_NOTE: An item reopened with its group (M5-6) can close again, and that close is its own event
+        dedupeParts: [row.updatedAt.toISOString()],
       });
       return { isSuccess: true, message: "Quality issue closed", outboxId };
     });

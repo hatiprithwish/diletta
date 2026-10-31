@@ -91,6 +91,8 @@ export enum QualityIssueEntityActionEnum {
   Fixed = "fixed",
   Dismissed = "dismissed",
   Converted = "converted",
+  // DEV_NOTE: Doc gaps (M5-6), the one way an item leaves a closed status: its group reopened, its document removed
+  Reopened = "reopened",
 }
 
 export const qualityIssueEventType = (action: QualityIssueEntityActionEnum): string =>

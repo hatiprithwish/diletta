@@ -400,6 +400,7 @@ export default class DocGapClustersDAL {
       response.isSuccess = true;
       response.message = "No documents to reopen doc gap clusters for";
       response.reopenedCount = 0;
+      response.reopenedIds = [];
       return response;
     }
 
@@ -421,6 +422,7 @@ export default class DocGapClustersDAL {
       response.isSuccess = true;
       response.message = "Doc gap clusters reopened successfully";
       response.reopenedCount = reopened.length;
+      response.reopenedIds = reopened.map((row) => row.id);
     } catch (error) {
       const message = "Unknown error in reopening doc gap clusters";
       AppLogger.error({

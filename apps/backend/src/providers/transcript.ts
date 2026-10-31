@@ -23,6 +23,7 @@ export default class TranscriptProvider {
         .trim(),
       searchCitations: message.parts.flatMap((part) => TranscriptProvider.searchCitationsOf(part)),
       searchStatuses: message.parts.flatMap((part) => TranscriptProvider.searchStatusOf(part)),
+      hasUnfinishedTool: message.parts.some((part) => TranscriptProvider.isUnfinishedTool(part)),
     }));
   }
 
@@ -39,6 +40,17 @@ export default class TranscriptProvider {
   ): Schemas.SearchHelpDocsStatusEnum[] {
     const output = TranscriptProvider.searchOutputOf(part);
     return output ? [output.status] : [];
+  }
+
+  // DEV_NOTE: A tool call with no result yet: running, or paused for an approval (M3-4)
+  private static isUnfinishedTool(part: UIMessage["parts"][number]): boolean {
+    if (!part.type.startsWith("tool-") && part.type !== "dynamic-tool") return false;
+    return !(
+      "state" in part &&
+      (part.state === "output-available" ||
+        part.state === "output-error" ||
+        part.state === "output-denied")
+    );
   }
 
   private static searchOutputOf(
@@ -81,6 +93,7 @@ export default class TranscriptProvider {
     let turnSearchStatuses: Schemas.SearchHelpDocsStatusEnum[] = [];
     let turnHasCitations = false;
     let turnHasReply = false;
+    let turnHasUnfinishedTool = false;
     for (const entry of params.entries.slice(start)) {
       if (entry.role === "user" || !current) {
         const isUser = entry.role === "user";
@@ -99,11 +112,13 @@ export default class TranscriptProvider {
         turnSearchStatuses = [];
         turnHasCitations = false;
         turnHasReply = false;
+        turnHasUnfinishedTool = false;
       }
 
       current.lastEntryId = entry.id;
       turnSearchCitations = [...turnSearchCitations, ...entry.searchCitations];
       turnSearchStatuses = [...turnSearchStatuses, ...entry.searchStatuses];
+      turnHasUnfinishedTool ||= entry.hasUnfinishedTool;
       if (entry.role !== "other" && entry.text.length > 0) {
         const citations =
           entry.role === "assistant" ? Schemas.citedBy(entry.text, turnSearchCitations) : [];
@@ -126,6 +141,7 @@ export default class TranscriptProvider {
           searchStatuses: turnSearchStatuses,
           hasReply: turnHasReply,
           hasCitations: turnHasCitations,
+          hasUnfinishedTool: turnHasUnfinishedTool,
         });
       }
     }

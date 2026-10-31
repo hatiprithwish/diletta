@@ -539,7 +539,7 @@ describe("Quality issue", () => {
       issueType: Schemas.QualityIssueTypeIntEnum.KnowledgeGap,
       issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.KnowledgeGap,
       note: "People keep asking something the help docs don't answer.",
-      docGapCluster: { publicId: "gap_1", label: "How do I archive a register?" },
+      docGapCluster: { label: "How do I archive a register?" },
       rating: null,
       excerpt: [],
       isContentPurged: false,

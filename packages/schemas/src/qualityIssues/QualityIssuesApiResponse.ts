@@ -31,8 +31,8 @@ export interface QualityIssueListItem {
   ratedReply: string | null;
   chatbotName: string | null;
   isChatbotWide: boolean;
-  // DEV_NOTE: Set on the item a growing group of unanswered questions opened (M5-6), so the page names and links it
-  docGapCluster: { publicId: string; label: string } | null;
+  // DEV_NOTE: Set on the item a growing group of unanswered questions opened (M5-6), so the page names it
+  docGapCluster: { label: string } | null;
   conversation: {
     publicId: string;
     title: string | null;

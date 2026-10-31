@@ -11,7 +11,7 @@ import {
 
 const { Found, NoResults, Unavailable } = SearchHelpDocsStatusEnum;
 const candidate = (searchStatuses: SearchHelpDocsStatusEnum[], hasCitations = false) =>
-  docGapCandidateSignal({ searchStatuses, hasReply: true, hasCitations });
+  docGapCandidateSignal({ searchStatuses, hasReply: true, hasCitations, hasUnfinishedTool: false });
 
 describe("docGapCandidateSignal", () => {
   it("is LowRetrieval when every search was empty, Idk when one found something the reply didn't cite", () => {
@@ -27,7 +27,20 @@ describe("docGapCandidateSignal", () => {
     expect(candidate([Unavailable])).toBeNull();
     expect(candidate([Found, Unavailable])).toBeNull();
     expect(
-      docGapCandidateSignal({ searchStatuses: [Found], hasReply: false, hasCitations: false }),
+      docGapCandidateSignal({
+        searchStatuses: [Found],
+        hasReply: false,
+        hasCitations: false,
+        hasUnfinishedTool: false,
+      }),
+    ).toBeNull();
+    expect(
+      docGapCandidateSignal({
+        searchStatuses: [NoResults],
+        hasReply: true,
+        hasCitations: false,
+        hasUnfinishedTool: true,
+      }),
     ).toBeNull();
   });
 });
@@ -66,8 +79,8 @@ describe("nextDocGapCentroid", () => {
 });
 
 describe("docGapClusterOpensQualityIssue", () => {
-  const opens = (isOpen: boolean, questionCount: number, conversationCount: number) =>
-    docGapClusterOpensQualityIssue({ isOpen, questionCount, conversationCount });
+  const opens = (isOpen: boolean, questionCount: number, userCount: number) =>
+    docGapClusterOpensQualityIssue({ isOpen, questionCount, userCount });
 
   it("needs an Open group over both floors, and never a single question", () => {
     expect(opens(true, 1, 1)).toBe(false);

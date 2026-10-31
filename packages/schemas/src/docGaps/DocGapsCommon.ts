@@ -27,6 +27,8 @@ export const DOC_GAP_SIGNAL_LABEL_MAP: Record<DocGapSignalIntEnum, DocGapSignalL
 
 // Whole Doc Gap Body — DB shape (enums stored as integers)
 // DEV_NOTE: Internal only: the Knowledge page reads a gap's question_generic through its group, never this row.
+// clusterId null = pending: its verdict and rewrite are stored, its embedding and group aren't yet, so a retry never
+// pays for the rewrite again. A pending gap shows nowhere.
 // conversationId and messageId go null at the chat purge (M6-1); the gap stays. embedding is the clustering's own.
 export const ZDocGap = z.object({
   id: z.string(),
@@ -45,10 +47,10 @@ export type DocGap = z.infer<typeof ZDocGap>;
 
 // DEV_NOTE: How close a question must be to a group's centroid to join it (cosine similarity on bge-m3)
 export const DOC_GAP_CLUSTER_MIN_SIMILARITY = 0.85;
-// DEV_NOTE: When a group opens its one Quality item: this many questions, from this many conversations, so a single
-// question never opens one and neither does one user asking again and again
+// DEV_NOTE: When a group opens its one Quality item: this many questions, from this many different users, so a single
+// question never opens one and neither does one user asking again and again, in one chat or several
 export const DOC_GAP_QUALITY_MIN_QUESTIONS = 5;
-export const DOC_GAP_QUALITY_MIN_CONVERSATIONS = 3;
+export const DOC_GAP_QUALITY_MIN_USERS = 3;
 // DEV_NOTE: A rewritten question's size, and how much of the chat the rewrite reads (each side)
 export const DOC_GAP_QUESTION_MAX_CHARS = 300;
 export const DOC_GAP_SOURCE_TEXT_MAX_CHARS = 4000;
@@ -85,15 +87,18 @@ export interface DocGapRewriteSource {
   reply: string;
 }
 
-// DEV_NOTE: A candidate is a turn that searched and whose reply cites nothing. A search that was unavailable says
-// nothing about the docs, so a turn with one is no candidate. Every search empty = LowRetrieval; a search found
+// DEV_NOTE: A candidate is a finished turn that searched and whose reply cites nothing. A search that was unavailable
+// says nothing about the docs, so a turn with one is no candidate. Neither is a turn paused on a tool (hasUnfinishedTool:
+// waiting for an approval): its text so far isn't its reply, and the reply that follows is about the action. Every search empty = LowRetrieval; a search found
 // something the reply didn't use = Idk. null = no candidate.
 export function docGapCandidateSignal(params: {
   searchStatuses: SearchHelpDocsStatusEnum[];
   hasReply: boolean;
   hasCitations: boolean;
+  hasUnfinishedTool: boolean;
 }): DocGapSignalIntEnum | null {
   const { searchStatuses } = params;
+  if (params.hasUnfinishedTool) return null;
   if (!params.hasReply || params.hasCitations || searchStatuses.length === 0) return null;
   if (searchStatuses.includes(SearchHelpDocsStatusEnum.Unavailable)) return null;
   return searchStatuses.every((status) => status === SearchHelpDocsStatusEnum.NoResults)
@@ -134,15 +139,15 @@ export function nextDocGapCentroid(
 export function docGapClusterOpensQualityIssue(params: {
   isOpen: boolean;
   questionCount: number;
-  conversationCount: number;
+  userCount: number;
 }): boolean {
   return (
     params.isOpen &&
     params.questionCount >= DOC_GAP_QUALITY_MIN_QUESTIONS &&
-    params.conversationCount >= DOC_GAP_QUALITY_MIN_CONVERSATIONS
+    params.userCount >= DOC_GAP_QUALITY_MIN_USERS
   );
 }
 
 export function docGapQualityNote(label: string): string {
-  return `People keep asking something the help docs don't answer: "${label}". Add a document for it on the Knowledge page.`;
+  return `People keep asking something the help docs don't answer: "${label}". Use Add a document on this group in Knowledge.`;
 }

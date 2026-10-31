@@ -1,7 +1,7 @@
 import { and, countDistinct, desc, eq } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { docGaps, messages } from "@/db/tables";
+import { conversations, docGaps, messages } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -34,7 +34,6 @@ export default class DocGapsDAL {
       companyId: params.companyId,
       chatbotId: params.chatbotId,
       messageId: params.messageId,
-      clusterId: params.clusterId,
     };
 
     try {
@@ -48,8 +47,6 @@ export default class DocGapsDAL {
           messageId: params.messageId,
           questionGeneric: params.questionGeneric,
           signal: params.signal,
-          embedding: params.embedding,
-          clusterId: params.clusterId,
         })
         .returning(GAP_COLUMNS);
 
@@ -107,31 +104,83 @@ export default class DocGapsDAL {
     return response;
   }
 
-  // DEV_NOTE: How many conversations a group's questions came from (a purged gap has none and isn't counted)
-  async countDocGapConversations(
+  async attachDocGapToCluster(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.CountDocGapConversationsDALRequest,
+    params: Schemas.AttachDocGapToClusterDALRequest,
   ) {
-    const response: Schemas.DocGapConversationCountDALResponse = { isSuccess: false };
+    const response: Schemas.DocGapDALResponse = { isSuccess: false };
+    const { embedding: _embedding, ...metadata } = params;
+
+    try {
+      const conditions = [eq(docGaps.id, params.id), eq(docGaps.companyId, params.companyId)];
+      const [updated] = await tx
+        .update(docGaps)
+        .set({ clusterId: params.clusterId, embedding: params.embedding, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning(GAP_COLUMNS);
+
+      if (!updated) {
+        const message = "Doc gap not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.AttachDocGapToCluster,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Doc gap attached to its cluster successfully";
+      response.docGap = updated;
+    } catch (error) {
+      const message = "Unknown error in attaching doc gap to its cluster";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.AttachDocGapToCluster,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: How many different users a group's questions came from, through each question's conversation. A purged gap
+  // has no conversation and isn't counted.
+  async countDocGapUsers(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountDocGapUsersDALRequest,
+  ) {
+    const response: Schemas.DocGapUserCountDALResponse = { isSuccess: false };
 
     try {
       const conditions = [
         eq(docGaps.companyId, params.companyId),
         eq(docGaps.clusterId, params.clusterId),
       ];
+      const joinConditions = [
+        eq(conversations.id, docGaps.conversationId),
+        eq(conversations.companyId, docGaps.companyId),
+      ];
       const [counted] = await tx
-        .select({ conversationCount: countDistinct(docGaps.conversationId) })
+        .select({ userCount: countDistinct(conversations.chatbotUserId) })
         .from(docGaps)
+        .innerJoin(conversations, and(...joinConditions))
         .where(and(...conditions));
 
       response.isSuccess = true;
-      response.message = "Doc gap conversations counted successfully";
-      response.conversationCount = counted?.conversationCount ?? 0;
+      response.message = "Doc gap users counted successfully";
+      response.userCount = counted?.userCount ?? 0;
     } catch (error) {
-      const message = "Unknown error in counting doc gap conversations";
+      const message = "Unknown error in counting doc gap users";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.CountDocGapConversations,
+        action: Schemas.LogAction.CountDocGapUsers,
         message,
         error,
         metadata: params,

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
@@ -196,6 +196,43 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetQualityIssueByDocGapCluster,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Fixed → Open for the items of these groups (their documents were removed, so nothing answers them). Only
+  // Fixed: an item an admin dismissed stays dismissed.
+  async reopenFixedQualityIssuesByDocGapClusters(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ReopenDocGapQualityIssuesRequest,
+  ) {
+    const response: Schemas.QualityIssuesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        inArray(qualityIssues.docGapClusterId, params.docGapClusterIds),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Fixed),
+      ];
+      response.qualityIssues = await tx
+        .update(qualityIssues)
+        .set({ status: Schemas.QualityIssueStatusIntEnum.Open, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Quality issues of reopened doc gap clusters reopened successfully";
+    } catch (error) {
+      const message = "Unknown error in reopening quality issues of doc gap clusters";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ReopenDocGapQualityIssues,
         message,
         error,
         metadata: params,
@@ -673,7 +710,6 @@ export default class QualityIssuesDAL {
         conversationTitle: conversations.title,
         conversationContentPurgedAt: conversations.contentPurgedAt,
         chatbotName: chatbots.name,
-        docGapClusterPublicId: docGapClusters.publicId,
         docGapClusterLabel: docGapClusters.label,
         // DEV_NOTE: An erased user keeps its row, not its name
         userName: sql<

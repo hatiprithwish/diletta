@@ -7,8 +7,10 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: A group of unanswered questions' one Quality item (M5-6), in the caller's transaction (pattern rule 1.1: a
 // self-contained multi-DAL step a Repo runs inside its own tx; it never opens one, never throws: a failure comes back as
 // isSuccess false and the Repo rolls back). open: only for a group with no item yet, whatever became of an earlier one,
-// so a group opens one item ever (UNQ_quality_issues_doc_gap_cluster_id). closeForCluster: the item follows its group
-// closed by an admin; an item already closed stays as it is. Closing the item leaves the group alone.
+// so a group has one item ever (UNQ_quality_issues_doc_gap_cluster_id). closeForCluster: the item follows its group
+// closed by an admin; an item already closed stays as it is. Closing the item leaves the group alone. reopenForClusters:
+// the one way out of a closed status (pattern rule 3.42): a group reopened by removing its document takes its Fixed item
+// with it.
 export default class DocGapQualityProvider {
   private static dal = new QualityIssuesDAL();
 
@@ -112,11 +114,55 @@ export default class DocGapQualityProvider {
       rootLogId: null,
       detail: { status, issueType: qualityIssue.issueType, docGapClusterId },
       eventType: Schemas.qualityIssueEventType(action),
-      dedupeKey: Schemas.qualityIssueEventDedupeKey(action, qualityIssue.publicId),
+      dedupeKey: Schemas.qualityIssueEventDedupeKey(
+        action,
+        qualityIssue.publicId,
+        qualityIssue.updatedAt.toISOString(),
+      ),
     });
     if (!event.isSuccess || !event.outboxId) {
       return { isSuccess: false, message: event.message };
     }
     return { isSuccess: true, message: "Quality item closed", outboxId: event.outboxId };
+  }
+
+  // DEV_NOTE: The groups a removed document reopened: their Fixed items open again, one row per group still, so the inbox
+  // speaks up about a gap that is real again. The Cron sweep publishes the events.
+  static async reopenForClusters(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ReopenDocGapQualityIssuesRequest,
+  ): Promise<Schemas.ApiResponse> {
+    if (params.docGapClusterIds.length === 0) {
+      return { isSuccess: true, message: "No reopened groups" };
+    }
+    const reopened = await DocGapQualityProvider.dal.reopenFixedQualityIssuesByDocGapClusters(
+      tx,
+      params,
+    );
+    if (!reopened.isSuccess) return { isSuccess: false, message: reopened.message };
+
+    const action = Schemas.QualityIssueEntityActionEnum.Reopened;
+    for (const qualityIssue of reopened.qualityIssues ?? []) {
+      const event = await CriticalEventProvider.record(tx, {
+        companyId: params.companyId,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+        actorId: null,
+        entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
+        entityId: qualityIssue.id,
+        entityAction: action,
+        entityVersion: null,
+        parentLogId: null,
+        rootLogId: null,
+        detail: { docGapClusterId: qualityIssue.docGapClusterId },
+        eventType: Schemas.qualityIssueEventType(action),
+        dedupeKey: Schemas.qualityIssueEventDedupeKey(
+          action,
+          qualityIssue.publicId,
+          qualityIssue.updatedAt.toISOString(),
+        ),
+      });
+      if (!event.isSuccess) return { isSuccess: false, message: event.message };
+    }
+    return { isSuccess: true, message: "Quality items reopened" };
   }
 }

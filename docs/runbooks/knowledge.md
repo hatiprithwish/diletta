@@ -111,17 +111,17 @@ pnpm --filter backend exec wrangler r2 object delete diletta-files-staging/<key>
 
 **Questions it couldn't answer.** Groups (`doc_gap_clusters`) of rewritten questions (`doc_gaps.question_generic`). `DocGapsRepo` writes them (below). An admin closes an Open group with the document that answers it (uploaded there or picked from any source: `answered_by_document_id`, Answered) or dismisses it. Neither is undone from the page. Removing that document (delete, source delete, or the sync pruning a page that left the sitemap) reopens the group in the same transaction.
 
-**How a question gets there (M5-6).** A live turn that searched and whose reply cites nothing is a candidate; the queue consumer asks the small model on the company's key whether it went unanswered and rewrites it without personal details, then embeds and groups it per chatbot. Costs one small model call per candidate, on the company's budget.
+**How a question gets there (M5-6).** A live turn that searched and whose reply cites nothing is a candidate; the queue consumer asks the small model on the company's key whether it went unanswered and rewrites it without personal details, then embeds and groups it per chatbot. Costs one small model call per candidate, on the company's budget; a retry repeats it only if the rewrite itself failed, since its answer is stored first. A turn paused for an approval is never a candidate.
 
-| Setting                             | Value | Effect                                          |
-| ----------------------------------- | ----- | ----------------------------------------------- |
-| `DOC_GAP_CLUSTER_MIN_SIMILARITY`    | 0.85  | How close a question must be to join a group    |
-| `DOC_GAP_QUALITY_MIN_QUESTIONS`     | 5     | Questions before a group opens its Quality item |
-| `DOC_GAP_QUALITY_MIN_CONVERSATIONS` | 3     | Conversations those questions must come from    |
+| Setting                          | Value | Effect                                          |
+| -------------------------------- | ----- | ----------------------------------------------- |
+| `DOC_GAP_CLUSTER_MIN_SIMILARITY` | 0.85  | How close a question must be to join a group    |
+| `DOC_GAP_QUALITY_MIN_QUESTIONS`  | 5     | Questions before a group opens its Quality item |
+| `DOC_GAP_QUALITY_MIN_USERS`      | 3     | Different users those questions must come from  |
 
-A new question near a **Dismissed** group joins it silently. An **Answered** group isn't matched: the question starts a new group, which shows the document didn't close the gap. Answering or dismissing a group closes its Quality item; closing the item leaves the group.
+A new question near a **Dismissed** group joins it silently. An **Answered** group isn't matched: the question starts a new group, which shows the document didn't close the gap. Answering or dismissing a group closes its Quality item; closing the item leaves the group. Removing the answering document reopens the group and, if the item was Fixed, the item.
 
-**Why a question didn't show up.** Search the logs for `ProcessDocGapCandidate` and `RewriteDocGapQuestion` by company. "Doc gap candidate dropped" says why (budget used up, no key, no published config, purged chat). "Rewrite refused; doc gap dropped" means the rewrite kept an email or a long number, or came back empty or too long. Failures that retry end in `diletta-events-*-dlq` after 3 tries, and that question is lost: gaps aren't rebuilt.
+**Why a question didn't show up.** Search the logs for `ProcessDocGapCandidate` and `RewriteDocGapQuestion` by company. "Doc gap candidate dropped" says why (budget used up, no key, no published config, purged chat). "Rewrite refused; doc gap dropped" means the rewrite kept an email or a long number, or came back empty or too long. Failures that retry end in `diletta-events-*-dlq` after 3 tries, and that question is lost from the groups: gaps aren't rebuilt. A gap that reached its rewrite stays in `doc_gaps` with `cluster_id` null.
 
 **Reopen a group by hand** (an admin closed it with the wrong document):
 

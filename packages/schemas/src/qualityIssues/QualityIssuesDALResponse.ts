@@ -46,7 +46,6 @@ export interface DashboardQualityIssueRow {
   conversationTitle: string | null;
   conversationContentPurgedAt: Date | null;
   chatbotName: string | null;
-  docGapClusterPublicId: string | null;
   docGapClusterLabel: string | null;
   userName: string | null;
   changeRequestPublicId: string | null;
@@ -68,4 +67,8 @@ export interface DashboardQualityIssuesDALResponse extends ApiResponse {
 // DEV_NOTE: Every tab's count; totalRecords = all of them
 export interface QualityIssueTabCountsDALResponse extends TotalRecordsResponse {
   tabCounts?: QualityIssueTabCounts;
+}
+
+export interface QualityIssuesDALResponse extends ApiResponse {
+  qualityIssues?: QualityIssue[];
 }
