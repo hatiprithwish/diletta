@@ -147,6 +147,55 @@ export default class ActivityLogDAL {
     return response;
   }
 
+  // DEV_NOTE: One row by id, for a queue consumer holding the event's activityLogId. isNotFound when it is gone.
+  async getActivityLog(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActivityLogDALRequest,
+  ) {
+    const response: Schemas.ActivityLogDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.id, params.id),
+        eq(activityLog.companyId, params.companyId),
+      ];
+      const [row] = await tx
+        .select()
+        .from(activityLog)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!row) {
+        const message = "Activity log not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetActivityLog,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Activity log fetched successfully";
+      response.activityLog = row;
+    } catch (error) {
+      const message = "Unknown error in fetching activity log";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActivityLog,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getActivityLogsByEntity(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetActivityLogsByEntityDALRequest,

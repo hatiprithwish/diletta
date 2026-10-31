@@ -123,6 +123,7 @@ export const ZQualityIssue = z.object({
   issueType: z.enum(QualityIssueTypeIntEnum).nullable(),
   note: z.string().nullable(),
   evalCaseId: z.string().nullable(),
+  docGapClusterId: z.string().nullable(),
   createdBy: z.string().nullable(),
   updatedBy: z.string().nullable(),
   createdAt: z.date(),

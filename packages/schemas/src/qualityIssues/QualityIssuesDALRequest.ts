@@ -14,8 +14,10 @@ import type {
 export type CreateSystemQualityIssueDALRequest = Pick<
   QualityIssue,
   "companyId" | "issueType" | "note"
-> &
-  ({ conversationId: string; chatbotId?: undefined } | { conversationId: null; chatbotId: string });
+> & { docGapClusterId?: string } & (
+    | { conversationId: string; chatbotId?: undefined }
+    | { conversationId: null; chatbotId: string }
+  );
 
 // Params to find the company's open system issue of one type, and to serialise the writers that open one
 export type FindOpenSystemQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
@@ -90,3 +92,9 @@ export type UpdateQualityIssueStatusDALRequest = Pick<QualityIssue, "companyId" 
   ) & {
     updatedBy: string;
   };
+
+// DEV_NOTE: The one item a group of unanswered questions ever opened (M5-6), whatever its status. isForUpdate locks it.
+export type GetQualityIssueByDocGapClusterDALRequest = Pick<QualityIssue, "companyId"> & {
+  docGapClusterId: string;
+  isForUpdate: boolean;
+};

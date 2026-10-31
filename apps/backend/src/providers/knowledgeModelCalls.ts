@@ -25,7 +25,8 @@ export default class KnowledgeModelCallsProvider {
       taskType:
         | Schemas.ModelTaskTypeEnum.KnowledgeEmbed
         | Schemas.ModelTaskTypeEnum.SearchEmbed
-        | Schemas.ModelTaskTypeEnum.SearchRerank;
+        | Schemas.ModelTaskTypeEnum.SearchRerank
+        | Schemas.ModelTaskTypeEnum.DocGapEmbed;
       model: string;
       price: Schemas.ModelPrice;
       calls: Schemas.KnowledgeModelCall[];

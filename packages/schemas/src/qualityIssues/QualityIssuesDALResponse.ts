@@ -46,6 +46,8 @@ export interface DashboardQualityIssueRow {
   conversationTitle: string | null;
   conversationContentPurgedAt: Date | null;
   chatbotName: string | null;
+  docGapClusterPublicId: string | null;
+  docGapClusterLabel: string | null;
   userName: string | null;
   changeRequestPublicId: string | null;
   evalCasePublicId: string | null;

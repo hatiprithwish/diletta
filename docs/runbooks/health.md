@@ -14,6 +14,8 @@ At 04:00 UTC (`ChatbotHealthCheck` cron), for every chatbot of every Active comp
 
 A signal drops when yesterday's share is at least **15 percentage points** above the baseline's. Too little traffic on either side means no judgement for that signal. The numbers live in `packages/schemas/src/chatbotHealth/ChatbotHealthCommon.ts` (`CHATBOT_HEALTH_*`) and are unit-tested there.
 
+Conversations close as "couldn't answer" only since M5-6 (the last question became a doc gap), so this signal's baseline starts empty until then and it rises from zero as data arrives.
+
 ## What happens on a drop
 
 - **Quality page.** The chatbot gets one open issue, source Automatic check, type Health drop, titled "Daily health check: <chatbot>". Its note says what dropped, e.g. "Oct 30: Replies rated down 70% (usually 10%)." It has no conversation, so it has no excerpt, no Create test and no Open conversation; the admin marks it fixed or dismisses it.

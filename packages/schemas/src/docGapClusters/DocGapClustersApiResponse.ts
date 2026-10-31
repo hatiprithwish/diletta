@@ -21,9 +21,11 @@ export interface DocGapClusterAnswer {
 // DEV_NOTE: One group of questions the assistant couldn't answer (M4-7). Status Enum Pattern for its status.
 // sampleQuestions = the newest DOC_GAP_SAMPLE_QUESTIONS_MAX of its questions, already rewritten without personal
 // details (doc_gaps.question_generic); latestQuestionAt null = none left (they moved to another group). answeredBy is
-// set while Answered.
+// set while Answered. chatbotName = the chatbot it is about (null once removed), shown only when chatbotCount says the
+// company has several.
 export interface DocGapClusterListItem {
   publicId: string;
+  chatbotName: string | null;
   label: string;
   questionCount: number;
   docGapClusterStatus: DocGapClusterStatusIntEnum;
@@ -39,6 +41,7 @@ export interface GetDocGapClustersApiResponse extends ApiResponse {
   docGapClusters?: DocGapClusterListItem[];
   totalRecords?: number;
   tabCounts?: DocGapClusterTabCounts;
+  chatbotCount?: number;
 }
 
 // DEV_NOTE: POST …/answer, …/dismiss: the group as it stands after. failure set (409) = it is no longer Open

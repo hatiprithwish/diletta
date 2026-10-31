@@ -77,6 +77,10 @@ export default class QualityIssuesRepo {
       chatbotName: row.chatbotName,
       isChatbotWide:
         row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
+      docGapCluster:
+        row.docGapClusterPublicId !== null && row.docGapClusterLabel !== null
+          ? { publicId: row.docGapClusterPublicId, label: row.docGapClusterLabel }
+          : null,
       conversation:
         row.conversationPublicId === null
           ? null

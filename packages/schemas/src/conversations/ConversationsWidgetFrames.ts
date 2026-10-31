@@ -3,7 +3,12 @@ import type { BudgetRefusalEnum } from "../budget";
 import type { ConfigSpec } from "../configSpec";
 import { ZConversationSession } from "./ConversationsCommon";
 import type { TurnMessage } from "../messages";
-import type { KnowledgeCitation, SearchHelpDocsExcerpt } from "../knowledgeSearch";
+import type {
+  KnowledgeCitation,
+  SearchHelpDocsExcerpt,
+  SearchHelpDocsStatusEnum,
+} from "../knowledgeSearch";
+import type { DocGapSignalIntEnum } from "../docGaps";
 import { ZWidgetFeedbackRating } from "../feedback";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import {
@@ -201,6 +206,7 @@ export interface TranscriptEntry {
   role: "user" | "assistant" | "other";
   text: string;
   searchCitations: KnowledgeCitation[];
+  searchStatuses: SearchHelpDocsStatusEnum[];
 }
 
 // DEV_NOTE: Server-side only — the next slice of the transcript to write to the read model: one turn (a user message
@@ -214,6 +220,9 @@ export interface TranscriptTurn {
   messages: TurnMessage[];
   title: string | null;
   lastEntryId: string;
+  // DEV_NOTE: Set when the turn may have gone unanswered (M5-6, Schemas.docGapCandidateSignal); null otherwise, and on a
+  // slice with no user message
+  docGapSignal: DocGapSignalIntEnum | null;
 }
 
 // DEV_NOTE: Server-side only — the turns to write, or isPositionLost when the last synced message isn't in the

@@ -109,7 +109,19 @@ pnpm --filter backend exec wrangler r2 object delete diletta-files-staging/<key>
 
 `/knowledge` shows every source (name, type, address or file count, status, documents, re-sync, last good sync) and a banner per Failed source with Retry sync. The banner never names a reason: none is stored. Find it in the logs (`RunKnowledgeSync`, `ListKnowledgeSyncItems`, `FetchKnowledgePage`) by the source's public id. `/knowledge/$id` lists one source's documents.
 
-**Questions it couldn't answer.** Groups (`doc_gap_clusters`) of rewritten questions (`doc_gaps.question_generic`). The clustering that writes them is M5-6; until then the section shows its empty state. An admin closes an Open group with the document that answers it (uploaded there or picked from any source: `answered_by_document_id`, Answered) or dismisses it. Neither is undone from the page. Removing that document (delete, source delete, or the sync pruning a page that left the sitemap) reopens the group in the same transaction.
+**Questions it couldn't answer.** Groups (`doc_gap_clusters`) of rewritten questions (`doc_gaps.question_generic`). `DocGapsRepo` writes them (below). An admin closes an Open group with the document that answers it (uploaded there or picked from any source: `answered_by_document_id`, Answered) or dismisses it. Neither is undone from the page. Removing that document (delete, source delete, or the sync pruning a page that left the sitemap) reopens the group in the same transaction.
+
+**How a question gets there (M5-6).** A live turn that searched and whose reply cites nothing is a candidate; the queue consumer asks the small model on the company's key whether it went unanswered and rewrites it without personal details, then embeds and groups it per chatbot. Costs one small model call per candidate, on the company's budget.
+
+| Setting                             | Value | Effect                                          |
+| ----------------------------------- | ----- | ----------------------------------------------- |
+| `DOC_GAP_CLUSTER_MIN_SIMILARITY`    | 0.85  | How close a question must be to join a group    |
+| `DOC_GAP_QUALITY_MIN_QUESTIONS`     | 5     | Questions before a group opens its Quality item |
+| `DOC_GAP_QUALITY_MIN_CONVERSATIONS` | 3     | Conversations those questions must come from    |
+
+A new question near a **Dismissed** group joins it silently. An **Answered** group isn't matched: the question starts a new group, which shows the document didn't close the gap. Answering or dismissing a group closes its Quality item; closing the item leaves the group.
+
+**Why a question didn't show up.** Search the logs for `ProcessDocGapCandidate` and `RewriteDocGapQuestion` by company. "Doc gap candidate dropped" says why (budget used up, no key, no published config, purged chat). "Rewrite refused; doc gap dropped" means the rewrite kept an email or a long number, or came back empty or too long. Failures that retry end in `diletta-events-*-dlq` after 3 tries, and that question is lost: gaps aren't rebuilt.
 
 **Reopen a group by hand** (an admin closed it with the wrong document):
 
@@ -126,6 +138,8 @@ WHERE public_id = '<group public id>';
 - Pages are fetched, not rendered, so content built by JavaScript after load is missed.
 - Converted HTML keeps navigation and footer text, which ends up in chunks.
 - The same page listed under both `www.` and the bare domain is stored twice (one document per URL).
-- Search: questions it couldn't answer don't feed doc gaps yet (M5-6), so the Knowledge page's groups stay empty until then.
+- Doc gaps: names in a rewritten question rest on the model's rewrite; the backstop pattern catches only emails and long numbers.
+- Doc gaps: a turn whose reply answered without citing a search is a candidate too; the verdict call is what rules it out.
+- Doc gaps: similarity and floors are starting values, not tuned on real traffic. A group's label stays its first question.
 - Search: the widget receives the model's search query (the tool's input) for its search step. Titles and URLs of the results go with it; excerpt text never does.
 - Search: the reranker's answer carries `usage.prompt_tokens`, but rows are still Estimated at one token per character (an overcount).

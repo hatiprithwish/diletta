@@ -6,6 +6,7 @@ import type { DocGapCluster, DocGapClusterTabCounts } from "./DocGapClustersComm
 export interface DocGapClusterRow {
   id: string;
   publicId: string;
+  chatbotName: string | null;
   label: string;
   questionCount: number;
   status: DocGapCluster["status"];
@@ -35,6 +36,7 @@ export interface DocGapClusterDALResponse extends ApiResponse {
 // DEV_NOTE: Every tab's count; totalRecords = all of them
 export interface DocGapClusterTabCountsDALResponse extends TotalRecordsResponse {
   tabCounts?: DocGapClusterTabCounts;
+  chatbotCount?: number;
 }
 
 // DEV_NOTE: Each group's sample questions, newest first, keyed by the group's internal id (a group with none has no key)
@@ -44,4 +46,15 @@ export interface DocGapSampleQuestionsDALResponse extends ApiResponse {
 
 export interface ReopenDocGapClustersDALResponse extends ApiResponse {
   reopenedCount?: number;
+}
+
+// DEV_NOTE: The closest group a question may join, with its distance as cosine similarity. isSuccess with no group =
+// the chatbot has none yet.
+export interface NearestDocGapCluster extends DocGapCluster {
+  centroid: number[];
+  similarity: number;
+}
+
+export interface NearestDocGapClusterDALResponse extends ApiResponse {
+  docGapCluster?: NearestDocGapCluster;
 }

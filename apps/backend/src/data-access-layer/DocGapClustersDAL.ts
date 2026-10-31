@@ -1,15 +1,23 @@
 import { and, asc, count, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { docGapClusters, docGaps, knowledgeDocuments, knowledgeSources } from "@/db/tables";
+import {
+  chatbots,
+  docGapClusters,
+  docGaps,
+  knowledgeDocuments,
+  knowledgeSources,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
 
 // DEV_NOTE: A group's columns but the centroid, which only the clustering (M5-6) reads
 const CLUSTER_COLUMNS = {
   id: docGapClusters.id,
   publicId: docGapClusters.publicId,
   companyId: docGapClusters.companyId,
+  chatbotId: docGapClusters.chatbotId,
   label: docGapClusters.label,
   questionCount: docGapClusters.questionCount,
   status: docGapClusters.status,
@@ -20,7 +28,7 @@ const CLUSTER_COLUMNS = {
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo, and every
 // query filters on companyId (defence in depth on top of RLS). The groups of questions the assistant couldn't answer
-// as the Knowledge page reads and closes them (M4-7); the clustering that writes them is M5-6. Question text
+// as the Knowledge page reads and closes them (M4-7), and as the clustering finds, creates and grows them (M5-6). Question text
 // (question_generic, already rewritten without personal details) is never logged.
 export default class DocGapClustersDAL {
   // DEV_NOTE: A group with its answering document and that document's source (left joins: no DB foreign keys), and the
@@ -34,10 +42,15 @@ export default class DocGapClustersDAL {
       eq(knowledgeSources.id, knowledgeDocuments.knowledgeSourceId),
       eq(knowledgeSources.companyId, knowledgeDocuments.companyId),
     ];
+    const chatbotJoinConditions = [
+      eq(chatbots.id, docGapClusters.chatbotId),
+      eq(chatbots.companyId, docGapClusters.companyId),
+    ];
     return tx
       .select({
         id: docGapClusters.id,
         publicId: docGapClusters.publicId,
+        chatbotName: chatbots.name,
         label: docGapClusters.label,
         questionCount: docGapClusters.questionCount,
         status: docGapClusters.status,
@@ -54,6 +67,7 @@ export default class DocGapClustersDAL {
         sourceName: knowledgeSources.name,
       })
       .from(docGapClusters)
+      .leftJoin(chatbots, and(...chatbotJoinConditions))
       .leftJoin(knowledgeDocuments, and(...documentJoinConditions))
       .leftJoin(knowledgeSources, and(...sourceJoinConditions));
   }
@@ -123,6 +137,9 @@ export default class DocGapClustersDAL {
           open: countOf(Open),
           answered: countOf(Answered),
           dismissed: countOf(Dismissed),
+          chatbotCount: sql<number>`(
+            select count(*) from ${chatbots} where ${chatbots.companyId} = ${params.companyId}
+          )`.mapWith(Number),
         })
         .from(docGapClusters)
         .where(eq(docGapClusters.companyId, params.companyId));
@@ -135,6 +152,7 @@ export default class DocGapClustersDAL {
         [Answered]: result?.answered ?? 0,
         [Dismissed]: result?.dismissed ?? 0,
       };
+      response.chatbotCount = result?.chatbotCount ?? 0;
     } catch (error) {
       const message = "Unknown error in counting doc gap clusters";
       AppLogger.error({
@@ -414,6 +432,200 @@ export default class DocGapClustersDAL {
           companyId: params.companyId,
           documentCount: params.knowledgeDocumentIds.length,
         },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One clustering at a time per chatbot (until the commit), so two questions arriving together can't each
+  // start the same group or both cross the Quality floor
+  async lockDocGapClustering(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.LockDocGapClusteringDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const lockKey = `doc_gap_clustering:${params.companyId}:${params.chatbotId}`;
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+      response.isSuccess = true;
+      response.message = "Doc gap clustering locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking doc gap clustering";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockDocGapClustering,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The chatbot's closest group a question may join: Open or Dismissed, never Answered. Locked, so an admin
+  // closing it waits for this write and the Quality check reads its real status. A chatbot holds few groups, so this
+  // sorts them rather than keep an index on centroids. isSuccess with no group = none yet.
+  async findNearestDocGapCluster(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindNearestDocGapClusterDALRequest,
+  ) {
+    const response: Schemas.NearestDocGapClusterDALResponse = { isSuccess: false };
+    const { embedding: _embedding, ...metadata } = params;
+
+    try {
+      const distance = sql<number>`${docGapClusters.centroid} <=> ${JSON.stringify(params.embedding)}::halfvec`;
+      const conditions = [
+        eq(docGapClusters.companyId, params.companyId),
+        eq(docGapClusters.chatbotId, params.chatbotId),
+        inArray(docGapClusters.status, [
+          Schemas.DocGapClusterStatusIntEnum.Open,
+          Schemas.DocGapClusterStatusIntEnum.Dismissed,
+        ]),
+      ];
+      const [nearest] = await tx
+        .select({
+          ...CLUSTER_COLUMNS,
+          centroid: docGapClusters.centroid,
+          similarity: sql<number>`1 - (${distance})`.mapWith(Number),
+        })
+        .from(docGapClusters)
+        .where(and(...conditions))
+        .orderBy(asc(distance), asc(docGapClusters.id))
+        .limit(1)
+        .for("update");
+
+      response.isSuccess = true;
+      response.message = nearest ? "Nearest doc gap cluster found" : "No doc gap cluster to join";
+      response.docGapCluster = nearest;
+    } catch (error) {
+      const message = "Unknown error in finding nearest doc gap cluster";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.FindNearestDocGapCluster,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A new Open group from its first question (its label and centroid). The Repo holds the chatbot's clustering
+  // lock; a removed chatbot is checked here (no DB foreign keys), isNotFound.
+  async createDocGapCluster(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateDocGapClusterDALRequest,
+  ) {
+    const response: Schemas.DocGapClusterDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, chatbotId: params.chatbotId };
+
+    try {
+      const chatbotConditions = [
+        eq(chatbots.id, params.chatbotId),
+        eq(chatbots.companyId, params.companyId),
+      ];
+      const [chatbot] = await tx
+        .select({ id: chatbots.id })
+        .from(chatbots)
+        .where(and(...chatbotConditions))
+        .limit(1);
+      if (!chatbot) {
+        const message = "Chatbot not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateDocGapCluster,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      const [created] = await tx
+        .insert(docGapClusters)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: params.companyId,
+          chatbotId: params.chatbotId,
+          label: params.label,
+          centroid: params.centroid,
+          questionCount: 1,
+        })
+        .returning(CLUSTER_COLUMNS);
+
+      response.isSuccess = true;
+      response.message = "Doc gap cluster created successfully";
+      response.docGapCluster = created;
+    } catch (error) {
+      const message = "Unknown error in creating doc gap cluster";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateDocGapCluster,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async growDocGapCluster(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GrowDocGapClusterDALRequest,
+  ) {
+    const response: Schemas.DocGapClusterDALResponse = { isSuccess: false };
+    const { centroid: _centroid, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(docGapClusters.id, params.id),
+        eq(docGapClusters.companyId, params.companyId),
+      ];
+      const [updated] = await tx
+        .update(docGapClusters)
+        .set({
+          centroid: params.centroid,
+          questionCount: params.questionCount,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning(CLUSTER_COLUMNS);
+
+      if (!updated) {
+        const message = "Doc gap cluster not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GrowDocGapCluster,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Doc gap cluster grown successfully";
+      response.docGapCluster = updated;
+    } catch (error) {
+      const message = "Unknown error in growing doc gap cluster";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GrowDocGapCluster,
+        message,
+        error,
+        metadata,
       });
       response.message = message;
     }

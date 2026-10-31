@@ -38,6 +38,7 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   ratedReply: "Every 6 months, per the Fire safety policy.",
   chatbotName: "eRegister Assistant",
   isChatbotWide: false,
+  docGapCluster: null,
   conversation: { publicId: "conv_1", title: "Bot gave old fire drill frequency" },
   createdAt: "2026-10-20T13:20:00.000Z",
   updatedAt: "2026-10-20T13:20:00.000Z",
@@ -66,6 +67,7 @@ const ROW_HEALTH: Schemas.QualityIssueListItem = {
   note: "Oct 30: Replies rated down 70% (usually 10%).",
   ratedReply: null,
   isChatbotWide: true,
+  docGapCluster: null,
   conversation: null,
 };
 
@@ -528,6 +530,40 @@ describe("Quality issue", () => {
     expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
     expect(within(card).queryByRole("link", { name: "Open conversation" })).not.toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Mark fixed" })).toBeInTheDocument();
+  });
+
+  it("shows a growing group of unanswered questions with its label and a way to Knowledge, no test", async () => {
+    const gapItem: Schemas.QualityIssueDetail = {
+      ...ROW_HEALTH,
+      publicId: "qi_3",
+      issueType: Schemas.QualityIssueTypeIntEnum.KnowledgeGap,
+      issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.KnowledgeGap,
+      note: "People keep asking something the help docs don't answer.",
+      docGapCluster: { publicId: "gap_1", label: "How do I archive a register?" },
+      rating: null,
+      excerpt: [],
+      isContentPurged: false,
+      conversation: null,
+      changeRequestPublicId: null,
+      evalCase: null,
+    };
+    mockApi((url, init) =>
+      url.includes("/dashboard/quality-issues/qi_3")
+        ? { status: 200, body: { isSuccess: true, qualityIssue: gapItem } }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_3");
+    const card = await detailCard();
+    expect(
+      await within(card).findByRole("heading", {
+        name: "Unanswered questions: How do I archive a register?",
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "Open Knowledge" })).toHaveAttribute(
+      "href",
+      "/knowledge",
+    );
+    expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
   });
 
   it("keeps a saved note when the answer carries no issue", async () => {

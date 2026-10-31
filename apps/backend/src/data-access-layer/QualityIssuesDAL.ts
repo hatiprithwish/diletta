@@ -12,6 +12,7 @@ import {
   feedback,
   messages,
   qualityIssues,
+  docGapClusters,
 } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
@@ -137,6 +138,8 @@ export default class QualityIssuesDAL {
         eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.System),
         eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
         isNull(qualityIssues.conversationId),
+        // DEV_NOTE: An item a group of questions opened (M5-6) has no conversation either, but it isn't this one
+        isNull(qualityIssues.docGapClusterId),
       ];
       const [qualityIssue] = await tx
         .select()
@@ -155,6 +158,44 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetOpenChatbotWideQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getQualityIssueByDocGapCluster(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetQualityIssueByDocGapClusterDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.docGapClusterId, params.docGapClusterId),
+      ];
+      const query = tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...conditions))
+        .limit(1);
+      const [qualityIssue] = params.isForUpdate ? await query.for("update") : await query;
+
+      response.isSuccess = true;
+      response.message = qualityIssue
+        ? "Quality issue of the doc gap cluster fetched successfully"
+        : "The doc gap cluster has no quality issue";
+      response.qualityIssue = qualityIssue;
+    } catch (error) {
+      const message = "Unknown error in fetching quality issue of doc gap cluster";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetQualityIssueByDocGapCluster,
         message,
         error,
         metadata: params,
@@ -255,6 +296,7 @@ export default class QualityIssuesDAL {
           source: Schemas.QualityIssueSourceIntEnum.System,
           issueType: params.issueType,
           note: params.note,
+          docGapClusterId: params.docGapClusterId,
         })
         .returning();
 
@@ -610,6 +652,10 @@ export default class QualityIssuesDAL {
       eq(messages.id, feedback.messageId),
       eq(messages.companyId, feedback.companyId),
     ];
+    const docGapClusterJoinConditions = [
+      eq(docGapClusters.id, qualityIssues.docGapClusterId),
+      eq(docGapClusters.companyId, qualityIssues.companyId),
+    ];
     return tx
       .select({
         id: qualityIssues.id,
@@ -627,6 +673,8 @@ export default class QualityIssuesDAL {
         conversationTitle: conversations.title,
         conversationContentPurgedAt: conversations.contentPurgedAt,
         chatbotName: chatbots.name,
+        docGapClusterPublicId: docGapClusters.publicId,
+        docGapClusterLabel: docGapClusters.label,
         // DEV_NOTE: An erased user keeps its row, not its name
         userName: sql<
           string | null
@@ -644,6 +692,7 @@ export default class QualityIssuesDAL {
       .from(qualityIssues)
       .leftJoin(conversations, and(...conversationJoinConditions))
       .leftJoin(chatbots, and(...chatbotJoinConditions))
+      .leftJoin(docGapClusters, and(...docGapClusterJoinConditions))
       .leftJoin(chatbotUsers, and(...userJoinConditions))
       .leftJoin(changeRequests, and(...changeRequestJoinConditions))
       .leftJoin(evalCases, and(...evalCaseJoinConditions))

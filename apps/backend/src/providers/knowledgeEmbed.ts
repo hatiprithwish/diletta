@@ -4,7 +4,7 @@ import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: The only env.AI.run caller for embeddings (pattern rule 3.10; the search reranker is KnowledgeRerankProvider):
 // Workers AI bge-m3 embeddings for knowledge chunks (knowledge.embed) and search queries (search.embed), platform-paid
-// (tier Embed), through the env's AI Gateway for logs, tagged with the task type. Texts go out in batches of KNOWLEDGE_EMBED_BATCH_SIZE, one call
+// (tier Embed), and doc gap questions (doc_gap.embed), through the env's AI Gateway for logs, tagged with the task type. Texts go out in batches of KNOWLEDGE_EMBED_BATCH_SIZE, one call
 // each; every call made is returned in calls (failed ones too) so the caller writes one model_calls row per call.
 // bge-m3 returns no usage, so a call is counted at one token per input character plus its two special tokens: more
 // than the tokenizer ever produces (usage Estimated, an overcount never an under). Stops at the first failed batch.
@@ -16,7 +16,10 @@ export default class KnowledgeEmbedProvider {
     env: Env,
     params: {
       companyPublicId: string;
-      taskType: Schemas.ModelTaskTypeEnum.KnowledgeEmbed | Schemas.ModelTaskTypeEnum.SearchEmbed;
+      taskType:
+        | Schemas.ModelTaskTypeEnum.KnowledgeEmbed
+        | Schemas.ModelTaskTypeEnum.SearchEmbed
+        | Schemas.ModelTaskTypeEnum.DocGapEmbed;
       texts: string[];
     },
   ): Promise<Schemas.KnowledgeEmbedResponse> {

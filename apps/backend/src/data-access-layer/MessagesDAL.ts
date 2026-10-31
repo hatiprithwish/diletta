@@ -239,4 +239,72 @@ export default class MessagesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: A doc gap candidate's question and its turn's replies, with what decides whether it may be read: the
+  // conversation's purge and eval marks. Empty when the message is gone. Text never reaches a log.
+  async getDocGapCandidateMessages(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetDocGapCandidateMessagesDALRequest,
+  ) {
+    const response: Schemas.DocGapCandidateMessagesDALResponse = { isSuccess: false };
+
+    try {
+      const questionConditions = [
+        eq(messages.id, params.messageId),
+        eq(messages.companyId, params.companyId),
+      ];
+      const [question] = await tx
+        .select({ conversationId: messages.conversationId, turnId: messages.turnId })
+        .from(messages)
+        .where(and(...questionConditions))
+        .limit(1);
+      if (!question) {
+        response.isSuccess = true;
+        response.message = "Doc gap candidate message is gone";
+        response.messages = [];
+        return response;
+      }
+
+      const conditions = [
+        eq(messages.companyId, params.companyId),
+        eq(messages.conversationId, question.conversationId),
+        eq(messages.turnId, question.turnId),
+        inArray(messages.role, [
+          Schemas.MessageRoleIntEnum.User,
+          Schemas.MessageRoleIntEnum.Assistant,
+        ]),
+      ];
+      const joinConditions = [
+        eq(conversations.id, messages.conversationId),
+        eq(conversations.companyId, messages.companyId),
+      ];
+      const rows = await tx
+        .select({
+          role: messages.role,
+          text: sql<string | null>`${messages.content}->>'text'`,
+          contentPurgedAt: conversations.contentPurgedAt,
+          evalRunId: conversations.evalRunId,
+        })
+        .from(messages)
+        .innerJoin(conversations, and(...joinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(messages.id));
+
+      response.isSuccess = true;
+      response.message = "Doc gap candidate messages fetched successfully";
+      response.messages = rows;
+    } catch (error) {
+      const message = "Unknown error in fetching doc gap candidate messages";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDocGapCandidateMessages,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }
