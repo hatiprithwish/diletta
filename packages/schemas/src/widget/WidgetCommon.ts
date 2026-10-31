@@ -25,9 +25,13 @@ export const ZWidgetEmbedConfig = z.object({
 export type WidgetEmbedConfig = z.infer<typeof ZWidgetEmbedConfig>;
 
 // DEV_NOTE: getToken asks the host's own backend for a fresh companion JWT (≤ 5 minutes, see ZWidgetJwtClaims). The
-// widget calls it before every connect and every bootstrap read and never stores the token.
+// widget calls it before every connect and every bootstrap read and never stores the token. getHostToken (M3-5,
+// optional) returns the host user's bearer token for the host's own API (jwt_forward: the chatbot reads and changes
+// records as this user): the widget sends it to the Conversation DO on every connect and again when the DO asks
+// (token_needed), never stores it, and a host without write tools may leave it out (approvals then can't run).
 export type WidgetInitOptions = WidgetEmbedConfig & {
   getToken: () => Promise<string>;
+  getHostToken?: () => Promise<string>;
 };
 
 // DEV_NOTE: Props of the React export: the same options, all of them reactive (a new theme re-themes it, a new

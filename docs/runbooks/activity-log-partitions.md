@@ -4,7 +4,7 @@
 
 ## What keeps the partitions in place
 
-A daily Cron (`0 3 * * *`, `src/crons/ActivityLogPartitionsCron.ts`) makes sure the current UTC month and the next 3 each have a partition. Partitions from the `*_partition_activity_log` migration run through 2027-12, so the Cron first creates one in 2027-10 (for 2028-01).
+A daily job at 03:00 UTC (`src/crons/ActivityLogPartitionsCron.ts`, picked by `CronScheduleProvider` from the Worker's one every-minute cron trigger) makes sure the current UTC month and the next 3 each have a partition. Partitions from the `*_partition_activity_log` migration run through 2027-12, so the Cron first creates one in 2027-10 (for 2028-01).
 
 The worker connects as `diletta_app`, which can't run DDL ([app-role.md](app-role.md)). It reaches the owner's rights only through two `SECURITY DEFINER` functions from the `*_activity_log_partition_maintenance` migration:
 

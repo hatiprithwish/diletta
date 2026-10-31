@@ -6,11 +6,71 @@ export enum AuthzActionEnum {
   ChatbotCreate = "chatbot.create",
   ChatbotUpdate = "chatbot.update",
 
+  // Settings › Bots (company-scoped, M4-10): read a chatbot's versions; write, copy or discard its draft; publish one;
+  // turn the company's read-only mode on or off
+  ChatbotConfigRead = "chatbot_config.read",
+  ChatbotConfigUpdate = "chatbot_config.update",
+  ChatbotConfigPublish = "chatbot_config.publish",
+  ReadOnlyModeRead = "company.read_only_read",
+  ReadOnlyModeUpdate = "company.read_only_update",
+
+  // Settings › Model keys and Budget (company-scoped, M4-10): read the model keys, add one or replace its value (checked
+  // with the provider first); read the spending budget and what's used, change the budget
+  ModelKeyRead = "model_key.read",
+  ModelKeyUpdate = "model_key.update",
+  BudgetRead = "budget.read",
+  BudgetUpdate = "budget.update",
+
+  // Settings › Connections and Team (company-scoped, M4-10): read the connections (origins are edited through
+  // ConnectionOriginsUpdate); read the team, invite an admin, revoke an invite, remove an admin
+  ConnectionRead = "connection.read",
+  TeamRead = "team.read",
+  TeamInvite = "team.invite",
+  TeamInviteRevoke = "team.invite_revoke",
+  TeamAdminRemove = "team.admin_remove",
+
   // Knowledge sources and their documents (company-scoped)
   KnowledgeSourceRead = "knowledge_source.read",
   KnowledgeSourceCreate = "knowledge_source.create",
   KnowledgeSourceUpdate = "knowledge_source.update",
   KnowledgeSourceDelete = "knowledge_source.delete",
+
+  // Knowledge page (company-scoped, M4-7): read the questions the assistant couldn't answer, grouped; close a group with
+  // the document that answers it, or dismiss it
+  DocGapClusterRead = "doc_gap_cluster.read",
+  DocGapClusterUpdate = "doc_gap_cluster.update",
+
+  // Insights pages (company-scoped, M4-3): Overview, Usage, Impact read the activity rollups; Impact's minutes per task
+  InsightRead = "insight.read",
+  RoiAssumptionUpdate = "roi_assumption.update",
+
+  // Conversations page (company-scoped, M4-4): list, transcript and export; an admin flags one into the quality inbox
+  ConversationRead = "conversation.read",
+  QualityIssueCreate = "quality_issue.create",
+
+  // Quality page (company-scoped, M4-6): read the inbox; triage, mark fixed or dismiss an issue; turn one into a test
+  QualityIssueRead = "quality_issue.read",
+  QualityIssueUpdate = "quality_issue.update",
+  EvalCaseCreate = "eval_case.create",
+
+  // Tests page (company-scoped, M4-8): read runs, their results and transcripts, and cases; write and edit a case, or turn
+  // one on or off (EvalCaseCreate above covers New case too). Running tests comes with the harness (M5-2).
+  EvalRunRead = "eval_run.read",
+  EvalCaseRead = "eval_case.read",
+  EvalCaseUpdate = "eval_case.update",
+
+  // Changes (company-scoped, M4-4 detail; M4-5 the list and timeline): read; mark one that needs a person resolved
+  ChangeRequestRead = "change_request.read",
+  ChangeRequestResolve = "change_request.resolve",
+
+  // Security page (company-scoped, M4-9): read the audit log (every admin and operator write on the company)…
+  AuditLogRead = "audit_log.read",
+  // and the rest of the page: read identity and origins, keys, retention and prompt-injection events; change where the
+  // widget may run, rotate the company key, set how long chat content is kept
+  SecurityRead = "security.read",
+  ConnectionOriginsUpdate = "company_connection.origins_update",
+  EncryptionKeyRotate = "company_encryption_key.rotate",
+  RetentionUpdate = "company.retention_update",
 
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
@@ -21,6 +81,9 @@ export enum AuthzActionEnum {
   ToolDefinitionCreate = "tool_definition.create",
   ToolDefinitionUpdate = "tool_definition.update",
   ToolDefinitionDelete = "tool_definition.delete",
+
+  // Activity rollups (operator only, on one company named by the route): rebuild a range of days by hand
+  ActivityRollupRebuild = "activity_rollup.rebuild",
 }
 
 // DEV_NOTE: Actions only an operator may perform. Everything else is company-scoped: an operator may perform it
@@ -32,6 +95,7 @@ export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.ToolDefinitionCreate,
   AuthzActionEnum.ToolDefinitionUpdate,
   AuthzActionEnum.ToolDefinitionDelete,
+  AuthzActionEnum.ActivityRollupRebuild,
 ]);
 
 // DEV_NOTE: The company a resource belongs to (internal companies.id, resolved server-side). null = no single

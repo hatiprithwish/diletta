@@ -4,6 +4,7 @@ import {
   count,
   desc,
   eq,
+  ilike,
   inArray,
   isNotNull,
   isNull,
@@ -256,10 +257,7 @@ export default class KnowledgeDocumentsDAL {
       const orderExpr =
         params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
       const offset = (params.pageNo - 1) * params.pageSize;
-      const conditions = [
-        eq(knowledgeDocuments.companyId, params.companyId),
-        eq(knowledgeDocuments.knowledgeSourceId, params.knowledgeSourceId),
-      ];
+      const conditions = this.searchConditions(params);
 
       const knowledgeDocumentsResponse = await tx
         .select()
@@ -290,15 +288,12 @@ export default class KnowledgeDocumentsDAL {
 
   async getKnowledgeDocumentsCount(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.GetKnowledgeDocumentsCountDALRequest,
+    params: Schemas.SearchKnowledgeDocumentsDALRequest,
   ) {
     const response: Schemas.TotalRecordsResponse = { isSuccess: false };
 
     try {
-      const conditions = [
-        eq(knowledgeDocuments.companyId, params.companyId),
-        eq(knowledgeDocuments.knowledgeSourceId, params.knowledgeSourceId),
-      ];
+      const conditions = this.searchConditions(params);
       const [result] = await tx
         .select({ count: count() })
         .from(knowledgeDocuments)
@@ -312,6 +307,104 @@ export default class KnowledgeDocumentsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CountKnowledgeDocuments,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Documents per source for the Knowledge page's Sources table (M4-7), one grouped read for the page's
+  // sources
+  async getKnowledgeDocumentCountsBySource(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetKnowledgeDocumentCountsBySourceDALRequest,
+  ) {
+    const response: Schemas.KnowledgeDocumentCountsDALResponse = { isSuccess: false };
+
+    if (params.knowledgeSourceIds.length === 0) {
+      response.isSuccess = true;
+      response.message = "No knowledge sources to count documents for";
+      response.documentCounts = {};
+      return response;
+    }
+
+    try {
+      const conditions = [
+        eq(knowledgeDocuments.companyId, params.companyId),
+        inArray(knowledgeDocuments.knowledgeSourceId, params.knowledgeSourceIds),
+      ];
+      const rows = await tx
+        .select({ knowledgeSourceId: knowledgeDocuments.knowledgeSourceId, count: count() })
+        .from(knowledgeDocuments)
+        .where(and(...conditions))
+        .groupBy(knowledgeDocuments.knowledgeSourceId);
+
+      response.isSuccess = true;
+      response.message = "Knowledge documents counted by source successfully";
+      response.documentCounts = Object.fromEntries(
+        rows.map((row) => [row.knowledgeSourceId, row.count]),
+      );
+    } catch (error) {
+      const message = "Unknown error in counting knowledge documents by source";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountKnowledgeDocumentsBySource,
+        message,
+        error,
+        metadata: { companyId: params.companyId, sourceCount: params.knowledgeSourceIds.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One document by its public id in any source of the company (the document that answers a gap cluster,
+  // M4-7). isForKeyShare holds the row until the transaction ends: a delete of it waits for the commit, and a delete
+  // already under way makes this wait, then find nothing.
+  async getCompanyKnowledgeDocument(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindCompanyKnowledgeDocumentDALRequest,
+  ) {
+    const response: Schemas.KnowledgeDocumentDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(knowledgeDocuments.publicId, params.publicId),
+        eq(knowledgeDocuments.companyId, params.companyId),
+      ];
+      const query = tx
+        .select()
+        .from(knowledgeDocuments)
+        .where(and(...conditions))
+        .limit(1);
+      const [knowledgeDocument] = params.isForKeyShare ? await query.for("key share") : await query;
+
+      if (!knowledgeDocument) {
+        const message = "Knowledge document not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetCompanyKnowledgeDocument,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Knowledge document fetched successfully";
+      response.knowledgeDocument = knowledgeDocument;
+    } catch (error) {
+      const message = "Unknown error in fetching knowledge document";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyKnowledgeDocument,
         message,
         error,
         metadata: params,
@@ -518,5 +611,17 @@ export default class KnowledgeDocumentsDAL {
     }
 
     return response;
+  }
+
+  // DEV_NOTE: One source's documents, by title when search is set (an admin's text, matched literally)
+  private searchConditions(params: Schemas.SearchKnowledgeDocumentsDALRequest) {
+    const conditions = [
+      eq(knowledgeDocuments.companyId, params.companyId),
+      eq(knowledgeDocuments.knowledgeSourceId, params.knowledgeSourceId),
+    ];
+    if (params.search !== null) {
+      conditions.push(ilike(knowledgeDocuments.title, Utility.containsPattern(params.search)));
+    }
+    return conditions;
   }
 }

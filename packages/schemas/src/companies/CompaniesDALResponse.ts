@@ -15,3 +15,8 @@ export interface CompaniesDALResponse extends ApiResponse {
 export interface CompanyIdResponse extends ApiResponse {
   companyId?: string;
 }
+
+// DEV_NOTE: Server-side only: internal ids of every company in some statuses, for a sweep across companies (withPlatform)
+export interface CompanyIdsDALResponse extends ApiResponse {
+  companyIds?: string[];
+}

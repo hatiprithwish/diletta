@@ -32,11 +32,15 @@ export default class Constants {
   // have a partition. The SQL function caps creation at 12 months ahead.
   static readonly ACTIVITY_LOG_PARTITION_MONTHS_AHEAD = 3;
 
-  // DEV_NOTE: Cron expressions, matched against controller.cron in scheduled(). Each must equal its entry in
-  // wrangler.jsonc triggers.crons exactly. The every-minute one also runs the model_calls usage backfill.
-  static readonly OUTBOX_SWEEP_CRON = "* * * * *";
-  static readonly ACTIVITY_LOG_PARTITIONS_CRON = "0 3 * * *";
-  static readonly KNOWLEDGE_RESYNC_CRON = "0 * * * *";
+  // DEV_NOTE: The Worker's one cron trigger (wrangler.jsonc triggers.crons, equal exactly): every minute. The account's
+  // Workers Free plan allows 5 cron triggers in total, so jobs that run less often are picked by time in
+  // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
+  //   every minute: outbox sweep + model_calls usage backfill + change request values purge
+  //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync + activity rollups (today and yesterday) + eval transcript sweep
+  //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
+  static readonly CRON_TRIGGER = "* * * * *";
+  static readonly CRON_HOURLY_MINUTE = 0;
+  static readonly ACTIVITY_LOG_PARTITIONS_UTC_HOUR = 3;
 
   // DEV_NOTE: Widget auth (M2-1, ADR 0001). The companion JWT rides in Sec-WebSocket-Protocol on the upgrade. A token
   // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of
@@ -89,6 +93,10 @@ export default class Constants {
   static readonly BUDGET_MESSAGE_WINDOW_MS = 60_000;
   static readonly BUDGET_TURN_WINDOW_MS = 60 * 60_000;
 
+  // DEV_NOTE: Settings › Model keys (M4-10): how long the provider's list-models check may take before the key counts
+  // as not checked (502, nothing saved)
+  static readonly MODEL_KEY_CHECK_TIMEOUT_MS = 10_000;
+
   // DEV_NOTE: The most activity rows read for one entity (an issue gathers a handful: opened, a provider per failing
   // key, triage events from M4)
   static readonly ACTIVITY_LOGS_BY_ENTITY_LIMIT = 100;
@@ -101,6 +109,10 @@ export default class Constants {
   // DEV_NOTE: The ratings the user gave a resumed conversation's replies (M2-7), read by the worker before the upgrade
   // and relayed by the DO in its conversation frame, so connecting costs the DO no database read
   static readonly CONVERSATION_FEEDBACK_HEADER = "x-diletta-conversation-feedback";
+  // DEV_NOTE: The host user's roles from this connect's verified companion JWT and its exp (M3-4,
+  // Schemas.ZConversationRolesGrant), for the config's approval rules. Set by the worker like the session header; the
+  // DO stores the newest connect's grant and counts its roles only until that exp.
+  static readonly CONVERSATION_ROLES_HEADER = "x-diletta-conversation-roles";
   // DEV_NOTE: At most this many ratings go in that header (the newest replies'), keeping it well under the header size
   // limit. A visitor gets at most FEEDBACK_FRAMES_PER_WINDOW feedback frames per FEEDBACK_WINDOW_MS per conversation;
   // more are answered "not saved" without touching the database.
@@ -113,6 +125,42 @@ export default class Constants {
   // this, so a stuck close never fires in a loop
   static readonly CONVERSATION_CLOSE_RETRY_MS = 60_000;
   static readonly CONVERSATION_TITLE_MAX_CHARS = 80;
+
+  // DEV_NOTE: Action engine (M3-4). A commit (one host write with its retries, HOST_CALL_TIMEOUT_MS per attempt) gets
+  // ACTION_COMMIT_TIMEOUT_MS before Think gives the model an error; the commit itself still finishes and is recorded.
+  // A continuation (the turn Think runs after an approval, rejection or expiry) that hasn't ended this long after its
+  // turn timeout is dropped, so it can't hold the conversation. Think's own parked-approval rows are swept
+  // ACTION_PENDING_APPROVAL_TTL_MS after they park (well past the approval expiry, which ends them first).
+  // A commit that couldn't start or finish its database write is tried again after ACTION_COMMIT_RETRY_MS (and on
+  // every host_token frame and wake). A visitor gets at most DECISION_FRAMES_PER_WINDOW change request decisions per
+  // FEEDBACK_WINDOW_MS per conversation; more are refused without touching the database.
+  static readonly ACTION_COMMIT_TIMEOUT_MS = 120_000;
+  static readonly CONTINUATION_START_GRACE_MS = 60_000;
+  static readonly ACTION_PENDING_APPROVAL_TTL_MS = 24 * 60 * 60_000;
+  static readonly ACTION_COMMIT_RETRY_MS = 60_000;
+  static readonly DECISION_FRAMES_PER_WINDOW = 30;
+  // DEV_NOTE: Token refresh (M3-8): a step that needs the host token and has none (or the host refused it) asks the
+  // widget (token_needed, reason refresh) and waits up to HOST_TOKEN_WAIT_MS for a host_token frame, then tries once
+  // more. A change request still waiting for one HOST_TOKEN_GRACE_MS after it first needed it (the widget closed, or
+  // its host gives none) is handed to a person; the grace covers a page reload.
+  static readonly HOST_TOKEN_WAIT_MS = 15_000;
+  static readonly HOST_TOKEN_GRACE_MS = 5 * 60_000;
+  // DEV_NOTE: The change request values purge (M3-7), every minute: at most CHANGE_REQUEST_PURGE_BATCH_SIZE rows per
+  // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
+  static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;
+  static readonly CHANGE_REQUEST_PURGE_MAX_BATCHES = 10;
+
+  // DEV_NOTE: Eval transcripts (M5-3). getEvalTranscript waits up to EVAL_TRANSCRIPT_IDLE_WAIT_MS (checking every
+  // EVAL_TRANSCRIPT_IDLE_POLL_MS) for the attempt's DO to finish a commit or verify still running, then answers; an
+  // idle eval conversation never changes again, so the judge and the stored transcript read the same one. A transcript
+  // files row still pending its owner EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS after it was written was never attached (its
+  // /results failed or the Worker died): the hourly sweep removes it and its R2 object, EVAL_TRANSCRIPT_SWEEP_BATCH_SIZE
+  // rows per transaction, EVAL_TRANSCRIPT_SWEEP_MAX_BATCHES per run.
+  static readonly EVAL_TRANSCRIPT_IDLE_WAIT_MS = 30_000;
+  static readonly EVAL_TRANSCRIPT_IDLE_POLL_MS = 250;
+  static readonly EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS = 60 * 60_000;
+  static readonly EVAL_TRANSCRIPT_SWEEP_BATCH_SIZE = 200;
+  static readonly EVAL_TRANSCRIPT_SWEEP_MAX_BATCHES = 10;
 
   // DEV_NOTE: Knowledge ingestion (M2-5). One KnowledgeSyncWorkflow per source sync lists the source's items (at most
   // KNOWLEDGE_MAX_ITEMS_PER_SYNC: a sitemap's same-site page URLs, following nested sitemap indexes

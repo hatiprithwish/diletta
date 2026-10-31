@@ -8,7 +8,7 @@ import { useWidgetStoreApi } from "@/store/WidgetStoreContext";
 // DEV_NOTE: Reads the widget's bootstrap (chatbot name, greeting, suggestions, launcher label) when the widget mounts
 // and on retry, with a fresh token from the host each time. Each token also tells the store which host user it is for
 // (hashed), like every connect's token does. Opening nothing and creating nothing: a page view costs one read.
-export function useBootstrap(params: Schemas.WidgetAppProps) {
+export function useBootstrap(params: Omit<Schemas.WidgetAppProps, "getHostToken">) {
   const { apiBase, chatbot } = params;
   const storeApi = useWidgetStoreApi();
   const getTokenRef = useLatest(params.getToken);

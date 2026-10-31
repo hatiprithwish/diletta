@@ -12,3 +12,13 @@ export type FindAssistantMessageDALRequest = Pick<
   Message,
   "companyId" | "conversationId" | "sessionMessageId"
 >;
+
+// DEV_NOTE: Every message of one conversation, oldest first (the dashboard transcript, M4-4)
+export type ListConversationMessagesDALRequest = Pick<Message, "companyId" | "conversationId">;
+
+// DEV_NOTE: A quality issue's messages (M4-6): the newest `limit` user and assistant messages of one conversation, up
+// to and including upToMessageId (the rated reply; null = the whole conversation), returned oldest first
+export type ListRecentChatMessagesDALRequest = Pick<Message, "companyId" | "conversationId"> & {
+  upToMessageId: string | null;
+  limit: number;
+};

@@ -67,3 +67,28 @@ export type SetToolDefinitionStatusDALRequest = Pick<
 
 // DEV_NOTE: Deletes a Draft only
 export type DeleteToolDefinitionDraftDALRequest = Pick<ToolDefinition, "publicId" | "companyId">;
+
+// DEV_NOTE: The exact {name, version} pins of a turn's config (M3-4): the runtime loads these versions, never a tool by
+// name alone
+// DEV_NOTE: isForShare (a publish, M4-10) locks the pinned rows FOR SHARE until the commit, so a Disable can't commit in
+// between: the publish sees the Disabled row, or the Disable sees the Published config
+// DEV_NOTE: evalConnectionId (M5-2): an eval conversation's staging connection, joined in place of the one the tool
+// version names, so every call of an eval runs against staging. null / absent = the tool's own connection.
+export type GetPinnedToolDefinitionsDALRequest = Pick<ToolDefinition, "companyId"> & {
+  pins: Pick<ToolDefinition, "name" | "version">[];
+  isForShare?: boolean;
+  evalConnectionId?: string | null;
+};
+
+// One version by its internal id (a change request's tool call names it), for a commit
+export type FindToolDefinitionByIdDALRequest = Pick<ToolDefinition, "companyId" | "id"> & {
+  evalConnectionId?: string | null;
+};
+
+// The company's write tools by name (Impact's tasks, M4-3)
+export type GetWriteToolSummariesDALRequest = Pick<ToolDefinition, "companyId">;
+
+// DEV_NOTE: The Bots draft editor's tool picker (M4-10): Active versions only, by name then version, capped
+export type GetActiveToolDefinitionOptionsDALRequest = Pick<ToolDefinition, "companyId"> & {
+  limit: number;
+};

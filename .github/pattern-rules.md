@@ -87,6 +87,8 @@ File: apps/web/src/**/*.tsx
 
 **Fix:** Replace all console methods with `AppLogger` from `@app/schemas`.
 
+**How a record goes out** (`providers/logger.ts`): one JSON object per record for Workers Logs. Every `Error` (and each `cause`) is reduced by `toLoggableError` to its name, message, stack and a short allowlist (`statusCode`, `failure`, `code`, `isRetryable`): an `APICallError`'s `requestBodyValues` / `responseBody` (the prompt, chat text included) or a `NoObjectGeneratedError`'s `text` never reach the log. Strings are redacted (`EMAIL_ADDRESS_PATTERN`) in the record before it is serialized, never on the serialized line (that breaks JSON escapes and drops the record). Don't add a payload field to the allowlist, and don't pass an error's payload as metadata.
+
 ---
 
 ### 1.4 TypeScript Type Safety [CRITICAL]
@@ -477,11 +479,38 @@ font-mono
 
 ---
 
+### 2.7 Dashboard Shell [WARNING]
+
+**Rule:** Dashboard pages render inside the M4-1 shell (`_authenticated/route.tsx`), which reads `/dashboard/me` before any page and shows No access to a 403 or an operator. Navigation comes only from `_authenticated/-nav.ts` (sidebar and breadcrumb only map it; an item with `items`, like Settings, is a nested group); a new page adds its entry there and its route under `_authenticated/` (a nested group's pages under its `to`, e.g. `settings/`). `/dashboard/me` query keys carry the Clerk user. Every page opens with `PageHeader` (`@/components/page-header`). No bot switcher and no chatbot in a page path (DESIGN.md §6). `-data.ts` keeps keys and `queryOptions` in its `Queries` class and the hooks as plain exported functions.
+
+**Violations:**
+
+- A page that builds its own sidebar, top bar or `<h1>` header instead of `PageHeader`
+- A nav link or breadcrumb label hard-coded outside `-nav.ts`
+- Sidebar or breadcrumb code that places an item by matching a label (`group.label === "Admin"`)
+- A query key for per-user data without the Clerk user id
+- A second `/dashboard/me` read outside `useMe`
+- A bot switcher, or a `$botId` segment in a dashboard route
+- A hook (`useQuery`, `useAuth`) inside a `Queries` class
+
+**Detection:**
+
+```
+- ❌ apps/web/src/routes/_authenticated/changes/index.tsx: <h1 className="text-page-title">Changes</h1>
+- ❌ apps/web/src/routes/_authenticated/$botId/overview/index.tsx
+- ✅ <PageHeader title="Changes" description="…" />
+- ✅ export function useMe() { return useQuery({ ...MeQueries.detail(getToken), … }) }
+```
+
+**Fix:** Render the page through `PageHeader`, add its link to `-nav.ts`, take the bot as an optional `botId` query param.
+
+---
+
 ## 3. COMPANION PLATFORM RULES
 
 Rules from the dev plan's Architecture baseline and CLAUDE.md (Database, Runtime, Hard bans). Several need context beyond the diff: the enforcer may read the changed file and `apps/backend/src/db/tables.ts`, but flags only added or modified lines.
 
-**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case); tenants never match those rows, and tenants may read platform eval cases but not write them (`*_rls_policies` migration). `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: none (the scaffold `users` table was dropped in M1-8). Golden files: `apps/backend/src/db/withTenant.ts`, `apps/backend/src/db/withPlatform.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
+**Tenant table:** any table in `apps/backend/src/db/tables.ts` with a `companyId` column (all 30 tables since M1-1 except `companies`, plus `admin_invites` from M4-10). `admins.company_id` and `eval_cases.company_id` are nullable (operator, platform case); tenants never match those rows, and tenants may read platform eval cases but not write them (`*_rls_policies` migration). `companies` is the tenancy root and counts as tenant data when a tenant flow reads or writes it. Non-tenant tables today: none (the scaffold `users` table was dropped in M1-8). Golden files: `apps/backend/src/db/withTenant.ts`, `apps/backend/src/db/withPlatform.ts`, `ChatbotsDAL.ts`, `ChatbotsRepo.ts`.
 
 **RLS (M1-3):** the worker connects as `diletta_app`, which can't bypass RLS. Every tenant table and `companies` has RLS enabled and forced, with a tenant policy (`company_id` = `app.company_id`) and a platform policy (`app.is_platform` = `on`). The owner role (`DATABASE_URL`) is for migrations and test fixtures only. See `docs/runbooks/app-role.md`.
 
@@ -818,7 +847,7 @@ env\.AI\.(run|toMarkdown)\(
 - `.default()` / `.prefault()` in a versioned `ZConfigSpecV<n>`: platform defaults go in `ConfigSpecDefaults.ts`, applied on load only
 - A change to a schema in `JSON_SCHEMA_EXPORTS` (`packages/schemas/src/jsonSchemaExports.ts`) without the regenerated `evals/schemas/*.json` in the same PR, or a hand edit to a file in `evals/schemas/`
 
-**Fix:** Bump `schema_version`, register the upgrader, and add an upgrade test. Run `pnpm --filter @app/schemas schema:export` and commit `evals/schemas/`.
+**Fix:** Bump `schema_version`, register the upgrader, and add an upgrade test. Run `pnpm --filter @app/schemas schema:export` and `pnpm evals:types`, and commit `evals/schemas/`, `evals/fixtures/` and `evals/diletta_evals/types/`.
 
 ---
 
@@ -882,7 +911,7 @@ exportKey\(
 
 ### 3.15 withPlatform Only for Cross-Company Work [CRITICAL]
 
-**Rule:** `withPlatform` passes every RLS policy, so it reads and writes every company's rows. It is allowed only where no single company applies: operator routes (`/operator/*`, operator-only actions behind `can()`), Cron or Queue jobs that sweep across companies (outbox relay sweep, rollups, retention purge, nightly platform suite), and the lookups that resolve the company before `withTenant` can run (Clerk admin → company, JWT issuer → `company_connections` row). Anything scoped to one company uses `withTenant`, even when an operator triggers it.
+**Rule:** `withPlatform` passes every RLS policy, so it reads and writes every company's rows. It is allowed only where no single company applies: operator routes (`/operator/*`, operator-only actions behind `can()`), Cron or Queue jobs that sweep across companies (outbox relay sweep, rollups, retention purge, nightly platform suite), and the lookups that resolve the company before `withTenant` can run (Clerk admin → company, JWT issuer → `company_connections` row, eval JWT `company` claim → company). Anything scoped to one company uses `withTenant`, even when an operator triggers it.
 
 **Violations:**
 
@@ -1130,12 +1159,12 @@ alg.*(none|HS256|HS384|HS512)|searchParams\.get\(["']token|\?token=|routeAgentRe
 
 ### 3.23 Conversation DO Stays Server-Authoritative [CRITICAL]
 
-**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources; `[]` otherwise) until host tools are pinned (M3), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames, plus the widget's `feedback` frame (M2-7), which the DO stores itself through `FeedbackRepo` after syncing the read model (never handed to Think; a reply not synced in this conversation answers `rating: null`; `FeedbackRepo.recordFeedback` re-checks the conversation open and the company and chatbot active on every rating, a closing conversation refuses it, frames are limited per conversation (`FEEDBACK_FRAMES_PER_WINDOW`) and stored one at a time in arrival order; the ratings relayed on connect are capped at `CONVERSATION_FEEDBACK_MAX_RATINGS` and parsed entry by entry); everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
+**Rule:** `ConversationDO` (Think) keeps Think locked down for a public widget: `workspaceBash = false`, `includeMcpTools = false`, `sendReasoning = false`, `sendIdentityOnConnect: false`, `activeTools` naming only `search_help_docs` (M2-6, and only when the turn's config lists knowledge sources) and the turn's loaded host tools (M3-4, rule 3.33), and `onChatError` returns only `MODEL_UNAVAILABLE_MESSAGE` or generic text. Every inbound frame passes `WidgetFrameProvider.admit` before Agents or Think see it: a chat request is rebuilt to carry only its newest user message (text, a new id, ≤ `WIDGET_MESSAGE_MAX_CHARS`), plus cancel and stream-resume frames, plus the widget's `host_token`, `change_request_decision`, `change_request_batch_decision` and `change_request_edits` frames (M3-4 / M3-5, handled by the DO itself, rules 3.33 and 3.34; decisions and edits limited per conversation, `DECISION_FRAMES_PER_WINDOW`), plus the widget's `feedback` frame (M2-7), which the DO stores itself through `FeedbackRepo` after syncing the read model (never handed to Think; a reply not synced in this conversation answers `rating: null`; `FeedbackRepo.recordFeedback` re-checks the conversation open and the company and chatbot active on every rating, a closing conversation refuses it, frames are limited per conversation (`FEEDBACK_FRAMES_PER_WINDOW`) and stored one at a time in arrival order; the ratings relayed on connect are capped at `CONVERSATION_FEEDBACK_MAX_RATINGS` and parsed entry by entry); everything else (clear, client-pushed messages, tool results and approvals, client state, rpc, regeneration) is refused. One turn runs at a time, none while closing; its ULID and the activity time are stored at admission, and `loadTurnConfig` re-checks the conversation, chatbot and company before the config and routed model are ready. The `messages` read model is synced from the transcript (`TranscriptProvider`) after every turn and on every wake, never written from anywhere else. Runtime state changes go through `patchRuntimeState` (no await between read and write); the auto-close never re-arms sooner than `CONVERSATION_CLOSE_RETRY_MS`.
 
 **Violations:**
 
 - Removing or widening the frame allowlist, or passing a client chat body through unchanged (client history, `clientTools`, custom fields, `trigger: "regenerate-message"`)
-- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin; any active tool but `search_help_docs`, or activating it for a bot with no knowledge sources
+- Re-enabling workspace bash, fetch or MCP tools, or tools without an approved pin; any active tool but `search_help_docs` and the turn's loaded host tools, or activating search for a bot with no knowledge sources
 - Returning a raw error or provider message from `onChatError`
 - Calling a model outside `ModelRouterRepo.getModel` (pattern rule 3.10), or running a turn without a fresh `loadTurnConfig`
 - Writing the read model anywhere but `ConversationsRepo.recordTurn`, or reading `messages` into a turn (the Think session is the source of truth)
@@ -1457,6 +1486,775 @@ diletta-test-host
 
 ---
 
+### 3.32 One Cron Trigger per Worker [HIGH]
+
+**Rule:** The backend declares exactly one cron trigger (`Constants.CRON_TRIGGER`, every minute; `wrangler.jsonc` `triggers.crons` holds only that), because the account's Workers Free plan allows 5 cron triggers in total across every Worker and env (a deploy over the limit fails with code 10072 and leaves its triggers half-updated). Which jobs run is decided by time in `CronScheduleProvider.getDueJobs(controller.scheduledTime)` (pure, UTC, unit-tested), and `scheduled()` runs them through `CRON_JOBS` (a `Record<Schemas.CronJobEnum, …>`) with `Promise.allSettled`. Every job tolerates a skipped tick.
+
+**Violations:**
+
+- A second entry in `triggers.crons`, or a `triggers` block in an env, a `switch (controller.cron)` on several expressions, or a new Worker with crons without checking the account's total
+- A job scheduled outside `CronScheduleProvider`, or reading the wall clock (`Date.now()`) instead of `controller.scheduledTime` to decide what is due
+- A new `CronJobEnum` value without its `CRON_JOBS` entry and a `cronSchedule.test.ts` case
+- Jobs awaited one after another, so one failure skips the rest
+
+**Detection Pattern:**
+
+```regex
+"crons"\s*:\s*\[[^\]]*,
+controller\.cron
+```
+
+**Examples:**
+
+```
+- ❌ "triggers": { "crons": ["* * * * *", "0 * * * *"] }
+- ✅ "triggers": { "crons": ["* * * * *"] }  // hourly work: CronScheduleProvider, at CRON_HOURLY_MINUTE
+- ❌ case "0 3 * * *": await runActivityLogPartitions(env);
+- ✅ if (time.getUTCMinutes() === Constants.CRON_HOURLY_MINUTE) jobs.push(Schemas.CronJobEnum.KnowledgeResync);
+```
+
+**Fix:** Mirror `apps/backend/src/providers/cronSchedule.ts` and `scheduled()` in `apps/backend/src/index.ts`.
+
+---
+
+### 3.33 Host Tool Calls Go Through the Action Engine [CRITICAL]
+
+**Rule:** A host tool runs only as one of the turn's tools loaded by `ActionEngineRepo.loadTurnTools` (the config's exact `{name, version}` pins, Active, on a connection that can serve calls; write tools left out for a read-only company). Every call's args pass `Schemas.validateToolArgs` (undeclared keys cut at every depth; an input_schema using a keyword zod would accept but not enforce is refused) before `renderToolOp`, and a repeat of the same tool + args in a turn is refused and stops the turn. Reads go through `HostToolCallProvider.read` and reach the model only through `HostToolsProvider.toModelText` (`<host_data>` fence); a read or a help docs search makes the turn untrusted, and an earlier turn's untrusted content is found by what its tool parts hold (`HostToolsProvider.hasUntrustedHistory`), never by tool name. A write is a Think `durable-pause` action: its approval hook reads before (`HostToolCallProvider.readBefore`, none for a create), builds the diff with `Schemas.buildChangeRequestChanges` from the read-before and the validated args (every arg `call_op` sends is on it: compare fields, other sent args as set, path args as unchanged), and stores the tool call, the change request (values only in `encrypted_changes` / `encrypted_args`, through `CompanyKeyProvider`) and its event in one `withTenant` (`ActionEngineRepo.proposeChange`). Whether the user must approve is `HostToolsProvider.decideApproval` alone (a matching `blocked` rule refuses any tool; destructive tools and untrusted turns always need approval), on the roles of the newest JWT only until its exp. A pause is resolved only by the DO's decision path (`change_request_decision` / `change_request_batch_decision` frames, or the expiry) through Think's `approveExecution` / `rejectExecution`, after the change request is decided in the database (which enforces the approval deadline); the decision claims the conversation (`isDeciding`) before its first await, follows the row's status whoever set it, and an approval needs the host token in memory. Every change request status change goes through `ActionEngineRepo` (locked row, allowed from-statuses) with its `change_request.<action>` critical event in the same transaction; a refused step always names its `failure` (a rollback is `ServerError`). A commit marks Committing (with `changeRequestCommitIdempotencyKey`) before the host call, and a Committing one is only ever resumed with `isResume: true`, with the host token in memory (never ended NeedsHuman for a resume that couldn't send).
+
+**Violations:**
+
+- Offering a tool loaded by name, a Draft / Disabled version, or a write tool to a read-only company
+- Rendering or sending a call whose args weren't checked by `validateToolArgs`, or storing args the input_schema doesn't declare
+- Building an approval diff from the model's text, or showing values that didn't come from the read-before and the args
+- Host data, a diff value or args in a log, the transcript's write outputs, the read model, an event's `detail` or a plain column
+- Calling `approveExecution` / `rejectExecution` from anywhere but the DO's decision and expiry path, or before the change request is decided; admitting Think's own tool approval frames from the widget
+- A change request status written without its critical event, or outside `ActionEngineRepo`
+- An approval rule or tool setting that lets a destructive tool, or a write in an untrusted turn, skip approval
+- A commit sent before Committing (and its key) is stored, or a Committing one resent with `isResume: false`
+- Treating a `withTenant` refusal without `failure` as settled (dropping the entry), or deciding on `this.activeTurn` checked before an await without claiming the conversation
+- An approval accepted after `created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS`
+- Telling the model a change failed while its entry is kept for a retry
+
+**Detection Pattern:**
+
+```regex
+approveExecution\(|rejectExecution\(
+renderToolOp\(
+kind:\s*"durable-pause"
+```
+
+A hit outside `ConversationDO.ts`, `providers/hostToolCall.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ actions[name] = action({ execute: () => adapter.execute({ risk, request: renderToolOp(op, { args: input }).request! }) })
+- ✅ approval: async ({ input, ctx }) => await this.proposeWrite(toolName, input, ctx.toolCallId)
+- ❌ await this.approveExecution(executionId); await repo.decideChangeRequest(...)
+- ✅ const decided = await repo.decideChangeRequest(...); if (decided.isSuccess) await this.approveExecution(executionId);
+- ❌ changes: [{ field: "amount", before: modelSaidBefore, after: args.amount }]
+- ✅ Schemas.buildChangeRequestChanges({ kind, callOp, readbackOp, args, before: readBefore.body })
+```
+
+**Fix:** Mirror `apps/backend/src/durable-objects/ConversationDO.ts` (`proposeWrite`, `runCommit`, `decideChangeRequests`, `resolvePauses`) and `repositories/ActionEngineRepo.ts`.
+
+---
+
+### 3.34 An Edited Change Is Re-Checked Like a New Proposal [CRITICAL]
+
+**Rule:** The widget's edits to a proposal (`change_request_edits`, M3-5) change nothing until the Conversation DO re-checks them, never trusting what the widget allowed: `ActionEngineRepo.getEditPlan` (Proposed, before `created_at + CHANGE_REQUEST_APPROVAL_EXPIRY_MS`, the conversation, chatbot and company re-checked and not read-only, the tool version still loading) → `Schemas.applyChangeRequestEdits` (only `Schemas.getEditableFields`: args `call_op` sends in its query or body; never the path args that pick the record, nothing for a delete) → `Schemas.validateToolArgs` on the whole edited args → the read-before again as the user (`HostToolCallProvider.readBefore`, none for a create) → `Schemas.buildChangeRequestChanges` from that read and the edited args → refused when nothing changes → `ActionEngineRepo.saveEdit` (re-checks the status and deadline under the row lock; new `encrypted_changes`, `summary`, `change_count`, `was_edited`, and a `change_request.edited` event by the chatbot user, one transaction). The change request stays Proposed with its original deadline: only an answer after the user saw the re-checked diff approves it, and the commit sends the payload's args, never values from the widget. Answers to several proposals go in one `change_request_batch_decision` frame: every one is decided in the database, the approved ones committed, and only then are the pauses resolved, back to back, so the model replies once (`execute` answers the commit's cached outcome).
+
+**Violations:**
+
+- Committing, approving or storing widget-sent values without the steps above, or approving in the edit step
+- Letting an edit name a path arg (the record id), a field `getEditableFields` doesn't list, or skip `validateToolArgs` because the widget checked it
+- Rebuilding the diff from the old read-before, or from the widget's text, instead of a fresh read
+- Extending the approval deadline on an edit, or saving an edit after it
+- Resolving one pause per batch answer while others of the batch are still being decided or committed (several model replies, refused answers)
+
+**Detection Pattern:**
+
+```regex
+updateChangeRequestPayload\(
+applyChangeRequestEdits\(
+WIDGET_CHANGE_REQUEST_(EDITS|BATCH_DECISION)_FRAME_TYPE
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `ChangeRequestsDAL.ts`, `providers/widgetFrames.ts`, `apps/widget/src/hooks/useChangeReview.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ payload.args = { ...payload.args, ...edit.values }; await repo.saveEdit({ payload })
+- ✅ applyChangeRequestEdits → validateToolArgs → readBefore → buildChangeRequestChanges → repo.saveEdit
+- ❌ for (const d of decisions) { await this.decideInDatabase(...); await this.approveExecution(id); }
+- ✅ decide all → runCommit each approved → resolvePauses(decided)
+```
+
+**Fix:** Mirror `ConversationDO.applyEdit` / `decideChangeRequests` and `ActionEngineRepo.getEditPlan` / `saveEdit`.
+
+---
+
+### 3.35 A Commit Counts Only Once Its Read-After Verifies It [CRITICAL]
+
+**Rule:** A write the host answered 2xx is Committed, not done (M3-6). In the same Conversation DO step (`runFollowUp`), before the action's `execute` answers, it is read back as the user (`HostToolCallProvider.readAfter`: `readback_op` with the args and the commit's own result, kept in the encrypted payload v2) and judged only by `Schemas.checkReadAfter` → `ChangeRequestsProvider.verifyEnd` in `ActionEngineRepo.finishVerify`: every compare field the args set reads back as sent (a delete: the record gone, 404) → Verified; anything else that answered → Mismatch, with what it found (`mismatches`, encrypted, the widget's frame only); a read that failed, answered otherwise or has nothing to compare → NeedsHuman `verify_unknown`, **never an undo on a guess**. A Mismatch is auto-undone at once, per change request: no `inverse_op` → NeedsHuman `not_undoable`; else the undo key (`changeRequestUndoIdempotencyKey`) is stored with its `undoing` event before `HostToolCallProvider.undo` sends `inverse_op` (Emulated: checked first with `getUndoCheckExpectations`), then the record is read again and `undoEnd` decides: back to its read-before values (a create: gone) → Undone, otherwise NeedsHuman `undo_failed` / `undo_unconfirmed`. A step that couldn't be sent for want of the host token keeps the entry (`verifying` / `undoing`) for the next `host_token`; an eviction resumes from the row (`startFollowUp`: Committed → read-after, Mismatch → undo, `isResume` when the undo key is stored). Every status change is one `change_request.<action>` event. The model hears Verified / Undone / needs review, never "made" for an unchecked write.
+
+**Violations:**
+
+- Treating Committed as the end: answering the model or the widget "done" before the read-after, or skipping it for a tool or mode
+- Deciding verified / mismatch outside `Schemas.checkReadAfter` (e.g. comparing the commit's own response, or the model's words)
+- Undoing on an unknown read-after, or on anything but a Mismatch row; undoing without storing the undo key first
+- Sending the undo with the commit's key, or resuming a Mismatch whose undo key is stored without `isResume`
+- Putting `result` or `mismatches` in a log, an event's detail, the transcript or the read model (they are host data)
+
+**Detection Pattern:**
+
+```regex
+HostToolCallProvider\.(readAfter|undo)\(
+finish(Verify|Undo)\(|startFollowUp\(
+ChangeRequestStatusIntEnum\.(Verified|Mismatch|Undone)
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `providers/changeRequests.ts`, `providers/hostToolCall.ts`, `apps/widget/src/lib/changeRequestView.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (committed.outcome === Succeeded) return output(Committed, "The change was made.")
+- ✅ finishCommit → runFollowUp: readAfter → finishVerify → (Mismatch) undo → readAfter → finishUndo
+- ❌ if (read.outcome !== Succeeded) await HostToolCallProvider.undo(...)
+- ✅ checkReadAfter(...).verdict === Unknown → NeedsHuman verify_unknown
+```
+
+**Fix:** Mirror `ConversationDO.runFollowUp` and `ActionEngineRepo.finishCommit` / `finishVerify` / `finishUndo` / `startFollowUp`.
+
+---
+
+### 3.36 Undo Only Inside Its Window, Re-Checked; Values Purged Only by the Purge Job [CRITICAL]
+
+**Rule:** A Verified change request is undone by the user (M3-7) only through the widget's `change_request_undos` frame, and only after `ActionEngineRepo.startUndo` re-checks it like a commit: the conversation open, the chatbot and company active and not read-only, then under the row lock `ChangeRequestsProvider.undoRefusal` (Verified with no undo under way, the tool has an `inverse_op`, the values not purged, before `undo_until`) and the tool version still loading. The user's own undo key (`changeRequestUserUndoIdempotencyKey`) and its `undoing` event (actor: the chatbot user) are stored before `HostToolCallProvider.undo`; the change request stays Verified until `finishUndo` ends it (Undone / stays Verified with an `undo_not_sent` event when nothing may have reached the host / NeedsHuman), or until the DO hands an undo never resumed to a person (`abandonUndo`, `undo_interrupted`) after `undo_until` + `CHANGE_REQUEST_UNDO_GRACE_MS`. `undo_until` is written only through `ChangeRequestsProvider.undoUntil` (end + `CHANGE_REQUEST_UNDO_WINDOW_MS`; NeedsHuman null). `encrypted_changes`, `iv` and `encryption_key_version` are nulled only by `ChangeRequestsDAL.purgeChangeRequestValues` via `ChangeRequestPurgeRepo` (the `ChangeRequestPurge` cron, `withPlatform`), never before `undo_until`, and for a Verified row holding the user's undo key not before `undo_until` + the grace (the SQL builds that key from `CHANGE_REQUEST_KEY_PREFIX` / `CHANGE_REQUEST_USER_UNDO_KEY_SUFFIX`, never a literal). An undo makes no model call: every later turn hears it through `userUndos` (summaries, never values).
+
+**Violations:**
+
+- Sending `inverse_op` for a Verified change request without `startUndo`, or trusting the widget's view of the window
+- Undoing after `undo_until`, on a read-only company, or a NeedsHuman / Undone / Mismatch row through the user path
+- Setting `undo_until` by hand in a step, or giving NeedsHuman one
+- Nulling the payload anywhere but the purge, or purging a row whose window hasn't ended or whose user undo is under way
+- Running a model call (or a continuation) to announce an undo, or putting values in `userUndos`
+- Writing a status event for an undo that changed no status (use `undo_not_sent`), or guessing who undid a change from its payload instead of `undoneBy`
+
+**Detection Pattern:**
+
+```regex
+startUndo\(|undoRefusal\(|purgeChangeRequestValues\(
+undoUntil:
+encryptedChanges: null
+WIDGET_CHANGE_REQUEST_UNDOS_FRAME_TYPE
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `ChangeRequestPurgeRepo.ts`, `ChangeRequestsDAL.ts`, `providers/changeRequests.ts`, `providers/widgetFrames.ts`, `apps/widget/src/hooks/useChangeReview.ts`, `apps/widget/src/lib/changeRequestView.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (view.undoUntil > Date.now()) await HostToolCallProvider.undo({ plan, getHostToken })
+- ✅ repo.startUndo → runFollowUp(plan) → finishUndo
+- ❌ await tx.update(changeRequests).set({ encryptedChanges: null }).where(eq(changeRequests.status, Verified))
+- ✅ ChangeRequestPurgeRepo.purgeExpiredValues() (undo_until < now, undo under way skipped)
+```
+
+**Fix:** Mirror `ConversationDO.undoChangeRequests` / `runUserUndo`, `ActionEngineRepo.startUndo` and `ChangeRequestPurgeRepo`.
+
+---
+
+### 3.37 A Missing Host Token Is Asked For, Never Guessed Around [CRITICAL]
+
+**Rule:** When a host call as the user finds no token, or the host refuses it (TokenNeeded / TokenRejected), the Conversation DO asks the widget for a fresh one (M3-8) and tries the same call once more (`withFreshToken`), but only when a second try can't write twice: nothing may have landed (`mayHaveLanded !== true`), or the call is a resume (the adapter starts a resume's `mayHaveLanded` at true even when it sends nothing; the same plan resends it as a resume). The ask is `HostTokenAsk` (`src/hostToken/`): `token_needed` with `reason: refresh` to every open socket, a wait of at most `HOST_TOKEN_WAIT_MS` for a `host_token` frame (no socket = no wait), shared by every step asking meanwhile, and not repeated for `HOST_TOKEN_WAIT_MS` after one timed out unless a token arrives. A fresh token the host refuses too ends the step as it did before M3-8. A token the host refused is dropped from `this.hostToken` (unless a newer one arrived meanwhile), so the answer, edit and undo gates answer `reason: answer`. A read with no token still tells the model to ask the user to sign in. A commit, read-after, undo or the undo's re-read with no token keeps its entry (`waitForToken`: `tokenNeededSince` from the first wait, `isUnsent` when its first send reached nothing) and resumes on the next `host_token`; `isUnsent` reaches `startCommit` / `startFollowUp` so that resume is a fresh send (never a resend guessing it landed), and it is cleared before every send. A step still waiting `HOST_TOKEN_GRACE_MS` after it first needed the token goes to a person only through `ActionEngineRepo.handOverForToken` (Approved / Committing / Committed / Mismatch → NeedsHuman `token_needed`); a user undo keeps `abandonUndo`. `reason: answer` is only for the reply to the widget's own answer, edit or undo frame (the widget resends that frame once); the widget answers `refresh` silently, with no UI, through `lib/hostTokenSender.ts` (one `getHostToken` call at a time; one that throws, rejects or hangs past `WIDGET_HOST_TOKEN_FETCH_TIMEOUT_MS` never blocks the next send).
+
+**Violations:**
+
+- Ending a commit, read-after or undo Failed / NeedsHuman for a missing or refused token without asking for a fresh one first, or before the grace has passed
+- Retrying a fresh (non-resume) host call after a token failure that may have landed, retrying a resume as a fresh send, or retrying more than once per fresh token
+- Keeping a token the host refused in `this.hostToken`, or asking the widget again while a timed-out ask's cooldown runs
+- A shared widget token fetch that a throwing or hung `getHostToken` can block
+- Passing `isUnsent: true` for a step whose last send may have reached the host, or leaving it set across a send
+- Sending `token_needed` without `reason`, or `reason: answer` for the DO's own step (the widget would resend an unrelated frame)
+- Showing a notice, spinner or card for a `refresh` ask in the widget
+- Keeping the waiter or the token anywhere but DO memory (rule 3.11)
+
+**Detection Pattern:**
+
+```regex
+type: "token_needed"
+WidgetTokenNeededReasonEnum
+isUnsent
+handOverForToken\(
+tokenNeededSince
+```
+
+A hit outside `ConversationDO.ts`, `ActionEngineRepo.ts`, `src/hostToken/HostTokenAsk.ts`, `apps/widget/src/hooks/useChangeReview.ts`, `apps/widget/src/lib/hostTokenSender.ts` and `packages/schemas` needs a reason.
+
+**Examples:**
+
+```
+- ❌ if (read.outcome === TokenNeeded) return output(Error, TOOL_TEXT.tokenNeeded)   // never asked the widget
+- ✅ const { response, isWaiting } = await this.withFreshToken(() => HostToolCallProvider.read(...), { isResume: false, signal })
+- ❌ await repo.finishCommit({ hostCall: committed /* TokenRejected, nothing landed */ })   // ends it Failed at once
+- ✅ if (isWaiting) await this.waitForToken(toolCallId, !plan.isResume)
+```
+
+**Fix:** Mirror `ConversationDO.withFreshToken` / `waitForToken` / `handOverTokenWaits`, `HostTokenAsk`, `ActionEngineRepo.handOverForToken` and the widget's `createHostTokenSender`.
+
+---
+
+### 3.38 Activity Rollups Are Rebuilt Whole, Never Edited [HIGH]
+
+**Rule:** `activity_rollups` is derived (M4-2): a (company, day) is written only by `ActivityRollupsRepo.rebuildDay`, in one `withTenant` that takes the day's advisory lock (`ActivityRollupsDAL.lockActivityRollupDay`), reads the source groups from their own DALs (`ConversationsDAL` / `FeedbackDAL` / `ActivityLogDAL` / `ModelCallsDAL` `get…RollupGroups`), deletes the day and inserts what `ActivityRollupsProvider.buildValues` (pure) returns; any failure rolls the day back. Days are UTC (`Schemas.activityRollupDayKey` / `activityRollupDayRange`), metric keys come only from the `Schemas` helpers (`ACTIVITY_ROLLUP_CONVERSATIONS_STARTED`, `conversationOutcomeMetric`, `ACTIVITY_ROLLUP_FEEDBACK_KEY_MAP`, `changeRequestRollupMetric`, `changeRequestUserUndoRollupMetric`, `modelCallTaskRollupMetric`, `modelCallModelRollupMetric`), every group adds to its chatbot's row and to the company-wide row (`chatbot_id` null), and an eval call (`eval_run_id` set) goes only under the Eval scope's keys (`ActivityRollupModelCallScopeEnum.Eval`, `model_calls.eval.*`), never a chatbot's live usage. Source reads filter on `company_id` + a `created_at` range, so they use `IDX_<table>_company_id_created_at`. Costs are summed in fixed point, never as floats. The hourly `ActivityRollups` cron rebuilds yesterday and today for Active and Paused companies (`rebuildRecent`, company list in `withPlatform`); any other range only through `POST /operator/companies/:companyPublicId/rollups/rebuild` (`authorizePlatform(ActivityRollupRebuild)`, at most `ACTIVITY_ROLLUPS_MAX_REBUILD_DAYS`, nothing after today). Rollups are never a source of truth: a page that must match the raw tables (M4-3 numbers checks) reads them as totals, never writes back.
+
+**Violations:**
+
+- An `UPDATE` / upsert / increment on `activity_rollups`, or an insert outside `ActivityRollupsDAL.createActivityRollups`
+- A rebuild that deletes and inserts in separate transactions, or without the day lock
+- A metric key built as a literal string outside `packages/schemas/src/activityRollups/`
+- Summing `cost_usd` with JS numbers (`Number`, `parseFloat`, `+`)
+- A day computed in local time, or a source read filtered on `updated_at` (rows move days on later writes)
+- A rollup source read in a DAL other than the source table's own
+- Counting an eval call under the live `model_calls.*` keys, or telling eval from live by `chatbot_id` instead of `eval_run_id`
+- A day count or range check that lists every day first (use `activityRollupDayCount`)
+
+**Detection Pattern:**
+
+```regex
+\.update\(activityRollups\)
+insert\(activityRollups\)[\s\S]{0,200}onConflict
+["'`](conversations|feedback|change_requests|model_calls)\.[a-z_]+
+```
+
+A hit outside `ActivityRollupsDAL.ts`, `providers/activityRollups.ts`, `packages/schemas/src/activityRollups/` and tests needs a reason.
+
+**Examples:**
+
+```
+- ❌ await tx.update(activityRollups).set({ value: sql`value + 1` })   // incremental: drifts on a retry
+- ✅ await repo.rebuildDay({ companyId, day })   // lock → read → delete → insert, one tx
+- ❌ metric: `model_calls.cost.${taskType}`
+- ✅ metric: Schemas.modelCallTaskRollupMetric(Measure.CostUsd, taskType)
+```
+
+**Fix:** Mirror `ActivityRollupsRepo`, `ActivityRollupsDAL` and `providers/activityRollups.ts`.
+
+---
+
+### 3.39 Insights Pages Read Rollups Through the Parser, One Owner at a Time [HIGH]
+
+**Rule:** Overview, Usage and Impact (M4-3) get their numbers only from `GET /dashboard/insights/{overview,usage,impact}` (`authorizeCompany(InsightRead)`) → `InsightsRepo` (one read-only `withTenant`) → `ActivityRollupsDAL.getActivityRollups`, for one owner: the `botId`'s chatbot (a public id, resolved in the company, unknown → 404) or the company-wide rows (`chatbot_id` null). Metric keys are read back only through `Schemas.parseActivityRollupMetric`; all math lives in the pure `InsightsProvider`. Spend = the `.model.<provider>/<model>` cost keys of company-key providers (live + eval), summed as bigint micros (`ActivityRollupsProvider.toUnits` / `fromUnits`); platform-paid providers (`Schemas.isPlatformPaidProvider`, Workers AI) are "Included", never spend. Periods come only from `Schemas.insightsRangePeriods` / `impactRangePeriods` / `insightsBillingMonth` (UTC); the billing-month spend card always reads the company-wide rows. Readings are indexed by day once (`InsightsProvider.indexReadings`). A tool's Impact work = verified − `user_undone` (the user's undos), never − every `undone` (auto-undos were never verified). Impact's minutes per task are written only by `POST /dashboard/roi-assumptions` (`authorizeCompany(RoiAssumptionUpdate)`, `RoiAssumptionsRepo`): a new `roi_assumptions` row effective today, never an update or delete; a tool task must name one of the company's write tools; each day is valued with `Schemas.roiMinutesOnDay`. The pages never compute a total from raw rows in the browser and never write to `activity_rollups`.
+
+**Violations:**
+
+- A page or Repo reading `model_calls`, `conversations` or `activity_log` directly for an Insights total (the rollup is the read model; raw sums are for tests)
+- Adding chatbot rows together for a company total, or reading company and chatbot rows in one query
+- Matching a metric key with `startsWith` / a regex / a literal outside `parseActivityRollupMetric`
+- A spend total that includes `workers_ai`, or sums `cost_usd` with JS numbers
+- A UTC day built with local-time `Date` methods (`getDate`, `setHours`) on the server
+- Subtracting `change_requests.undone.*` from verified work, or scanning every reading once per metric or per day
+- Putting one bot's spend against the company budget
+- An `UPDATE` / `DELETE` on `roi_assumptions`, or minutes for a task saved without the write-tool check
+- A component prop type or a page search schema defined in `apps/web` instead of `Schemas.DashboardUi` / `insights/`
+
+**Detection Pattern:**
+
+```regex
+metric\.(startsWith|includes|match)\(
+\.update\(roiAssumptions\)|\.delete\(roiAssumptions\)
+from\(modelCalls\)[\s\S]{0,300}sum\(
+```
+
+A hit outside `packages/schemas/src/activityRollups/`, `ModelCallsDAL.ts` (rollup groups, budget seed) and tests needs a reason.
+
+**Examples:**
+
+```
+- ❌ const spend = rows.filter((r) => r.metric.includes("cost_usd")).reduce((a, r) => a + Number(r.value), 0)
+- ✅ InsightsProvider.buildUsage({ periods, readings: InsightsProvider.parseReadings(rows) })
+- ❌ await tx.update(roiAssumptions).set({ manualMinutes })   // rewrites every past day's hours
+- ✅ await dal.createRoiAssumption(tx, { …, effectiveFrom: Schemas.activityRollupDayKey(now) })
+```
+
+**Fix:** Mirror `InsightsRepo`, `providers/insights.ts`, `RoiAssumptionsRepo` and the `overview/` / `usage/` / `impact/` pages.
+
+---
+
+### 3.40 The Dashboard Transcript Shows No Values; a Turn Costs Its Spend by turn_id [CRITICAL]
+
+**Rule:** The Conversations page (M4-4) reads only through `GET /dashboard/conversations` (list, paged), `/export` and `/:publicId` (`authorizeCompany(ConversationRead)`) → `DashboardConversationsRepo` (one read-only `withTenant` each); a flag only through `POST /dashboard/conversations/:publicId/flag` (`authorizeCompany(QualityIssueCreate)`) → `QualityIssuesRepo.flagConversation`; a change's detail only through `GET /dashboard/change-requests/:publicId` (`authorizeCompany(ChangeRequestRead)`) → `ChangeRequestsRepo`. A transcript never carries a tool call's args, a change's values or a host answer: `tool_calls.encrypted_args` and `change_requests.encrypted_changes` are never selected on these paths and nothing here calls `CompanyKeyProvider.decryptValue`; a tool row shows the tool name, version, status (error codes through `TOOL_CALL_ERROR_LABEL_MAP`) and the change request's value-free `summary`. Turns are grouped and costed only in the pure `ConversationTranscriptProvider`: a turn = one `turn_id` across messages, tool calls and spend model calls; its cost = `SUM(model_calls.cost_usd)` of that `turn_id` with `provider <> 'workers_ai'` (Workers AI is platform-paid, as on the Usage page), summed as bigint micros, Pending / Unknown rows flagged (`ConversationCostNoteEnum`). `botId` / `configId` are public ids resolved in the company (unknown → 404). A flag opens at most one open admin issue per conversation (advisory lock in `QualityIssuesDAL.createAdminQualityIssue`) with its `quality_issue.opened` event in the same transaction (actor Admin), relayed after the commit; the outbox id never reaches the response. A purged conversation keeps its row and costs, never its title or text.
+
+**Violations:**
+
+- Selecting `encryptedArgs`, `encryptedChanges` or `iv` in a dashboard read, or decrypting args or a payload for a dashboard response
+- A turn cost that includes `workers_ai` rows, groups by anything but `turn_id`, or sums `cost_usd` with JS numbers
+- Building turns, numbering them or adding costs in the browser or the Repo instead of `ConversationTranscriptProvider`
+- Sending `turnId`, an internal id, the outbox id or a raw error code without its label to the client
+- Opening an admin quality issue without the advisory lock or without its critical event, or relaying it before the commit
+- A page component or search schema defined in `apps/web` instead of `Schemas.DashboardUi` / `conversations/`
+
+**Detection Pattern:**
+
+```regex
+encrypted(Args|Changes)[\s\S]{0,200}(Dashboard|Transcript)
+decryptValue[\s\S]{0,400}(DashboardConversationsRepo|ChangeRequestsRepo)
+getConversationTurnCosts[\s\S]{0,600}workers_ai
+```
+
+**Examples:**
+
+```
+- ❌ toolCalls: rows.map((r) => ({ ...r, args: await decrypt(r.encryptedArgs) }))   // values leave the server
+- ✅ ToolCallsDAL.listConversationToolCalls → { toolName, toolVersion, status, errorCode, change: { summary, status } }
+- ❌ const turnCost = calls.filter((c) => c.turnId === id).reduce((a, c) => a + Number(c.costUsd), 0)
+- ✅ ConversationTranscriptProvider.buildTranscript({ messages, toolCalls, turnCosts })
+```
+
+**Fix:** Mirror `DashboardConversationsRepo`, `providers/conversationTranscript.ts`, `QualityIssuesRepo` and the `conversations/` pages.
+
+---
+
+### 3.41 Mark Resolved Only From NeedsHuman, With Its Admin Event; the Changes Page Shows No Values [CRITICAL]
+
+**Rule:** The Changes page (M4-5) reads only through `GET /dashboard/change-requests` (paged; `tab`, `requesterId` = host user id, `botId`, unknown → 404), `/requesters` (capped at `CHANGE_REQUEST_REQUESTERS_MAX`, never in the list's answer), `/needs-human-count` and `/:publicId` (`authorizeCompany(ChangeRequestRead)`) → `ChangeRequestsRepo` (one `withTenant` each). The timeline comes only from the change request's `activity_log` events (`ActivityLogDAL.getActivityLogTimeline`, newest `CHANGE_REQUEST_TIMELINE_MAX_EVENTS` kept, shown oldest first) turned into words by the pure `ChangeRequestTimelineProvider`; event details are read through `Schemas.ZChangeRequestEventDetail`. A change's values (`encrypted_changes`) are never selected or decrypted on these paths. Mark resolved only through `POST /dashboard/change-requests/:publicId/resolve` (`authorizeCompany(ChangeRequestResolve)`) → `ChangeRequestsRepo.resolveChangeRequest`: one `withTenant` that locks the row (`FOR UPDATE OF change_requests`), moves it only from NeedsHuman to Resolved (anything else → `ChangeRequestResolveFailureEnum.NotNeedsHuman`, 409, nothing written), sets `undo_until` through `ChangeRequestsProvider.undoUntil(Resolved)` (now, so the purge empties the values), and records `change_request.resolved` with actor Admin through `CriticalEventProvider.record` (failure → `TenantRollbackError`), relayed after the commit; the answer's detail is read after the commit, so a failed read never rolls the resolve back. Resolved is final: no other code moves a change request out of it.
+
+**Violations:**
+
+- Selecting `encryptedChanges` / `iv` or calling `decryptValue` for a Changes page response
+- Resolving without the row lock, from a status other than NeedsHuman, or without its critical event in the same transaction
+- Building the timeline's words in the browser or the Repo instead of `ChangeRequestTimelineProvider`, or showing a raw `entity_action`
+- Sending an internal id (the change request's, its conversation's, a chatbot user's) or the outbox id to the client
+- An uncapped Requested by list, or one rebuilt on every page of the list
+- Reading the response's timeline inside the resolve's transaction, or capping the timeline by dropping its newest events
+
+**Detection Pattern:**
+
+```regex
+ChangeRequestStatusIntEnum\.Resolved[\s\S]{0,300}fromStatuses:\s*\[(?!Schemas\.ChangeRequestStatusIntEnum\.NeedsHuman\])
+decryptValue[\s\S]{0,400}ChangeRequestsRepo
+```
+
+**Examples:**
+
+```
+- ❌ await dal.updateChangeRequestStatus(tx, { id, status: Resolved, fromStatuses: [row.status] })   // resolves anything
+- ✅ getDashboardChangeRequest(tx, { …, isForUpdate: true }) → NeedsHuman only → update + CriticalEventProvider.record
+- ❌ timeline: logs.map((log) => ({ label: log.entityAction }))   // internal names in the UI
+- ✅ ChangeRequestTimelineProvider.timeline(logs)
+```
+
+**Fix:** Mirror `ChangeRequestsRepo.resolveChangeRequest`, `providers/changeRequestTimeline.ts` and the `changes/` pages.
+
+### 3.42 Quality Issues Leave Open Once, With Their Admin Event; a Test Is a Reviewed Rewrite [CRITICAL]
+
+**Rule:** The Quality page (M4-6) reads only through `GET /dashboard/quality-issues` (paged; `tab` open / converted / fixed / dismissed, absent = Open; `botId`, unknown → 404), `/open-count` and `/:publicId` (`authorizeCompany(QualityIssueRead)`) → `QualityIssuesRepo` (one `withTenant` each); the excerpt and the rewrite's input come only from the pure `QualityIssuesProvider` (the rated reply for a user issue, never another reply in its place; nothing once the chat is purged). Every write locks the issue (`getDashboardQualityIssue` with `isForUpdate`), starts only from Open (else `QualityIssueUpdateFailureEnum.NotOpen`, 409, nothing written; a convert whose chatbot is gone: `ChatbotNotFound`, 409) and records its `quality_issue.<triaged|fixed|dismissed|converted>` event with actor Admin through `CriticalEventProvider.record` in the same `withTenant` (failure → `TenantRollbackError`), relayed after the commit; the answer is read after the commit. Triage (`PATCH`, `QualityIssueUpdate`) sets the type and / or note; Mark fixed / Dismiss (`QualityIssueUpdate`) end the issue for good: no code moves an issue back to Open. Create test (`EvalCaseCreate`) is two steps: `POST …/test-draft` reads the chat in one read-only `withTenant`, then calls the model router outside it (the conversation chatbot's published routing, tier Mid, `ModelTaskTypeEnum.QualityTestRewrite`, `conversationId` null so it never adds to the conversation's cost) through `QualityTestRewriteProvider` (chat and note fenced as data, the answer held to `Schemas.ZQualityTestDraft`) and saves nothing; `POST …/convert` takes the admin's reviewed draft and, in one `withTenant`, creates the chatbot's `eval_cases` row (`input` / `expectations` at their own `schemaVersion` 1, never a safety case) and moves the issue to Converted with its `eval_case_id`. Neither the chat, the note nor the draft is logged.
+
+**Violations:**
+
+- A write that skips the row lock or the Open check, or moves an issue back to Open
+- A status change or triage without its critical event in the same transaction
+- Saving an eval case straight from the model's answer, without the admin's reviewed draft
+- Calling a model provider for the rewrite outside the router, or passing the conversation's id to the router for it
+- Building the excerpt or the rewrite input in the Repo or the browser instead of `QualityIssuesProvider`, or reading the whole conversation for it (`listConversationMessages`) instead of the bounded `listRecentChatMessages`
+- A rewrite input not bounded by `QUALITY_TEST_REWRITE_MAX_CHARS` (the answer restates it under the output cap)
+- Logging a note, a message, a draft or an eval case's name / input / expectations
+
+**Detection Pattern:**
+
+```regex
+updateQualityIssueStatus\(tx,[\s\S]{0,200}status:\s*Schemas\.QualityIssueStatusIntEnum\.Open
+taskType:\s*Schemas\.ModelTaskTypeEnum\.QualityTestRewrite[\s\S]{0,200}conversationId:\s*(?!null)
+```
+
+**Examples:**
+
+```
+- ❌ const draft = await rewrite(model, source); await evalCasesDal.createEvalCase(tx, { …draft })   // never reviewed
+- ✅ POST …/test-draft (draft only) → admin edits → POST …/convert (case + Converted + event, one withTenant)
+- ❌ await dal.updateQualityIssueStatus(tx, { id, status: Fixed, … })   // without lockOpenIssue first
+- ✅ lockOpenIssue → updateQualityIssueStatus (matches Open) → recordEvent
+```
+
+**Fix:** Mirror `QualityIssuesRepo` (`closeQualityIssue`, `draftQualityTest`, `convertQualityIssue`), `providers/qualityIssues.ts`, `providers/qualityTestRewrite.ts` and the `quality/` pages.
+
+---
+
+### 3.43 Gap Clusters Close Once, on a Document of the Company; Removing That Document Reopens Them [CRITICAL]
+
+**Rule:** The Knowledge page (M4-7) reads groups of unanswered questions only through `GET /dashboard/doc-gap-clusters` (paged; `tab` open / answered / dismissed, absent = Open; every tab's count in the same answer; `authorizeCompany(DocGapClusterRead)`) → `DocGapClustersRepo` → `DocGapClustersDAL` (one `withTenant`). Sample questions are only `doc_gaps.question_generic` (already rewritten without personal details), at most `DOC_GAP_SAMPLE_QUESTIONS_MAX` per group, newest first, and never logged. Answer (`POST …/:publicId/answer {documentPublicId}`) and Dismiss (`POST …/dismiss`) (`DocGapClusterUpdate`) lock the group (`getDocGapCluster` with `isForUpdate`), start only from Open (else `DocGapClusterUpdateFailureEnum.NotOpen`, 409, nothing written), and Answer sets `answered_by_document_id` only to a document of the same company, which the Repo reads with `getCompanyKnowledgeDocument({ isForKeyShare: true })` (unknown → 404). That lock holds the document until the commit, so a delete of it can't commit in between and leave the group pointing at a missing document. The group is read back in the same transaction. No code moves a group back to Open by hand. The only reopen is `DocGapClustersDAL.reopenDocGapClustersByDocuments`, called by `KnowledgeDocumentFilesProvider` in the transaction that removes the documents (document delete, source delete, sync prune), so a group never points at a missing document. A source carries an admin-given `name` (`ZKnowledgeSourceName`), set on create and editable by PATCH.
+
+**Violations:**
+
+- Setting `answered_by_document_id` without reading the document in the company under `isForKeyShare`, or from a non-Open group
+- Deleting knowledge documents anywhere but `KnowledgeDocumentFilesProvider` (their groups would keep a dangling document)
+- Reopening a group from a route or Repo (Open again only when its document is removed)
+- Sending `doc_gaps` text other than `question_generic`, or logging it
+
+**Detection Pattern:**
+
+Run these on file content. Each is a violation outside the one file named after it, which the enforcer checks by path (a content regex can't see the file name):
+
+```regex
+set\(\{[^}]*status:\s*Schemas\.DocGapClusterStatusIntEnum\.Open
+deleteKnowledgeDocuments(BySource)?\(
+```
+
+- The first may match only inside `DocGapClustersDAL.reopenDocGapClustersByDocuments` (`data-access-layer/DocGapClustersDAL.ts`).
+- The second may be called only from `providers/knowledgeDocumentFiles.ts` (declared in `data-access-layer/KnowledgeDocumentsDAL.ts`).
+
+**Examples:**
+
+```
+- ❌ await tx.update(docGapClusters).set({ status: Answered, answeredByDocumentId: id })   // any status, any company's document
+- ✅ lockOpenCluster → getCompanyKnowledgeDocument → answerDocGapCluster (matches Open) → readBack
+- ❌ await documentsDal.deleteKnowledgeDocuments(tx, { companyId, ids })   // groups it answered keep a missing document
+- ✅ await KnowledgeDocumentFilesProvider.remove(tx, { companyId, companyPublicId, documents })
+```
+
+**Fix:** Mirror `DocGapClustersRepo`, `DocGapClustersDAL` and `providers/knowledgeDocumentFiles.ts` (`docs/runbooks/knowledge.md`).
+
+### 3.44 Eval Results Are Read Through Their Parsers; Transcripts Never Leave R2 Raw [CRITICAL]
+
+**Rule:** The Tests page (M4-8) reads runs and results only through `GET /dashboard/eval-runs…` (`authorizeCompany(EvalRunRead)`) → `EvalRunsRepo` → `EvalRunsDAL` (one `withTenant`). `eval_results.grader_output` is read only through `Schemas.parseEvalGraderOutput` (`EvalRunsProvider.attempt`); a body that fails it is shown as unreadable (`isGraderOutputUnreadable`), never passed through. A transcript is opened only by `EvalRunsRepo.getEvalRunTranscript`:
+
+- `FilesDAL.getEvalRunTranscriptFile` finds the file inside `withTenant`. It must be `owner_type eval_result`, owned by a result of the run in the URL, and that result's `transcript_file_id` must point back at it; anything else is 404.
+- The size is checked against `EVAL_TRANSCRIPT_MAX_BYTES` twice: the row's, then the R2 object's own (`getObject({ maxBytes })`) before its body is read.
+- `FileStorageProvider.getObject` reads it outside the transaction.
+- `Schemas.parseEvalTranscript` parses it; a file that fails is 422 `Unreadable`.
+
+The client gets the parsed entries only. Raw bytes are never returned or logged, and tool calls carry no args or values. A case's result in a run comes only from `Schemas.evalCaseRunResult` (passed, failed, or null while the run is still grading it: never shown as failed, never counted in the safety tally). A platform case's conversation and rubric are never sent to a company (`body: null`). Cases are written only through `EvalCasesRepo` with bodies built by `Schemas.toEvalCase` (rule 3.50), and read for editing through `Schemas.readEvalCaseBody`. An edit takes the company's own case under its row lock (`getEvalCase({ isForUpdate: true })` matches `company_id`, so a platform case is 404). A body it can't read refuses a new conversation or rubric (409 `NotEditable`). The page never starts a run (M5-2).
+
+**Violations:**
+
+- Returning `grader_output` or a transcript's bytes to a client without its parser, or serving the R2 object directly
+- Opening a transcript by file id alone (without the run, the owner result and `transcript_file_id`)
+- Writing an eval case's `input` / `expectations` by hand, or editing a platform case
+- Deciding a case's result from anything but `evalCaseRunResult`, or returning a platform case's body
+
+**Detection Pattern:**
+
+```regex
+graderOutput:\s*row\.graderOutput
+FILES_BUCKET\.get\(
+```
+
+- The first should match nowhere: an attempt reaches a response only through `EvalRunsProvider.attempt`.
+- The second may be called only from `providers/fileStorage.ts`.
+
+**Examples:**
+
+```
+- ❌ return c.body(await env.FILES_BUCKET.get(key))                       // raw transcript to the client
+- ✅ EvalRunsRepo.getEvalRunTranscript → getEvalRunTranscriptFile → getObject → parseEvalTranscript
+- ❌ attempts.map((row) => ({ ...row, graderOutput: row.graderOutput }))  // unparsed jsonb
+- ✅ attempts.map((row) => EvalRunsProvider.attempt(row))
+```
+
+**Fix:** Mirror `EvalRunsRepo`, `EvalCasesRepo` and `providers/evalRuns.ts` (`docs/runbooks/tests.md`).
+
+### 3.45 An Admin Write Records Its Audit Row in Its Own Transaction [CRITICAL]
+
+**Rule:** Every dashboard and operator write (M4-9) records who did what on what through `recordAuditOrRollback(tx, …)` (`repositories/audit.ts`, the one wrapper of `AuditEventProvider.record`) inside the write's own `withTenant`, after the write succeeded; it throws `TenantRollbackError` when the row fails, so a write never commits without its row. It is a critical event (`activity_log` + `event_outbox`, rule 3.5): never a bare `activity_log` insert. The actor is the Repo's: Admin with the signed-in company admin's `adminId` on a dashboard Repo, Operator on an operator-only Repo (`ToolDefinitionsRepo`), System (`systemAuditActor()`, no id) only for a change no person made on `Schemas.AUDIT_SYSTEM_ENTITY_TYPES` (M5-4: `ChatbotConfigsRepo.applyGateResult`). Entity types and actions come only from `Schemas.AuditEntityTypeEnum` / `AuditEntityActionEnum`; the provider builds the event type and dedupe key (`auditEventType` / `auditEventDedupeKey`, a fresh ULID per call: the key is unique, it never dedupes). The detail is `ZAuditEventDetail` (`label` only: a name, title or task, never chat text, values or secrets). One row per thing that happened (a status change is its own action), none for a save that changes nothing or a refusal. The Repo returns `outboxIds` (`Schemas.WithOutboxIds`); the route takes them off the answer and relays them with `EventOutboxRepo.relayInBackground` after the commit. The log is read only through `/dashboard/audit-log` (`authorizeCompany(AuditLogRead)`) → `AuditLogRepo` → `ActivityLogDAL.getAuditLog` / `getAuditLogCount` (actor Admin or Operator, inlined for the partial index) → `AuditLogProvider` (words and On; no internal id or detail in the answer).
+
+**Violations:**
+
+- A new `/dashboard/*` or `/operator/*` write whose Repo doesn't call `recordAuditOrRollback` in the write's transaction (or records it after the commit), or a Repo calling `AuditEventProvider.record` with its own rollback copy
+- Sending `outboxIds` to the client, or not relaying them
+- Putting anything but `label` in an audit row's detail, or a label holding chat text, values or secrets
+- Recording a row for a refused or no-op write, or for a sync the platform started
+
+**Detection Pattern:**
+
+```regex
+c\.json\(\{\s*\.\.\.response,\s*outboxIds
+entityType:\s*"(chatbot|knowledge_source|knowledge_document|doc_gap_cluster|eval_case|roi_assumption|tool_definition)"
+```
+
+- The first should match nowhere: routes destructure `outboxIds` off the Repo's answer.
+- The second should match nowhere: audit entity types are written only as `Schemas.AuditEntityTypeEnum` members.
+
+**Examples:**
+
+```
+- ❌ const response = await repo.createChatbot(params); return c.json(response, 201)        // outboxIds to the client, never relayed
+- ✅ const { outboxIds, ...response } = await repo.createChatbot(params);
+     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+- ❌ await activityLogDal.createActivityLog(tx, { entityType: "chatbot", entityAction: "created", … })   // no outbox row
+- ❌ const audited = await AuditEventProvider.record(tx, …); if (!audited.isSuccess) throw new TenantRollbackError(…)   // a copy of the rollback
+- ✅ const outboxId = await recordAuditOrRollback(tx, { …, entityType: Schemas.AuditEntityTypeEnum.Chatbot });
+```
+
+**Fix:** Mirror `ChatbotsRepo` (`audit`, `updateChatbot`), `repositories/audit.ts`, `providers/auditEvent.ts`, `AuditLogRepo` and `providers/auditLog.ts` (`docs/runbooks/security.md`).
+
+### 3.46 The Security Page Shows Settings, Never Secrets; Its Writes Are Narrow [CRITICAL]
+
+**Rule:** The Security page (M4-9) reads only through `/dashboard/security/*` (`authorizeCompany(SecurityRead)`) into its own view types: `Schemas.SecurityConnection` (no `auth_config`, base URL or internal id; `signingKeysFetchedAt` from `JwksProvider.getCachedFetchedAt`, which reads the cache and never fetches) and `Schemas.SecurityEncryptionKey` (never `encrypted_key` or `master_key_version`). Its writes change one thing each and record their audit row (rule 3.45): allowed origins only (`updateAllowedOrigins`, validated by `ZUpdateAllowedOriginsApiRequest`, compared as a set under the row lock; the issuer is operator-set), a key rotation only through `CompanyEncryptionKeysRepo.rotateCompanyEncryptionKey` (admin-only, key rows locked first; a Retiring key refuses it with 409 `RotationInProgress` through `ENCRYPTION_KEY_ROTATE_FAILURE_HTTP_STATUS_MAP`, nothing written; `rotatedAt` is the next version's `created_at`, never `updated_at`), and retention only to a value in `CONTENT_RETENTION_DAYS_OPTIONS`, compared with the value in force. A save that changes nothing (the same origins in another order, the default saved explicitly) records nothing. No control promises what isn't built: no Erase a user before M6-2, and retention copy says the purge isn't running before M6-1. Prompt-injection events are quality issues typed Prompt injection until M6-4 (`QualityIssuesRepo.getInjectionEvents`).
+
+**Violations:**
+
+- Returning a connection's `authConfig` / `baseUrl`, or a key's `encryptedKey` / `masterKeyVersion`, from a Security route
+- Letting a company admin change a connection's `jwt_issuer`, or calling `JwksProvider.getJwks` / a fetch from the Security page's reads
+- A rotation, origins or retention write without its audit row, or a rotation that skips the Retiring check
+- An Erase a user control, or retention copy that says transcripts are deleted, before M6-2 / M6-1
+
+**Detection Pattern:**
+
+```regex
+(encryptedKey|masterKeyVersion|authConfig|baseUrl):\s*(key|connection|row)\.
+```
+
+- Should match nowhere in `CompanyConnectionsRepo.toSecurityConnection` or `CompanyEncryptionKeysRepo.getSecurityEncryptionKeys`.
+
+**Examples:**
+
+```
+- ❌ return { ...connection, signingKeysFetchedAt }                     // auth settings to the browser
+- ✅ CompanyConnectionsRepo.toSecurityConnection(connection)           // environment, issuer, origins, status, cached time
+- ❌ await dal.updateCompanyConnection(tx, { jwtIssuer: body.jwtIssuer, … })   // a company admin moving the trust root
+- ✅ await dal.updateCompanyConnectionOrigins(tx, { allowedOrigins, updatedBy })
+```
+
+**Fix:** Mirror `SecurityRoutes`, `CompanyConnectionsRepo.updateAllowedOrigins`, `CompanyEncryptionKeysRepo.rotateFromDashboard` and `CompaniesRepo.updateContentRetention` (`docs/runbooks/security.md`).
+
+---
+
+### 3.47 Chatbot Versions Are Written Only as Drafts and Published Only With Their Model Keys [CRITICAL]
+
+**Rule:** `chatbot_configs` rows are written only by `ChatbotConfigsRepo` (Settings › Bots, M4-10; the gate run's move through `applyGateResult` in the harness's finish transaction, rule 3.53), each write with its audit row (rule 3.45). A body is stored only through `Schemas.normalizeConfigBody` (`body_hash` = sha256 of its `Utility.stableStringify`), and read for the editor only through `Schemas.readConfigBody` (no platform defaults written back). Only a Draft is saved, discarded or sent to testing (the DAL matches Draft; the Repo locks the row and refuses anything else with 409 `NotDraft`); only a Ready version is published (rule 3.53). One open version (Draft, Testing, Ready) per chatbot, checked under the chatbot row's lock (409 `DraftExists`); rollback is a copy into a new draft, never an edit of an old version. An approval rule whose tools were all unpinned is never saved with an empty list (empty = every tool). Discard archives (configs are never deleted). Publish runs in one `withTenant`: chatbot row locked, version locked and Ready, its gate approval checked (rule 3.53), an Active model key for every routing provider read `FOR SHARE` (`ModelKeyMissing`), every model in `MODEL_PRICES` (`ModelNotPriced`), every pin Active read `FOR SHARE` (`ToolNotActive`), the old Published version archived, this one published; a failure after the archive rolls back (`TenantRollbackError`). Disabling a tool version a Published config pins is refused (409 `PinnedByPublishedConfig`), each Published body read through `readConfigBody` (never matched by its raw jsonb shape). Failures answer `CHATBOT_CONFIG_FAILURE_HTTP_STATUS_MAP`.
+
+**Violations:**
+
+- An insert or update of `chatbot_configs` outside `ChatbotConfigsDAL`, or a `ChatbotConfigsDAL` write called from anywhere but `ChatbotConfigsRepo`
+- Storing a body that didn't go through `normalizeConfigBody`, or the output of `loadConfigSpec` (defaults frozen into the row)
+- An update that changes a Published or Archived version's body, or a delete of a config row
+- A publish or send to testing that skips the model key, price or pin checks, or a publish that archives the old version without rolling back when the publish fails
+
+**Detection Pattern:**
+
+```regex
+(insert|update|delete)\(chatbotConfigs\)
+```
+
+- Should match only in `ChatbotConfigsDAL.ts` (and test fixtures run as the owner).
+
+**Examples:**
+
+```
+- ❌ await tx.update(chatbotConfigs).set({ body: spec })              // loadConfigSpec output, or a published row
+- ✅ await this.dal.updateChatbotConfigDraft(tx, { body: normalized.body, bodyHash, … })
+- ❌ await dal.publishChatbotConfig(tx, …)                            // no key / pin checks
+- ✅ const refused = await this.checkPublishNeeds(tx, { companyId, body }); if (refused) return refused;
+```
+
+**Fix:** Mirror `ChatbotConfigsRepo` (`docs/runbooks/bots.md`).
+
+---
+
+### 3.48 A Model Key Is Saved Only After the Provider Accepts It, and Never Leaves the Repo [CRITICAL]
+
+**Rule:** Settings › Model keys (M4-10) writes model keys only through `CompanySecretsRepo.addModelKey` / `rotateModelKey`. The pasted key is checked first with `AiGatewayProvider.checkModelKey` (the provider's list-models GET through AI Gateway: no model call, nothing billed; outside any transaction), and only `Valid` saves anything: `Rejected` (the router's own rejected-key rule, `isRejectedKeyAnswer`, never a 403 or a gateway error) answers 400 `KeyRejected`, anything else 502 `CheckUnavailable`. One Active key per provider (pre-checked, and the unique index's violation mapped through `isActiveKeyTaken`) → 409 `ProviderHasActiveKey`. A rotation locks the row, encrypts the new value with `CompanyKeyProvider.encryptValue`, and sets it Active with `last_validated_at`. Each write has its audit row (rule 3.45) labelled with the provider. The key goes only into the provider's auth header on that check and into the encryption call; it is never logged, never in a DAL param, never in an answer (`Schemas.ModelKey` carries `lastFourChars` only). The spending budget is written only by `CompaniesRepo.updateSpendingBudget` (`ZSpendingBudgetUsd`: positive, whole cents, capped; compared in micro-dollars with the value in force under the row lock, so the amount already in force records nothing; `BudgetChanged` audit row); "used" is the same `model_calls` sum BudgetDO is seeded from.
+
+**Violations:**
+
+- Saving or rotating a model key without a `Valid` check, or making the check a model call (anything but list-models)
+- Treating a 403 or a gateway error as a rejected key
+- A model key's plaintext in a log, a DAL param or a route response
+- A budget write outside `CompaniesRepo.updateSpendingBudget`, or one that records an audit row when the amount didn't change
+
+**Detection Pattern:**
+
+```regex
+checkModelKey|spendingBudget:\s
+```
+
+- `checkModelKey` should be called only from `CompanySecretsRepo.ts`; a `spendingBudget` write only from `CompaniesDAL.updateCompanySpendingBudget`.
+
+**Examples:**
+
+```
+- ❌ await this.dal.createCompanySecret(tx, { …, encryptedSecret })   // no provider check first
+- ✅ const outcome = await AiGatewayProvider.checkModelKey(this.env, { provider, apiKey }); if (refusal) return refusal;
+- ❌ AppLogger.error({ …, metadata: { provider, apiKey } })
+- ✅ AppLogger.error({ …, metadata: { provider } })
+```
+
+**Fix:** Mirror `CompanySecretsRepo.addModelKey` / `CompaniesRepo.updateSpendingBudget` (`docs/runbooks/model-keys.md`, `docs/runbooks/budget.md`).
+
+---
+
+### 3.49 An Admin Invite Is a Row, and the Row Decides Who Gets In [CRITICAL]
+
+**Rule:** Company admins are invited only through `TeamRepo.inviteAdmin` (Settings › Team, M4-10). Its checks and the `admin_invites` insert (Pending, one per company and email) run in a `withTenant` holding the company row lock and commit before Clerk is called; Clerk is never called inside a transaction. Then Clerk gets an emailed invitation (new email) or the invite metadata on an existing account that administers no company and holds no other invite metadata, and a second `withTenant` stores the Clerk reference and the audit row. A Clerk failure closes the row as Revoked. The Clerk metadata carries `{ companyPublicId, adminInvitePublicId }`; `AdminsRepo.provisionAdmin` creates an admin from it only while that invite row is Pending in the named company, locking it and marking it Accepted in the admin row's transaction (a failed admin insert rolls the acceptance back), and clears the metadata after refusing a Revoked or unknown invite. Revoke commits Revoked (Pending only) with its audit row, then tells Clerk, best effort. Remove admin never deletes the row: `removed_at` / `removed_by` are set and `clerk_user_id` is replaced by a `removed_` token, so the person stays named on what they did; never yourself or the last admin, under the company lock. Every write has its audit row (rule 3.45). Emails never go into log metadata.
+
+**Violations:**
+
+- Creating a Clerk invitation or setting `companyPublicId` metadata from code anywhere but `ClerkProvider.createInvitation` / `grantInvite`, called by `TeamRepo`
+- A Clerk call inside a `withTenant` / `withPlatform` callback
+- Provisioning an admin from `adminInvitePublicId` metadata without locking the invite row and checking it is Pending in the same company
+- Deleting an `admins` row from app code, or a removal without the self / last-admin checks under the company lock
+
+**Detection Pattern:**
+
+```regex
+createInvitation|updateUserMetadata|delete\(admins\)
+```
+
+- `createInvitation` / `updateUserMetadata` should appear only in `providers/clerk.ts`; `delete(admins)` only in test fixtures run as the owner.
+
+**Examples:**
+
+```
+- ❌ await withTenant(db, companyId, async (tx) => { …; await ClerkProvider.createInvitation(env, …) })   // Clerk under a lock
+- ✅ const created = await withTenant(…insert Pending…); const sent = await ClerkProvider.createInvitation(env, { …, adminInvitePublicId }); await withTenant(…ref + audit…)
+- ❌ await tx.delete(admins).where(eq(admins.id, adminId))                  // erases who did what
+- ✅ await this.adminsDal.removeAdmin(tx, { companyId, adminId, removedBy })
+```
+
+**Fix:** Mirror `TeamRepo` and `AdminsRepo.provisionAdmin` (`docs/runbooks/team.md`).
+
+### 3.50 Eval Cases Are Read Through Their Loader, and the Python Types Are Generated [CRITICAL]
+
+**Rule:** `eval_cases.expectations` (M5-1) is read only through `Schemas.loadEvalCaseExpectations` (or `readEvalCaseBody`, which uses it). That loader upgrades the body from its own `schemaVersion` with the registered upgraders and holds it to the current schema. It never throws and never writes the upgraded body back. Expectations are written only through `Schemas.toEvalCase`, at the current version. It returns `{ isSuccess: false, failure }` (`EvalCaseWriteFailureEnum`: NothingToCheck, TooLong, Invalid) instead of storing anything, and a refusal is reported by that reason (`EVAL_CASE_UPDATE_FAILURE_BY_WRITE_FAILURE`), never guessed. Whether a case checks anything besides its rubric is decided only by `Schemas.hasEvalCaseChecks`. `input` stays `ZEvalCaseInputV1`. A shape change adds `ZEvalCaseExpectationsV<n+1>`, registers the upgrader from `n` with a test, and never edits a released version. The dashboard edits a case's name, conversation and rubric only. An edit keeps the stored checks (rules, tool calls, forbidden tools, readbacks) and is refused when it would leave nothing to check (409 `NothingToCheck`) or make the expectations too long (400 `TooLong`). The Python harness gets its types only from generated code: `evals/diletta_evals/types/` is written by `pnpm evals:types` from `evals/schemas/`. Never edit it by hand. Every change to a `JSON_SCHEMA_EXPORTS` schema or a contract sample regenerates the JSON Schema, the fixture and the types in the same PR. `pnpm evals:check` (the `Evals Contract` workflow) fails until it does.
+
+**Violations:**
+
+- Parsing `eval_cases.expectations` with `ZEvalCaseExpectationsV*.parse` / `safeParse` outside `packages/schemas`, or writing a body that `toEvalCase` didn't build
+- Writing an upgraded body back to a row nobody edited, or editing a released `ZEvalCaseExpectationsV<n>`
+- Dropping a case's rules, tool calls, forbidden tools or readbacks on a dashboard edit
+- A hand edit to `evals/diletta_evals/types/`, or a schema / sample change without the regenerated `evals/schemas/`, `evals/fixtures/` and `evals/diletta_evals/types/`
+- Python types for a case shape written by hand in `evals/`, or upgrade logic for old case versions in Python (the harness gets cases already upgraded)
+
+**Detection Pattern:**
+
+```regex
+ZEvalCaseExpectationsV\d+\.(safeParse|parse)\(|expectations:\s*\{\s*schemaVersion
+```
+
+- Both should match only inside `packages/schemas/src/evalCases/` and in test fixtures.
+
+**Examples:**
+
+```
+- ❌ const expectations = row.expectations as Schemas.EvalCaseExpectations          // skips the upgrade from v1
+- ✅ const body = Schemas.readEvalCaseBody(row.input, row.expectations)
+- ❌ expectations: { schemaVersion: 2, rubric }                                       // hand-built, no refinements
+- ✅ const stored = Schemas.toEvalCase({ messages, rubric, checks: body.checks }); if (!stored.isSuccess) return { failure: EVAL_CASE_UPDATE_FAILURE_BY_WRITE_FAILURE[stored.failure] }
+```
+
+**Fix:** Mirror `EvalCasesRepo` and `EvalCasesCommon.ts`, then run `pnpm --filter @app/schemas schema:export && pnpm evals:types && pnpm evals:check` (`docs/runbooks/tests.md`).
+
+---
+
+### 3.51 /eval/\* Takes Only a Platform-Signed Eval JWT, on a Staging Connection [CRITICAL]
+
+**Rule:** Every `/eval/*` route (M5-2) runs `authenticateEval` first, before any validator, and nothing else: no Clerk session, no widget JWT. The token is verified only by `EvalAuthRepo.authenticate`: `EvalJwtProvider` (ES256, a `kid` from `EVAL_JWT_PUBLIC_JWKS`, `iss` / `aud` / lifetime), then the company and connection it names, and the connection must be an active **Staging** one of an active company (a production connection is 403). The company and connection come from the token, never from a body or path. A run is held to what it started with: `eval_runs.eval_case_ids` (the cases `startRun` handed out) and `company_connection_id` (the token's staging connection). A step whose token names another connection is 404, a result or attempt for a case outside the set is 404, Done needs k results for every case of the set (`case_count` = its size) and a reset that went through (`reset_at`), and each step that writes (attempt start, result, finish) reads the run row `FOR UPDATE`. An attempt runs once: `conversations (eval_run_id, eval_case_id, eval_attempt)` is unique, so a repeat is 409 `Duplicate` before any model call. `cost_usd` is added to by every model call of the run as it is recorded or backfilled (`EvalRunsDAL.addEvalRunCost`), never summed at the finish. An eval conversation is marked by `session.eval` and `conversations.eval_run_id`; the widget never resumes one (`startOrResume` and `onConnect` refuse it), and a key failure in it opens no Quality issue. Its turns are held to the company's budget, never to a user's (no `admitTurn`, no chatbot user on its model calls). `decideApproval` stays the policy: a Required write is approved by the eval on its test user's behalf (`isApprovedByEval`, logged as an eval approval, never as automatic) and the attempt answers it as `wasApprovalRequired`. It runs the run's config, never the published one. Its host calls run only on the token's staging connection (`evalConnectionId` in place of the tool version's own connection, joined only when it is Staging). Its model calls carry `evalRunId`. Its writes are approved without a user, and a Blocked rule still blocks. It never shows on the dashboard: every dashboard read and rollup of conversations or change requests filters `eval_run_id IS NULL`. The harness's host bearer (`X-Host-Token`) goes only to DO memory or the adapter (rule 3.11). A connection's `reset_op` is a `ZConnectionResetOp` and exists only on a Staging connection.
+
+**Violations:**
+
+- An `/eval/*` route without `authenticateEval`, or one that reads the company or connection from the request
+- Accepting an eval JWT for a Production connection, verifying it against a host's JWKS, or accepting another algorithm than ES256
+- A host call of an eval conversation that runs on the tool version's own connection, or an eval turn that loads the published config
+- A dashboard query of `conversations` or `change_requests` (list, count, detail, rollup) without `isNull(conversations.evalRunId)`
+- Logging, storing or echoing `X-Host-Token`; a `reset_op` on a Production connection
+- Finishing a run Done from the cases that have results instead of `eval_case_ids`, recording a case outside the set, or a run step that doesn't check `company_connection_id`
+- A widget resume or socket connect that admits an eval conversation (`evalRunId` / `session.eval` set)
+- Overriding the approval decision for an eval (`isApprovalRequired = … && session.eval === null`) instead of `isApprovedByEval`, or logging an eval approval as `isAutomatic`
+- A Done finish without `reset_at`, or an attempt that can start twice for one (run, case, attempt)
+
+**Detection Pattern:**
+
+```regex
+EvalHarnessRoutes\.(get|post|put|patch|delete)\((?![^)]*authenticateEval)
+```
+
+- In `durable-objects/ConversationDO.ts` only: `evalRunId:\s*null` is a violation (it must come from `session.eval`). Elsewhere it is legitimate (knowledge calls, a user's quality issue), so scope the search to that file.
+
+**Examples:**
+
+```
+- ❌ EvalHarnessRoutes.post("/runs", zValidator("json", Schemas.ZCreateEvalRunApiRequest), handler)
+- ✅ EvalHarnessRoutes.post("/runs", authenticateEval, zValidator("json", Schemas.ZCreateEvalRunApiRequest), handler)
+- ❌ const conditions = [eq(conversations.companyId, params.companyId)]                // a dashboard list that shows eval chats
+- ✅ const conditions = [eq(conversations.companyId, params.companyId), isNull(conversations.evalRunId)]
+```
+
+**Fix:** Mirror `EvalHarnessRoutes` / `EvalHarnessRepo` and `ToolDefinitionsDAL.runConnectionJoinConditions` (`docs/runbooks/evals.md`).
+
+---
+
+### 3.52 The Eval Judge Is Pinned and Routed; a Transcript Is Built by the Backend [CRITICAL]
+
+**Rule:** The LLM judge (M5-3) runs only in the backend, through `POST /eval/runs/:runId/judge` → `EvalJudgeRepo.judge` → `ModelRouterRepo.getModel` (`taskType` `EvalJudge`, the run's `evalRunId`, the attempt's conversation, no chatbot user, no caps) → `EvalJudgeProvider`. Its model is `Schemas.pickEvalJudgeModel(routing)`: of the two pinned models of the run config's default tier's provider (`EVAL_JUDGE_MODELS[provider]`), the primary unless a tier of the config names it, then the alternate, so the config never picks its judge and a model never grades its own replies. Both pinned models of every provider are in `MODEL_PRICES` and differ. A change to the judge's prompt bumps `EVAL_JUDGE_PROMPT_VERSION`. The judge reads `EvalTranscriptProvider.judgeView` (every tool call, the last reply whole, held to `EVAL_JUDGE_TRANSCRIPT_MAX_CHARS`), never the stored file's cut-down v1. The view and rubric reach the model fenced as data (`EvalJudgeProvider.prompt`, tags defused). The judge never takes the transcript from the harness: the backend reads the attempt from its DO (`EvalTranscriptsRepo.read` → `getEvalTranscript`, eval sessions only, once the DO is idle). Any failure to get a verdict (router, provider, gateway, budget, an answer that won't parse after `EVAL_JUDGE_MAX_TRIES`) is `JudgeUnavailable` (503), never a pass and never a fail verdict. The harness never retries it: it records that attempt failed with the reason, stops the run, resets, and finishes it Failed with `failure` `JudgeUnavailable` (`eval_runs.failure`, only on an incomplete run). `/results` answers Duplicate before any DO read or R2 write when the attempt has its result (`EvalRunsDAL.hasEvalResult`). An attempt's transcript is built by `EvalTranscriptProvider.build` (v1: messages, and pinned tool calls with version, status and change summary, never args or values) and stored by `EvalTranscriptsRepo.store`: the `files` row pending its owner (`FILE_PENDING_OWNER_ID`, its own transaction) **before** the R2 object, then attached in the result's transaction (`EvalTranscriptFilesProvider.attach`). It is discarded only when that transaction is known not to have written the result; an unknown outcome is left to the hourly `EvalTranscriptSweep`, which removes rows still pending after `EVAL_TRANSCRIPT_PENDING_MAX_AGE_MS` with their objects. Both remove rows first, through a delete that re-checks they are still pending (`deleteFiles` `pendingOwnerType`), then only the objects of the rows actually removed. No refusal is told apart by its message text. `eval_runs.failure` names what actually stopped the run (`stop_reason`): ServerError only for a backend 5xx or no answer, HarnessError for the harness's own stops.
+
+**Violations:**
+
+- A judge model call from Python, from `evals/`, or anywhere but `EvalJudgeRepo.judge` through the model router
+- A judge model taken from the config's routing (`routing[tier].model`) or `EVAL_JUDGE_MODELS` directly instead of `pickEvalJudgeModel`, or a pinned model missing from `MODEL_PRICES`
+- A `/judge` or `/results` body that carries the transcript, or a transcript with tool args or host values
+- Grading a rubric as passed (or failed) when the judge gave no verdict, or retrying `JudgeUnavailable` in the harness
+- An `eval_results` row pointing at a transcript file that isn't in R2, or an R2 transcript left behind by a refused result
+- An R2 transcript put before its pending `files` row exists, deleting a transcript when the result's commit outcome is unknown, deleting a transcript row without re-checking it is still pending (or its object before its row), or deciding a refusal by comparing `message` strings
+- The judge graded on `EvalTranscriptProvider.build`'s stored transcript, or a judge prompt with no size budget
+- `failure` set on a Done run
+
+**Detection Pattern:**
+
+```regex
+ModelTaskTypeEnum\.EvalJudge
+```
+
+- As a model call's `taskType`, legitimate only in `repositories/EvalJudgeRepo.ts` (and tests); the Insights usage label map (`InsightsCommon.ts`) only names it. Anywhere else is a violation.
+
+**Examples:**
+
+```
+- ❌ const pinned = source.routing[source.routing.defaultTier]                        // the config's own model judges itself
+- ✅ const pinned = Schemas.pickEvalJudgeModel(source.routing)
+- ❌ return { verdict: { hasPassed: false, reason: "Judge unreachable" } }             // a made-up verdict
+- ✅ return refuse(Schemas.EvalRunStepFailureEnum.JudgeUnavailable, message)
+```
+
+**Fix:** Mirror `EvalJudgeRepo.judge`, `EvalHarnessRepo.recordResult`, `EvalJudgeProvider` and `EvalTranscriptProvider` (`docs/runbooks/evals.md`).
+
+---
+
+### 3.53 A Version Goes Live Only Through Its Gate; a Failed Safety Case Blocks It [CRITICAL]
+
+**Rule:** The publish gate (M5-4): Draft → Testing only by an admin (`ChatbotConfigsRepo.sendChatbotConfigToTesting`, its publish needs checked, audited `SentToTesting`); Testing → Ready / Draft only by the finish of a Gate run, through `ChatbotConfigsRepo.applyGateResult(tx, …)` in the finish's transaction (`EvalHarnessRepo.finish`, run row then config row locked), only while the config is still Testing and was sent no later than the run started (`chatbot_configs.updated_at` and `eval_runs.created_at` both `clock_timestamp()`, taken after their row locks, never the transaction's `now()`), audited as System (`PassedGate` / `FailedGate`); Testing / Ready → Draft only by an admin (`moveChatbotConfigToDraft`, clears `approved_by_run_id`, audited `MovedToDraft`); Ready → Published only by `publishChatbotConfig`. Every move goes through `ChatbotConfigsDAL.moveChatbotConfigStatus` (matches its `fromStatuses`) or `publishChatbotConfig` (matches Ready). `POST /eval/runs` with trigger Gate needs `k ≥ Schemas.EVAL_GATE_MIN_K` (400 `Invalid`) and a Testing config (409 `NotTesting`, config row locked); Manual and Nightly runs never move a config. A run's `has_passed` comes only from `Schemas.evalRunGateDecision` over every case of its set (tallies from `eval_cases`, a case that never ran = 0 attempts): Done, at least `EVAL_GATE_PASS_PERCENT` of the set passed pass^k, **and** every safety case of the set passed all k (one failed or never-run safety case fails it, above the threshold too). Publish refuses (409) a version that isn't Ready (`NotReady`), whose `approved_by_run_id` isn't its own Done passed **Gate** run with `k ≥ EVAL_GATE_MIN_K` (`NotApproved`), or whose chatbot has an active safety case (its own or the platform's) outside that run's `eval_case_ids` (`GateOutdated`); its publish needs are checked again. The editor's safety banner reads the newest Gate run only, on a draft only.
+
+**Violations:**
+
+- A `status` or `approved_by_run_id` write on `chatbot_configs` outside `moveChatbotConfigStatus` / `publishChatbotConfig`, or a publish that matches any status but Ready
+- `has_passed` computed anywhere but `evalRunGateDecision` (e.g. `passAllKCount === caseCount`, or a threshold with no safety rule)
+- A Gate run started on a config that isn't Testing or with `k < EVAL_GATE_MIN_K`, a Manual or Nightly run that moves its config, a finish that moves a config sent after the run started, or a gate move compared on `now()`
+- A gate move outside `ChatbotConfigsRepo.applyGateResult` (e.g. `EvalHarnessRepo` calling `ChatbotConfigsDAL` itself), or one without its System audit row
+- A publish that skips `checkGateApproval`, or trusts `approved_by_run_id` without reading the run (Gate, Done, passed, `k ≥ EVAL_GATE_MIN_K`, same config) and the active safety cases
+
+**Detection Pattern:**
+
+```regex
+approvedByRunId:|passAllKCount === |ChatbotConfigStatusIntEnum\.Ready
+```
+
+- `approvedByRunId:` in a write only in `ChatbotConfigsDAL.moveChatbotConfigStatus` (and owner test fixtures); `passAllKCount === ` nowhere in a pass decision.
+
+**Examples:**
+
+```
+- ❌ hasPassed: request.isComplete && passAllKCount === caseIds.length       // no safety rule
+- ✅ const gate = Schemas.evalRunGateDecision({ isComplete, k, caseCount, cases })
+- ❌ await this.lockDraft(tx, …); await this.dal.publishChatbotConfig(tx, …) // a draft goes live untested
+- ✅ lockVersion(Ready) → checkGateApproval → checkPublishNeeds → publish
+```
+
+**Fix:** Mirror `ChatbotConfigsRepo.publishChatbotConfig` / `checkGateApproval` / `applyGateResult` and `EvalHarnessRepo.finish` (`docs/runbooks/bots.md`, `docs/runbooks/evals.md`).
+
+---
+
 ## 4. ADDING NEW RULES
 
 To add a new custom rule:
@@ -1544,5 +2342,5 @@ The Pattern Enforcer workflow (`.github/workflows/claude-pr-review.yml`) runs on
 ## Last Updated
 
 Created: 2025
-Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture)
+Updated: 2026-10-06 (M0-6: section 3 Companion platform rules, UI rules 2.2–2.6; M0-7: 3.14 master key; M1-3: RLS, 3.15 withPlatform, 3.16 table grants); 2026-10-07 (M1-4: 3.17 paged lists, 3.18 where clauses; M1-5: 1.1 provider → DAL, 3.19 envelope encryption); 2026-10-08 (M1-7: 3.12 config spec versions, loader / normalizer, platform defaults, evals/schemas export; M1-8: 3.20 can() on every dashboard and operator route, 3.3 companyId from authorizeCompany, users table dropped); 2026-10-08 (M1-9: 3.21 owner rights only through SECURITY DEFINER functions; M2-1: 3.22 widget identity from a verified companion JWT, 3.3 issuer lookup named; M2-3: 3.10 router files, price table, key-failure rules); 2026-10-09 (M2-2: 3.22 auth before the upgrade (ADR 0001), 3.23 Conversation DO server-authoritative; 1.1 self-contained tx-step providers, 3.10 retries, 3.23 init-before-check, sync by id; M2-4: 3.24 every model call reserved against the budget; M2-5: 3.10 Workers AI embed and toMarkdown files, 3.25 knowledge ingestion); 2026-10-10 (M2-6: 3.10 rerank file and KnowledgeModelCallsProvider, 3.23 search_help_docs the only tool, 3.25 provider rename, 3.26 knowledge search); 2026-10-10 (M2-7: 3.22 /widget/bootstrap + widget CORS, 3.23 feedback frame, 3.27 widget renders data, never trusts it); 2026-10-10 (M2-7 review: 3.22 query after token on /widget/\*, 3.23 feedback status re-check, rate limit and ordering, 3.27 hashed host user, idle after a dropped resume, widget tokens); 2026-10-10 (M2-8: 3.28 a thumbs-down opens its user issue in the rating's transaction); 2026-10-10 (M3-1: 3.29 tool ops versioned, rendered only by renderToolOp, operator-curated); 2026-10-10 (M3-2: 3.30 host calls only through @app/adapter, emulated tools off {result.\*}); 2026-10-10 (M3-3: 3.31 the test host stays a test fixture); 2026-10-11 (3.32 one cron trigger per Worker, jobs picked by time); 2026-10-11 (M3-4: 3.33 host tool calls through the action engine, 3.23 host tools and the action frames); 2026-10-11 (M3-4 review: 3.33 nested args, full diff, blocked rules, decision claim, deadline, step failures, token-gated resume; 3.23 decision frame limit); 2026-10-21 (M3-5: 3.34 edits re-checked like a new proposal, batch answers resolved together; 3.23 batch and edit frames); 2026-10-22 (M3-6: 3.35 a commit counts only once its read-after verifies it, auto-undo per change request); 2026-10-22 (M4-1: 2.7 dashboard shell, nav and page header); 2026-10-23 (M4-2: 3.38 activity rollups rebuilt whole, never edited); 2026-10-23 (M4-3: 3.39 Insights pages read rollups through the parser, ROI minutes append-only); 2026-10-23 (M4-4: 3.40 dashboard transcript shows no values, turn cost = spend by turn_id, one open admin flag); 2026-10-24 (M4-5: 3.41 Mark resolved only from NeedsHuman with its admin event, Changes page shows no values); 2026-10-24 (M4-6: 3.42 quality issues leave Open once with their admin event, a test is a reviewed rewrite); 2026-10-24 (M4-7: 3.43 gap clusters close once on a company document, removing it reopens them); 2026-10-25 (M4-8: 3.44 eval results read through their parsers, transcripts never leave R2 raw); 2026-10-25 (M4-9: 3.45 an admin write records its audit row in its own transaction; 3.46 the Security page shows settings, never secrets, and its writes are narrow); 2026-10-26 (M4-10: 3.47 chatbot versions written only as drafts, published only with their model keys); 2026-10-28 (M4-10: 3.48 model keys saved only after the provider accepts them, budget writes); 2026-10-29 (M4-10: 3.49 an admin invite is a row, and the row decides who gets in); 2026-10-29 (M5-1: 3.50 eval cases read through their loader, Python types generated); 2026-10-29 (M5-2: 3.51 /eval/\* takes only a platform-signed eval JWT on a staging connection, eval chats off the dashboard); 2026-10-30 (M5-3: 3.52 the eval judge is pinned and routed, transcripts built by the backend); 2026-10-30 (M5-4: 3.53 a version goes live only through its gate, a failed safety case blocks it; 3.47 publish from Ready); 2026-10-31 (M5-4 review: 3.53 min k, gate move in ChatbotConfigsRepo with System audit rows, clock_timestamp; 3.45 System actor)
 Maintainer: hatiprithwish

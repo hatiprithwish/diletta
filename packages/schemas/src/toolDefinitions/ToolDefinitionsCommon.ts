@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SEARCH_HELP_DOCS_TOOL_NAME } from "../knowledgeSearch/KnowledgeSearchCommon";
+import { getToolInputSchemaIssue } from "./ToolArgsValidator";
 import { ZToolOps, type ToolInverseOp, type ToolOps, type ToolReadbackOp } from "./ToolOpsRegistry";
 import {
   ToolOpPlaceholderRootEnum,
@@ -136,6 +137,8 @@ export enum ToolDefinitionFailureEnum {
   InvalidOps = "InvalidOps",
   ConnectionNotFound = "ConnectionNotFound",
   ConnectionUnavailable = "ConnectionUnavailable",
+  // DEV_NOTE: M4-10: a version a Published chatbot config pins can't be disabled (roll the config off it first)
+  PinnedByPublishedConfig = "PinnedByPublishedConfig",
 }
 
 // DEV_NOTE: 409 = the tool's state refused it; 400 = the request's ops or connection can't be used
@@ -148,6 +151,7 @@ export const TOOL_DEFINITION_FAILURE_HTTP_STATUS_MAP: Record<ToolDefinitionFailu
     [ToolDefinitionFailureEnum.InvalidOps]: 400,
     [ToolDefinitionFailureEnum.ConnectionNotFound]: 400,
     [ToolDefinitionFailureEnum.ConnectionUnavailable]: 400,
+    [ToolDefinitionFailureEnum.PinnedByPublishedConfig]: 409,
   };
 
 // DEV_NOTE: The name the model calls the tool by: provider tool-name rules (letters, digits, _ and -, at most 64,
@@ -157,8 +161,9 @@ export const ZToolDefinitionName = z
   .regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/, "Invalid tool name")
   .refine((name) => name !== SEARCH_HELP_DOCS_TOOL_NAME, { message: "Reserved tool name" });
 
-// Whether an op reads the call_op response anywhere ({result.*} in its path, query or body)
-function readsCallResult(op: ToolReadbackOp | ToolInverseOp): boolean {
+// DEV_NOTE: Whether an op reads the call_op response anywhere ({result.*} in its path, query or body). A readback op
+// that does has no read-before (M3-4): the record it reads exists only after the call (a create's new id).
+export function readsCallResult(op: ToolReadbackOp | ToolInverseOp): boolean {
   const strings: { text: string; path: (string | number)[] }[] = [];
   collectTemplateStrings(op.path, [], strings);
   collectTemplateStrings(op.query, [], strings);
@@ -193,6 +198,18 @@ export function getToolRiskOpsIssue(
     }
   }
   return null;
+}
+
+// DEV_NOTE: Everything a stored tool's loaded ops must pass to be saved, activated or run: the risk rule above and an
+// input_schema the runtime can check (getToolInputSchemaIssue). Null = fine; else the reason.
+export function getToolOpsIssue(
+  risk: ToolDefinitionRiskIntEnum,
+  idempotencyMode: ToolDefinitionIdempotencyModeIntEnum,
+  ops: ToolOps,
+): string | null {
+  return (
+    getToolRiskOpsIssue(risk, idempotencyMode, ops) ?? getToolInputSchemaIssue(ops.inputSchema)
+  );
 }
 
 // Create Tool Definition Body (version 1, Draft)

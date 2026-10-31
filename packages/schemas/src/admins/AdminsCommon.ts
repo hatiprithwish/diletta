@@ -16,6 +16,9 @@ export const ZAdmin = z.object({
   companyId: z.string().nullable(),
   email: z.string().nullable(),
   name: z.string().nullable(),
+  // DEV_NOTE: Set when removed on Settings › Team (M4-10); the row stays for attribution. removedBy is an internal id.
+  removedAt: z.date().nullable(),
+  removedBy: z.string().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -29,15 +32,40 @@ export type AdminContext =
   | { adminId: Admin["id"]; role: AdminRoleEnum.CompanyAdmin; companyId: string };
 
 // API response shape — internal ids structurally omitted; the company is identified by its publicId
-export type AdminProfile = Omit<Admin, "id" | "companyId"> & {
+export type AdminProfile = Omit<Admin, "id" | "companyId" | "removedAt" | "removedBy"> & {
   role: AdminRoleEnum;
   company: { publicId: string; name: string } | null;
 };
 
 // DEV_NOTE: What the dashboard needs from a Clerk user to provision an admin. companyPublicId comes from the
-// invite's publicMetadata (Settings › Team, M4-10); null = not invited to any company.
+// invite's publicMetadata (Settings › Team, M4-10); null = not invited to any company. adminInvitePublicId names the
+// admin_invites row a dashboard invite created (null for an operator's manual invite): that row must still be Pending.
 export interface ClerkAdminProfile {
   email: string | null;
   name: string | null;
   companyPublicId: string | null;
+  adminInvitePublicId: string | null;
+}
+
+// DEV_NOTE: Server-side only. A Clerk user found by email (Settings › Team invite): null = no account yet.
+// hasPendingInvite = the account already carries invite metadata (another dashboard invite not yet used).
+export interface ClerkUserLookupResponse {
+  isSuccess: boolean;
+  message?: string;
+  clerkUserId?: string | null;
+  hasPendingInvite?: boolean;
+}
+
+// DEV_NOTE: Server-side only. When each Clerk user was last active (epoch ms, null = never)
+export interface ClerkLastActiveResponse {
+  isSuccess: boolean;
+  message?: string;
+  lastActiveAt?: Record<string, number | null>;
+}
+
+// DEV_NOTE: Server-side only. The Clerk invitation an invite sent
+export interface ClerkInvitationResponse {
+  isSuccess: boolean;
+  message?: string;
+  invitationId?: string;
 }

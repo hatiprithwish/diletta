@@ -18,7 +18,12 @@ import { useWidgetStore, useWidgetStoreApi } from "@/store/WidgetStoreContext";
 //   first learned otherwise: their saved conversation, if any, is loaded;
 //   changed (the host signed in as someone else without destroy()): the old user's chat is left as is and the new
 //     user's saved conversation, if any, starts over in its place.
-export default function WidgetApp({ apiBase, chatbot, getToken }: Schemas.WidgetAppProps) {
+export default function WidgetApp({
+  apiBase,
+  chatbot,
+  getToken,
+  getHostToken,
+}: Schemas.WidgetAppProps) {
   const storeApi = useWidgetStoreApi();
   const conversationPublicId = useWidgetStore((state) => state.conversationPublicId);
   const hostUser = useWidgetStore((state) => state.hostUser);
@@ -53,6 +58,7 @@ export default function WidgetApp({ apiBase, chatbot, getToken }: Schemas.Widget
       apiBase={apiBase}
       chatbot={chatbot}
       getToken={getToken}
+      getHostToken={getHostToken}
       bootstrap={bootstrap.state}
       onRetryBootstrap={bootstrap.retry}
     />

@@ -128,3 +128,78 @@ export function anthropicBrokenStream(
   });
   return new Response(body, { headers: STREAM_HEADERS });
 }
+
+// DEV_NOTE: An Anthropic stream that asks for the given tool calls (each {id, name, input}), in one step
+export function anthropicToolCallsStream(
+  model: string,
+  calls: { id: string; name: string; input: Record<string, unknown> }[],
+) {
+  return new Response(
+    [
+      sse({
+        type: "message_start",
+        message: {
+          id: "msg_tools",
+          type: "message",
+          role: "assistant",
+          model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 800, output_tokens: 1 },
+        },
+      }),
+      ...calls.flatMap((call, index) => [
+        sse({
+          type: "content_block_start",
+          index,
+          content_block: { type: "tool_use", id: call.id, name: call.name, input: {} },
+        }),
+        sse({
+          type: "content_block_delta",
+          index,
+          delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) },
+        }),
+        sse({ type: "content_block_stop", index }),
+      ]),
+      sse({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { output_tokens: 20 },
+      }),
+      sse({ type: "message_stop" }),
+    ].join(""),
+    { headers: STREAM_HEADERS },
+  );
+}
+
+// DEV_NOTE: An Anthropic stream that answers with the given text
+export function anthropicReplyStream(model: string, text: string) {
+  return new Response(
+    [
+      sse({
+        type: "message_start",
+        message: {
+          id: "msg_reply",
+          type: "message",
+          role: "assistant",
+          model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 900, output_tokens: 1 },
+        },
+      }),
+      sse({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+      sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }),
+      sse({ type: "content_block_stop", index: 0 }),
+      sse({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 30 },
+      }),
+      sse({ type: "message_stop" }),
+    ].join(""),
+    { headers: STREAM_HEADERS },
+  );
+}

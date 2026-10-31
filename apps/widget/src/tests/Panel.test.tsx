@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as Schemas from "@app/schemas";
 import Panel from "@/components/Panel";
 import Launcher from "@/components/Launcher";
+import { toChangeCard } from "@/lib/changeRequestView";
+import { EMPTY_REVIEW } from "@/store/widgetStore";
 
 // DEV_NOTE: The widget states of DESIGN.md §7 from plain view models: what shows, and which action each control sends
 const base: Schemas.WidgetPanelView = {
@@ -27,6 +29,15 @@ function renderPanel(view: Partial<Schemas.WidgetPanelView>) {
     onClose: vi.fn(),
     onRate: vi.fn(),
     onDraftChange: vi.fn(),
+    onApprove: vi.fn(),
+    onReject: vi.fn(),
+    onEdit: vi.fn(),
+    onCancelEdit: vi.fn(),
+    onSaveEdits: vi.fn(),
+    onEditValue: vi.fn(),
+    onToggleRecord: vi.fn(),
+    onShowMore: vi.fn(),
+    onUndo: vi.fn(),
   };
   render(<Panel view={{ ...base, ...view }} {...actions} />);
   return actions;
@@ -43,6 +54,7 @@ const reply = (
   isStreaming: false,
   canRate: false,
   rating: null,
+  changeCards: [],
   ...patch,
 });
 
@@ -192,3 +204,224 @@ describe("Panel", () => {
     expect(actions.onSend).toHaveBeenCalledWith("こんにち");
   });
 });
+
+// DEV_NOTE: Review cards (M3-5): which action each control sends, from cards the view builder made
+describe("Change request cards", () => {
+  const editable: Schemas.ChangeRequestEditableField = {
+    field: "amount",
+    type: Schemas.ChangeRequestFieldTypeEnum.Number,
+    enumValues: null,
+    format: null,
+    isRequired: false,
+  };
+  const member = (publicId: string): Schemas.WidgetChangeRequest => ({
+    publicId,
+    toolName: "update_record",
+    toolCallId: null,
+    kind: Schemas.ChangeRequestKindEnum.Update,
+    changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Proposed,
+    changeRequestStatusLabel: Schemas.ChangeRequestStatusLabelEnum.Proposed,
+    summary: "update_record: 1 field changed",
+    changes: [
+      {
+        field: "amount",
+        before: { isFound: true, value: 120 },
+        after: { isFound: true, value: 300 },
+        isChanged: true,
+      },
+      {
+        field: "recordId",
+        before: { isFound: true, value: `EXT-${publicId}` },
+        after: { isFound: true, value: `EXT-${publicId}` },
+        isChanged: false,
+      },
+    ],
+    changeCount: 1,
+    expiresAt: null,
+    isUndoable: true,
+    wasEdited: false,
+    editableFields: [editable],
+    mismatches: null,
+    undoUntil: null,
+    isUndoing: false,
+    undoneBy: null,
+  });
+  const cardOf = (
+    members: Schemas.WidgetChangeRequest[],
+    patch: Partial<Schemas.WidgetChangeReviewState> = {},
+  ) =>
+    toChangeCard(
+      { messageId: "a1", cardId: "card-1", members },
+      {
+        ...EMPTY_REVIEW,
+        changeRequests: Object.fromEntries(members.map((m) => [m.publicId, m])),
+        ...patch,
+      },
+    );
+  const withCard = (card: Schemas.WidgetChangeCardView) => ({
+    messages: [reply({ text: "Ready for your review.", changeCards: [card] })],
+  });
+
+  it("shows the diff and sends approve, edit and reject for the whole card", async () => {
+    const actions = renderPanel(withCard(cardOf([member("1"), member("2")])));
+    const card = screen.getByRole("region", { name: "Update 2 records" });
+    expect(within(card).getByText("EXT-1")).toBeInTheDocument();
+    expect(within(card).getAllByText("300")).toHaveLength(2);
+    await userEvent.click(within(card).getByRole("button", { name: "Approve 2 changes" }));
+    expect(actions.onApprove).toHaveBeenCalledWith("card-1");
+    await userEvent.click(within(card).getByRole("button", { name: "Edit" }));
+    expect(actions.onEdit).toHaveBeenCalledWith("card-1");
+    await userEvent.click(within(card).getByRole("button", { name: "Reject" }));
+    expect(actions.onReject).toHaveBeenCalledWith("card-1");
+  });
+
+  it("edits a value, removes a record and saves in the editor", async () => {
+    const actions = renderPanel(
+      withCard(cardOf([member("1"), member("2")], { editing: { "card-1": {} } })),
+    );
+    const card = screen.getByRole("region", { name: "Editing 2 changes" });
+    const [first] = within(card).getAllByRole("textbox", { name: "amount" });
+    if (!first) throw new Error("No amount input");
+    fireEvent.change(first, { target: { value: "450" } });
+    expect(actions.onEditValue).toHaveBeenCalledWith("card-1", "1", "amount", "450");
+    const [remove] = within(card).getAllByRole("button", { name: "Remove this record" });
+    if (!remove) throw new Error("No remove button");
+    await userEvent.click(remove);
+    expect(actions.onToggleRecord).toHaveBeenCalledWith("card-1", "1");
+    await userEvent.click(within(card).getByRole("button", { name: "Save edits" }));
+    expect(actions.onSaveEdits).toHaveBeenCalledWith("card-1");
+    await userEvent.click(within(card).getByRole("button", { name: "Cancel" }));
+    expect(actions.onCancelEdit).toHaveBeenCalledWith("card-1");
+  });
+
+  it("ticks records in bulk review and shows the rest on request", async () => {
+    const members = Array.from({ length: 8 }, (_, index) => member(String(index)));
+    const actions = renderPanel(withCard(cardOf(members, { excluded: { "2": true } })));
+    const card = screen.getByRole("region", { name: "Update 7 of 8 records" });
+    const unticked = within(card).getByRole("checkbox", { name: "Include EXT-2" });
+    expect(unticked).not.toBeChecked();
+    await userEvent.click(unticked);
+    expect(actions.onToggleRecord).toHaveBeenCalledWith("card-1", "2");
+    await userEvent.click(within(card).getByRole("button", { name: "Show 2 more" }));
+    expect(actions.onShowMore).toHaveBeenCalledWith("card-1");
+    expect(within(card).getByRole("button", { name: "Approve 7 changes" })).toBeEnabled();
+  });
+
+  it("waits while an answer is on its way, and shows each outcome once decided", () => {
+    const sending = cardOf([member("1")], { sending: { "card-1": true } });
+    const { unmount } = render(<Panel view={{ ...base, ...withCard(sending) }} {...noopActions} />);
+    expect(screen.getByRole("button", { name: "Approve 1 change" })).toBeDisabled();
+    unmount();
+
+    const decided = cardOf([
+      { ...member("1"), changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Rejected },
+    ]);
+    renderPanel(withCard(decided));
+    expect(screen.getByText("Rejected. Nothing changed.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument();
+  });
+
+  // DEV_NOTE: M3-6's settled cards: checked, undone with what the check found, needs a person
+  it("shows a verified card, an undone one with expected vs found, and one that needs a person", () => {
+    const settled = (publicId: string, status: Schemas.ChangeRequestStatusIntEnum) => ({
+      ...member(publicId),
+      changeRequestStatus: status,
+      editableFields: [],
+      mismatches:
+        status === Schemas.ChangeRequestStatusIntEnum.Undone
+          ? [
+              {
+                field: "amount",
+                expected: { isFound: true as const, value: 300 },
+                found: { isFound: true as const, value: 999 },
+              },
+            ]
+          : null,
+    });
+    const { unmount } = render(
+      <Panel
+        view={{
+          ...base,
+          ...withCard(cardOf([settled("1", Schemas.ChangeRequestStatusIntEnum.Verified)])),
+        }}
+        {...noopActions}
+      />,
+    );
+    const verified = screen.getByRole("region", { name: "Record updated" });
+    expect(within(verified).getByText("Saved and checked")).toBeInTheDocument();
+    unmount();
+
+    const { unmount: unmountUndone } = render(
+      <Panel
+        view={{
+          ...base,
+          ...withCard(cardOf([settled("2", Schemas.ChangeRequestStatusIntEnum.Undone)])),
+        }}
+        {...noopActions}
+      />,
+    );
+    const undone = screen.getByRole("region", { name: "Change undone" });
+    expect(
+      within(undone).getByText(
+        "The app didn't save EXT-2 as expected, so I undid it. Nothing changed.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(undone).getByText("Expected")).toBeInTheDocument();
+    expect(within(undone).getByText("999")).toBeInTheDocument();
+    unmountUndone();
+
+    renderPanel(
+      withCard(
+        cardOf([
+          settled("3", Schemas.ChangeRequestStatusIntEnum.Verified),
+          settled("4", Schemas.ChangeRequestStatusIntEnum.NeedsHuman),
+        ]),
+      ),
+    );
+    const flagged = screen.getByRole("region", { name: "This change needs a person" });
+    expect(within(flagged).getByText("EXT-3 was saved and checked.")).toBeInTheDocument();
+    expect(
+      within(flagged).getByText(
+        "EXT-4 is flagged for your team. Please leave it as is until they review it.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // DEV_NOTE: M3-7: a checked card offers Undo until its window ends, then hides it
+  it("sends Undo for a checked card and hides it once the window has passed", async () => {
+    const checked = (undoUntil: number | null) => ({
+      ...member("1"),
+      changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Verified,
+      editableFields: [],
+      undoUntil,
+    });
+    const actions = renderPanel(withCard(cardOf([checked(Date.now() + 3_600_000)])));
+    const card = screen.getByRole("region", { name: "Record updated" });
+    expect(within(card).getByText(/^Undo available until \d{2}:\d{2}$/)).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Undo" }));
+    expect(actions.onUndo).toHaveBeenCalledWith("card-1");
+    cleanup();
+
+    renderPanel(withCard(cardOf([checked(null)])));
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+});
+
+const noopActions = {
+  onSend: vi.fn(),
+  onStop: vi.fn(),
+  onRetry: vi.fn(),
+  onNewChat: vi.fn(),
+  onClose: vi.fn(),
+  onRate: vi.fn(),
+  onDraftChange: vi.fn(),
+  onApprove: vi.fn(),
+  onReject: vi.fn(),
+  onEdit: vi.fn(),
+  onCancelEdit: vi.fn(),
+  onSaveEdits: vi.fn(),
+  onEditValue: vi.fn(),
+  onToggleRecord: vi.fn(),
+  onShowMore: vi.fn(),
+  onUndo: vi.fn(),
+};

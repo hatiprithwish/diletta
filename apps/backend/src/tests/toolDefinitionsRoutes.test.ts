@@ -1,11 +1,18 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { admins, companies, companyConnections, toolDefinitions } from "@/db/tables";
+import {
+  activityLog,
+  admins,
+  companies,
+  companyConnections,
+  eventOutbox,
+  toolDefinitions,
+} from "@/db/tables";
 import worker from "@/index";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -62,6 +69,33 @@ async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   } finally {
     await pool.end();
   }
+}
+
+// DEV_NOTE: The company's audit rows (M4-9) of one entity type, oldest first, read as the owner
+async function auditEvents(companyId: string, entityType: string) {
+  let rows: {
+    actorType: number;
+    entityAction: string;
+    entityVersion: number | null;
+    detail: unknown;
+  }[] = [];
+  await withOwnerDb(async (ownerDb) => {
+    const conditions = [
+      eq(activityLog.companyId, companyId),
+      eq(activityLog.entityType, entityType),
+    ];
+    rows = await ownerDb
+      .select({
+        actorType: activityLog.actorType,
+        entityAction: activityLog.entityAction,
+        entityVersion: activityLog.entityVersion,
+        detail: activityLog.detail,
+      })
+      .from(activityLog)
+      .where(and(...conditions))
+      .orderBy(asc(activityLog.createdAt), asc(activityLog.id));
+  });
+  return rows;
 }
 
 async function call(
@@ -144,6 +178,8 @@ afterAll(async () => {
   await withOwnerDb(async (ownerDb) => {
     await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminA]));
     if (!companyA) return;
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, [companyA]));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, [companyA]));
     await ownerDb.delete(toolDefinitions).where(inArray(toolDefinitions.companyId, [companyA]));
     await ownerDb
       .delete(companyConnections)
@@ -220,6 +256,50 @@ describe(
       expect(deleted.status).toBe(200);
       const missing = await call("GET", `${base()}/${v2Tool.publicId}`, { as: operator });
       expect(missing.status).toBe(404);
+
+      // DEV_NOTE: Each operator write left one audit row on the company, with the tool's name and version (M4-9); the
+      // refused edit and version none
+      const events = await auditEvents(companyA, Schemas.AuditEntityTypeEnum.ToolDefinition);
+      expect(
+        events
+          .filter((event) => (event.detail as { label: string }).label === name)
+          .map((event) => [event.actorType, event.entityAction, event.entityVersion]),
+      ).toEqual([
+        [Schemas.ActivityLogActorTypeIntEnum.Operator, Schemas.AuditEntityActionEnum.Created, 1],
+        [Schemas.ActivityLogActorTypeIntEnum.Operator, Schemas.AuditEntityActionEnum.Activated, 1],
+        [
+          Schemas.ActivityLogActorTypeIntEnum.Operator,
+          Schemas.AuditEntityActionEnum.VersionCreated,
+          2,
+        ],
+        [Schemas.ActivityLogActorTypeIntEnum.Operator, Schemas.AuditEntityActionEnum.Deleted, 2],
+      ]);
+    });
+
+    it("records a draft edit only when it changed something", async () => {
+      const name = uniqueName();
+      const created = await call("POST", base(), { as: operator, body: readTool(name) });
+      expect(created.status).toBe(201);
+      const tool = created.body.toolDefinition as Schemas.ToolDefinitionWithStatus;
+      const { name: _name, ...unchanged } = readTool(name).toolDefinition;
+
+      const same = await call("PATCH", `${base()}/${tool.publicId}`, {
+        as: operator,
+        body: { toolDefinition: unchanged },
+      });
+      expect(same.status).toBe(200);
+      const changed = await call("PATCH", `${base()}/${tool.publicId}`, {
+        as: operator,
+        body: { toolDefinition: { description: "List open records" } },
+      });
+      expect(changed.status).toBe(200);
+
+      const events = await auditEvents(companyA, Schemas.AuditEntityTypeEnum.ToolDefinition);
+      expect(
+        events
+          .filter((event) => (event.detail as { label: string }).label === name)
+          .map((event) => event.entityAction),
+      ).toEqual([Schemas.AuditEntityActionEnum.Created, Schemas.AuditEntityActionEnum.Updated]);
     });
 
     it("answers 400 for invalid ops, a reserved name or an unknown connection, 409 for a taken name", async () => {

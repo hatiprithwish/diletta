@@ -13,6 +13,7 @@ import withPlatform from "@/db/withPlatform";
 import {
   activityLog,
   activityRollups,
+  adminInvites,
   admins,
   changeRequests,
   chatbotConfigs,
@@ -106,6 +107,14 @@ const FIXTURES: Fixture[] = [
         .insert(activityRollups)
         .values({ companyId, day: "2026-10-06", metric: `rls_${uid()}`, value: "1" })
         .returning({ id: activityRollups.id }),
+  },
+  {
+    name: "admin_invites",
+    insert: (client, companyId) =>
+      client
+        .insert(adminInvites)
+        .values({ publicId: pid(), companyId, email: `rls-${uid()}@example.com` })
+        .returning({ id: adminInvites.id }),
   },
   {
     name: "admins",
@@ -367,7 +376,12 @@ const FIXTURES: Fixture[] = [
     insert: (client, companyId) =>
       client
         .insert(knowledgeSources)
-        .values({ publicId: pid(), companyId, type: Schemas.KnowledgeSourceTypeIntEnum.Upload })
+        .values({
+          publicId: pid(),
+          companyId,
+          name: "RLS test",
+          type: Schemas.KnowledgeSourceTypeIntEnum.Upload,
+        })
         .returning({ id: knowledgeSources.id }),
   },
   {
@@ -593,7 +607,15 @@ beforeAll(async () => {
 
     const [platformCase] = await ownerDb
       .insert(evalCases)
-      .values({ publicId: pid(), name: "RLS platform case", input: {}, expectations: {} })
+      // DEV_NOTE: Inactive, so a copy a crashed run leaves behind never joins an eval run (M5-2 refuses a run while an
+      // active case can't be read)
+      .values({
+        publicId: pid(),
+        name: "RLS platform case",
+        input: {},
+        expectations: {},
+        isActive: false,
+      })
       .returning({ id: evalCases.id });
     platformCaseId = platformCase!.id;
   });

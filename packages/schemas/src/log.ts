@@ -15,7 +15,14 @@ export enum LogCategory {
   Conversation = "Conversation",
   Budget = "Budget",
   Knowledge = "Knowledge",
+  // DEV_NOTE: The R2 side of the files registry (FileStorageProvider), shared by knowledge documents and eval transcripts
+  Files = "Files",
   Feedback = "Feedback",
+  Action = "Action",
+  Rollup = "Rollup",
+  Insights = "Insights",
+  // DEV_NOTE: The eval harness's /eval/* API (M5-2)
+  Eval = "Eval",
 }
 
 export enum LogAction {
@@ -41,6 +48,7 @@ export enum LogAction {
   GetCompanyByPublicId = "GetCompanyByPublicId",
   ListCompanies = "ListCompanies",
   CountCompanies = "CountCompanies",
+  ListCompanyIdsByStatus = "ListCompanyIdsByStatus",
   UpdateCompany = "UpdateCompany",
 
   // Chatbot users
@@ -94,6 +102,7 @@ export enum LogAction {
   ListCompanySecrets = "ListCompanySecrets",
   UpdateCompanySecret = "UpdateCompanySecret",
   GetActiveModelKey = "GetActiveModelKey",
+  GetActiveModelKeyProviders = "GetActiveModelKeyProviders",
   InvalidateModelKey = "InvalidateModelKey",
 
   // Chatbot user secrets
@@ -147,6 +156,30 @@ export enum LogAction {
   DeleteToolDefinitionDraft = "DeleteToolDefinitionDraft",
   LoadToolOps = "LoadToolOps",
   ResolveOperatorCompany = "ResolveOperatorCompany",
+  GetPinnedToolDefinitions = "GetPinnedToolDefinitions",
+  GetToolDefinitionById = "GetToolDefinitionById",
+
+  // Action engine (tool calls, change requests)
+  LoadTurnTools = "LoadTurnTools",
+  RunHostTool = "RunHostTool",
+  CreateToolCall = "CreateToolCall",
+  ProposeChange = "ProposeChange",
+  CreateChangeRequest = "CreateChangeRequest",
+  GetChangeRequestDetails = "GetChangeRequestDetails",
+  UpdateChangeRequestStatus = "UpdateChangeRequestStatus",
+  SetChangeRequestExecutionId = "SetChangeRequestExecutionId",
+  ListConversationChangeRequests = "ListConversationChangeRequests",
+  DecideChangeRequest = "DecideChangeRequest",
+  ExpireChangeRequest = "ExpireChangeRequest",
+  CommitChangeRequest = "CommitChangeRequest",
+  VerifyChangeRequest = "VerifyChangeRequest",
+  UndoChangeRequest = "UndoChangeRequest",
+  RequestHostToken = "RequestHostToken",
+  HandOverChangeRequest = "HandOverChangeRequest",
+  PurgeChangeRequestValues = "PurgeChangeRequestValues",
+  EditChangeRequest = "EditChangeRequest",
+  UpdateChangeRequestPayload = "UpdateChangeRequestPayload",
+  ReceiveHostToken = "ReceiveHostToken",
 
   // Knowledge sources
   CreateKnowledgeSource = "CreateKnowledgeSource",
@@ -205,6 +238,46 @@ export enum LogAction {
 
   // Chatbot configs
   GetPublishedChatbotConfig = "GetPublishedChatbotConfig",
+  GetLatestDraftChatbotConfig = "GetLatestDraftChatbotConfig",
+  ListChatbotConfigs = "ListChatbotConfigs",
+  CountChatbotConfigs = "CountChatbotConfigs",
+  GetChatbotConfigDetails = "GetChatbotConfigDetails",
+  GetChatbotConfigVersionState = "GetChatbotConfigVersionState",
+  CreateChatbotConfig = "CreateChatbotConfig",
+  UpdateChatbotConfigDraft = "UpdateChatbotConfigDraft",
+  ArchiveChatbotConfigDraft = "ArchiveChatbotConfigDraft",
+  ArchivePublishedChatbotConfig = "ArchivePublishedChatbotConfig",
+  PublishChatbotConfig = "PublishChatbotConfig",
+  MoveChatbotConfigStatus = "MoveChatbotConfigStatus",
+  SendChatbotConfigToTesting = "SendChatbotConfigToTesting",
+  MoveChatbotConfigToDraft = "MoveChatbotConfigToDraft",
+  GateChatbotConfig = "GateChatbotConfig",
+  GetPublishedChatbotConfigBodies = "GetPublishedChatbotConfigBodies",
+  GetChatbotConfigHeads = "GetChatbotConfigHeads",
+  GetChatbotConversationCounts = "GetChatbotConversationCounts",
+  GetLatestEvalRunsByConfig = "GetLatestEvalRunsByConfig",
+  GetActiveToolDefinitionOptions = "GetActiveToolDefinitionOptions",
+  GetKnowledgeSourceOptions = "GetKnowledgeSourceOptions",
+  UpdateCompanyReadOnly = "UpdateCompanyReadOnly",
+  CheckModelKey = "CheckModelKey",
+  UpdateCompanySpendingBudget = "UpdateCompanySpendingBudget",
+
+  // Settings › Team (M4-10)
+  CreateAdminInvite = "CreateAdminInvite",
+  GetAdminInviteDetails = "GetAdminInviteDetails",
+  FindPendingAdminInviteByEmail = "FindPendingAdminInviteByEmail",
+  GetPendingAdminInvites = "GetPendingAdminInvites",
+  SetAdminInviteClerkRef = "SetAdminInviteClerkRef",
+  UpdateAdminInviteStatus = "UpdateAdminInviteStatus",
+  GetCompanyAdmins = "GetCompanyAdmins",
+  GetCompanyAdminByClerkUserId = "GetCompanyAdminByClerkUserId",
+  GetCompanyAdminByEmail = "GetCompanyAdminByEmail",
+  RemoveAdmin = "RemoveAdmin",
+  FindClerkUserByEmail = "FindClerkUserByEmail",
+  CreateClerkInvitation = "CreateClerkInvitation",
+  GrantClerkInvite = "GrantClerkInvite",
+  RevokeClerkInvite = "RevokeClerkInvite",
+  GetClerkLastActive = "GetClerkLastActive",
 
   // Conversations
   CreateConversation = "CreateConversation",
@@ -250,6 +323,135 @@ export enum LogAction {
   GetActivityLogDefaultHasRows = "GetActivityLogDefaultHasRows",
   EnsureActivityLogPartitions = "EnsureActivityLogPartitions",
 
+  // Activity rollups
+  LockActivityRollupDay = "LockActivityRollupDay",
+  DeleteActivityRollupDay = "DeleteActivityRollupDay",
+  CreateActivityRollups = "CreateActivityRollups",
+  GetConversationRollupGroups = "GetConversationRollupGroups",
+  GetFeedbackRollupGroups = "GetFeedbackRollupGroups",
+  GetChangeRequestRollupGroups = "GetChangeRequestRollupGroups",
+  GetModelCallRollupGroups = "GetModelCallRollupGroups",
+  RebuildActivityRollupDay = "RebuildActivityRollupDay",
+  RebuildRecentActivityRollups = "RebuildRecentActivityRollups",
+  GetActivityRollups = "GetActivityRollups",
+
+  // Insights (M4-3)
+  GetInsightsOverview = "GetInsightsOverview",
+  GetInsightsUsage = "GetInsightsUsage",
+  GetInsightsImpact = "GetInsightsImpact",
+  CountChangeRequestsByStatus = "CountChangeRequestsByStatus",
+  CountOpenQualityIssues = "CountOpenQualityIssues",
+  GetFailedKnowledgeSourcesSummary = "GetFailedKnowledgeSourcesSummary",
+  GetWriteToolSummaries = "GetWriteToolSummaries",
+  GetAdminDetails = "GetAdminDetails",
+
+  // ROI assumptions (M4-3)
+  CreateRoiAssumption = "CreateRoiAssumption",
+  GetRoiAssumptions = "GetRoiAssumptions",
+
+  // Conversations page (M4-4)
+  GetDashboardConversations = "GetDashboardConversations",
+  CountDashboardConversations = "CountDashboardConversations",
+  GetDashboardConversation = "GetDashboardConversation",
+  ExportConversations = "ExportConversations",
+  ListConversationMessages = "ListConversationMessages",
+  ListConversationToolCalls = "ListConversationToolCalls",
+  GetConversationTurnCosts = "GetConversationTurnCosts",
+  GetChatbotConfigOptions = "GetChatbotConfigOptions",
+  CreateAdminQualityIssue = "CreateAdminQualityIssue",
+  FlagConversation = "FlagConversation",
+  GetDashboardChangeRequest = "GetDashboardChangeRequest",
+
+  // Changes page (M4-5)
+  GetDashboardChangeRequests = "GetDashboardChangeRequests",
+  CountDashboardChangeRequests = "CountDashboardChangeRequests",
+  GetChangeRequestRequesters = "GetChangeRequestRequesters",
+  GetActivityLogTimeline = "GetActivityLogTimeline",
+  ResolveChangeRequest = "ResolveChangeRequest",
+
+  // Quality page (M4-6)
+  GetDashboardQualityIssues = "GetDashboardQualityIssues",
+  CountDashboardQualityIssues = "CountDashboardQualityIssues",
+  GetDashboardQualityIssue = "GetDashboardQualityIssue",
+  TriageQualityIssue = "TriageQualityIssue",
+  UpdateQualityIssueStatus = "UpdateQualityIssueStatus",
+  CloseQualityIssue = "CloseQualityIssue",
+  DraftQualityTest = "DraftQualityTest",
+  ConvertQualityIssue = "ConvertQualityIssue",
+  CreateEvalCase = "CreateEvalCase",
+  ListRecentChatMessages = "ListRecentChatMessages",
+
+  // Knowledge page (M4-7)
+  CountKnowledgeDocumentsBySource = "CountKnowledgeDocumentsBySource",
+  GetCompanyKnowledgeDocument = "GetCompanyKnowledgeDocument",
+  GetDocGapClusters = "GetDocGapClusters",
+  CountDocGapClusters = "CountDocGapClusters",
+  GetDocGapCluster = "GetDocGapCluster",
+  GetDocGapSampleQuestions = "GetDocGapSampleQuestions",
+  AnswerDocGapCluster = "AnswerDocGapCluster",
+  DismissDocGapCluster = "DismissDocGapCluster",
+  ReopenDocGapClusters = "ReopenDocGapClusters",
+
+  // Tests page (M4-8)
+  GetDashboardEvalRuns = "GetDashboardEvalRuns",
+  CountDashboardEvalRuns = "CountDashboardEvalRuns",
+  GetDashboardEvalRun = "GetDashboardEvalRun",
+  GetLatestEvalRun = "GetLatestEvalRun",
+  GetEvalRunSafetyCases = "GetEvalRunSafetyCases",
+  GetEvalRunCases = "GetEvalRunCases",
+  CountEvalRunCases = "CountEvalRunCases",
+  GetEvalRunCaseAttempts = "GetEvalRunCaseAttempts",
+  GetEvalRunTranscriptFile = "GetEvalRunTranscriptFile",
+  GetEvalRunTranscript = "GetEvalRunTranscript",
+  GetEvalRunsSummary = "GetEvalRunsSummary",
+  GetDashboardEvalCases = "GetDashboardEvalCases",
+  CountDashboardEvalCases = "CountDashboardEvalCases",
+  GetDashboardEvalCase = "GetDashboardEvalCase",
+  GetLatestEvalCaseResults = "GetLatestEvalCaseResults",
+  CountActiveEvalCases = "CountActiveEvalCases",
+  UpdateEvalCase = "UpdateEvalCase",
+
+  // Audit log (M4-9)
+  RecordAuditEvent = "RecordAuditEvent",
+  GetAuditLog = "GetAuditLog",
+  CountAuditLog = "CountAuditLog",
+  ExportAuditLog = "ExportAuditLog",
+
+  // Security page (M4-9)
+  GetSecurityConnections = "GetSecurityConnections",
+  UpdateAllowedOrigins = "UpdateAllowedOrigins",
+  RotateEncryptionKey = "RotateEncryptionKey",
+  UpdateContentRetention = "UpdateContentRetention",
+  GetInjectionQualityIssues = "GetInjectionQualityIssues",
+  CountInjectionQualityIssues = "CountInjectionQualityIssues",
+
   // Cron
   DispatchCron = "DispatchCron",
+
+  // Eval harness (M5-2)
+  GetRunnableEvalCases = "GetRunnableEvalCases",
+  CreateEvalRun = "CreateEvalRun",
+  FinishEvalRun = "FinishEvalRun",
+  CreateEvalResult = "CreateEvalResult",
+  GetEvalRunTallies = "GetEvalRunTallies",
+  AddEvalRunCost = "AddEvalRunCost",
+  MarkEvalRunReset = "MarkEvalRunReset",
+  DecodeEvalJwt = "DecodeEvalJwt",
+  VerifyEvalJwt = "VerifyEvalJwt",
+  AuthenticateEval = "AuthenticateEval",
+  StartEvalRun = "StartEvalRun",
+  StartEvalConversation = "StartEvalConversation",
+  RunEvalAttempt = "RunEvalAttempt",
+  ReadBackEvalRecord = "ReadBackEvalRecord",
+  RecordEvalResult = "RecordEvalResult",
+  ResetEvalRun = "ResetEvalRun",
+  EndEvalRun = "EndEvalRun",
+  // Eval graders (M5-3)
+  JudgeEvalAttempt = "JudgeEvalAttempt",
+  GetEvalTranscript = "GetEvalTranscript",
+  StoreEvalTranscript = "StoreEvalTranscript",
+  GetEvalAttemptConversation = "GetEvalAttemptConversation",
+  HasEvalResult = "HasEvalResult",
+  GetPendingOwnerFiles = "GetPendingOwnerFiles",
+  SweepEvalTranscripts = "SweepEvalTranscripts",
 }

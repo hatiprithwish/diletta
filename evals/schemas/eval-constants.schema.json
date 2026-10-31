@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "evalJwtIssuer": {
+      "type": "string",
+      "const": "diletta-eval-harness"
+    },
+    "evalJwtAudience": {
+      "type": "string",
+      "const": "diletta-eval"
+    },
+    "evalJwtMaxLifetimeSeconds": {
+      "type": "number",
+      "const": 300
+    },
+    "evalHostTokenHeader": {
+      "type": "string",
+      "const": "X-Host-Token"
+    },
+    "testHostAdminHeader": {
+      "type": "string",
+      "const": "X-Test-Host-Admin"
+    },
+    "testHostTokenMaxLifetimeSeconds": {
+      "type": "number",
+      "const": 300
+    },
+    "evalRunFailureJudgeUnavailable": {
+      "type": "number",
+      "const": 1
+    },
+    "evalRunFailureHostUnavailable": {
+      "type": "number",
+      "const": 2
+    },
+    "evalRunFailureServerError": {
+      "type": "number",
+      "const": 3
+    },
+    "evalRunFailureHarnessError": {
+      "type": "number",
+      "const": 4
+    }
+  },
+  "required": [
+    "evalJwtIssuer",
+    "evalJwtAudience",
+    "evalJwtMaxLifetimeSeconds",
+    "evalHostTokenHeader",
+    "testHostAdminHeader",
+    "testHostTokenMaxLifetimeSeconds",
+    "evalRunFailureJudgeUnavailable",
+    "evalRunFailureHostUnavailable",
+    "evalRunFailureServerError",
+    "evalRunFailureHarnessError"
+  ],
+  "title": "EvalHarnessConstants",
+  "description": "Constants the harness needs that no request or answer carries (the eval JWT, headers, the test host's token), each a literal: read by the harness, never sent"
+}

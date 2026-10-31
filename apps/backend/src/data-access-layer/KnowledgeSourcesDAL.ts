@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, max, or, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, knowledgeSources } from "@/db/tables";
@@ -41,6 +41,7 @@ export default class KnowledgeSourcesDAL {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
+          name: params.name,
           type: params.type,
           url: params.url,
           syncFrequency: params.syncFrequency,
@@ -131,11 +132,13 @@ export default class KnowledgeSourcesDAL {
       const orderExpr =
         params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
       const offset = (params.pageNo - 1) * params.pageSize;
+      const conditions = [eq(knowledgeSources.companyId, params.companyId)];
+      if (params.status !== null) conditions.push(eq(knowledgeSources.status, params.status));
 
       const knowledgeSourcesResponse = await tx
         .select()
         .from(knowledgeSources)
-        .where(eq(knowledgeSources.companyId, params.companyId))
+        .where(and(...conditions))
         // DEV_NOTE: id breaks ties (same created_at, never-synced sources), so rows never repeat or go missing
         // between pages
         .orderBy(orderExpr, asc(knowledgeSources.id))
@@ -246,6 +249,7 @@ export default class KnowledgeSourcesDAL {
         .update(knowledgeSources)
         .set({
           // DEV_NOTE: When a param is null, it's ignored
+          name: params.name ?? undefined,
           syncFrequency: params.syncFrequency ?? undefined,
           status: params.status ?? undefined,
           updatedBy: params.updatedBy,
@@ -487,6 +491,76 @@ export default class KnowledgeSourcesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetDueKnowledgeSources,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A failed source's sync_heartbeat_at is when its sync set it Failed (setKnowledgeSourceSyncState); an
+  // admin's edit moves updated_at, never the heartbeat, so a rename doesn't read as a fresh failure
+  async getFailedKnowledgeSourcesSummary(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetFailedKnowledgeSourcesSummaryDALRequest,
+  ) {
+    const response: Schemas.FailedKnowledgeSourcesSummaryDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(knowledgeSources.companyId, params.companyId),
+        eq(knowledgeSources.status, Schemas.KnowledgeSourceStatusIntEnum.Failed),
+      ];
+      const [result] = await tx
+        .select({ count: count(), lastFailedAt: max(knowledgeSources.syncHeartbeatAt) })
+        .from(knowledgeSources)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Failed knowledge sources summarised successfully";
+      response.failedCount = result?.count ?? 0;
+      response.lastFailedAt = result?.lastFailedAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in summarising failed knowledge sources";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetFailedKnowledgeSourcesSummary,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The Bots draft editor's source picker (M4-10): any status (Paused stops syncing, not search), by name
+  async getKnowledgeSourceOptions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetKnowledgeSourceOptionsDALRequest,
+  ) {
+    const response: Schemas.KnowledgeSourceOptionsDALResponse = { isSuccess: false };
+
+    try {
+      const options = await tx
+        .select({ publicId: knowledgeSources.publicId, name: knowledgeSources.name })
+        .from(knowledgeSources)
+        .where(eq(knowledgeSources.companyId, params.companyId))
+        .orderBy(asc(knowledgeSources.name), asc(knowledgeSources.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Knowledge source options fetched successfully";
+      response.options = options;
+    } catch (error) {
+      const message = "Unknown error in fetching knowledge source options";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetKnowledgeSourceOptions,
         message,
         error,
         metadata: params,

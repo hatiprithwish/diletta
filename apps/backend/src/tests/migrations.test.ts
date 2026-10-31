@@ -308,6 +308,7 @@ describe("CHECK constraints", () => {
       db.insert(knowledgeSources).values({
         publicId: Utility.generatePublicId(),
         companyId,
+        name: "Docs",
         type: Schemas.KnowledgeSourceTypeIntEnum.Upload,
         url: "https://docs.test",
       }),
@@ -317,6 +318,7 @@ describe("CHECK constraints", () => {
       db.insert(knowledgeSources).values({
         publicId: Utility.generatePublicId(),
         companyId,
+        name: "Docs",
         type: Schemas.KnowledgeSourceTypeIntEnum.Sitemap,
         url: "https://docs.test/sitemap.xml",
       }),

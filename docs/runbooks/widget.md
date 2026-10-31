@@ -8,12 +8,13 @@ Before any conversation exists, it reads its settings from `GET /widget/bootstra
 
 A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`):
 
-| Option     | Required | What it is                                                                                                               |
-| ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `apiBase`  | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`) |
-| `getToken` | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                             |
-| `chatbot`  | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                   |
-| `theme`    | no       | `"light"` (default) or `"dark"`                                                                                          |
+| Option         | Required | What it is                                                                                                                                                                                                                                           |
+| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiBase`      | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`)                                                                                                                             |
+| `getToken`     | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                                                                                                                                                         |
+| `getHostToken` | no       | `() => Promise<string>`: the signed-in user's bearer token for the host's own API. The chatbot reads and changes records as this user (`jwt_forward`). Called again whenever the chatbot asks for a fresh one. Without it, changes can't be approved |
+| `chatbot`      | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                                                                                                                                               |
+| `theme`        | no       | `"light"` (default) or `"dark"`                                                                                                                                                                                                                      |
 
 **Script tag.** The static Worker in `apps/widget/wrangler.jsonc` serves the bundle (`diletta-widget.js`).
 
@@ -23,6 +24,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
   const widget = window.Diletta.init({
     apiBase: "https://<platform worker>",
     getToken: () => fetch("/api/companion-token").then((response) => response.text()),
+    getHostToken: () => fetch("/api/session-token").then((response) => response.text()),
     theme: "light",
   });
   // window.Diletta.open() / close() / setTheme("dark") / destroy() act on the same widget
@@ -47,8 +49,11 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 - **Reload.** Opening the panel resumes the saved conversation. The server sends the transcript and the ratings already given.
 - **New chat.** Clears the saved id and shows the welcome screen. The old conversation closes on its own after 30 minutes idle.
 - **Every connect** gets a fresh token through `getToken`, sent in `Sec-WebSocket-Protocol`. Tokens are never stored.
+- **Host token (M3-8).** Sent after every connect through `getHostToken`, never stored. When the chatbot needs a fresh one mid-conversation (it has none after a server restart, or the host refused it), it asks, and the widget calls `getHostToken` again with nothing shown to the visitor. If `getHostToken` fails, a lookup tells the visitor to sign in again, and an approved change that can't be finished within 5 minutes (the widget was closed) goes to the company's team as "needs a person". `getHostToken` should return a token the host's API still accepts, refreshing it if needed.
 
 **The greeting.** Its first line is the welcome heading; any following lines are the paragraph under it.
+
+**Reviewing changes (M3-5).** A change the chatbot proposes shows as a card in the reply that proposed it. The card shows each record's id and a diff (old value struck through, new value highlighted). Up to 3 records show as a card with **Approve N changes / Edit / Reject**. More show as a table with a checkbox per record (the first 6 rows until "Show N more"): ticked records are approved, unticked ones rejected. One click answers the whole card in one frame, so the chatbot replies once. **Edit** opens an input per field the change sends; the fields that pick the record can't be edited. **Save edits** sends only the values that changed. The server checks them again: it validates them against the tool's input schema, reads the record again and rebuilds the diff. The card then goes back to approval with the new diff, under the same deadline. A refused edit stays in the editor with the reason, and nothing changes. The host token goes to the server on every connect. If the server asks for it again (`token_needed`), the widget fetches one and retries once; after that the card says to sign in again.
 
 **Feedback.** Thumbs up or down on a finished reply. The visitor can switch, but not clear. They're stored in `feedback` (one row per reply per user), one at a time in click order, so the last click wins. A rating is refused (shown as "not saved") once the conversation closed or the company or chatbot isn't active, and past 30 feedback clicks a minute in one conversation. On reconnect the widget gets back the ratings of the newest 100 replies. M2-8 opens the quality issue for a thumbs-down.
 
@@ -72,7 +77,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 
 ## Bundle size
 
-`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7. `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
+`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7 and 185.4 KiB at M3-5 (review cards, the checkbox and native select). `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
 
 The biggest parts are React DOM, zod, `cn`, the agents client (including its unused capnweb transport) and `ai`. Markdown is the widget's own small parser (`src/lib/markdown.ts`) rather than a library, to stay within the budget.
 

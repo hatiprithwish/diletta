@@ -202,12 +202,52 @@ export const admins = table(
     companyId: t.bigint("company_id", { mode: "string" }), // → companies.id, null = operator
     email: t.text(),
     name: t.text(),
+    // DEV_NOTE: Settings › Team's Remove (M4-10) keeps the row, so audit history, "edited by" and "invited by" still name
+    // the person: removed_at / removed_by are set and clerk_user_id is replaced by a `removed_` token, which frees the
+    // Clerk account for a later invite and makes every sign-in lookup miss
+    removedAt: t.timestamp("removed_at", { withTimezone: true }),
+    removedBy: t.bigint("removed_by", { mode: "string" }), // → admins.id
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     t.uniqueIndex("UNQ_admins_clerk_user_id").on(table.clerkUserId),
     t.index("IDX_admins_company_id").on(table.companyId),
+    t.index("IDX_admins_removed_by").on(table.removedBy),
+  ],
+);
+
+// DEV_NOTE: Settings › Team (M4-10): an invite to administer one company. Pending until the invitee's first sign-in
+// accepts it (in the admins row's transaction) or an admin revokes it; the row, not the Clerk metadata, decides. Exactly
+// one of clerk_invitation_id (an emailed Clerk invitation) and clerk_user_id (an existing Clerk account given the invite
+// metadata) is set once Clerk has answered. One Pending invite per company and email.
+export const adminInvites = table(
+  "admin_invites",
+  {
+    id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
+    publicId: t.text("public_id").notNull(),
+    companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    email: t.text().notNull(), // lowercased
+    status: t
+      .smallint()
+      .$type<Schemas.AdminInviteStatusIntEnum>()
+      .notNull()
+      .default(Schemas.AdminInviteStatusIntEnum.Pending),
+    clerkInvitationId: t.text("clerk_invitation_id"),
+    clerkUserId: t.text("clerk_user_id"),
+    invitedBy: t.bigint("invited_by", { mode: "string" }), // → admins.id
+    acceptedAt: t.timestamp("accepted_at", { withTimezone: true }),
+    createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    t.uniqueIndex("UNQ_admin_invites_public_id").on(table.publicId),
+    t
+      .uniqueIndex("UNQ_admin_invites_company_id_email_pending")
+      .on(table.companyId, table.email)
+      .where(sql`${table.status} = ${lit(Schemas.AdminInviteStatusIntEnum.Pending)}`),
+    t.index("IDX_admin_invites_company_id").on(table.companyId),
+    t.index("IDX_admin_invites_invited_by").on(table.invitedBy),
   ],
 );
 
@@ -397,6 +437,11 @@ export const roiAssumptions = table(
 
 // DEV_NOTE: One run of a config against its eval cases. Publish gate = trigger gate AND has_passed.
 // Pass threshold, judge model and safety rule are pinned by harness_version.
+// The harness (M5-2) starts a run Running with the cases it handed out (eval_case_ids, the set Done is checked
+// against) and the staging connection its token named (company_connection_id, the only one its steps may use); both
+// are null only on a run that never started. reset_at: the harness's reset (once, after the attempts) went through;
+// Done needs it. cost_usd is added to by every model call of the run as it is recorded or backfilled, so it settles
+// after the run ends.
 export const evalRuns = table(
   "eval_runs",
   {
@@ -404,6 +449,9 @@ export const evalRuns = table(
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
     chatbotConfigId: t.bigint("chatbot_config_id", { mode: "string" }).notNull(), // → chatbot_configs.id
+    companyConnectionId: t.bigint("company_connection_id", { mode: "string" }), // → company_connections.id
+    evalCaseIds: t.bigint("eval_case_ids", { mode: "string" }).array(), // → eval_cases.id
+    resetAt: t.timestamp("reset_at", { withTimezone: true }), // the harness's reset went through
     trigger: t.smallint().$type<Schemas.EvalRunTriggerIntEnum>().notNull(),
     harnessVersion: t.text("harness_version").notNull(),
     k: t.smallint().notNull(),
@@ -415,6 +463,7 @@ export const evalRuns = table(
     caseCount: t.integer("case_count"),
     passAllKCount: t.integer("pass_all_k_count"),
     hasPassed: t.boolean("has_passed"), // null until done
+    failure: t.smallint().$type<Schemas.EvalRunFailureIntEnum>(), // why the harness stopped a Failed run (M5-3)
     costUsd: t.numeric("cost_usd", { precision: 12, scale: 6 }).notNull().default("0"),
     finishedAt: t.timestamp("finished_at", { withTimezone: true }),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -424,6 +473,7 @@ export const evalRuns = table(
     t.uniqueIndex("UNQ_eval_runs_public_id").on(table.publicId),
     t.index("IDX_eval_runs_company_id").on(table.companyId),
     t.index("IDX_eval_runs_chatbot_config_id").on(table.chatbotConfigId),
+    t.index("IDX_eval_runs_company_connection_id").on(table.companyConnectionId),
   ],
 );
 
@@ -535,7 +585,9 @@ export const qualityIssues = table(
 // ─── Conversations & usage ──────────────────────────────────────────────────
 
 // DEV_NOTE: Index of one chat. The live transcript lives in the Think session; public_id = the DO name.
-// Content expiry = last_activity_at + companies.content_retention_days.
+// Content expiry = last_activity_at + companies.content_retention_days. eval_run_id set = an eval attempt's chat
+// (M5-2): it runs that run's config on the staging connection and never shows on the dashboard; eval_case_id +
+// eval_attempt name the attempt, once per run (the unique index refuses a repeat before anything runs).
 export const conversations = table(
   "conversations",
   {
@@ -545,6 +597,9 @@ export const conversations = table(
     chatbotUserId: t.bigint("chatbot_user_id", { mode: "string" }).notNull(), // → chatbot_users.id
     chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     chatbotConfigId: t.bigint("chatbot_config_id", { mode: "string" }), // → chatbot_configs.id (current)
+    evalRunId: t.bigint("eval_run_id", { mode: "string" }), // → eval_runs.id, null = a widget chat
+    evalCaseId: t.bigint("eval_case_id", { mode: "string" }), // → eval_cases.id
+    evalAttempt: t.smallint("eval_attempt"), // 1..k
     status: t
       .smallint()
       .$type<Schemas.ConversationStatusIntEnum>()
@@ -561,10 +616,20 @@ export const conversations = table(
   (table) => [
     t.uniqueIndex("UNQ_conversations_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_conversations_root_log_id").on(table.rootLogId),
-    t.index("IDX_conversations_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
+    t.index("IDX_conversations_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_conversations_chatbot_user_id").on(table.chatbotUserId),
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),
+    t.index("IDX_conversations_eval_run_id").on(table.evalRunId),
+    t.index("IDX_conversations_eval_case_id").on(table.evalCaseId),
+    t
+      .uniqueIndex("UNQ_conversations_eval_run_id_eval_case_id_eval_attempt")
+      .on(table.evalRunId, table.evalCaseId, table.evalAttempt),
+    t.check(
+      "CHK_conversations_eval_attempt",
+      sql`(${table.evalRunId} IS NULL) = (${table.evalCaseId} IS NULL) AND (${table.evalRunId} IS NULL) = (${table.evalAttempt} IS NULL)`,
+    ),
   ],
 );
 
@@ -669,7 +734,8 @@ export const modelCalls = table(
       .index("IDX_model_calls_created_at_pending")
       .on(table.createdAt)
       .where(sql`${table.usageStatus} = ${lit(Schemas.ModelCallUsageStatusIntEnum.Pending)}`),
-    t.index("IDX_model_calls_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups, the budget seed and the activity rollup day reads
+    t.index("IDX_model_calls_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_model_calls_chatbot_id").on(table.chatbotId),
     t.index("IDX_model_calls_chatbot_user_id").on(table.chatbotUserId),
     t.index("IDX_model_calls_conversation_id").on(table.conversationId),
@@ -697,7 +763,8 @@ export const feedback = table(
     t
       .uniqueIndex("UNQ_feedback_message_id_chatbot_user_id")
       .on(table.messageId, table.chatbotUserId),
-    t.index("IDX_feedback_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
+    t.index("IDX_feedback_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_feedback_chatbot_user_id").on(table.chatbotUserId),
   ],
 );
@@ -730,7 +797,7 @@ export const changeRequests = table(
     idempotencyKey: t.text("idempotency_key"),
     hostRef: t.text("host_ref"), // id returned by the host
     undoUntil: t.timestamp("undo_until", { withTimezone: true }),
-    errorCode: t.text("error_code"),
+    errorCode: t.text("error_code").$type<Schemas.ChangeRequestErrorCodeEnum>(),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -755,6 +822,7 @@ export const knowledgeSources = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    name: t.text().notNull(), // what the admin calls it (M4-7)
     type: t.smallint().$type<Schemas.KnowledgeSourceTypeIntEnum>().notNull(),
     url: t.text(),
     syncFrequency: t
@@ -962,7 +1030,18 @@ export const activityLog = table(
   },
   (table) => [
     t.primaryKey({ name: "activity_log_pkey", columns: [table.id, table.createdAt] }),
-    t.index("IDX_activity_log_company_id").on(table.companyId),
+    // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2); on the
+    // partitioned parent, so every partition (and every one the maintenance function adds) gets it
+    t.index("IDX_activity_log_company_id_created_at").on(table.companyId, table.createdAt),
+    // DEV_NOTE: The audit log (M4-9): a company's rows written by an admin or an operator, and the System rows of the
+    // audit's system entity types (M5-4: a gate run moving a chatbot version), newest first, without reading its
+    // chatbot-user and other system events. The predicate is ActivityLogDAL.auditActorCondition's, word for word.
+    t
+      .index("IDX_activity_log_company_id_created_at_audit")
+      .on(table.companyId, table.createdAt)
+      .where(
+        sql`${table.actorType} IN (${lit(Schemas.ActivityLogActorTypeIntEnum.Admin)}, ${lit(Schemas.ActivityLogActorTypeIntEnum.Operator)}) OR (${table.actorType} = ${lit(Schemas.ActivityLogActorTypeIntEnum.System)} AND ${table.entityType} IN (${sql.raw(Schemas.AUDIT_SYSTEM_ENTITY_TYPES.map((type) => `'${type}'`).join(", "))}))`,
+      ),
     t.index("IDX_activity_log_actor_id").on(table.actorId),
     t.index("IDX_activity_log_entity_id").on(table.entityId),
     t.index("IDX_activity_log_parent_log_id").on(table.parentLogId),

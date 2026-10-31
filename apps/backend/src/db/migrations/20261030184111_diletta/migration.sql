@@ -1,0 +1,2 @@
+DROP INDEX "IDX_activity_log_company_id_created_at_audit";--> statement-breakpoint
+CREATE INDEX "IDX_activity_log_company_id_created_at_audit" ON "activity_log" ("company_id","created_at") WHERE "actor_type" IN (2, 3) OR ("actor_type" = 4 AND "entity_type" IN ('chatbot_config'));

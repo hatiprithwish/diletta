@@ -5,7 +5,13 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { companies, companyConnections, toolDefinitions } from "@/db/tables";
+import {
+  activityLog,
+  companies,
+  companyConnections,
+  eventOutbox,
+  toolDefinitions,
+} from "@/db/tables";
 import ToolDefinitionsRepo from "@/repositories/ToolDefinitionsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -117,6 +123,8 @@ afterAll(async () => {
   const companyIds = [companyA, companyB].filter(Boolean);
   if (companyIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(toolDefinitions).where(inArray(toolDefinitions.companyId, companyIds));
     await ownerDb
       .delete(companyConnections)
@@ -250,7 +258,11 @@ describe("ToolDefinitionsRepo", () => {
       toolDefinition: { description: "Changed after activation" },
     });
     expect(editActive.failure).toBe(Schemas.ToolDefinitionFailureEnum.NotDraft);
-    const deleteActive = await repo.deleteToolDefinition({ companyId: companyA, publicId });
+    const deleteActive = await repo.deleteToolDefinition({
+      companyId: companyA,
+      publicId,
+      adminId: "1",
+    });
     expect(deleteActive.failure).toBe(Schemas.ToolDefinitionFailureEnum.NotDraft);
   });
 
@@ -352,6 +364,7 @@ describe("ToolDefinitionsRepo", () => {
     const deleted = await repo.deleteToolDefinition({
       companyId: companyA,
       publicId: v2.toolDefinition!.publicId,
+      adminId: "1",
     });
     expect(deleted.isSuccess).toBe(true);
 
@@ -593,7 +606,7 @@ describe("ToolDefinitionsRepo", () => {
         })
       ).isNotFound,
     ).toBe(true);
-    expect((await repo.deleteToolDefinition(asB)).isNotFound).toBe(true);
+    expect((await repo.deleteToolDefinition({ ...asB, adminId: "1" })).isNotFound).toBe(true);
 
     // DEV_NOTE: The same name is free in company B: names are per company
     const sameName = await repo.createToolDefinition({

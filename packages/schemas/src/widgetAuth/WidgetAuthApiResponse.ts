@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FeedbackRatingIntEnum, ZWidgetFeedbackRatings } from "../feedback";
 import type { Chatbot } from "../chatbots";
+import { ZWidgetChangeRequest } from "../changeRequests/ChangeRequestsCommon";
 import type { ApiResponse } from "../common";
 import type {
   CachedJwks,
@@ -53,12 +54,64 @@ export const ZWidgetFeedbackMessage = z.object({
 });
 export type WidgetFeedbackMessage = z.infer<typeof ZWidgetFeedbackMessage>;
 
+// DEV_NOTE: One change request as it now stands (M3-4): sent to every socket when a write is proposed and at each
+// status change after it, and on connect for the ones still open. Carries the diff's values (the user's own host data,
+// to their own widget only); the widget's review card (M3-5) draws from it.
+export const ZWidgetChangeRequestMessage = z.object({
+  type: z.literal("change_request"),
+  changeRequest: ZWidgetChangeRequest,
+});
+export type WidgetChangeRequestMessage = z.infer<typeof ZWidgetChangeRequestMessage>;
+
+// DEV_NOTE: Why the DO asks for a fresh host token (M3-8). Answer: the reply to the widget's own answer, edit or undo
+// frame, which did nothing; the widget fetches a token (getHostToken), sends it in a host_token frame and sends that
+// frame again once (M3-5, M3-7). Refresh: the DO needs the token for its own step (a host read in a turn, a commit,
+// read-after or undo to resume, a token the host refused); the widget only sends a fresh one, silently, with no UI. A
+// widget that sends none leaves a read to tell the model to ask the user to sign in, and a change request to a person
+// after HOST_TOKEN_GRACE_MS. A frame without reason (a DO before M3-8) is an answer.
+export enum WidgetTokenNeededReasonEnum {
+  Answer = "answer",
+  Refresh = "refresh",
+}
+
+export const ZWidgetTokenNeededMessage = z.object({
+  type: z.literal("token_needed"),
+  reason: z.enum(WidgetTokenNeededReasonEnum).default(WidgetTokenNeededReasonEnum.Answer),
+});
+export type WidgetTokenNeededMessage = z.infer<typeof ZWidgetTokenNeededMessage>;
+
+// DEV_NOTE: The answer to one edit of a change_request_edits frame (M3-5). isSaved: the re-checked values replaced the
+// proposal's (its change_request frame, with the new diff, comes first). Otherwise message says why, in safe text
+// (no values), and nothing changed.
+export const ZWidgetChangeRequestEditMessage = z.object({
+  type: z.literal("change_request_edit"),
+  changeRequestId: z.string(),
+  isSaved: z.boolean(),
+  message: z.string().nullable(),
+});
+export type WidgetChangeRequestEditMessage = z.infer<typeof ZWidgetChangeRequestEditMessage>;
+
+// DEV_NOTE: The answer to one undo of a change_request_undos frame (M3-7). isStarted: the undo was sent (its
+// change_request frames follow: Undone, or back to Verified, or needs a person). Otherwise message says why, in safe
+// text (no values), and nothing changed.
+export const ZWidgetChangeRequestUndoMessage = z.object({
+  type: z.literal("change_request_undo"),
+  changeRequestId: z.string(),
+  isStarted: z.boolean(),
+  message: z.string().nullable(),
+});
+export type WidgetChangeRequestUndoMessage = z.infer<typeof ZWidgetChangeRequestUndoMessage>;
+
 export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetConversationMessage,
   ZWidgetErrorMessage,
   ZWidgetUnavailableMessage,
   ZWidgetConversationClosedMessage,
   ZWidgetFeedbackMessage,
+  ZWidgetChangeRequestMessage,
+  ZWidgetTokenNeededMessage,
+  ZWidgetChangeRequestEditMessage,
+  ZWidgetChangeRequestUndoMessage,
 ]);
 export type WidgetServerMessage = z.infer<typeof ZWidgetServerMessage>;
 

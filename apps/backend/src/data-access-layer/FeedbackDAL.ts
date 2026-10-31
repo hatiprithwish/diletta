@@ -1,7 +1,7 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, gte, lt } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { chatbotUsers, feedback, messages } from "@/db/tables";
+import { chatbotUsers, conversations, feedback, messages } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -115,6 +115,52 @@ export default class FeedbackDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.ListConversationFeedback,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Activity rollups (M4-2): ratings given in [start, end) (created_at), per chatbot (the reply's
+  // conversation) and current rating, so a thumb switched later counts as it stands now, on the day it was first given
+  async getFeedbackRollupGroups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivityRollupWindowDALRequest,
+  ) {
+    const response: Schemas.FeedbackRollupGroupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(feedback.companyId, params.companyId),
+        eq(messages.companyId, params.companyId),
+        eq(conversations.companyId, params.companyId),
+        gte(feedback.createdAt, params.start),
+        lt(feedback.createdAt, params.end),
+      ];
+      const groups = await tx
+        .select({
+          chatbotId: conversations.chatbotId,
+          rating: feedback.rating,
+          count: count(),
+        })
+        .from(feedback)
+        .innerJoin(messages, eq(messages.id, feedback.messageId))
+        .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+        .where(and(...conditions))
+        .groupBy(conversations.chatbotId, feedback.rating);
+
+      response.isSuccess = true;
+      response.message = "Feedback rollup groups fetched successfully";
+      response.groups = groups;
+    } catch (error) {
+      const message = "Unknown error in fetching feedback rollup groups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetFeedbackRollupGroups,
         message,
         error,
         metadata: params,

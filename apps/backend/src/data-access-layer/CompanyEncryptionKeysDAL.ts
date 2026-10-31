@@ -180,11 +180,14 @@ export default class CompanyEncryptionKeysDAL {
     const response: Schemas.CompanyEncryptionKeysDALResponse = { isSuccess: false };
 
     try {
-      const companyEncryptionKeysResponse = await tx
+      const query = tx
         .select()
         .from(companyEncryptionKeys)
         .where(eq(companyEncryptionKeys.companyId, params.companyId))
         .orderBy(asc(companyEncryptionKeys.version));
+      const companyEncryptionKeysResponse = params.isForUpdate
+        ? await query.for("update")
+        : await query;
 
       response.isSuccess = true;
       response.message = "Encryption keys fetched successfully";

@@ -6,6 +6,7 @@ import { KNOWLEDGE_RERANK_MODEL } from "../knowledgeSearch";
 import { PlatformModelProviderEnum } from "../modelCalls";
 import {
   MODEL_PRICES,
+  MODEL_TIER_SUGGESTIONS,
   MODEL_TIER_CALL_TIER_MAP,
   PLATFORM_MODEL_PRICES,
   computeModelCallCostUsd,
@@ -172,6 +173,16 @@ describe("getModelCallPrice", () => {
     for (const models of Object.values(PLATFORM_MODEL_PRICES)) {
       for (const modelPrice of Object.values(models)) {
         expect(modelPrice.cacheWriteUsdPerMTok).toBeGreaterThanOrEqual(modelPrice.inputUsdPerMTok);
+      }
+    }
+  });
+});
+
+describe("MODEL_TIER_SUGGESTIONS", () => {
+  it("suggests only priced models", () => {
+    for (const [provider, tiers] of Object.entries(MODEL_TIER_SUGGESTIONS)) {
+      for (const model of Object.values(tiers)) {
+        expect(getModelPrice(provider as ModelProviderEnum, model)).not.toBeNull();
       }
     }
   });

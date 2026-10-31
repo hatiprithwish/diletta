@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -316,5 +316,114 @@ export default class ModelCallsDAL {
       return sql<boolean>`true`;
     }
     return sql<boolean>`exists (select 1 from ${table} where ${idColumn} = ${id} and ${companyIdColumn} = ${companyId})`;
+  }
+
+  // DEV_NOTE: Activity rollups (M4-2): model calls made in [start, end), per chatbot (null = background job), eval or
+  // not (eval_run_id set; an eval call may carry the chatbot under test), task type, provider and model. Every row
+  // counts, failed and Unknown ones too (cost as it stands, 0 until a Pending row is backfilled; the hourly run rebuilds
+  // yesterday as well, so a backfill reaches the rollup). Sums are cast to text so a cost stays exact.
+  async getModelCallRollupGroups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivityRollupWindowDALRequest,
+  ) {
+    const response: Schemas.ModelCallRollupGroupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.companyId, params.companyId),
+        gte(modelCalls.createdAt, params.start),
+        lt(modelCalls.createdAt, params.end),
+      ];
+      const isEval = sql<boolean>`${modelCalls.evalRunId} is not null`;
+      const groups = await tx
+        .select({
+          chatbotId: modelCalls.chatbotId,
+          isEval,
+          taskType: modelCalls.taskType,
+          provider: modelCalls.provider,
+          model: modelCalls.model,
+          count: count(),
+          inputTokens: sql<string>`coalesce(sum(${modelCalls.inputTokens}), 0)::text`,
+          outputTokens: sql<string>`coalesce(sum(${modelCalls.outputTokens}), 0)::text`,
+          costUsd: sql<string>`coalesce(sum(${modelCalls.costUsd}), 0)::numeric(18, 6)::text`,
+        })
+        .from(modelCalls)
+        .where(and(...conditions))
+        .groupBy(
+          modelCalls.chatbotId,
+          isEval,
+          modelCalls.taskType,
+          modelCalls.provider,
+          modelCalls.model,
+        );
+
+      response.isSuccess = true;
+      response.message = "Model call rollup groups fetched successfully";
+      response.groups = groups;
+    } catch (error) {
+      const message = "Unknown error in fetching model call rollup groups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetModelCallRollupGroups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The dashboard transcript's costs (M4-4): one conversation's model spend per turn (turnId null = calls
+  // with no turn). Spend = the company key's calls: Workers AI rows (embeddings, the search's embed and rerank) are
+  // platform-paid and left out, as on the Usage page. Every other row counts, failed ones too, at its cost as it stands
+  // (0 until a Pending row is backfilled); pendingCount and unknownCount say when that is. Sums are text, so exact.
+  async getConversationTurnCosts(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetConversationTurnCostsDALRequest,
+  ) {
+    const response: Schemas.ConversationTurnCostsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.companyId, params.companyId),
+        eq(modelCalls.conversationId, params.conversationId),
+        ne(modelCalls.provider, Schemas.PlatformModelProviderEnum.WorkersAi),
+      ];
+      const turnCosts = await tx
+        .select({
+          turnId: modelCalls.turnId,
+          costUsd: sql<string>`coalesce(sum(${modelCalls.costUsd}), 0)::numeric(14, 6)::text`,
+          pendingCount:
+            sql<number>`count(*) filter (where ${modelCalls.usageStatus} = ${Schemas.ModelCallUsageStatusIntEnum.Pending})`.mapWith(
+              Number,
+            ),
+          unknownCount:
+            sql<number>`count(*) filter (where ${modelCalls.usageStatus} = ${Schemas.ModelCallUsageStatusIntEnum.Unknown})`.mapWith(
+              Number,
+            ),
+          firstAt: sql<Date>`min(${modelCalls.createdAt})`.mapWith(modelCalls.createdAt),
+        })
+        .from(modelCalls)
+        .where(and(...conditions))
+        .groupBy(modelCalls.turnId);
+
+      response.isSuccess = true;
+      response.message = "Conversation turn costs fetched successfully";
+      response.turnCosts = turnCosts;
+    } catch (error) {
+      const message = "Unknown error in fetching conversation turn costs";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetConversationTurnCosts,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
   }
 }

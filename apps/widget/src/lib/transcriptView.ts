@@ -1,10 +1,12 @@
 import { getToolName, isTextUIPart, isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
+import { hostToolStepLabel, toChangeCardsByMessage } from "@/lib/changeRequestView";
 
 // DEV_NOTE: Think's transcript (UIMessage[], from the socket) as the panel shows it (Schemas.WidgetMessageView). Pure.
-// A reply is its text parts (one per model step, joined as paragraphs), its tool calls as steps, and the sources its
-// [n] markers cite, looked up in every search_help_docs result of that reply. Tool outputs come from the server and
+// A reply is its text parts (one per model step, joined as paragraphs), its tool calls as steps, the sources its
+// [n] markers cite, looked up in every search_help_docs result of that reply, and the review cards of the changes its
+// calls proposed (lib/changeRequestView.ts, M3-5). Tool outputs come from the server and
 // are parsed, never trusted: an output that doesn't parse (or that Think trimmed) shows as a finished step with no
 // detail and adds no sources.
 const SEARCH_DETAIL = (count: number) => (count === 1 ? "1 result" : `${count} results`);
@@ -30,7 +32,15 @@ function toStep(part: Parameters<typeof getToolName>[0]): Schemas.WidgetToolStep
     };
   }
   if (!isSearch) {
-    return { id, label: "Done", detail: null, state: Schemas.WidgetToolStepStateEnum.Done };
+    const { label, isFailed } = hostToolStepLabel(part);
+    return {
+      id,
+      label,
+      detail: null,
+      state: isFailed
+        ? Schemas.WidgetToolStepStateEnum.Failed
+        : Schemas.WidgetToolStepStateEnum.Done,
+    };
   }
 
   const output = Schemas.ZSearchHelpDocsOutput.safeParse(part.output);
@@ -80,8 +90,10 @@ export function toMessageViews(params: {
   isStreaming: boolean;
   ratings: Record<string, Schemas.FeedbackRatingIntEnum>;
   pendingRatings: Record<string, Schemas.FeedbackRatingIntEnum>;
+  review: Schemas.WidgetChangeReviewState;
 }): Schemas.WidgetMessageView[] {
   const lastIndex = params.messages.length - 1;
+  const cards = toChangeCardsByMessage(params.messages, params.review);
   return params.messages.flatMap((message, index): Schemas.WidgetMessageView[] => {
     if (message.role === "user") {
       return [{ role: "user", id: message.id, text: textOf(message) }];
@@ -100,6 +112,7 @@ export function toMessageViews(params: {
         isStreaming,
         canRate: !isStreaming && text.length > 0,
         rating: params.pendingRatings[message.id] ?? params.ratings[message.id] ?? null,
+        changeCards: cards[message.id] ?? [],
       },
     ];
   });

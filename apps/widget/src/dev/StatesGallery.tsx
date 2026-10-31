@@ -5,9 +5,12 @@ import Launcher from "@/components/Launcher";
 import Panel from "@/components/Panel";
 import ShadowHost from "@/shadow/ShadowHost";
 import { useDevTheme } from "@/dev/useDevTheme";
+import { toChangeCard } from "@/lib/changeRequestView";
+import { EMPTY_REVIEW } from "@/store/widgetStore";
 
-// DEV_NOTE: Development only (?gallery): the M2-7 widget states from DESIGN.md §7, drawn by the real components from
-// sample data (the design canvas's), each in its own shadow root, to compare with docs/design/screenshots
+// DEV_NOTE: Development only (?gallery): the widget states from DESIGN.md §7 (M2-7, and the review cards of M3-5),
+// drawn by the real components from sample data (the design canvas's), each in its own shadow root, to compare with
+// docs/design/screenshots. The cards go through the same view builder the chat uses (toChangeCard).
 const noop = () => undefined;
 const actions: Schemas.WidgetPanelActions = {
   onSend: noop,
@@ -17,7 +20,153 @@ const actions: Schemas.WidgetPanelActions = {
   onClose: noop,
   onRate: noop,
   onDraftChange: noop,
+  onApprove: noop,
+  onReject: noop,
+  onEdit: noop,
+  onCancelEdit: noop,
+  onSaveEdits: noop,
+  onEditValue: noop,
+  onToggleRecord: noop,
+  onShowMore: noop,
+  onUndo: noop,
 };
+
+const value = (raw: string | null): Schemas.ChangeRequestValue =>
+  raw === null ? { isFound: false } : { isFound: true, value: raw };
+
+const EDITABLE_DATE: Schemas.ChangeRequestEditableField = {
+  field: "completedOn",
+  type: Schemas.ChangeRequestFieldTypeEnum.String,
+  enumValues: null,
+  format: "date",
+  isRequired: false,
+};
+const EDITABLE_STATUS: Schemas.ChangeRequestEditableField = {
+  field: "status",
+  type: Schemas.ChangeRequestFieldTypeEnum.String,
+  enumValues: ["Open", "Closed"],
+  format: null,
+  isRequired: false,
+};
+
+// DEV_NOTE: One sample change request: the record id that picks it, then its changed fields
+function sample(
+  publicId: string,
+  recordId: string,
+  changes: [field: string, before: string | null, after: string][],
+  options: {
+    status?: Schemas.ChangeRequestStatusIntEnum;
+    editableFields?: Schemas.ChangeRequestEditableField[];
+    mismatches?: Schemas.ChangeRequestMismatch[];
+  } = {},
+): Schemas.WidgetChangeRequest {
+  const status = options.status ?? Schemas.ChangeRequestStatusIntEnum.Proposed;
+  return {
+    publicId,
+    toolName: "update_inspection",
+    toolCallId: null,
+    kind: Schemas.ChangeRequestKindEnum.Update,
+    changeRequestStatus: status,
+    changeRequestStatusLabel: Schemas.CHANGE_REQUEST_STATUS_LABEL_MAP[status],
+    summary: "update_inspection: fields changed",
+    changes: [
+      ...changes.map(([field, before, after]) => ({
+        field,
+        before: value(before),
+        after: value(after),
+        isChanged: true,
+      })),
+      { field: "inspectionId", before: value(recordId), after: value(recordId), isChanged: false },
+    ],
+    changeCount: changes.length,
+    expiresAt: status === Schemas.ChangeRequestStatusIntEnum.Proposed ? Date.now() + 900_000 : null,
+    isUndoable: true,
+    wasEdited: false,
+    editableFields: options.editableFields ?? [],
+    mismatches: options.mismatches ?? null,
+    undoUntil:
+      status === Schemas.ChangeRequestStatusIntEnum.Verified ? Date.now() + 3_600_000 : null,
+    isUndoing: false,
+    undoneBy:
+      status === Schemas.ChangeRequestStatusIntEnum.Undone
+        ? options.mismatches
+          ? Schemas.ChangeRequestUndoneByEnum.System
+          : Schemas.ChangeRequestUndoneByEnum.User
+        : null,
+  };
+}
+
+const CLOSE_CHANGES: [string, string | null, string][] = [
+  ["status", "Open", "Closed"],
+  ["completedOn", null, "2026-09-22"],
+];
+const closeThree = (status?: Schemas.ChangeRequestStatusIntEnum) =>
+  ["EXT-B-014", "EXT-B-017", "EXT-B-019"].map((recordId, index) =>
+    sample(`cr${index}`, recordId, CLOSE_CHANGES, {
+      status,
+      editableFields: [EDITABLE_STATUS, EDITABLE_DATE],
+    }),
+  );
+
+// DEV_NOTE: M3-6's settled cards: every record checked; one didn't save as expected and was undone; one needs a person
+const STATUS_NOT_SAVED: Schemas.ChangeRequestMismatch[] = [
+  { field: "status", expected: value("Closed"), found: value("Open") },
+];
+const checkedThree = () => closeThree(Schemas.ChangeRequestStatusIntEnum.Verified);
+const withLast = (status: Schemas.ChangeRequestStatusIntEnum) => [
+  ...checkedThree().slice(0, 2),
+  sample("cr2", "EXT-B-019", CLOSE_CHANGES, { status, mismatches: STATUS_NOT_SAVED }),
+];
+
+const reviewOf = (members: Schemas.WidgetChangeRequest[]): Schemas.WidgetChangeReviewState => ({
+  ...EMPTY_REVIEW,
+  changeRequests: Object.fromEntries(members.map((member) => [member.publicId, member])),
+});
+
+const card = (
+  members: Schemas.WidgetChangeRequest[],
+  review: Partial<Schemas.WidgetChangeReviewState> = {},
+) =>
+  toChangeCard(
+    { messageId: "a1", cardId: "a1:update_inspection:update", members },
+    { ...reviewOf(members), ...review },
+  );
+
+const BULK_RECORDS = Array.from({ length: 18 }, (_, index) =>
+  sample(`bulk${index}`, `EXT-${"ACD"[index % 3]}-${String(index + 1).padStart(3, "0")}`, [
+    ["dueOn", "2026-09-30", "2026-10-15"],
+  ]),
+);
+
+const reply = (
+  text: string,
+  changeCards: Schemas.WidgetChangeCardView[],
+): Schemas.WidgetAssistantMessageView => ({
+  role: "assistant",
+  id: "a1",
+  text,
+  steps: [
+    {
+      id: "s1",
+      label: "Waiting for your approval",
+      detail: null,
+      state: Schemas.WidgetToolStepStateEnum.Done,
+    },
+  ],
+  citations: [],
+  isStreaming: false,
+  canRate: false,
+  rating: null,
+  changeCards,
+});
+
+const CLOSE_ASK: Schemas.WidgetUserMessageView = {
+  role: "user",
+  id: "u1",
+  text: "Close the three Building B inspections Priya finished on Tuesday.",
+};
+const CLOSE_REPLY =
+  "I found 3 open inspections in Building B marked done on 22 Sep. Nothing is saved until you approve.";
 
 const base: Schemas.WidgetPanelView = {
   chatbotName: "Registers Assistant",
@@ -78,6 +227,7 @@ const STATES: Schemas.WidgetGalleryState[] = [
           isStreaming: true,
           canRate: false,
           rating: null,
+          changeCards: [],
         },
       ],
     },
@@ -114,7 +264,103 @@ const STATES: Schemas.WidgetGalleryState[] = [
           isStreaming: false,
           canRate: true,
           rating: null,
+          changeCards: [],
         },
+      ],
+    },
+  },
+  {
+    name: "Approval",
+    view: { ...base, messages: [CLOSE_ASK, reply(CLOSE_REPLY, [card(closeThree())])] },
+  },
+  {
+    name: "Editing",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply(CLOSE_REPLY, [
+          card(closeThree(), {
+            editing: { "a1:update_inspection:update": { cr1: { completedOn: "2026-09-23" } } },
+          }),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Bulk review",
+    view: {
+      ...base,
+      messages: [
+        { role: "user", id: "u1", text: "Move every overdue Q3 inspection to 15 Oct." },
+        reply("18 inspections are overdue from Q3. Untick any you want to keep as they are.", [
+          card(BULK_RECORDS, { excluded: { bulk3: true } }),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Decided",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply(CLOSE_REPLY, [
+          card([
+            ...closeThree(Schemas.ChangeRequestStatusIntEnum.Committed).slice(0, 2),
+            sample("cr9", "EXT-B-019", CLOSE_CHANGES, {
+              status: Schemas.ChangeRequestStatusIntEnum.Rejected,
+            }),
+          ]),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Verified",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("Done. Want me to schedule the next inspection for these three?", [
+          card(checkedThree()),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Changes undone",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("EXT-B-019 didn't close, so I put it back. The other two are closed.", [
+          card(withLast(Schemas.ChangeRequestStatusIntEnum.Undone)),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Undone by you",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("Done. Want me to schedule the next inspection for these three?", [
+          card(closeThree(Schemas.ChangeRequestStatusIntEnum.Undone)),
+        ]),
+      ],
+    },
+  },
+  {
+    name: "Needs a person",
+    view: {
+      ...base,
+      messages: [
+        CLOSE_ASK,
+        reply("I couldn't confirm EXT-B-019. Your team will check it.", [
+          card(withLast(Schemas.ChangeRequestStatusIntEnum.NeedsHuman)),
+        ]),
       ],
     },
   },

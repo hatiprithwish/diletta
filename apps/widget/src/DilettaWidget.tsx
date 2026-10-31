@@ -3,7 +3,7 @@ import * as Schemas from "@app/schemas";
 import { createWidgetStore } from "@/store/widgetStore";
 import WidgetRoot from "@/WidgetRoot";
 
-// DEV_NOTE: The React export: <DilettaWidget apiBase=… chatbot=… theme=… getToken=… />. Options that don't check out
+// DEV_NOTE: The React export: <DilettaWidget apiBase=… chatbot=… theme=… getToken=… getHostToken=… />. Options that don't check out
 // (ZWidgetEmbedConfig) render nothing rather than break the host app. A new apiBase or chatbot starts a fresh widget,
 // store included (nothing of the old chatbot's conversation carries over); a new theme re-themes it in place.
 export default function DilettaWidget(props: Schemas.DilettaWidgetProps) {
@@ -17,7 +17,11 @@ export default function DilettaWidget(props: Schemas.DilettaWidgetProps) {
   return (
     <DilettaWidgetInstance
       key={`${config.data.apiBase}|${config.data.chatbot ?? ""}`}
-      options={{ ...config.data, getToken: props.getToken }}
+      options={{
+        ...config.data,
+        getToken: props.getToken,
+        getHostToken: typeof props.getHostToken === "function" ? props.getHostToken : undefined,
+      }}
       theme={config.data.theme ?? Schemas.WidgetThemeEnum.Light}
     />
   );

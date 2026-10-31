@@ -13,3 +13,14 @@ export interface KnowledgeSourcesDALResponse extends ApiResponse {
 export interface KnowledgeSourceIdsDALResponse extends ApiResponse {
   knowledgeSourceIds?: string[];
 }
+
+// DEV_NOTE: lastFailedAt = the newest sync_heartbeat_at of a failed source (set when its sync failed, never by an
+// admin's edit); null when none failed
+export interface FailedKnowledgeSourcesSummaryDALResponse extends ApiResponse {
+  failedCount?: number;
+  lastFailedAt?: Date | null;
+}
+
+export interface KnowledgeSourceOptionsDALResponse extends ApiResponse {
+  options?: Pick<KnowledgeSource, "publicId" | "name">[];
+}

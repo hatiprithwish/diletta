@@ -59,7 +59,7 @@ companion/                    (from scaffold)
                   Tailwind preset, lime theme (light + dark)
     crypto/       new: envelope encryption
     adapter/      new: Adapter + AuthStrategy
-  evals/          new: Python harness (DeepEval), types from schemas
+  evals/          new: Python harness (judge via the backend's model router), types from schemas
   llm-context/    scaffold docs + new: neon, hyperdrive, durable-objects,
                   think, ai-gateway, queues, pgvector
   docs/           new: architecture/ (v0.15 diagram), adr/, runbooks/
@@ -208,18 +208,18 @@ Exit: approve → commit → verify → undo works end to end against the test h
 
 Exit: all 14 pages live on staging with real data, light and dark, every action behind `can()`.
 
-| ID    | Task                                                                                                                                  | Done when                                                    | Lane     |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------- |
-| M4-1  | Shell: shadcn Sidebar collapsing to an icon rail, bot switcher, grouped nav with Settings as a nested group, breadcrumb, theme switch | Matches the design canvas                                    | Product  |
-| M4-2  | Rollups: hourly Cron into `activity_rollups` with `chatbot_id`                                                                        | Re-runnable for any company and day                          | Platform |
-| M4-3  | Overview, Usage, Impact                                                                                                               | Numbers match raw `model_calls` and actions for a sample day | Product  |
-| M4-4  | Conversations: list + transcript with per-turn cost                                                                                   | Turn totals equal `model_calls` by `turn_id`                 | Product  |
-| M4-5  | Changes: list, detail timeline from `activity_log`, mark resolved                                                                     | `needs_human` items resolvable                               | Product  |
-| M4-6  | Quality inbox: triage, create test (PII rewrite + review), fixed, dismissed                                                           | CHECKs on source and status hold                             | Product  |
-| M4-7  | Knowledge: sources, sync status, gap clusters with sample questions                                                                   | Cluster links to the doc that closed it                      | Product  |
-| M4-8  | Tests: runs, cases, failure detail with grader output                                                                                 | Opens transcript from R2                                     | Product  |
-| M4-9  | Security: identity and origins, key rotation, retention and erasure, injection events, audit log                                      | Each action writes an audit row                              | Product  |
-| M4-10 | Settings: Bots (versions, publish, rollback as copy, read-only switch), Model keys, Connections, Team, Budget                         | Publish blocked without a model key                          | Product  |
+| ID    | Task                                                                                                                                    | Done when                                                    | Lane     |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------- |
+| M4-1  | Shell: shadcn Sidebar collapsing to an icon rail, company header, grouped nav with Settings as a nested group, breadcrumb, theme switch | Matches the design canvas                                    | Product  |
+| M4-2  | Rollups: hourly Cron into `activity_rollups` with `chatbot_id`                                                                          | Re-runnable for any company and day                          | Platform |
+| M4-3  | Overview, Usage, Impact                                                                                                                 | Numbers match raw `model_calls` and actions for a sample day | Product  |
+| M4-4  | Conversations: list + transcript with per-turn cost                                                                                     | Turn totals equal `model_calls` by `turn_id`                 | Product  |
+| M4-5  | Changes: list, detail timeline from `activity_log`, mark resolved                                                                       | `needs_human` items resolvable                               | Product  |
+| M4-6  | Quality inbox: triage, create test (PII rewrite + review), fixed, dismissed                                                             | CHECKs on source and status hold                             | Product  |
+| M4-7  | Knowledge: sources, sync status, gap clusters with sample questions                                                                     | Cluster links to the doc that closed it                      | Product  |
+| M4-8  | Tests: runs, cases, failure detail with grader output                                                                                   | Opens transcript from R2                                     | Product  |
+| M4-9  | Security: identity and origins, key rotation, retention and erasure, injection events, audit log                                        | Each action writes an audit row                              | Product  |
+| M4-10 | Settings: Bots (versions, publish, rollback as copy, read-only switch), Model keys, Connections, Team, Budget                           | Publish blocked without a model key                          | Product  |
 
 ### M5 Evals and learning
 
@@ -308,17 +308,17 @@ eRegister goes live when every box below is ticked.
 
 **Open questions** (each blocks the task named)
 
-- [ ] Host token in Workflows for large commits: fresh token per step, or cap bulk size and skip Workflows in v1? (M3-4, review item #2)
+- [x] Host token in Workflows for large commits: fresh token per step, or cap bulk size and skip Workflows in v1? (M3-4, review item #2) — no Workflows for commits in v1: commits run in the Conversation DO with the in-memory host token, and a conversation holds at most `CHANGE_REQUEST_MAX_PENDING` (20) open proposals.
 - [x] JWT algorithm pinning: which algorithms eRegister signs with (M2-1, review item #7) — RS256 and ES256 only, `kid` required; `none` and HS\* rejected. Confirm eRegister signs with one of the two before M7.
 - [x] Drizzle on Postgres (from the scaffold): which parts go to raw-SQL migrations beyond RLS, partitions and halfvec? (M0-2) — anything drizzle-kit can't express (RLS policies, partitions, extensions, `halfvec` columns and indexes) goes in a custom migration (`db:generate:sql`) in the same journal as drizzle-kit output.
 - [x] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7) — 200 KiB gzipped for the script-tag bundle (`WIDGET_BUNDLE_MAX_GZIP_BYTES`, the build fails above it); 170.7 KiB at M2-7, with the widget's own small markdown parser instead of a library.
-- [ ] Approval expiry and undo window default values (M3-4, M3-7)
+- [x] Approval expiry and undo window default values (M3-4, M3-7) — approval expiry decided in M3-4: 15 minutes (`CHANGE_REQUEST_APPROVAL_EXPIRY_MS`); undo window decided in M3-7: 1 hour from the end (`CHANGE_REQUEST_UNDO_WINDOW_MS`), values purged after it (NeedsHuman kept until resolved).
 - [ ] Load test target: concurrent conversations per company (M6-5)
 - [ ] Cluster size that opens a Quality item (M5-6)
 - [ ] Budget alerts at 50 / 80 / 100% of `spending_budget` (Cron in the architecture): no task owns them after M2-4. Fold into M6-6, or a new task? (see `docs/runbooks/budget.md` › Known gaps)
-- [ ] Tool args must be checked against the tool's `input_schema` before `renderToolOp` (types, enums, required; the renderer drops a missing arg's key). Needs a JSON Schema validator: zod `z.fromJSONSchema` if it covers the keywords used, else a new package (ask first) (M3-4)
-- [ ] A pinned tool version that is Disabled: leave the tool out of the turn, or refuse the turn? And should disabling a version pinned by a published config be blocked? (M3-4, M4-10)
-- [ ] Loop guard (same tool + same args twice in a turn → stop) left out of M2-4 because no tools exist yet: add with the first tool calls (M3-1 / M3-4), in `ConversationDO.beforeTurn` `stopWhen`
+- [x] Tool args must be checked against the tool's `input_schema` before `renderToolOp` (types, enums, required; the renderer drops a missing arg's key). Needs a JSON Schema validator: zod `z.fromJSONSchema` if it covers the keywords used, else a new package (ask first) (M3-4) — zod's `fromJSONSchema` (`Schemas.validateToolArgs`); a schema it can't convert is refused on save and activation, and left out of a turn.
+- [x] A pinned tool version that is Disabled: leave the tool out of the turn, or refuse the turn? And should disabling a version pinned by a published config be blocked? (M3-4, M4-10) — M3-4: left out of the turn and logged. M4-10: disabling a version a Published config pins is refused (409 `PinnedByPublishedConfig`), and publish refuses a pin that isn't Active.
+- [x] Loop guard (same tool + same args twice in a turn → stop) left out of M2-4 because no tools exist yet: add with the first tool calls (M3-1 / M3-4), in `ConversationDO.beforeTurn` `stopWhen` — built in M3-4 for host tools (the repeat is refused as Blocked and ends the turn's loop).
 
 **Risks**
 

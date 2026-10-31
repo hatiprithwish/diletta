@@ -19,8 +19,26 @@ export const ZUploadKnowledgeDocumentApiRequest = z.object({
 });
 export type UploadKnowledgeDocumentApiRequest = z.infer<typeof ZUploadKnowledgeDocumentApiRequest>;
 
+// DEV_NOTE: Text the Knowledge page's document picker (M4-7) looks for in titles, case-insensitive; blank = every document
+export const KNOWLEDGE_DOCUMENT_SEARCH_MAX_CHARS = 200;
+export const ZKnowledgeDocumentSearch = z
+  .string()
+  .trim()
+  .max(KNOWLEDGE_DOCUMENT_SEARCH_MAX_CHARS)
+  .transform((search) => (search === "" ? undefined : search))
+  .optional();
+
+// DEV_NOTE: GET …/documents/count with the list's search, so the pages add up
+export const ZGetKnowledgeDocumentsCountApiRequest = z.object({
+  search: ZKnowledgeDocumentSearch,
+});
+export type GetKnowledgeDocumentsCountApiRequest = z.infer<
+  typeof ZGetKnowledgeDocumentsCountApiRequest
+>;
+
 // DEV_NOTE: A sitemap source can hold hundreds of documents, so the list is paged
 export const ZGetKnowledgeDocumentsApiRequest = ZPageApiRequest.extend({
   sortColumn: ZKnowledgeDocumentSortColumn.nullable().optional(),
+  search: ZKnowledgeDocumentSearch,
 });
 export type GetKnowledgeDocumentsApiRequest = z.infer<typeof ZGetKnowledgeDocumentsApiRequest>;

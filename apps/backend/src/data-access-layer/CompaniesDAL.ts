@@ -1,4 +1,4 @@
-import { asc, count, desc, eq } from "drizzle-orm";
+import { asc, count, desc, eq, inArray } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies } from "@/db/tables";
@@ -44,16 +44,13 @@ export default class CompaniesDAL {
 
   async getCompanyDetails(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindCompanyDALRequest,
+    params: Schemas.GetCompanyDetailsDALRequest,
   ) {
     const response: Schemas.CompanyDALResponse = { isSuccess: false };
 
     try {
-      const [company] = await tx
-        .select()
-        .from(companies)
-        .where(eq(companies.id, params.companyId))
-        .limit(1);
+      const query = tx.select().from(companies).where(eq(companies.id, params.companyId)).limit(1);
+      const [company] = params.isForUpdate ? await query.for("update") : await query;
 
       if (!company) {
         const message = "Company not found";
@@ -191,6 +188,39 @@ export default class CompaniesDAL {
     return response;
   }
 
+  // DEV_NOTE: Cross-company sweep (withPlatform): the internal id of every company in one of the statuses, oldest
+  // first. Server-side only (the hourly activity rollup)
+  async getCompanyIdsByStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompanyIdsByStatusDALRequest,
+  ) {
+    const response: Schemas.CompanyIdsDALResponse = { isSuccess: false };
+
+    try {
+      const rows = await tx
+        .select({ id: companies.id })
+        .from(companies)
+        .where(inArray(companies.status, params.statuses))
+        .orderBy(asc(companies.id));
+
+      response.isSuccess = true;
+      response.message = "Company ids fetched successfully";
+      response.companyIds = rows.map((row) => row.id);
+    } catch (error) {
+      const message = "Unknown error in listing company ids";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListCompanyIdsByStatus,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async updateCompany(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpdateCompanyDALRequest,
@@ -232,6 +262,133 @@ export default class CompaniesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.UpdateCompany,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The Security page's Save retention (M4-9), by the admin, on the company's own row (withTenant)
+  async updateCompanyContentRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanyContentRetentionDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          contentRetentionDays: params.contentRetentionDays,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Content retention updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating content retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateContentRetention,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Settings › Budget (M4-10), by the admin, on the company's own row (withTenant). BudgetDO re-reads it
+  // within BUDGET_REFRESH_MS.
+  async updateCompanySpendingBudget(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanySpendingBudgetDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          spendingBudget: params.spendingBudget,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Spending budget updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating spending budget";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateCompanySpendingBudget,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The Bots page's Read-only mode (M4-10), by the admin, on the company's own row (withTenant)
+  async updateCompanyReadOnly(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanyReadOnlyDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          isReadOnly: params.isReadOnly,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Read-only mode updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating read-only mode";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateCompanyReadOnly,
         message,
         error,
         metadata: params,

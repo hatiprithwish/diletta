@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { findToolOpPlaceholders } from "../toolDefinitions/ToolOpPlaceholders";
+import { ZToolCallOpV1 } from "../toolDefinitions/ToolOpsV1";
 
 export enum CompanyConnectionEnvironmentIntEnum {
   Production = 1,
@@ -90,6 +92,22 @@ export enum CompanyConnectionAuthTypeEnum {
   HmacSigned = "hmac_signed",
 }
 
+// DEV_NOTE: How each auth type signs the assistant in, as Settings › Connections says it (DESIGN.md §8)
+export const COMPANY_CONNECTION_SIGN_IN_LABEL_MAP: Record<CompanyConnectionAuthTypeEnum, string> = {
+  [CompanyConnectionAuthTypeEnum.JwtForward]: "Forward the user's token",
+  [CompanyConnectionAuthTypeEnum.ApiKeyHeader]: "API key in a header",
+  [CompanyConnectionAuthTypeEnum.Oauth2Cc]: "OAuth client credentials",
+  [CompanyConnectionAuthTypeEnum.Oauth2Authcode]: "OAuth sign-in per user",
+  [CompanyConnectionAuthTypeEnum.HmacSigned]: "Signed requests",
+};
+
+// DEV_NOTE: auth_type is text: a value this build doesn't know reads as such, never as another method
+export function companyConnectionSignInLabel(authType: string): string {
+  return Object.hasOwn(COMPANY_CONNECTION_SIGN_IN_LABEL_MAP, authType)
+    ? COMPANY_CONNECTION_SIGN_IN_LABEL_MAP[authType as CompanyConnectionAuthTypeEnum]
+    : "Unknown sign-in method";
+}
+
 // DEV_NOTE: jwt_forward sends the chatbot user's host bearer token (held in DO memory) as Authorization: Bearer, so
 // the host applies its own permissions to every call. Nothing to configure and no stored credential.
 export const ZJwtForwardAuthConfig = z.strictObject({});
@@ -140,13 +158,27 @@ const ZJwtIssuer = ZHttpsUrl.refine((value) => !value.includes("?") && !value.in
 
 // DEV_NOTE: A browser Origin header is scheme://host[:port] only, so a stored path, query or trailing slash
 // could never match it. Only exact origins are accepted.
-const ZOrigin = z.url().refine((value) => URL.canParse(value) && new URL(value).origin === value, {
-  message: "Must be an origin (scheme://host[:port]) with no path",
+export const ZOrigin = z
+  .url()
+  .refine((value) => URL.canParse(value) && new URL(value).origin === value, {
+    message: "Must be an origin (scheme://host[:port]) with no path",
+  });
+
+// DEV_NOTE: company_connections.reset_op (staging only, M5-2): the one host call that puts the staging data back after
+// an eval run. A call op with no placeholders (there are no args), sent once per run, after its last attempt, as the
+// host test user. Attempts within a run aren't reset between them: cases are state-independent (each names its own
+// records with {case.tag}). null = the host needs no reset.
+export const ZConnectionResetOp = ZToolCallOpV1.superRefine((op, ctx) => {
+  const templates = [op.path, ...Object.values(op.query ?? {}), JSON.stringify(op.bodyMap ?? {})];
+  if (templates.some((template) => findToolOpPlaceholders(template).length > 0)) {
+    ctx.addIssue({ code: "custom", message: "A reset op has no placeholders" });
+  }
 });
+export type ConnectionResetOp = z.infer<typeof ZConnectionResetOp>;
 
 // Create Company Connection Body
 // DEV_NOTE: authConfig is any JSON object here: its shape depends on the auth type, so the create request and the
-// Repo check it with getAuthConfigIssue. resetOp stays any JSON until the eval reset flow (M5-2).
+// Repo check it with getAuthConfigIssue. resetOp only on a Staging connection (the request refines it).
 export const ZCompanyConnectionBase = z.object({
   environment: z.enum(CompanyConnectionEnvironmentIntEnum),
   adapterType: z.enum(CompanyConnectionAdapterTypeIntEnum),
@@ -156,7 +188,7 @@ export const ZCompanyConnectionBase = z.object({
   credentialScope: z.enum(CompanyConnectionCredentialScopeIntEnum),
   jwtIssuer: ZJwtIssuer,
   allowedOrigins: z.array(ZOrigin),
-  resetOp: z.json().nullable(),
+  resetOp: ZConnectionResetOp.nullable(),
 });
 export type CompanyConnectionBase = z.infer<typeof ZCompanyConnectionBase>;
 

@@ -1,4 +1,4 @@
-import type { ToolDefinitionRow } from "./ToolDefinitionsCommon";
+import type { ToolDefinition, ToolDefinitionRow } from "./ToolDefinitionsCommon";
 import type { ApiResponse } from "../common";
 import type { CompanyConnection } from "../companyConnections";
 
@@ -23,4 +23,30 @@ export interface ToolConnectionDALResponse extends ApiResponse {
 export interface ToolDefinitionNameDALResponse extends ApiResponse {
   latestVersion?: number;
   hasDraft?: boolean;
+}
+
+// DEV_NOTE: A tool version with the connection fields a host call needs (M3-4). Left join: a connection that is gone
+// leaves connection null, and the Repo leaves the tool out.
+export type ToolDefinitionWithConnectionRow = ToolDefinition & {
+  connection: Pick<
+    CompanyConnection,
+    "status" | "adapterType" | "baseUrl" | "authType" | "authConfig" | "credentialScope"
+  > | null;
+};
+
+export interface ToolDefinitionsWithConnectionDALResponse extends ApiResponse {
+  toolDefinitions?: ToolDefinitionWithConnectionRow[];
+}
+
+export interface ToolDefinitionWithConnectionDALResponse extends ApiResponse {
+  toolDefinition?: ToolDefinitionWithConnectionRow;
+}
+
+// DEV_NOTE: One entry per write tool name that has a version past Draft: its newest such version's description
+export interface WriteToolSummariesDALResponse extends ApiResponse {
+  tools?: Pick<ToolDefinition, "name" | "description">[];
+}
+
+export interface ToolDefinitionOptionsDALResponse extends ApiResponse {
+  options?: Pick<ToolDefinition, "name" | "version" | "description" | "risk">[];
 }

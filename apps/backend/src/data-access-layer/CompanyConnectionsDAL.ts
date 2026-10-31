@@ -78,7 +78,7 @@ export default class CompanyConnectionsDAL {
 
   async getCompanyConnectionDetails(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FindCompanyConnectionDALRequest,
+    params: Schemas.GetCompanyConnectionDetailsDALRequest,
   ) {
     const response: Schemas.CompanyConnectionDALResponse = { isSuccess: false };
 
@@ -87,11 +87,12 @@ export default class CompanyConnectionsDAL {
         eq(companyConnections.publicId, params.publicId),
         eq(companyConnections.companyId, params.companyId),
       ];
-      const [companyConnection] = await tx
+      const query = tx
         .select()
         .from(companyConnections)
         .where(and(...conditions))
         .limit(1);
+      const [companyConnection] = params.isForUpdate ? await query.for("update") : await query;
 
       if (!companyConnection) {
         const message = "Company connection not found";
@@ -102,6 +103,7 @@ export default class CompanyConnectionsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -214,6 +216,8 @@ export default class CompanyConnectionsDAL {
           jwtIssuer: params.jwtIssuer ?? undefined,
           allowedOrigins: params.allowedOrigins ?? undefined,
           status: params.status ?? undefined,
+          // DEV_NOTE: undefined = unchanged, null = cleared
+          resetOp: params.resetOp,
           updatedAt: now,
         })
         .where(and(...conditions))
@@ -241,6 +245,53 @@ export default class CompanyConnectionsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.UpdateCompanyConnection,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The Security page's Edit (M4-9): the widget's allowed origins only, by the admin. Unknown or another
+  // company's connection → isNotFound.
+  async updateCompanyConnectionOrigins(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanyConnectionOriginsDALRequest,
+  ) {
+    const response: Schemas.CompanyConnectionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companyConnections.publicId, params.publicId),
+        eq(companyConnections.companyId, params.companyId),
+      ];
+      const [companyConnectionResponse] = await tx
+        .update(companyConnections)
+        .set({
+          allowedOrigins: params.allowedOrigins,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!companyConnectionResponse) {
+        response.message = "Company connection not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Allowed origins updated successfully";
+      response.companyConnection = companyConnectionResponse;
+    } catch (error) {
+      const message = "Unknown error in updating allowed origins";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateAllowedOrigins,
         message,
         error,
         metadata: params,

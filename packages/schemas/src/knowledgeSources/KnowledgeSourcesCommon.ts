@@ -94,23 +94,35 @@ export const KNOWLEDGE_SOURCE_URL_MAX_LENGTH = 2048;
 export const ZKnowledgeSourceUrl = z
   .url({ protocol: /^https?$/, hostname: z.regexes.domain })
   .max(KNOWLEDGE_SOURCE_URL_MAX_LENGTH)
-  .refine((url) => new URL(url).port === "", { message: "URL must use the default port" });
+  // DEV_NOTE: zod runs this even when the url check above failed, so an unparseable value is left to that check (new
+  // URL would throw, a 500 instead of a 400)
+  .refine((url) => !URL.canParse(url) || new URL(url).port === "", {
+    message: "URL must use the default port",
+  });
+
+// DEV_NOTE: What the admin calls the source (M4-7: "Help center"), shown on the Knowledge page. Rows from before M4-7
+// were named by the migration (a web source's host, else "Uploads").
+export const KNOWLEDGE_SOURCE_NAME_MAX_CHARS = 120;
+export const ZKnowledgeSourceName = z.string().trim().min(1).max(KNOWLEDGE_SOURCE_NAME_MAX_CHARS);
 
 // Create Knowledge Source Body
 // DEV_NOTE: Web sources (sitemap, url) need a url and a sync frequency; uploads have neither (CHK_knowledge_sources_*)
 export const ZKnowledgeSourceBase = z.discriminatedUnion("type", [
   z.object({
     type: z.literal(KnowledgeSourceTypeIntEnum.Sitemap),
+    name: ZKnowledgeSourceName,
     url: ZKnowledgeSourceUrl,
     syncFrequency: z.enum(KnowledgeSourceSyncFrequencyIntEnum),
   }),
   z.object({
     type: z.literal(KnowledgeSourceTypeIntEnum.Url),
+    name: ZKnowledgeSourceName,
     url: ZKnowledgeSourceUrl,
     syncFrequency: z.enum(KnowledgeSourceSyncFrequencyIntEnum),
   }),
   z.object({
     type: z.literal(KnowledgeSourceTypeIntEnum.Upload),
+    name: ZKnowledgeSourceName,
   }),
 ]);
 export type KnowledgeSourceBase = z.infer<typeof ZKnowledgeSourceBase>;
@@ -122,6 +134,7 @@ export const ZKnowledgeSource = z.object({
   id: z.string(),
   publicId: z.string(),
   companyId: z.string(),
+  name: z.string(),
   type: z.enum(KnowledgeSourceTypeIntEnum),
   url: z.string().nullable(),
   syncFrequency: z.enum(KnowledgeSourceSyncFrequencyIntEnum).nullable(),
@@ -146,4 +159,9 @@ export type KnowledgeSourceWithStatus = Omit<
   knowledgeSourceStatusLabel: KnowledgeSourceStatusLabelEnum;
   typeLabel: KnowledgeSourceTypeLabelEnum;
   syncFrequencyLabel: KnowledgeSourceSyncFrequencyLabelEnum | null;
+};
+
+// DEV_NOTE: One row of the Knowledge page's Sources table (M4-7): the source and how many documents it holds now
+export type KnowledgeSourceListItem = KnowledgeSourceWithStatus & {
+  documentCount: number;
 };

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
 import { toMessageViews } from "@/lib/transcriptView";
+import { EMPTY_REVIEW } from "@/store/widgetStore";
 
 // DEV_NOTE: Think's transcript → the panel's view: steps, the sources a reply cites, and when thumbs are offered
 const citation = (n: number): Schemas.KnowledgeCitation => ({
@@ -38,6 +39,7 @@ describe("toMessageViews", () => {
       isStreaming: false,
       ratings: { a1: Schemas.FeedbackRatingIntEnum.Up },
       pendingRatings: {},
+      review: EMPTY_REVIEW,
     });
     expect(views[0]).toEqual({ role: "user", id: "u1", text: "How do I add a field?" });
     const reply = views[1];
@@ -61,6 +63,7 @@ describe("toMessageViews", () => {
       isStreaming: true,
       ratings: {},
       pendingRatings: {},
+      review: EMPTY_REVIEW,
     });
     const reply = views[1];
     if (reply?.role !== "assistant") throw new Error("No reply");
@@ -83,6 +86,7 @@ describe("toMessageViews", () => {
       isStreaming: false,
       ratings: {},
       pendingRatings: { a1: Schemas.FeedbackRatingIntEnum.Down },
+      review: EMPTY_REVIEW,
     });
     const reply = views[1];
     if (reply?.role !== "assistant") throw new Error("No reply");

@@ -16,8 +16,8 @@ interface RouterContext {
 }
 
 function ThemedToaster() {
-  const { theme } = useTheme();
-  return <Toaster theme={theme} />;
+  const { resolvedTheme } = useTheme();
+  return <Toaster theme={resolvedTheme} />;
 }
 
 function RootDocument({ children }: { children: ReactNode }) {

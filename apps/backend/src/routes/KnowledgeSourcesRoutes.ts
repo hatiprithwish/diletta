@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { zValidator } from "@hono/zod-validator";
+import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import KnowledgeSourcesRepo from "@/repositories/KnowledgeSourcesRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
@@ -12,7 +13,8 @@ import * as Schemas from "@app/schemas";
 // authorizeCompany(action) → zValidator → handler. companyId comes from the signed-in admin, never the client; sources
 // and documents are addressed by publicId. A request the source's state refuses (already syncing, paused, wrong source
 // type) answers 409 with its failure, an upload whose bytes don't match its type 400; isSuccess ? 200 : isNotFound ?
-// 404 : 500 otherwise. An upload body over KNOWLEDGE_UPLOAD_BODY_MAX_BYTES is refused with 413 before it is parsed.
+// 404 : 500 otherwise. An upload body over KNOWLEDGE_UPLOAD_BODY_MAX_BYTES is refused with 413 before it is parsed. A
+// write's audit row (M4-9) is relayed after the commit; its outbox ids never reach the client.
 const KnowledgeSourcesRoutes = new Hono<AppContext>();
 
 function stateStatus(response: Schemas.KnowledgeSourceStateResponse, success: 200 | 201) {
@@ -71,12 +73,14 @@ KnowledgeSourcesRoutes.post(
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceCreate),
   zValidator("json", Schemas.ZCreateKnowledgeSourceApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new KnowledgeSourcesRepo(c.env);
-    const response = await repo.createKnowledgeSource({
+    const { outboxIds, ...response } = await repo.createKnowledgeSource({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, response.isSuccess ? 201 : 500);
   },
@@ -88,13 +92,15 @@ KnowledgeSourcesRoutes.patch(
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceUpdate),
   zValidator("json", Schemas.ZUpdateKnowledgeSourceApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new KnowledgeSourcesRepo(c.env);
-    const response = await repo.updateKnowledgeSource({
+    const { outboxIds, ...response } = await repo.updateKnowledgeSource({
       ...c.req.valid("json"),
-      companyId: c.get("companyId"),
+      companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 200));
   },
@@ -105,11 +111,14 @@ KnowledgeSourcesRoutes.delete(
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceDelete),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new KnowledgeSourcesRepo(c.env);
-    const response = await repo.deleteKnowledgeSource({
-      companyId: c.get("companyId"),
+    const { outboxIds, ...response } = await repo.deleteKnowledgeSource({
+      companyId,
       publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
   },
@@ -120,11 +129,14 @@ KnowledgeSourcesRoutes.post(
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceUpdate),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new KnowledgeSourcesRepo(c.env);
-    const response = await repo.startSync({
-      companyId: c.get("companyId"),
+    const { outboxIds, ...response } = await repo.requestSync({
+      companyId,
       publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 200));
   },
@@ -151,9 +163,11 @@ KnowledgeSourcesRoutes.get(
   "/:publicId/documents/count",
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceRead),
+  zValidator("query", Schemas.ZGetKnowledgeDocumentsCountApiRequest),
   async (c) => {
     const repo = new KnowledgeSourcesRepo(c.env);
     const response = await repo.getKnowledgeDocumentsCount({
+      ...c.req.valid("query"),
       companyId: c.get("companyId"),
       publicId: c.req.param("publicId"),
     });
@@ -172,13 +186,15 @@ KnowledgeSourcesRoutes.post(
   }),
   zValidator("form", Schemas.ZUploadKnowledgeDocumentApiRequest),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new KnowledgeSourcesRepo(c.env);
-    const response = await repo.uploadKnowledgeDocument({
+    const { outboxIds, ...response } = await repo.uploadKnowledgeDocument({
       ...c.req.valid("form"),
-      companyId: c.get("companyId"),
+      companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 201));
   },
@@ -189,12 +205,15 @@ KnowledgeSourcesRoutes.delete(
   checkAuth,
   authorizeCompany(Schemas.AuthzActionEnum.KnowledgeSourceUpdate),
   async (c) => {
+    const companyId = c.get("companyId");
     const repo = new KnowledgeSourcesRepo(c.env);
-    const response = await repo.deleteKnowledgeDocument({
-      companyId: c.get("companyId"),
+    const { outboxIds, ...response } = await repo.deleteKnowledgeDocument({
+      companyId,
       publicId: c.req.param("publicId"),
       documentPublicId: c.req.param("documentPublicId"),
+      adminId: c.get("admin").adminId,
     });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, stateStatus(response, 200));
   },

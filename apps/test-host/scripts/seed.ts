@@ -12,15 +12,14 @@ import { readOwnerDatabaseUrl } from "../../backend/src/db/ownerDatabaseUrl.ts";
 // staging test host (Schemas.TEST_HOST_STAGING_ISSUER). On the database in apps/backend/.env (the staging branch), as
 // the owner role (DATABASE_URL): fixture setup, like a test's, never code under test.
 // 1. The issuer's staging company connection: REST, base_url {issuer}/v1/, jwt_forward, the widget dev host's origin
-//    allowed. Created Active on the first run. On a rerun only base_url is set and the dev origin added: an operator's
-//    status and other origins are kept, and a row whose fixed-at-create fields differ (another environment, adapter,
-//    auth type or scope) is refused, never rewritten. Refused if the issuer belongs to another company.
+//    allowed, reset_op = POST /v1/_reset (Schemas.TEST_HOST_RESET_OP, the eval run's reset, M5-2). Created Active on
+//    the first run. On a rerun only base_url and reset_op are set and the dev origin added: an operator's status and
+//    other origins are kept, and a row whose fixed-at-create fields differ (another environment, adapter, auth type or
+//    scope) is refused, never rewritten. Refused if the issuer belongs to another company.
 // 2. Each tool definition, Active at its newest version: a new version is added only when the definition changed, so
 //    configs pinned to an older version keep it. Refused while a Draft of the name exists (an operator is editing it).
 //    Skipped while the connection isn't Active (a tool needs an Active connection), with a message saying so.
 // 3. Says what a chat with the tools still needs, and the {name, version} pins for the config.
-// reset_op stays null: its shape is defined by the eval reset flow (M5-2), which sets it here, pointing at
-// POST /v1/_reset.
 
 // DEV_NOTE: The connection id, and whether it is Active (a tool can be activated only on an Active connection)
 async function upsertConnection(
@@ -53,8 +52,9 @@ async function upsertConnection(
       ? row.allowed_origins
       : [...row.allowed_origins, Schemas.WIDGET_DEV_ORIGIN];
     await client.query(
-      `UPDATE company_connections SET base_url = $1, allowed_origins = $2, updated_at = now() WHERE id = $3`,
-      [baseUrl, origins, row.id],
+      `UPDATE company_connections SET base_url = $1, allowed_origins = $2, reset_op = $3::jsonb, updated_at = now()
+        WHERE id = $4`,
+      [baseUrl, origins, JSON.stringify(Schemas.TEST_HOST_RESET_OP), row.id],
     );
     return {
       connectionId: row.id,
@@ -64,8 +64,8 @@ async function upsertConnection(
   const inserted = await client.query<{ id: string }>(
     `INSERT INTO company_connections
        (public_id, company_id, environment, adapter_type, base_url, auth_type, auth_config, credential_scope,
-        jwt_issuer, allowed_origins, status)
-     VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, $7, $8, $9, $10)
+        jwt_issuer, allowed_origins, status, reset_op)
+     VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, $7, $8, $9, $10, $11::jsonb)
      RETURNING id`,
     [
       Utility.generatePublicId(),
@@ -78,6 +78,7 @@ async function upsertConnection(
       issuer,
       [Schemas.WIDGET_DEV_ORIGIN],
       Schemas.CompanyConnectionStatusIntEnum.Active,
+      JSON.stringify(Schemas.TEST_HOST_RESET_OP),
     ],
   );
   return { connectionId: inserted.rows[0]!.id, isActive: true };

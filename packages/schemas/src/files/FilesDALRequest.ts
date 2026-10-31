@@ -22,4 +22,22 @@ export type SetFileOwnerDALRequest = Pick<StoredFile, "id" | "companyId" | "owne
 
 export type FindFileDALRequest = Pick<StoredFile, "id" | "companyId">;
 
-export type DeleteFilesDALRequest = Pick<StoredFile, "companyId"> & { ids: string[] };
+// DEV_NOTE: pendingOwnerType set = only rows of that owner type still pending their owner (FILE_PENDING_OWNER_ID) are
+// deleted, so a row attached meanwhile is kept (the eval transcript discard and sweep, M5-3)
+export type DeleteFilesDALRequest = Pick<StoredFile, "companyId"> & {
+  ids: string[];
+  pendingOwnerType?: StoredFile["ownerType"];
+};
+
+// DEV_NOTE: An eval transcript by its file's public id, only when it is the transcript of a result of this run
+// (Tests page, M4-8)
+export type FindEvalRunTranscriptFileDALRequest = Pick<StoredFile, "companyId" | "publicId"> & {
+  evalRunId: string;
+};
+
+// DEV_NOTE: Platform (withPlatform, every company): files rows of one owner type still pending their owner
+// (FILE_PENDING_OWNER_ID) and created before createdBefore, oldest first, at most limit (the transcript sweep, M5-3)
+export type GetPendingOwnerFilesDALRequest = Pick<StoredFile, "ownerType"> & {
+  createdBefore: Date;
+  limit: number;
+};

@@ -1,10 +1,18 @@
 import { z } from "zod";
 
 // DEV_NOTE: What owns a file (files.owner_type, text in the DB): owner_id is that table's internal id. The file is
-// purged with its owner (row + R2 object). Conversation images, eval transcripts and exports add theirs when they land.
+// purged with its owner (row + R2 object). Conversation images and exports add theirs when they land.
 export enum FileOwnerTypeEnum {
   KnowledgeDocument = "knowledge_document",
+  // DEV_NOTE: An eval attempt's transcript (M4-8 reads it, M5-3 writes it): owner_id = eval_results.id, and the result's
+  // transcript_file_id points back at the file
+  EvalResult = "eval_result",
 }
+
+// DEV_NOTE: owner_id of a files row written before its owner row, then pointed at it (setFileOwner) in a later step. A
+// transcript row still pending an hour on was never attached (its /results failed) and is swept with its R2 object
+// (EvalTranscriptSweep, M5-3).
+export const FILE_PENDING_OWNER_ID = "0";
 
 // Whole Stored File Body — DB shape
 // DEV_NOTE: id, companyId, ownerId and createdBy are internal bigint ids — used by DAL/Repo only, NEVER sent to a

@@ -1,12 +1,22 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { activityLog, companies } from "@/db/tables";
+import {
+  activityLog,
+  admins,
+  changeRequests,
+  chatbotUsers,
+  companies,
+  conversations,
+  toolCalls,
+  toolDefinitions,
+} from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
-// and every query filters on companyId (defence in depth on top of RLS). activity_log is append-only: insert, and read by entity.
+// and every query filters on companyId (defence in depth on top of RLS). activity_log is append-only: insert, and read by
+// entity or as the audit log.
 // Critical events reach it through CriticalEventProvider, which writes the event_outbox row in the same tx.
 export default class ActivityLogDAL {
   async createActivityLog(
@@ -125,6 +135,242 @@ export default class ActivityLogDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetActivityLogsByEntity,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: An entity's timeline (M4-5: a change request's), oldest first, with each actor's name: left joins on the
+  // admin (actor Admin) and the chatbot user (actor ChatbotUser) of the same company, so a row whose actor is gone
+  // still reads; an erased user's name is left out. Capped at params.limit by keeping the newest events (read newest
+  // first, then put back in order): the latest steps say where the entity stands now.
+  async getActivityLogTimeline(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActivityLogsByEntityDALRequest,
+  ) {
+    const response: Schemas.ActivityLogTimelineDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.companyId, params.companyId),
+        eq(activityLog.entityType, params.entityType),
+        eq(activityLog.entityId, params.entityId),
+      ];
+      const adminJoinConditions = [
+        eq(activityLog.actorType, Schemas.ActivityLogActorTypeIntEnum.Admin),
+        eq(admins.id, activityLog.actorId),
+        eq(admins.companyId, activityLog.companyId),
+      ];
+      const userJoinConditions = [
+        eq(activityLog.actorType, Schemas.ActivityLogActorTypeIntEnum.ChatbotUser),
+        eq(chatbotUsers.id, activityLog.actorId),
+        eq(chatbotUsers.companyId, activityLog.companyId),
+      ];
+      const activityLogs = await tx
+        .select({
+          id: activityLog.id,
+          actorType: activityLog.actorType,
+          entityAction: activityLog.entityAction,
+          detail: activityLog.detail,
+          createdAt: activityLog.createdAt,
+          actorName: sql<
+            string | null
+          >`coalesce(${admins.name}, case when ${chatbotUsers.erasedAt} is null then ${chatbotUsers.displayName} end)`,
+        })
+        .from(activityLog)
+        .leftJoin(admins, and(...adminJoinConditions))
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Activity log timeline fetched successfully";
+      response.activityLogs = activityLogs.reverse();
+    } catch (error) {
+      const message = "Unknown error in fetching activity log timeline";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActivityLogTimeline,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Activity rollups (M4-2): change_request events written in [start, end) for the actions the rollup counts,
+  // per chatbot (the change request's conversation), action and tool name. activity_log is partitioned by created_at,
+  // so the range reads one or two partitions.
+  async getChangeRequestRollupGroups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivityRollupWindowDALRequest,
+  ) {
+    const response: Schemas.ChangeRequestRollupGroupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.companyId, params.companyId),
+        eq(changeRequests.companyId, params.companyId),
+        eq(toolCalls.companyId, params.companyId),
+        eq(toolDefinitions.companyId, params.companyId),
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.evalRunId),
+        eq(activityLog.entityType, Schemas.CHANGE_REQUEST_ENTITY_TYPE),
+        inArray(activityLog.entityAction, [...Schemas.ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS]),
+        gte(activityLog.createdAt, params.start),
+        lt(activityLog.createdAt, params.end),
+      ];
+      const rows = await tx
+        .select({
+          chatbotId: conversations.chatbotId,
+          action: activityLog.entityAction,
+          toolName: toolDefinitions.name,
+          actorType: activityLog.actorType,
+          count: count(),
+        })
+        .from(activityLog)
+        .innerJoin(changeRequests, eq(changeRequests.id, activityLog.entityId))
+        .innerJoin(toolCalls, eq(toolCalls.id, changeRequests.toolCallId))
+        .innerJoin(toolDefinitions, eq(toolDefinitions.id, toolCalls.toolId))
+        .innerJoin(conversations, eq(conversations.id, changeRequests.conversationId))
+        .where(and(...conditions))
+        .groupBy(
+          conversations.chatbotId,
+          activityLog.entityAction,
+          toolDefinitions.name,
+          activityLog.actorType,
+        );
+
+      // DEV_NOTE: entity_action is text; the query matched only counted actions, so find() narrows every row
+      const groups: Schemas.ChangeRequestRollupGroup[] = [];
+      for (const row of rows) {
+        const action = Schemas.ACTIVITY_ROLLUP_CHANGE_REQUEST_ACTIONS.find(
+          (item) => item === row.action,
+        );
+        if (action) {
+          groups.push({
+            chatbotId: row.chatbotId,
+            action,
+            toolName: row.toolName,
+            isByChatbotUser: row.actorType === Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+            count: row.count,
+          });
+        }
+      }
+
+      response.isSuccess = true;
+      response.message = "Change request rollup groups fetched successfully";
+      response.groups = groups;
+    } catch (error) {
+      const message = "Unknown error in fetching change request rollup groups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetChangeRequestRollupGroups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The audit log (M4-9): the company's rows written by an admin or an operator, and the System rows of
+  // Schemas.AUDIT_SYSTEM_ENTITY_TYPES (M5-4: a gate run moving a chatbot version), with the admin's name (left join on an
+  // admin of the same company, so a removed admin's row still reads; an operator's name is never read: RLS hides
+  // operators from a tenant; a System row has none). The values are inlined, not bound, so the planner matches the
+  // partial index IDX_activity_log_company_id_created_at_audit (the same predicate, tables.ts).
+  private auditActorCondition() {
+    const { Admin, Operator, System } = Schemas.ActivityLogActorTypeIntEnum;
+    const systemEntityTypes = Schemas.AUDIT_SYSTEM_ENTITY_TYPES.map((type) => `'${type}'`).join(
+      ", ",
+    );
+    return sql`(${activityLog.actorType} IN (${sql.raw(String(Admin))}, ${sql.raw(String(Operator))}) OR (${activityLog.actorType} = ${sql.raw(String(System))} AND ${activityLog.entityType} IN (${sql.raw(systemEntityTypes)})))`;
+  }
+
+  async getAuditLog(tx: NodePgTransaction<EmptyRelations>, params: Schemas.GetAuditLogDALRequest) {
+    const response: Schemas.AuditLogDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(activityLog.companyId, params.companyId), this.auditActorCondition()];
+      const adminJoinConditions = [
+        eq(activityLog.actorType, Schemas.ActivityLogActorTypeIntEnum.Admin),
+        eq(admins.id, activityLog.actorId),
+        eq(admins.companyId, activityLog.companyId),
+      ];
+      const sortColumns = {
+        [Schemas.AuditLogSortColumn.CreatedAt]: activityLog.createdAt,
+      };
+      const sortColumn = sortColumns[params.sortColumn];
+      const sortExpr =
+        params.sortDirection === Schemas.SortDirection.Asc ? asc(sortColumn) : desc(sortColumn);
+
+      const auditLog = await tx
+        .select({
+          actorType: activityLog.actorType,
+          entityType: activityLog.entityType,
+          entityAction: activityLog.entityAction,
+          entityVersion: activityLog.entityVersion,
+          detail: activityLog.detail,
+          createdAt: activityLog.createdAt,
+          actorName: admins.name,
+        })
+        .from(activityLog)
+        .leftJoin(admins, and(...adminJoinConditions))
+        .where(and(...conditions))
+        .orderBy(sortExpr, asc(activityLog.id))
+        .limit(params.pageSize)
+        .offset((params.pageNo - 1) * params.pageSize);
+
+      response.isSuccess = true;
+      response.message = "Audit log fetched successfully";
+      response.auditLog = auditLog;
+    } catch (error) {
+      const message = "Unknown error in fetching audit log";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetAuditLog,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getAuditLogCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetAuditLogCountDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [eq(activityLog.companyId, params.companyId), this.auditActorCondition()];
+      const [result] = await tx
+        .select({ count: count() })
+        .from(activityLog)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Audit log counted successfully";
+      response.totalRecords = result?.count ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting audit log";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountAuditLog,
         message,
         error,
         metadata: params,

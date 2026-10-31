@@ -5,7 +5,7 @@ import type { KnowledgeSource, KnowledgeSourceSortColumn } from "./KnowledgeSour
 // The DAL generates publicId.
 export type CreateKnowledgeSourceDALRequest = Pick<
   KnowledgeSource,
-  "companyId" | "type" | "url" | "syncFrequency" | "createdBy"
+  "companyId" | "name" | "type" | "url" | "syncFrequency" | "createdBy"
 >;
 
 // DEV_NOTE: isForUpdate locks the row for the rest of the transaction (SELECT … FOR UPDATE), so a state change
@@ -22,12 +22,16 @@ export type GetKnowledgeSourceIdsDALRequest = Pick<KnowledgeSource, "companyId">
 
 export type GetKnowledgeSourcesCountDALRequest = Pick<KnowledgeSource, "companyId">;
 
+// DEV_NOTE: status null = every state
 export type GetKnowledgeSourcesDALRequest = GetKnowledgeSourcesCountDALRequest &
-  PageDALRequest & { sortColumn: KnowledgeSourceSortColumn };
+  PageDALRequest & {
+    sortColumn: KnowledgeSourceSortColumn;
+    status: KnowledgeSource["status"] | null;
+  };
 
 // DEV_NOTE: Admin-editable fields; a null param is left as it is. updatedAt is set by the DAL.
 export type UpdateKnowledgeSourceDALRequest = Pick<KnowledgeSource, "publicId" | "companyId"> &
-  NullableDALFields<Pick<KnowledgeSource, "syncFrequency" | "status">> &
+  NullableDALFields<Pick<KnowledgeSource, "name" | "syncFrequency" | "status">> &
   Pick<KnowledgeSource, "updatedBy">;
 
 // DEV_NOTE: The sync's own state changes (claim → Syncing with a new syncRunId, finish → Active / Failed). A null
@@ -55,5 +59,13 @@ export type GetDueKnowledgeSourcesDALRequest = {
   failedBefore: Date;
   staleBefore: Date;
   companyIds: string[] | null;
+  limit: number;
+};
+
+// Failed sources now (Overview's needs attention, M4-3)
+export type GetFailedKnowledgeSourcesSummaryDALRequest = Pick<KnowledgeSource, "companyId">;
+
+// DEV_NOTE: The Bots draft editor's source picker (M4-10): every source, any status, by name, capped
+export type GetKnowledgeSourceOptionsDALRequest = Pick<KnowledgeSource, "companyId"> & {
   limit: number;
 };

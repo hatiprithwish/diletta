@@ -69,6 +69,46 @@ export default class Utility {
     }
   }
 
+  // DEV_NOTE: JSON with object keys sorted at every depth, so two equal values always give the same text whatever
+  // their key order (the action engine's loop guard compares a turn's tool calls by it). Array order is kept.
+  static stableStringify(value: unknown): string {
+    const sortKeys = (current: unknown): unknown => {
+      if (Array.isArray(current)) return current.map(sortKeys);
+      if (current !== null && typeof current === "object") {
+        return Object.fromEntries(
+          Object.entries(current)
+            .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+            .map(([key, entry]) => [key, sortKeys(entry)]),
+        );
+      }
+      return current;
+    };
+    return JSON.stringify(sortKeys(value)) ?? "null";
+  }
+
+  // DEV_NOTE: sha256 of the text, as lowercase hex. chatbot_configs.body_hash hashes the stableStringify of the normalised
+  // body, so it changes only when the company's own config does (M4-10).
+  static async sha256Hex(text: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+  }
+
+  // DEV_NOTE: Waits until isDone says yes, checking every pollMs for at most timeoutMs. true = done; false = still not done
+  // at the deadline. sleep is injected so tests don't wait.
+  static async waitUntil(
+    isDone: () => boolean,
+    params: { timeoutMs: number; pollMs: number; sleep: (ms: number) => Promise<void> },
+  ): Promise<boolean> {
+    const deadline = Date.now() + params.timeoutMs;
+    while (!isDone()) {
+      if (Date.now() >= deadline) return false;
+      await params.sleep(params.pollMs);
+    }
+    return true;
+  }
+
   // DEV_NOTE: base64url without padding (RFC 4648 §5), as JWTs and JWKs encode their parts. null when the input
   // isn't base64url, so a malformed token is a rejection, not an exception.
   static decodeBase64Url(encoded: string): Uint8Array<ArrayBuffer> | null {
@@ -111,6 +151,12 @@ export default class Utility {
     return false;
   }
 
+  // DEV_NOTE: A LIKE / ILIKE pattern that matches text anywhere, the text taken literally: its \, % and _ are escaped
+  // (backslash is Postgres's default LIKE escape)
+  static containsPattern(text: string): string {
+    return `%${text.replace(/[\\%_]/g, "\\$&")}%`;
+  }
+
   // DEV_NOTE: Passes a stream through chunk by chunk. onChunk sees each chunk and returns the one to pass on (the same,
   // or a replacement); mapError replaces the error a failing source raises before the reader gets it. onEnd runs
   // exactly once: when the stream finishes, fails (error set) or is cancelled by the reader (wasCancelled).
@@ -150,5 +196,19 @@ export default class Utility {
         await reader.cancel(reason);
       },
     });
+  }
+
+  // DEV_NOTE: Fixed-point maths for exact sums (costs, rollup values). A non-negative decimal (a count, or a sum the database cast to text) as bigint units of 10^-scale.
+  // Digits past the scale can't occur (cost_usd is numeric(12, 6)) and are dropped.
+  static toUnits(value: string | number, scale: number): bigint {
+    const text = typeof value === "number" ? String(value) : value.trim();
+    const [whole = "0", fraction = ""] = text.split(".");
+    return BigInt(`${whole || "0"}${fraction.padEnd(scale, "0").slice(0, scale)}`);
+  }
+
+  static fromUnits(units: bigint, scale: number): string {
+    if (scale === 0) return units.toString();
+    const digits = units.toString().padStart(scale + 1, "0");
+    return `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
   }
 }

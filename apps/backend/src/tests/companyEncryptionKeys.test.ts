@@ -7,7 +7,13 @@ import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import CompanyEncryptionKeysDAL from "@/data-access-layer/CompanyEncryptionKeysDAL";
 import getDbClient from "@/db/dbClient";
-import { companies, companyEncryptionKeys, companySecrets } from "@/db/tables";
+import {
+  activityLog,
+  companies,
+  companyEncryptionKeys,
+  companySecrets,
+  eventOutbox,
+} from "@/db/tables";
 import withTenant from "@/db/withTenant";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanyEncryptionKeysRepo from "@/repositories/CompanyEncryptionKeysRepo";
@@ -90,6 +96,8 @@ afterAll(async () => {
   const companyIds = createdCompanyIds.filter(Boolean);
   if (companyIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(companySecrets).where(inArray(companySecrets.companyId, companyIds));
     await ownerDb
       .delete(companyEncryptionKeys)
@@ -131,7 +139,7 @@ describe("CompanyEncryptionKeysRepo", () => {
     const before = await createModelKey(companyId, Schemas.ModelProviderEnum.Google, "g-before");
     expect(await storedKeyVersion(before)).toBe(1);
 
-    const rotated = await keysRepo.rotateCompanyEncryptionKey({ companyId });
+    const rotated = await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
     expect(rotated.isSuccess).toBe(true);
     expect(rotated.companyEncryptionKey?.version).toBe(2);
     expect(rotated.companyEncryptionKey?.companyEncryptionKeyStatus).toBe(
@@ -174,10 +182,16 @@ describe("CompanyEncryptionKeysRepo", () => {
   it("refuses a second rotation while a retiring key is still waiting for the rotation job", async () => {
     const companyId = await createCompany();
     const repo = new CompanyEncryptionKeysRepo(env);
-    expect((await repo.rotateCompanyEncryptionKey({ companyId })).isSuccess).toBe(true);
+    expect((await repo.rotateCompanyEncryptionKey({ companyId, adminId: "1" })).isSuccess).toBe(
+      true,
+    );
 
-    const again = await repo.rotateCompanyEncryptionKey({ companyId });
-    expect(again).toEqual({ isSuccess: false, message: "Key rotation already in progress" });
+    const again = await repo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
+    expect(again).toEqual({
+      isSuccess: false,
+      message: "Key rotation already in progress",
+      failure: Schemas.EncryptionKeyRotateFailureEnum.RotationInProgress,
+    });
 
     const listed = await repo.getCompanyEncryptionKeys({ companyId });
     expect(listed.companyEncryptionKeys?.map((key) => key.version)).toEqual([1, 2]);
@@ -190,7 +204,7 @@ describe("CompanyEncryptionKeysRepo", () => {
     const keysRepo = new CompanyEncryptionKeysRepo(env);
     const secretsRepo = new CompanySecretsRepo(env);
     const shredded = await createModelKey(companyId, Schemas.ModelProviderEnum.Google, "g-v1");
-    await keysRepo.rotateCompanyEncryptionKey({ companyId });
+    await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
     const kept = await createModelKey(companyId, Schemas.ModelProviderEnum.OpenAI, "o-v2");
 
     // DEV_NOTE: The rotation job's destroy step (M6-3), played by the owner connection
@@ -214,7 +228,7 @@ describe("CompanyEncryptionKeysRepo", () => {
     const stillThere = await secretsRepo.getDecryptedCompanySecret({ companyId, publicId: kept });
     expect(stillThere.secret).toBe("o-v2");
 
-    const rotated = await keysRepo.rotateCompanyEncryptionKey({ companyId });
+    const rotated = await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
     expect(rotated.isSuccess).toBe(true);
     expect(rotated.companyEncryptionKey?.version).toBe(3);
   });
@@ -258,7 +272,7 @@ describe("CompanyEncryptionKeysRepo", () => {
     createdCompanyIds.push(companyId);
     const repo = new CompanyEncryptionKeysRepo(env);
 
-    expect(await repo.rotateCompanyEncryptionKey({ companyId })).toEqual({
+    expect(await repo.rotateCompanyEncryptionKey({ companyId, adminId: "1" })).toEqual({
       isSuccess: false,
       message: "Active encryption key not found",
     });

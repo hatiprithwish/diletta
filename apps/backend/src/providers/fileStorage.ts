@@ -10,7 +10,7 @@ const R2_DELETE_BATCH_SIZE = 1000;
 export default class FileStorageProvider {
   static async putObject(
     env: Env,
-    params: { key: string; bytes: Uint8Array<ArrayBuffer>; mime: string },
+    params: { key: string; bytes: Uint8Array; mime: string },
   ): Promise<Schemas.ApiResponse> {
     try {
       await env.FILES_BUCKET.put(params.key, params.bytes, {
@@ -20,7 +20,7 @@ export default class FileStorageProvider {
     } catch (error) {
       const message = "Unknown error in storing file object";
       AppLogger.error({
-        category: Schemas.LogCategory.Knowledge,
+        category: Schemas.LogCategory.Files,
         action: Schemas.LogAction.PutFileObject,
         message,
         error,
@@ -30,7 +30,12 @@ export default class FileStorageProvider {
     }
   }
 
-  static async getObject(env: Env, params: { key: string }): Promise<Schemas.FileObjectResponse> {
+  // DEV_NOTE: maxBytes refuses an object from its stored size before its body is read, so a caller with a cap never
+  // buffers a bigger object (isTooLarge)
+  static async getObject(
+    env: Env,
+    params: { key: string; maxBytes?: number },
+  ): Promise<Schemas.FileObjectResponse> {
     const response: Schemas.FileObjectResponse = { isSuccess: false };
 
     try {
@@ -38,13 +43,26 @@ export default class FileStorageProvider {
       if (!object) {
         const message = "File object not found";
         AppLogger.error({
-          category: Schemas.LogCategory.Knowledge,
+          category: Schemas.LogCategory.Files,
           action: Schemas.LogAction.GetFileObject,
           message,
           metadata: params,
         });
         response.message = message;
         response.isNotFound = true;
+        return response;
+      }
+      if (params.maxBytes !== undefined && object.size > params.maxBytes) {
+        const message = "File object too large";
+        AppLogger.warn({
+          category: Schemas.LogCategory.Files,
+          action: Schemas.LogAction.GetFileObject,
+          message,
+          metadata: { ...params, sizeBytes: object.size },
+        });
+        await object.body.cancel();
+        response.message = message;
+        response.isTooLarge = true;
         return response;
       }
 
@@ -54,7 +72,7 @@ export default class FileStorageProvider {
     } catch (error) {
       const message = "Unknown error in fetching file object";
       AppLogger.error({
-        category: Schemas.LogCategory.Knowledge,
+        category: Schemas.LogCategory.Files,
         action: Schemas.LogAction.GetFileObject,
         message,
         error,
@@ -77,7 +95,7 @@ export default class FileStorageProvider {
     } catch (error) {
       const message = "Unknown error in deleting file objects";
       AppLogger.error({
-        category: Schemas.LogCategory.Knowledge,
+        category: Schemas.LogCategory.Files,
         action: Schemas.LogAction.DeleteFileObjects,
         message,
         error,

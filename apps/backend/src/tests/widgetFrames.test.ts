@@ -155,3 +155,144 @@ describe("WidgetFrameProvider.admit feedback", () => {
     }
   });
 });
+
+describe("WidgetFrameProvider.admit host token and change request decisions", () => {
+  it("admits the widget's host token for the DO's memory", () => {
+    const token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln";
+    expect(WidgetFrameProvider.admit(JSON.stringify({ type: "host_token", token }), none)).toEqual({
+      kind: "hostToken",
+      token,
+    });
+  });
+
+  it("refuses a malformed host token, never echoing it in the reason", () => {
+    const refused = [
+      { type: "host_token", token: "" },
+      { type: "host_token", token: "has space" },
+      { type: "host_token", token: "a".repeat(Schemas.WIDGET_HOST_TOKEN_MAX_CHARS + 1) },
+      { type: "host_token" },
+    ];
+    for (const frame of refused) {
+      const admission = WidgetFrameProvider.admit(JSON.stringify(frame), none);
+      expect(admission.kind).toBe("refuse");
+      expect(JSON.stringify(admission)).not.toContain("has space");
+    }
+  });
+
+  it("admits an approval or a rejection of one change request by its public id", () => {
+    const frame = {
+      type: "change_request_decision",
+      changeRequestId: "cr_123",
+      decision: Schemas.ChangeRequestDecisionEnum.Approve,
+    };
+    expect(WidgetFrameProvider.admit(JSON.stringify(frame), none)).toEqual({
+      kind: "decisions",
+      decisions: [
+        { changeRequestPublicId: "cr_123", decision: Schemas.ChangeRequestDecisionEnum.Approve },
+      ],
+    });
+  });
+
+  it("admits a batch of answers, each change request once", () => {
+    const frame = {
+      type: "change_request_batch_decision",
+      decisions: [
+        { changeRequestId: "cr_1", decision: Schemas.ChangeRequestDecisionEnum.Approve },
+        { changeRequestId: "cr_2", decision: Schemas.ChangeRequestDecisionEnum.Reject },
+      ],
+    };
+    expect(WidgetFrameProvider.admit(JSON.stringify(frame), none)).toEqual({
+      kind: "decisions",
+      decisions: [
+        { changeRequestPublicId: "cr_1", decision: Schemas.ChangeRequestDecisionEnum.Approve },
+        { changeRequestPublicId: "cr_2", decision: Schemas.ChangeRequestDecisionEnum.Reject },
+      ],
+    });
+  });
+
+  it("refuses an empty batch, a repeated change request, or one over the pending cap", () => {
+    const approve = Schemas.ChangeRequestDecisionEnum.Approve;
+    const refused = [
+      { type: "change_request_batch_decision", decisions: [] },
+      {
+        type: "change_request_batch_decision",
+        decisions: [
+          { changeRequestId: "cr_1", decision: approve },
+          { changeRequestId: "cr_1", decision: approve },
+        ],
+      },
+      {
+        type: "change_request_batch_decision",
+        decisions: Array.from({ length: Schemas.CHANGE_REQUEST_MAX_PENDING + 1 }, (_, i) => ({
+          changeRequestId: `cr_${i}`,
+          decision: approve,
+        })),
+      },
+    ];
+    for (const frame of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(frame), none).kind).toBe("refuse");
+    }
+  });
+
+  it("admits edits as values by field, and refuses empty or oversized ones", () => {
+    const frame = {
+      type: "change_request_edits",
+      edits: [{ changeRequestId: "cr_1", values: { name: "Beta", amount: 12 } }],
+    };
+    expect(WidgetFrameProvider.admit(JSON.stringify(frame), none)).toEqual({
+      kind: "edits",
+      edits: [{ changeRequestPublicId: "cr_1", values: { name: "Beta", amount: 12 } }],
+    });
+    const refused = [
+      { type: "change_request_edits", edits: [] },
+      { type: "change_request_edits", edits: [{ changeRequestId: "cr_1", values: {} }] },
+      {
+        type: "change_request_edits",
+        edits: [
+          {
+            changeRequestId: "cr_1",
+            values: { name: "x".repeat(Schemas.CHANGE_REQUEST_EDIT_VALUE_MAX_CHARS + 1) },
+          },
+        ],
+      },
+    ];
+    for (const edit of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(edit), none).kind).toBe("refuse");
+    }
+  });
+
+  it("admits the user's undo of change requests, each once, and refuses empty or repeated ones", () => {
+    const frame = { type: "change_request_undos", changeRequestIds: ["cr_1", "cr_2"] };
+    expect(WidgetFrameProvider.admit(JSON.stringify(frame), none)).toEqual({
+      kind: "undos",
+      changeRequestPublicIds: ["cr_1", "cr_2"],
+    });
+    const refused = [
+      { type: "change_request_undos", changeRequestIds: [] },
+      { type: "change_request_undos", changeRequestIds: ["cr_1", "cr_1"] },
+      {
+        type: "change_request_undos",
+        changeRequestIds: Array.from(
+          { length: Schemas.CHANGE_REQUEST_MAX_PENDING + 1 },
+          (_, index) => `cr_${index}`,
+        ),
+      },
+      { type: "change_request_undos", changeRequestIds: [""] },
+    ];
+    for (const undo of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(undo), none).kind).toBe("refuse");
+    }
+  });
+
+  it("refuses a malformed decision, and Think's own tool approval frames", () => {
+    const refused = [
+      { type: "change_request_decision", changeRequestId: "cr_1", decision: "maybe" },
+      { type: "change_request_decision", decision: "approve" },
+      { type: "cf_agent_tool_approval", toolCallId: "t-1", approved: true },
+      { type: "rpc", id: "1", method: "approveExecution", args: ["actpause_1"] },
+    ];
+    for (const frame of refused) {
+      expect(WidgetFrameProvider.admit(JSON.stringify(frame), none).kind).toBe("refuse");
+    }
+  });
+});

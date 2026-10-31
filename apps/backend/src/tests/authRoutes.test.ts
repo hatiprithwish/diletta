@@ -5,7 +5,14 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { admins, chatbots, companies, companyEncryptionKeys } from "@/db/tables";
+import {
+  activityLog,
+  admins,
+  chatbots,
+  companies,
+  companyEncryptionKeys,
+  eventOutbox,
+} from "@/db/tables";
 import worker from "@/index";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import Utility from "@/utils/Utility";
@@ -140,6 +147,9 @@ afterAll(async () => {
     }
     if (companyIds.length === 0) return;
 
+    // DEV_NOTE: The chatbot creates and edits here record audit rows (M4-9)
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
     await ownerDb
       .delete(companyEncryptionKeys)

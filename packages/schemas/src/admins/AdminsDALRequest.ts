@@ -14,3 +14,21 @@ export type CreateAdminDALRequest = Pick<Admin, "clerkUserId" | "email" | "name"
 export type UpdateAdminEmailDALRequest = Pick<Admin, "companyId" | "email"> & {
   adminId: Admin["id"];
 };
+
+// A company admin by internal id (who published a config, M4-3)
+export type FindAdminDALRequest = { companyId: string; adminId: Admin["id"] };
+
+// DEV_NOTE: Settings › Team (M4-10), inside withTenant on the company
+export type GetCompanyAdminsDALRequest = { companyId: string; limit: number };
+
+// DEV_NOTE: isForUpdate locks the row (Remove admin)
+export type FindCompanyAdminByClerkUserIdDALRequest = Pick<Admin, "clerkUserId"> & {
+  companyId: string;
+  isForUpdate?: boolean;
+};
+
+// DEV_NOTE: Matched case-insensitively (Clerk may store mixed case; invites store lowercase)
+export type FindCompanyAdminByEmailDALRequest = { companyId: string; email: string };
+
+// DEV_NOTE: Remove keeps the row (removed_at / removed_by set, clerk_user_id replaced by a removed_ token)
+export type RemoveAdminDALRequest = { companyId: string; adminId: Admin["id"]; removedBy: string };

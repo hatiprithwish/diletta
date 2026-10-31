@@ -1,29 +1,51 @@
 import Constants from "@/config/Constants";
 import {
   type LogRecord,
-  defaultConsoleFormatter,
   configure,
   dispose,
   getConsoleSink,
+  getJsonLinesFormatter,
   getLogger,
   withContext,
 } from "@logtape/logtape";
-import {
-  DEFAULT_REDACT_FIELDS,
-  EMAIL_ADDRESS_PATTERN,
-  redactByField,
-  redactByPattern,
-} from "@logtape/redaction";
+import { DEFAULT_REDACT_FIELDS, EMAIL_ADDRESS_PATTERN, redactByField } from "@logtape/redaction";
+import type { RedactionPattern } from "@logtape/redaction";
 import { DrizzleQueryError } from "drizzle-orm";
 import type * as Schemas from "@app/schemas";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-// DEV_NOTE: A DrizzleQueryError's message and stack carry every bound value of the failed query (names, config
-// JSON, PII), and a pg error's message and detail can quote values too. Field redaction can't see inside those
-// strings, so a query error is logged as its SQL text plus the pg error's code and object names only.
-export function toLoggableError(error: unknown): unknown {
-  if (!(error instanceof DrizzleQueryError)) return error;
-  return { name: error.name, query: error.query, cause: describeQueryErrorCause(error.cause) };
+// DEV_NOTE: How deep a cause chain is followed when an error is logged
+const MAX_LOGGED_CAUSE_DEPTH = 5;
+
+// DEV_NOTE: The fields an error keeps besides name, message and stack: codes and flags, never a payload
+const LOGGED_ERROR_FIELDS = ["statusCode", "failure", "code", "isRetryable"] as const;
+
+// DEV_NOTE: An error as it reaches the log. A DrizzleQueryError's message and stack carry every bound value of the
+// failed query (names, config JSON, PII), and a pg error's message and detail can quote values too, so a query error is
+// logged as its SQL text plus the pg error's code and object names only. Any other Error (and each cause in its chain)
+// keeps only its name, message, stack and LOGGED_ERROR_FIELDS: its other own fields can hold a payload, such as an
+// APICallError's requestBodyValues (the whole prompt, chat text included) and responseBody, or a
+// NoObjectGeneratedError's text (the model's answer). A value that isn't an Error passes through unchanged.
+export function toLoggableError(error: unknown, depth = 0): unknown {
+  if (error instanceof DrizzleQueryError) {
+    return { name: error.name, query: error.query, cause: describeQueryErrorCause(error.cause) };
+  }
+  if (!(error instanceof Error)) return error;
+  const logged: Record<string, unknown> = {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+  };
+  for (const field of LOGGED_ERROR_FIELDS) {
+    const value: unknown = (error as unknown as Record<string, unknown>)[field];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      logged[field] = value;
+    }
+  }
+  if (error.cause !== undefined && depth < MAX_LOGGED_CAUSE_DEPTH) {
+    logged.cause = toLoggableError(error.cause, depth + 1);
+  }
+  return logged;
 }
 
 function describeQueryErrorCause(cause: unknown) {
@@ -40,25 +62,61 @@ function describeQueryErrorCause(cause: unknown) {
   return cause instanceof Error ? { name: cause.name } : undefined;
 }
 
-function consoleFormatterWithProps(record: LogRecord): readonly unknown[] {
-  const base = defaultConsoleFormatter(record);
-  const { action, metadata, error, category } = record.properties;
-  const props: Record<string, unknown> = {};
-  if (category !== undefined) props.category = category;
-  if (action !== undefined) props.action = action;
-  if (metadata !== undefined) props.metadata = metadata;
-  if (error !== undefined) props.error = error;
-  if (Object.keys(props).length === 0) return base;
-  return [...base, "\n", props];
+const REDACTED_PATTERNS: readonly RedactionPattern[] = [EMAIL_ADDRESS_PATTERN];
+
+function redactText(text: string): string {
+  let redacted = text;
+  for (const { pattern, replacement } of REDACTED_PATTERNS) {
+    // DEV_NOTE: Narrowed apart: String.replace has no overload for the string-or-function union
+    redacted =
+      typeof replacement === "string"
+        ? redacted.replace(pattern, replacement)
+        : redacted.replace(pattern, replacement);
+  }
+  return redacted;
+}
+
+// DEV_NOTE: Every string in a value redacted, walking plain objects and arrays; an Error is first reduced by
+// toLoggableError (so a library's own record, which never went through AppLogger, can't log a payload either)
+export function redactValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return redactText(value);
+  if (depth > MAX_LOGGED_CAUSE_DEPTH * 2 || typeof value !== "object" || value === null) {
+    return value;
+  }
+  if (value instanceof Error) return redactValue(toLoggableError(value), depth + 1);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, depth + 1));
+  if (value instanceof Date) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, redactValue(item, depth + 1)]),
+  );
+}
+
+// DEV_NOTE: Workers Logs indexes the fields of a logged object, so every record goes out as one JSON object
+// (`@timestamp`, `level`, `message`, `logger`, then category, action, metadata, error and requestId at the top level).
+// The record's message and properties are redacted before the JSON Lines formatter serializes them: redacting the
+// serialized line instead would eat the letter of an escape (`\n`, `\t`, `\uXXXX`) next to an address and break the
+// JSON. The line is parsed back so the console gets an object, not a string.
+const jsonLinesFormatter = getJsonLinesFormatter({ categorySeparator: ".", properties: "flatten" });
+
+export function redactRecord(record: LogRecord): LogRecord {
+  return {
+    ...record,
+    message: record.message.map((part) => redactValue(part)),
+    rawMessage:
+      typeof record.rawMessage === "string" ? redactText(record.rawMessage) : record.rawMessage,
+    properties: redactValue(record.properties) as Record<string, unknown>,
+  };
+}
+
+export function jsonConsoleFormatter(record: LogRecord): readonly unknown[] {
+  return [JSON.parse(jsonLinesFormatter(redactRecord(record)))];
 }
 
 export async function configureLogger(): Promise<void> {
-  const consoleSink = redactByField(
-    getConsoleSink({
-      formatter: redactByPattern(consoleFormatterWithProps, [EMAIL_ADDRESS_PATTERN]),
-    }),
-    [...Constants.APP_REDACT_FIELDS, ...DEFAULT_REDACT_FIELDS],
-  );
+  const consoleSink = redactByField(getConsoleSink({ formatter: jsonConsoleFormatter }), [
+    ...Constants.APP_REDACT_FIELDS,
+    ...DEFAULT_REDACT_FIELDS,
+  ]);
 
   await configure({
     sinks: { console: consoleSink },

@@ -38,13 +38,33 @@ export type UpdateKnowledgeDocumentDALRequest = Pick<KnowledgeDocument, "id" | "
     Pick<KnowledgeDocument, "title" | "contentHash" | "indexStatus" | "lastSyncedAt" | "fileId">
   >;
 
+// DEV_NOTE: The documents of one source, by title when search is set (case-insensitive, the text taken literally)
+export type SearchKnowledgeDocumentsDALRequest = Pick<
+  KnowledgeDocument,
+  "companyId" | "knowledgeSourceId"
+> & { search: string | null };
+
+export type GetKnowledgeDocumentsDALRequest = SearchKnowledgeDocumentsDALRequest &
+  PageDALRequest & { sortColumn: KnowledgeDocumentSortColumn };
+
+// DEV_NOTE: The source-scoped reads and deletes of the sync
 export type GetKnowledgeDocumentsCountDALRequest = Pick<
   KnowledgeDocument,
   "companyId" | "knowledgeSourceId"
 >;
 
-export type GetKnowledgeDocumentsDALRequest = GetKnowledgeDocumentsCountDALRequest &
-  PageDALRequest & { sortColumn: KnowledgeDocumentSortColumn };
+// DEV_NOTE: How many documents each of these sources holds (the Knowledge page's Sources table, M4-7); a source with
+// none is left out of the answer
+export type GetKnowledgeDocumentCountsBySourceDALRequest = Pick<KnowledgeDocument, "companyId"> & {
+  knowledgeSourceIds: string[];
+};
+
+// DEV_NOTE: One document by its public id anywhere in the company (a gap cluster's answer, M4-7). isForKeyShare locks
+// it (FOR KEY SHARE) until the transaction ends, so it can't be deleted under a group being answered by it.
+export type FindCompanyKnowledgeDocumentDALRequest = Pick<
+  KnowledgeDocument,
+  "companyId" | "publicId"
+> & { isForKeyShare: boolean };
 
 // DEV_NOTE: The documents a sync works through (upload sources), oldest first. indexStatuses null = any.
 export type GetKnowledgeDocumentsBySourceDALRequest = GetKnowledgeDocumentsCountDALRequest & {

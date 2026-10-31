@@ -29,6 +29,8 @@ export enum ModelTaskTypeEnum {
   RouteIntent = "route.intent",
   QaAnswer = "qa.answer",
   EvalJudge = "eval.judge",
+  // DEV_NOTE: Create test on the Quality page (M4-6): a quality issue's chat rewritten without personal details
+  QualityTestRewrite = "quality.test_rewrite",
   KnowledgeEmbed = "knowledge.embed",
   SearchEmbed = "search.embed",
   SearchRerank = "search.rerank",

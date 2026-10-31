@@ -82,3 +82,16 @@ describe("Utility.generateUlid", () => {
     expect(() => Utility.generateUlid(2 ** 48)).toThrow(RangeError);
   });
 });
+
+describe("Utility fixed-point units", () => {
+  it("reads and writes decimals in fixed-point units", () => {
+    expect(Utility.toUnits("12.345678", 6)).toBe(12345678n);
+    expect(Utility.toUnits("0.5", 6)).toBe(500000n);
+    expect(Utility.toUnits("7", 6)).toBe(7000000n);
+    expect(Utility.toUnits(42, 0)).toBe(42n);
+    expect(Utility.fromUnits(12345678n, 6)).toBe("12.345678");
+    expect(Utility.fromUnits(1n, 6)).toBe("0.000001");
+    expect(Utility.fromUnits(0n, 6)).toBe("0.000000");
+    expect(Utility.fromUnits(9007199254740993n, 0)).toBe("9007199254740993");
+  });
+});
