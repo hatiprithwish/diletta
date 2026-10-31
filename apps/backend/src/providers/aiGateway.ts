@@ -140,10 +140,11 @@ export default class AiGatewayProvider {
         return response;
       }
 
+      // DEV_NOTE: Workers refuses redirect: "error". "manual" hands a 3xx back unfollowed, and it fails on !res.ok
       const url = `${CLOUDFLARE_API_BASE_URL}/accounts/${env.AI_GATEWAY_ACCOUNT_ID}/ai-gateway/gateways/${env.AI_GATEWAY_NAME}/logs/${encodeURIComponent(gatewayLogId)}`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(Constants.AI_GATEWAY_LOG_FETCH_TIMEOUT_MS),
       });
 
@@ -293,6 +294,8 @@ export default class AiGatewayProvider {
         return Schemas.ModelKeyCheckOutcomeEnum.Unreachable;
       }
 
+      // DEV_NOTE: Workers refuses redirect: "error". "manual" hands a 3xx back unfollowed, so the key never follows it;
+      // it ends as Unreachable below
       const res = await fetch(
         `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}/models`,
         {
@@ -302,7 +305,7 @@ export default class AiGatewayProvider {
             // DEV_NOTE: Always ask the provider: a cached answer would check nothing
             "cf-aig-skip-cache": "true",
           },
-          redirect: "error",
+          redirect: "manual",
           signal: AbortSignal.timeout(Constants.MODEL_KEY_CHECK_TIMEOUT_MS),
         },
       );

@@ -18,8 +18,13 @@ export const mockedRequests: ReturnType<typeof recordRequest>[] = [];
 export const gatewayRequests = () =>
   mockedRequests.filter((mocked) => mocked.url.startsWith("https://gateway.ai.cloudflare.com/"));
 
-// DEV_NOTE: Reads the fetch arguments directly rather than through new Request(input, init): workerd's Request
-// rejects some init values real fetch accepts (redirect: "error")
+// DEV_NOTE: Workers' fetch throws on redirect: "error", and a stub that ignores it hides that from every suite
+export function refuseRedirectError(init: RequestInit | undefined) {
+  if (init?.redirect === "error") {
+    throw new TypeError('Invalid redirect value, must be one of "follow" or "manual"');
+  }
+}
+
 export function mockCloudflare(
   respond: (request: ReturnType<typeof recordRequest>) => Response | Promise<Response>,
 ) {
@@ -32,6 +37,7 @@ export function mockCloudflare(
     if (!isMocked) {
       return await realFetch(input, init);
     }
+    refuseRedirectError(init);
     const recorded = recordRequest(url, init);
     mockedRequests.push(recorded);
     return await respond(recorded);
