@@ -9,15 +9,19 @@ import type {
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // A system issue (source = System) opens with no feedbackId, createdBy or evalCaseId: the CHECKs on the table
-// reject anything else for that source. The DAL generates publicId and checks the conversation exists.
+// reject anything else for that source. The DAL generates publicId. On a conversation (a model key failure, M2-3) it
+// checks the conversation exists and takes its chatbot; chatbot-wide (a health drop, M5-5) it checks the chatbot.
 export type CreateSystemQualityIssueDALRequest = Pick<
   QualityIssue,
-  "companyId" | "conversationId" | "issueType" | "note"
->;
+  "companyId" | "issueType" | "note"
+> &
+  ({ conversationId: string; chatbotId?: undefined } | { conversationId: null; chatbotId: string });
 
-// Params to find the company's open system issue of one type, and to serialise the writers that open one
+// Params to find the company's open system issue of one type, and to serialise the writers that open one. chatbotId
+// set = that chatbot's only (one open Health drop issue per chatbot, M5-5); absent = the company's (Model error).
 export type FindOpenSystemQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
   issueType: NonNullable<QualityIssue["issueType"]>;
+  chatbotId?: string;
 };
 
 // Params to replace a quality issue's note, found by its public ID within one company
@@ -28,15 +32,13 @@ export type UpdateQualityIssueNoteDALRequest = Pick<QualityIssue, "companyId" | 
 // DEV_NOTE: A user issue (source = User, M2-8) opens from a thumbs-down, one per feedback row (UNQ_quality_issues_
 // feedback_id): status Open, issueType null until triage, no note. The DAL generates publicId and checks the
 // conversation exists in the company and the feedback row rates a message of that very conversation.
-export type CreateUserQualityIssueDALRequest = Pick<
-  QualityIssue,
-  "companyId" | "conversationId"
-> & {
+export type CreateUserQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
+  conversationId: string;
   feedbackId: string;
 };
 
-// DEV_NOTE: Open issues now (Overview's needs attention, M4-3). chatbotId set = only that chatbot's (through the
-// conversation); null = the whole company.
+// DEV_NOTE: Open issues now (Overview's needs attention, M4-3). chatbotId set = only that chatbot's; null = the whole
+// company.
 export type CountOpenQualityIssuesDALRequest = Pick<QualityIssue, "companyId"> & {
   chatbotId: string | null;
 };
@@ -44,15 +46,13 @@ export type CountOpenQualityIssuesDALRequest = Pick<QualityIssue, "companyId"> &
 // DEV_NOTE: An admin's flag on a conversation (M4-4, source = Admin): status Open, issueType null until triage, no
 // note. At most one open admin issue per conversation: the DAL locks (company, conversation) and returns the open one
 // instead of opening another. It checks the conversation and the admin exist in the company.
-export type CreateAdminQualityIssueDALRequest = Pick<
-  QualityIssue,
-  "companyId" | "conversationId"
-> & {
+export type CreateAdminQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
+  conversationId: string;
   createdBy: string;
 };
 
 // DEV_NOTE: The Quality list's filters (M4-6), resolved by the Repo: chatbotId is the internal id of the chatbot public
-// id the client sent (through the conversation), null = the whole company
+// id the client sent (the issue's chatbot_id), null = the whole company
 export type QualityIssuesFilterDALRequest = Pick<QualityIssue, "companyId"> & {
   tab: QualityIssueListTabEnum;
   chatbotId: string | null;

@@ -15,4 +15,6 @@ export enum CronJobEnum {
   ActivityLogPartitions = "ActivityLogPartitions",
   // Daily, at Constants.NIGHTLY_SUITE_CHECK_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)
   NightlySuiteCheck = "NightlySuiteCheck",
+  // Daily, at Constants.CHATBOT_HEALTH_CHECK_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)
+  ChatbotHealthCheck = "ChatbotHealthCheck",
 }

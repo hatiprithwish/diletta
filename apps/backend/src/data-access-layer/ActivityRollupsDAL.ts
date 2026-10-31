@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { activityRollups } from "@/db/tables";
@@ -147,6 +147,56 @@ export default class ActivityRollupsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetActivityRollups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every chatbot's rows of the company over [fromDay, toDay] (chatbot_id set; the company-wide rows would
+  // count each group twice), for the daily health check (M5-5)
+  async getChatbotHealthRollups(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetChatbotHealthRollupsDALRequest,
+  ) {
+    const response: Schemas.ChatbotHealthRollupsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityRollups.companyId, params.companyId),
+        isNotNull(activityRollups.chatbotId),
+        gte(activityRollups.day, params.fromDay),
+        lte(activityRollups.day, params.toDay),
+      ];
+      const rows = await tx
+        .select({
+          chatbotId: activityRollups.chatbotId,
+          day: activityRollups.day,
+          metric: activityRollups.metric,
+          value: activityRollups.value,
+        })
+        .from(activityRollups)
+        .where(and(...conditions))
+        .orderBy(
+          asc(activityRollups.chatbotId),
+          asc(activityRollups.day),
+          asc(activityRollups.metric),
+        );
+
+      response.isSuccess = true;
+      response.message = "Chatbot health rollups fetched successfully";
+      response.rows = rows.flatMap((row) =>
+        row.chatbotId === null ? [] : [{ ...row, chatbotId: row.chatbotId }],
+      );
+    } catch (error) {
+      const message = "Unknown error in fetching chatbot health rollups";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetChatbotHealthRollups,
         message,
         error,
         metadata: params,

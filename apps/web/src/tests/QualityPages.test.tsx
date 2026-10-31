@@ -36,6 +36,7 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   issueTypeLabel: null,
   note: null,
   ratedReply: "Every 6 months, per the Fire safety policy.",
+  chatbotName: "eRegister Assistant",
   conversation: { publicId: "conv_1", title: "Bot gave old fire drill frequency" },
   createdAt: "2026-10-20T13:20:00.000Z",
   updatedAt: "2026-10-20T13:20:00.000Z",
@@ -53,9 +54,22 @@ const ROW_SYSTEM: Schemas.QualityIssueListItem = {
   conversation: { publicId: "conv_2", title: null },
 };
 
+// DEV_NOTE: A daily health check's issue (M5-5): about the whole chatbot, no conversation
+const ROW_HEALTH: Schemas.QualityIssueListItem = {
+  ...ROW_USER,
+  publicId: "qi_3",
+  source: Schemas.QualityIssueSourceIntEnum.System,
+  sourceLabel: Schemas.QualityIssueSourceLabelEnum.System,
+  issueType: Schemas.QualityIssueTypeIntEnum.HealthDrop,
+  issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.HealthDrop,
+  note: "Oct 30: Replies rated down 70% (usually 10%).",
+  ratedReply: null,
+  conversation: null,
+};
+
 const LIST: Schemas.GetQualityIssuesApiResponse = {
   isSuccess: true,
-  qualityIssues: [ROW_USER, ROW_SYSTEM],
+  qualityIssues: [ROW_USER, ROW_SYSTEM, ROW_HEALTH],
   totalRecords: 7,
   tabCounts: { open: 7, converted: 12, fixed: 9, dismissed: 15 },
 };
@@ -484,6 +498,35 @@ describe("Quality issue", () => {
     mockApi(withExcerpt(false));
     renderPage("/quality/qi_1");
     expect(await within(await detailCard()).findByText("No messages yet.")).toBeInTheDocument();
+  });
+
+  it("shows a health drop on the whole chatbot with its note, and no test or conversation to open", async () => {
+    const health: Schemas.QualityIssueDetail = {
+      ...ROW_HEALTH,
+      rating: null,
+      excerpt: [],
+      isContentPurged: false,
+      conversation: null,
+      changeRequestPublicId: null,
+      evalCase: null,
+    };
+    mockApi((url, init) =>
+      url.includes("/dashboard/quality-issues/qi_3")
+        ? { status: 200, body: { isSuccess: true, qualityIssue: health } }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_3");
+    const card = await detailCard();
+    expect(
+      await within(card).findByRole("heading", {
+        name: "Daily health check: eRegister Assistant",
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).getByText(/looks at the whole chatbot's day/)).toBeInTheDocument();
+    expect(within(card).getByDisplayValue(ROW_HEALTH.note ?? "")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("link", { name: "Open conversation" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Mark fixed" })).toBeInTheDocument();
   });
 
   it("keeps a saved note when the answer carries no issue", async () => {

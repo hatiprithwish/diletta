@@ -29,6 +29,7 @@ import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
@@ -55,6 +56,7 @@ const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.PlatformEvalCaseSync]: runPlatformEvalCaseSync,
   [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
   [Schemas.CronJobEnum.NightlySuiteCheck]: runNightlySuiteCheck,
+  [Schemas.CronJobEnum.ChatbotHealthCheck]: runChatbotHealthCheck,
 };
 
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests

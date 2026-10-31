@@ -115,6 +115,8 @@ const UPDATE_FAILURE_TEXT: Record<Schemas.QualityIssueUpdateFailureEnum, string>
     "This issue was already closed. Nothing changed.",
   [Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound]:
     "This conversation's chatbot was removed, so the test can't be saved. Nothing changed.",
+  [Schemas.QualityIssueUpdateFailureEnum.NoConversation]:
+    "This issue is about the whole chatbot, not one conversation, so it can't become a test. Nothing changed.",
 };
 
 // DEV_NOTE: A 409: someone else closed or converted the issue first (or, on save, its chatbot is gone). The detail and

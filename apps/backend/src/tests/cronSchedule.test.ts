@@ -7,6 +7,7 @@ import CronScheduleProvider from "@/providers/cronSchedule";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
@@ -50,6 +51,9 @@ vi.mock("@/crons/PlatformEvalCaseSyncCron", () => ({
 vi.mock("@/crons/NightlySuiteCheckCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/crons/ChatbotHealthCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 
 const {
   OutboxSweep,
@@ -61,6 +65,7 @@ const {
   PlatformEvalCaseSync,
   ActivityLogPartitions,
   NightlySuiteCheck,
+  ChatbotHealthCheck,
 } = Schemas.CronJobEnum;
 const at = (iso: string) => Date.parse(iso);
 
@@ -101,6 +106,25 @@ describe("CronScheduleProvider.getDueJobs", () => {
     );
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T15:00:00Z"))).not.toContain(
       ActivityLogPartitions,
+    );
+  });
+
+  it("adds the chatbot health check at 04:00 UTC only", () => {
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T04:00:00Z"))).toEqual([
+      OutboxSweep,
+      ModelCallUsageBackfill,
+      ChangeRequestPurge,
+      KnowledgeResync,
+      ActivityRollups,
+      EvalTranscriptSweep,
+      PlatformEvalCaseSync,
+      ChatbotHealthCheck,
+    ]);
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T04:01:00Z"))).not.toContain(
+      ChatbotHealthCheck,
+    );
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:00:00Z"))).not.toContain(
+      ChatbotHealthCheck,
     );
   });
 
@@ -160,6 +184,7 @@ describe("scheduled()", () => {
     expect(runPlatformEvalCaseSync).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
     expect(runNightlySuiteCheck).not.toHaveBeenCalled();
+    expect(runChatbotHealthCheck).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     await run(Constants.CRON_TRIGGER, "2026-10-11T03:01:00Z");

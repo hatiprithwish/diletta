@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import {
@@ -19,10 +19,11 @@ import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). System issues come from the model router's
-// key-failure path (M2-3), user issues from a thumbs-down (M2-8), admin issues from a flag on the Conversations
-// page (M4-4). The Quality page (M4-6) lists, reads, triages and closes them.
+// key-failure path (M2-3) and the daily health check (M5-5, chatbot-wide: no conversation), user issues from a
+// thumbs-down (M2-8), admin issues from a flag on the Conversations page (M4-4). The Quality page (M4-6) lists, reads,
+// triages and closes them. Every insert sets chatbot_id (the conversation's chatbot, or the chatbot-wide issue's).
 export default class QualityIssuesDAL {
-  // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type), held until the Repo's transaction ends.
+  // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type[, chatbot]), held until the Repo's transaction ends.
   // Two calls that hit the same failure at once take turns, so the second sees the first one's open issue instead
   // of opening a duplicate (there is no unique index to catch it: dismissed and fixed issues of the same type stay).
   async lockOpenSystemQualityIssue(
@@ -32,7 +33,10 @@ export default class QualityIssuesDAL {
     const response: Schemas.ApiResponse = { isSuccess: false };
 
     try {
-      const lockKey = `quality_issue:system:${params.companyId}:${params.issueType}`;
+      const lockKey =
+        params.chatbotId === undefined
+          ? `quality_issue:system:${params.companyId}:${params.issueType}`
+          : `quality_issue:system:${params.companyId}:${params.issueType}:${params.chatbotId}`;
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
 
       response.isSuccess = true;
@@ -52,7 +56,8 @@ export default class QualityIssuesDAL {
     return response;
   }
 
-  // DEV_NOTE: The oldest open system issue of the type, if any. isSuccess with no qualityIssue = none open.
+  // DEV_NOTE: The oldest open system issue of the type (of the chatbot when chatbotId is set), if any. isSuccess with no
+  // qualityIssue = none open.
   async getOpenSystemQualityIssue(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindOpenSystemQualityIssueDALRequest,
@@ -66,6 +71,8 @@ export default class QualityIssuesDAL {
         eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
         eq(qualityIssues.issueType, params.issueType),
       ];
+      if (params.chatbotId !== undefined)
+        conditions.push(eq(qualityIssues.chatbotId, params.chatbotId));
       const [qualityIssue] = await tx
         .select()
         .from(qualityIssues)
@@ -121,26 +128,55 @@ export default class QualityIssuesDAL {
         return response;
       }
 
-      const conversationConditions = [
-        eq(conversations.id, params.conversationId),
-        eq(conversations.companyId, params.companyId),
-      ];
-      const [conversation] = await tx
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(and(...conversationConditions))
-        .limit(1);
+      // DEV_NOTE: On a conversation, the issue is its chatbot's; chatbot-wide (M5-5), the chatbot must be the company's
+      let chatbotId: string;
+      if (params.conversationId !== null) {
+        const conversationConditions = [
+          eq(conversations.id, params.conversationId),
+          eq(conversations.companyId, params.companyId),
+        ];
+        const [conversation] = await tx
+          .select({ id: conversations.id, chatbotId: conversations.chatbotId })
+          .from(conversations)
+          .where(and(...conversationConditions))
+          .limit(1);
 
-      if (!conversation) {
-        const message = "Conversation not found";
-        AppLogger.error({
-          category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.CreateSystemQualityIssue,
-          message,
-          metadata,
-        });
-        response.message = message;
-        return response;
+        if (!conversation) {
+          const message = "Conversation not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateSystemQualityIssue,
+            message,
+            metadata,
+          });
+          response.message = message;
+          return response;
+        }
+        chatbotId = conversation.chatbotId;
+      } else {
+        const chatbotConditions = [
+          eq(chatbots.id, params.chatbotId),
+          eq(chatbots.companyId, params.companyId),
+        ];
+        const [chatbot] = await tx
+          .select({ id: chatbots.id })
+          .from(chatbots)
+          .where(and(...chatbotConditions))
+          .limit(1);
+
+        if (!chatbot) {
+          const message = "Chatbot not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateSystemQualityIssue,
+            message,
+            metadata,
+          });
+          response.message = message;
+          response.isNotFound = true;
+          return response;
+        }
+        chatbotId = chatbot.id;
       }
 
       const [qualityIssueResponse] = await tx
@@ -148,6 +184,7 @@ export default class QualityIssuesDAL {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
+          chatbotId,
           conversationId: params.conversationId,
           source: Schemas.QualityIssueSourceIntEnum.System,
           issueType: params.issueType,
@@ -193,7 +230,7 @@ export default class QualityIssuesDAL {
         eq(conversations.companyId, params.companyId),
       ];
       const [reference] = await tx
-        .select({ feedbackId: feedback.id })
+        .select({ feedbackId: feedback.id, chatbotId: conversations.chatbotId })
         .from(feedback)
         .innerJoin(messages, eq(messages.id, feedback.messageId))
         .innerJoin(conversations, eq(conversations.id, messages.conversationId))
@@ -217,6 +254,7 @@ export default class QualityIssuesDAL {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
+          chatbotId: reference.chatbotId,
           conversationId: params.conversationId,
           feedbackId: params.feedbackId,
           source: Schemas.QualityIssueSourceIntEnum.User,
@@ -324,7 +362,7 @@ export default class QualityIssuesDAL {
     return response;
   }
 
-  // DEV_NOTE: Open issues by source, joined to the conversation for the chatbot. userCount = the thumbs-down ones.
+  // DEV_NOTE: Open issues by source, by the issue's own chatbot. userCount = the thumbs-down ones.
   async getOpenQualityIssueCounts(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.CountOpenQualityIssuesDALRequest,
@@ -335,13 +373,13 @@ export default class QualityIssuesDAL {
       const conditions = [
         eq(qualityIssues.companyId, params.companyId),
         eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
-        eq(conversations.companyId, params.companyId),
+        // DEV_NOTE: An issue older than M5-5 whose conversation row is gone has no chatbot and never counted
+        isNotNull(qualityIssues.chatbotId),
       ];
-      if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+      if (params.chatbotId !== null) conditions.push(eq(qualityIssues.chatbotId, params.chatbotId));
       const groups = await tx
         .select({ source: qualityIssues.source, count: count() })
         .from(qualityIssues)
-        .innerJoin(conversations, eq(conversations.id, qualityIssues.conversationId))
         .where(and(...conditions))
         .groupBy(qualityIssues.source);
 
@@ -385,7 +423,7 @@ export default class QualityIssuesDAL {
         eq(conversations.companyId, params.companyId),
       ];
       const [conversation] = await tx
-        .select({ id: conversations.id })
+        .select({ id: conversations.id, chatbotId: conversations.chatbotId })
         .from(conversations)
         .where(and(...conversationConditions))
         .limit(1);
@@ -447,6 +485,7 @@ export default class QualityIssuesDAL {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: params.companyId,
+          chatbotId: conversation.chatbotId,
           conversationId: params.conversationId,
           source: Schemas.QualityIssueSourceIntEnum.Admin,
           createdBy: params.createdBy,
@@ -472,17 +511,18 @@ export default class QualityIssuesDAL {
     return response;
   }
 
-  // DEV_NOTE: The Quality page's issues (M4-6): with the conversation each is about (inner join: every issue has one),
-  // its chatbot and user, and left joins on the change request, the test it became and the rated reply with its
-  // rating (no DB foreign keys, so a row whose chatbot, user, change or test is gone still reads)
+  // DEV_NOTE: The Quality page's issues (M4-6): with the conversation each is about (none for a chatbot-wide system
+  // issue, M5-5), the issue's chatbot, the conversation's user, the change request, the test it became and the rated
+  // reply with its rating, all left joins (no DB foreign keys, so a row whose chatbot, user, change or test is gone
+  // still reads)
   private dashboardQuery(tx: NodePgTransaction<EmptyRelations>) {
     const conversationJoinConditions = [
       eq(conversations.id, qualityIssues.conversationId),
       eq(conversations.companyId, qualityIssues.companyId),
     ];
     const chatbotJoinConditions = [
-      eq(chatbots.id, conversations.chatbotId),
-      eq(chatbots.companyId, conversations.companyId),
+      eq(chatbots.id, qualityIssues.chatbotId),
+      eq(chatbots.companyId, qualityIssues.companyId),
     ];
     const userJoinConditions = [
       eq(chatbotUsers.id, conversations.chatbotUserId),
@@ -510,7 +550,7 @@ export default class QualityIssuesDAL {
         publicId: qualityIssues.publicId,
         conversationId: qualityIssues.conversationId,
         conversationRootLogId: conversations.rootLogId,
-        chatbotId: conversations.chatbotId,
+        chatbotId: qualityIssues.chatbotId,
         source: qualityIssues.source,
         status: qualityIssues.status,
         issueType: qualityIssues.issueType,
@@ -536,7 +576,7 @@ export default class QualityIssuesDAL {
         rating: feedback.rating,
       })
       .from(qualityIssues)
-      .innerJoin(conversations, and(...conversationJoinConditions))
+      .leftJoin(conversations, and(...conversationJoinConditions))
       .leftJoin(chatbots, and(...chatbotJoinConditions))
       .leftJoin(chatbotUsers, and(...userJoinConditions))
       .leftJoin(changeRequests, and(...changeRequestJoinConditions))
@@ -545,13 +585,16 @@ export default class QualityIssuesDAL {
       .leftJoin(messages, and(...messageJoinConditions));
   }
 
-  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts. The chatbot is the conversation's.
+  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts, on the issue's own chatbot. An issue
+  // must have its conversation row unless it is chatbot-wide (M5-5): one whose conversation is gone stays out, as it did
+  // under the inner join before.
   private dashboardConditions(params: Schemas.CountDashboardQualityIssuesDALRequest): SQL[] {
     const conditions: SQL[] = [
       eq(qualityIssues.companyId, params.companyId),
-      eq(conversations.companyId, params.companyId),
+      isNotNull(qualityIssues.chatbotId),
+      or(isNull(qualityIssues.conversationId), isNotNull(conversations.id)) as SQL,
     ];
-    if (params.chatbotId !== null) conditions.push(eq(conversations.chatbotId, params.chatbotId));
+    if (params.chatbotId !== null) conditions.push(eq(qualityIssues.chatbotId, params.chatbotId));
     return conditions;
   }
 
@@ -624,7 +667,7 @@ export default class QualityIssuesDAL {
           dismissed: countOf(Dismissed),
         })
         .from(qualityIssues)
-        .innerJoin(conversations, and(...conversationJoinConditions))
+        .leftJoin(conversations, and(...conversationJoinConditions))
         .where(and(...this.dashboardConditions(params)));
 
       response.isSuccess = true;

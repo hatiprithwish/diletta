@@ -25,23 +25,24 @@ export interface OpenQualityIssueCountsDALResponse extends ApiResponse {
 // DEV_NOTE: isCreated false = the conversation already had an open admin issue
 export type AdminQualityIssueDALResponse = QualityIssueWriteDALResponse;
 
-// DEV_NOTE: One issue as the Quality page reads it (M4-6), with internal ids (the Repo drops them). The conversation is
-// an inner join; the issue's change request, test and rated reply are left joins (no DB foreign keys). ratedReplyText
+// DEV_NOTE: One issue as the Quality page reads it (M4-6), with internal ids (the Repo drops them). The conversation,
+// change request, test and rated reply are left joins (no DB foreign keys; a chatbot-wide system issue has no
+// conversation, M5-5, so its conversation* fields are null). ratedReplyText
 // is the start of the rated reply's text (QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1 chars, so a longer one can be marked
 // cut; null once purged). rating = the rating as it stands now (the user may have switched it to Up).
 export interface DashboardQualityIssueRow {
   id: string;
   publicId: string;
-  conversationId: string;
+  conversationId: string | null;
   conversationRootLogId: string | null;
-  chatbotId: string;
+  chatbotId: string | null;
   source: QualityIssue["source"];
   status: QualityIssue["status"];
   issueType: QualityIssue["issueType"];
   note: string | null;
   createdAt: Date;
   updatedAt: Date;
-  conversationPublicId: string;
+  conversationPublicId: string | null;
   conversationTitle: string | null;
   conversationContentPurgedAt: Date | null;
   chatbotName: string | null;

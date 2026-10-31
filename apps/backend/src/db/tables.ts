@@ -542,13 +542,17 @@ export const evalResults = table(
 );
 
 // DEV_NOTE: Triage inbox. source ties to feedback_id (user) or created_by (admin); converted ties to eval_case_id.
+// chatbot_id = the conversation's chatbot, or the chatbot a chatbot-wide system issue is about (no conversation: a
+// health drop, M5-5); only a system issue may have no conversation. Every write sets chatbot_id; null only on an issue
+// older than M5-5 whose conversation row is gone (the backfill had no chatbot to give it).
 export const qualityIssues = table(
   "quality_issues",
   {
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
-    conversationId: t.bigint("conversation_id", { mode: "string" }).notNull(), // → conversations.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }), // → chatbots.id
+    conversationId: t.bigint("conversation_id", { mode: "string" }), // → conversations.id, null = chatbot-wide
     changeRequestId: t.bigint("change_request_id", { mode: "string" }), // → change_requests.id
     feedbackId: t.bigint("feedback_id", { mode: "string" }), // → feedback.id, source = user only
     source: t.smallint().$type<Schemas.QualityIssueSourceIntEnum>().notNull(),
@@ -578,10 +582,15 @@ export const qualityIssues = table(
       sql`(${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.Admin)}) = (${table.createdBy} IS NOT NULL)`,
     ),
     t.check(
+      "CHK_quality_issues_system_conversation_id",
+      sql`${table.conversationId} IS NOT NULL OR (${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.System)} AND ${table.chatbotId} IS NOT NULL)`,
+    ),
+    t.check(
       "CHK_quality_issues_converted_eval_case_id",
       sql`(${table.status} = ${lit(Schemas.QualityIssueStatusIntEnum.Converted)}) = (${table.evalCaseId} IS NOT NULL)`,
     ),
     t.index("IDX_quality_issues_company_id").on(table.companyId),
+    t.index("IDX_quality_issues_chatbot_id").on(table.chatbotId),
     t.index("IDX_quality_issues_conversation_id").on(table.conversationId),
     t.index("IDX_quality_issues_change_request_id").on(table.changeRequestId),
     t.index("IDX_quality_issues_created_by").on(table.createdBy),

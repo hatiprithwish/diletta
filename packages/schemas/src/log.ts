@@ -20,6 +20,7 @@ export enum LogCategory {
   Feedback = "Feedback",
   Action = "Action",
   Rollup = "Rollup",
+  Health = "Health",
   Insights = "Insights",
   // DEV_NOTE: The eval harness's /eval/* API (M5-2)
   Eval = "Eval",
@@ -464,4 +465,8 @@ export enum LogAction {
   GetLatestNightlyEvalRun = "GetLatestNightlyEvalRun",
   CheckNightlySuite = "CheckNightlySuite",
   ReportNightlyEvalRun = "ReportNightlyEvalRun",
+  // Production health per chatbot (M5-5)
+  GetChatbotHealthRollups = "GetChatbotHealthRollups",
+  CheckChatbotHealth = "CheckChatbotHealth",
+  RecordChatbotHealthDrop = "RecordChatbotHealthDrop",
 }

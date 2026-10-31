@@ -60,7 +60,7 @@ export default class QualityIssuesRepo {
   }
 
   // DEV_NOTE: Status Enum Pattern — source, status and type each as int + label. A purged conversation's title and
-  // rated reply stay out.
+  // rated reply stay out. A chatbot-wide system issue (a health drop, M5-5) has no conversation.
   private toListItem(row: Schemas.DashboardQualityIssueRow): Schemas.QualityIssueListItem {
     const isPurged = row.conversationContentPurgedAt !== null;
     return {
@@ -74,10 +74,11 @@ export default class QualityIssuesRepo {
         row.issueType === null ? null : Schemas.QUALITY_ISSUE_TYPE_LABEL_MAP[row.issueType],
       note: row.note,
       ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedReplyText),
-      conversation: {
-        publicId: row.conversationPublicId,
-        title: isPurged ? null : row.conversationTitle,
-      },
+      chatbotName: row.chatbotName,
+      conversation:
+        row.conversationPublicId === null
+          ? null
+          : { publicId: row.conversationPublicId, title: isPurged ? null : row.conversationTitle },
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -93,11 +94,9 @@ export default class QualityIssuesRepo {
       rating: row.rating,
       excerpt,
       isContentPurged: row.conversationContentPurgedAt !== null,
-      conversation: {
-        ...item.conversation,
-        chatbotName: row.chatbotName,
-        userName: row.userName,
-      },
+      conversation: item.conversation
+        ? { ...item.conversation, chatbotName: row.chatbotName, userName: row.userName }
+        : null,
       changeRequestPublicId: row.changeRequestPublicId,
       evalCase:
         row.evalCasePublicId !== null && row.evalCaseName !== null
@@ -107,8 +106,10 @@ export default class QualityIssuesRepo {
   }
 
   // DEV_NOTE: A prompt-injection event on the Security page (M4-9): the admin's note says where it was found, else the
-  // issue's source; a purged conversation's title stays out
-  private toInjectionEvent(row: Schemas.DashboardQualityIssueRow): Schemas.InjectionEvent {
+  // issue's source; a purged conversation's title stays out. The DAL reads only issues with their conversation.
+  private toInjectionEvent(
+    row: Schemas.DashboardQualityIssueRow & { conversationPublicId: string },
+  ): Schemas.InjectionEvent {
     return {
       publicId: row.publicId,
       conversationPublicId: row.conversationPublicId,
@@ -142,7 +143,11 @@ export default class QualityIssuesRepo {
         );
         return {
           ...rest,
-          injectionEvents: qualityIssues?.map((row) => this.toInjectionEvent(row)),
+          injectionEvents: qualityIssues?.flatMap((row) =>
+            row.conversationPublicId === null
+              ? []
+              : [this.toInjectionEvent({ ...row, conversationPublicId: row.conversationPublicId })],
+          ),
         };
       },
     );
@@ -329,6 +334,13 @@ export default class QualityIssuesRepo {
           "Only an open issue can become a test",
         );
       }
+      // DEV_NOTE: A chatbot-wide issue (a health drop, M5-5) has no chat to turn into a test
+      if (row.conversationId === null || row.chatbotId === null) {
+        return refuse(
+          Schemas.QualityTestDraftFailureEnum.NoConversation,
+          "The issue isn't about one conversation",
+        );
+      }
       if (row.conversationContentPurgedAt !== null) {
         return refuse(
           Schemas.QualityTestDraftFailureEnum.NoConversation,
@@ -449,6 +461,22 @@ export default class QualityIssuesRepo {
       });
       if (!stored.isSuccess) throw new TenantRollbackError(stored.message);
 
+      // DEV_NOTE: A chatbot-wide issue (M5-5) has no conversation to become a test; an issue older than M5-5 whose
+      // conversation row is gone has no chatbot to own one
+      if (row.conversationId === null) {
+        return {
+          isSuccess: false,
+          message: "The issue isn't about one conversation",
+          failure: Schemas.QualityIssueUpdateFailureEnum.NoConversation,
+        };
+      }
+      if (row.chatbotId === null) {
+        return {
+          isSuccess: false,
+          message: "The conversation's chatbot no longer exists",
+          failure: Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound,
+        };
+      }
       const created = await this.evalCasesDal.createEvalCase(tx, {
         companyId,
         chatbotId: row.chatbotId,
@@ -669,13 +697,14 @@ export default class QualityIssuesRepo {
   }
 
   // DEV_NOTE: The detail with its excerpt (QualityIssuesProvider), read in the caller's transaction from the newest
-  // messages up to the rated reply (MESSAGES_READ_LIMIT, text only). A purged chat has none (no messages are read).
+  // messages up to the rated reply (MESSAGES_READ_LIMIT, text only). A purged chat, or a chatbot-wide issue with no
+  // chat (M5-5), has none (no messages are read).
   private async withExcerpt(
     tx: Tx,
     companyId: string,
     row: Schemas.DashboardQualityIssueRow,
   ): Promise<Schemas.GetQualityIssueApiResponse> {
-    if (row.conversationContentPurgedAt !== null) {
+    if (row.conversationId === null || row.conversationContentPurgedAt !== null) {
       return {
         isSuccess: true,
         message: "Quality issue fetched successfully",

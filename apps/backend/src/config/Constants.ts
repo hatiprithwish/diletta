@@ -40,10 +40,13 @@ export default class Constants {
   //   every hour at CRON_HOURLY_MINUTE: also the platform suite's case sync (M5-5)
   //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
   //   daily at NIGHTLY_SUITE_CHECK_UTC_HOUR:CRON_HOURLY_MINUTE: the nightly platform suite's missed-run check (M5-5)
+  //   daily at CHATBOT_HEALTH_CHECK_UTC_HOUR:CRON_HOURLY_MINUTE: production health per chatbot (M5-5), after the hourly
+  //     rollups have rebuilt yesterday a few times
   static readonly CRON_TRIGGER = "* * * * *";
   static readonly CRON_HOURLY_MINUTE = 0;
   static readonly ACTIVITY_LOG_PARTITIONS_UTC_HOUR = 3;
   static readonly NIGHTLY_SUITE_CHECK_UTC_HOUR = 6;
+  static readonly CHATBOT_HEALTH_CHECK_UTC_HOUR = 4;
 
   // DEV_NOTE: The nightly platform suite (M5-5, .github/workflows/nightly-evals.yml, 02:00 UTC) alerts when the test
   // company (NIGHTLY_SUITE_COMPANY_ID) has no Nightly run that reached Done within this long of the check: a day plus
