@@ -7,3 +7,10 @@ export type GetChatbotHealthRollupsDALRequest = {
   fromDay: ActivityRollupDay;
   toDay: ActivityRollupDay;
 };
+
+// DEV_NOTE: Whether a quality issue already has an event naming this day (ZChatbotHealthDropDetail.day)
+export type HasChatbotHealthDayDALRequest = {
+  companyId: string;
+  qualityIssueId: string;
+  day: ActivityRollupDay;
+};

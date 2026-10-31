@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -16,6 +16,7 @@ import {
 } from "@/db/tables";
 import AppLogger from "@/providers/logger";
 import ChatbotHealthRepo from "@/repositories/ChatbotHealthRepo";
+import Constants from "@/config/Constants";
 import QualityIssuesRepo from "@/repositories/QualityIssuesRepo";
 import Utility from "@/utils/Utility";
 
@@ -83,15 +84,25 @@ async function seedRatings(
   await ownerDb.insert(activityRollups).values(rows);
 }
 
+// DEV_NOTE: One more bad day (18 of 20 rated down) on top of seedRatings
+async function seedDay(companyId: string, chatbotId: string, day: string) {
+  const row = (rating: Schemas.FeedbackRatingIntEnum, value: string) => ({
+    companyId,
+    chatbotId,
+    day,
+    metric: Schemas.ACTIVITY_ROLLUP_FEEDBACK_KEY_MAP[rating],
+    value,
+  });
+  await ownerDb
+    .insert(activityRollups)
+    .values([
+      row(Schemas.FeedbackRatingIntEnum.Up, "2"),
+      row(Schemas.FeedbackRatingIntEnum.Down, "18"),
+    ]);
+}
+
 async function healthIssues(chatbotId: string) {
-  const conditions = [
-    eq(qualityIssues.chatbotId, chatbotId),
-    eq(qualityIssues.issueType, Schemas.QualityIssueTypeIntEnum.HealthDrop),
-  ];
-  return await ownerDb
-    .select()
-    .from(qualityIssues)
-    .where(and(...conditions));
+  return await ownerDb.select().from(qualityIssues).where(eq(qualityIssues.chatbotId, chatbotId));
 }
 
 const dropAlerts = () =>
@@ -283,5 +294,145 @@ describe("A Health drop issue on the Quality page", () => {
     // DEV_NOTE: Another company never sees it
     const foreign = await repo.getQualityIssue({ companyId: companyB, publicId });
     expect(foreign.isNotFound).toBe(true);
+  });
+
+  it("keeps one open issue when an admin retypes it", async () => {
+    const chatbot = await newChatbot(companyA, "Retyped bot");
+    await seedRatings(companyA, chatbot.id, { up: 6, down: 14 });
+    const repo = new ChatbotHealthRepo(env);
+    await repo.checkCompany({ companyId: companyA, day: DAY });
+    const [issue] = await healthIssues(chatbot.id);
+    await new QualityIssuesRepo(env).triageQualityIssue({
+      companyId: companyA,
+      adminId: adminAId,
+      publicId: issue?.publicId ?? "",
+      issueType: Schemas.QualityIssueTypeIntEnum.ToolBug,
+    });
+
+    // DEV_NOTE: The same day again, then another: neither opens a second issue
+    await repo.checkCompany({ companyId: companyA, day: DAY });
+    await seedDay(companyA, chatbot.id, Schemas.activityRollupAddDays(DAY, 1));
+    await repo.checkCompany({
+      companyId: companyA,
+      day: Schemas.activityRollupAddDays(DAY, 1),
+    });
+    const rows = await ownerDb
+      .select()
+      .from(qualityIssues)
+      .where(eq(qualityIssues.chatbotId, chatbot.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.issueType).toBe(Schemas.QualityIssueTypeIntEnum.ToolBug);
+    expect(rows[0]?.note?.split("\n")).toHaveLength(2);
+  });
+
+  it("finds a covered day past any event cap, so a rerun on a long-open issue adds nothing", async () => {
+    const chatbot = await newChatbot(companyA, "Long-open bot");
+    await seedRatings(companyA, chatbot.id, { up: 6, down: 14 });
+    const repo = new ChatbotHealthRepo(env);
+    const nextDay = Schemas.activityRollupAddDays(DAY, 1);
+    await repo.checkCompany({ companyId: companyA, day: DAY });
+    const [issue] = await healthIssues(chatbot.id);
+    await seedDay(companyA, chatbot.id, nextDay);
+    // DEV_NOTE: More older events than ACTIVITY_LOGS_BY_ENTITY_LIMIT, ahead of the day's own
+    await ownerDb.insert(activityLog).values(
+      Array.from({ length: Constants.ACTIVITY_LOGS_BY_ENTITY_LIMIT + 1 }, () => ({
+        companyId: companyA,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+        entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
+        entityId: issue?.id ?? "",
+        entityAction: Schemas.QualityIssueEntityActionEnum.Triaged,
+        createdAt: new Date("2026-10-30T12:00:00Z"),
+      })),
+    );
+    await repo.checkCompany({ companyId: companyA, day: nextDay });
+    const once = (await healthIssues(chatbot.id))[0]?.note;
+    vi.mocked(AppLogger.error).mockClear();
+
+    const rerun = await repo.checkCompany({ companyId: companyA, day: nextDay });
+    expect(rerun).toMatchObject({ isSuccess: true, dropCount: 0 });
+    expect((await healthIssues(chatbot.id))[0]?.note).toBe(once);
+    expect(dropAlerts()).toHaveLength(0);
+  });
+
+  it("holds the note to what an admin can save", async () => {
+    const chatbot = await newChatbot(companyA, "Long note bot");
+    await seedRatings(companyA, chatbot.id, { up: 6, down: 14 });
+    const repo = new ChatbotHealthRepo(env);
+    await repo.checkCompany({ companyId: companyA, day: DAY });
+    const [issue] = await healthIssues(chatbot.id);
+    await ownerDb
+      .update(qualityIssues)
+      .set({ note: "x".repeat(Schemas.QUALITY_ISSUE_NOTE_MAX_CHARS) })
+      .where(eq(qualityIssues.id, issue?.id ?? ""));
+    const nextDay = Schemas.activityRollupAddDays(DAY, 1);
+    await seedDay(companyA, chatbot.id, nextDay);
+
+    await repo.checkCompany({ companyId: companyA, day: nextDay });
+    const note = (await healthIssues(chatbot.id))[0]?.note ?? "";
+    expect(note.length).toBeLessThanOrEqual(Schemas.QUALITY_ISSUE_NOTE_MAX_CHARS);
+    expect(note).toContain("Oct 31");
+  });
+
+  it("doesn't count a chatbot removed after its bad day as a failed check", async () => {
+    const chatbot = await newChatbot(companyB, "Removed bot");
+    await seedRatings(companyB, chatbot.id, { up: 6, down: 14 });
+    await ownerDb.delete(chatbots).where(eq(chatbots.id, chatbot.id));
+
+    const checked = await new ChatbotHealthRepo(env).checkCompany({
+      companyId: companyB,
+      day: DAY,
+    });
+    expect(checked.isSuccess).toBe(true);
+    expect(await healthIssues(chatbot.id)).toHaveLength(0);
+    expect(
+      vi
+        .mocked(AppLogger.error)
+        .mock.calls.filter(([entry]) => JSON.stringify(entry).includes(`"${chatbot.id}"`)),
+    ).toHaveLength(0);
+  });
+
+  it("reads a chatbot-wide issue as such, never makes it a test, and hides an issue whose conversation is gone", async () => {
+    const chatbot = await newChatbot(companyA, "Read bot");
+    await seedRatings(companyA, chatbot.id, { up: 6, down: 14 });
+    await new ChatbotHealthRepo(env).checkCompany({ companyId: companyA, day: DAY });
+    const [issue] = await healthIssues(chatbot.id);
+    const repo = new QualityIssuesRepo(env);
+    const scope = { companyId: companyA, publicId: issue?.publicId ?? "" };
+
+    expect((await repo.getQualityIssue(scope)).qualityIssue).toMatchObject({
+      isChatbotWide: true,
+      chatbotName: "Read bot",
+      conversation: null,
+      excerpt: [],
+    });
+    const converted = await repo.convertQualityIssue({
+      ...scope,
+      adminId: adminAId,
+      draft: {
+        name: "A test",
+        messages: [{ role: Schemas.EvalCaseMessageRoleEnum.User, text: "Hello?" }],
+        rubric: "Greets.",
+      },
+    });
+    expect(converted.failure).toBe(Schemas.QualityIssueUpdateFailureEnum.NoConversation);
+
+    // DEV_NOTE: A user's or admin's issue whose conversation row is gone isn't chatbot-wide: it stays hidden
+    const [orphan] = await ownerDb
+      .insert(qualityIssues)
+      .values({
+        publicId: Utility.generatePublicId(),
+        companyId: companyA,
+        chatbotId: chatbot.id,
+        conversationId: "999999999999",
+        source: Schemas.QualityIssueSourceIntEnum.Admin,
+        createdBy: adminAId,
+      })
+      .returning({ publicId: qualityIssues.publicId });
+    const hidden = await repo.getQualityIssue({
+      companyId: companyA,
+      publicId: orphan?.publicId ?? "",
+    });
+    expect(hidden.isSuccess).toBe(false);
+    expect(hidden.isNotFound).toBe(true);
   });
 });

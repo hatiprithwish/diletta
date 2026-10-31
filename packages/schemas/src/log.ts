@@ -467,6 +467,9 @@ export enum LogAction {
   ReportNightlyEvalRun = "ReportNightlyEvalRun",
   // Production health per chatbot (M5-5)
   GetChatbotHealthRollups = "GetChatbotHealthRollups",
+  HasChatbotHealthDay = "HasChatbotHealthDay",
+  LockOpenChatbotWideQualityIssue = "LockOpenChatbotWideQualityIssue",
+  GetOpenChatbotWideQualityIssue = "GetOpenChatbotWideQualityIssue",
   CheckChatbotHealth = "CheckChatbotHealth",
   RecordChatbotHealthDrop = "RecordChatbotHealthDrop",
 }

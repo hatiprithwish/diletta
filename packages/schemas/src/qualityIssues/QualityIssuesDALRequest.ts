@@ -17,11 +17,15 @@ export type CreateSystemQualityIssueDALRequest = Pick<
 > &
   ({ conversationId: string; chatbotId?: undefined } | { conversationId: null; chatbotId: string });
 
-// Params to find the company's open system issue of one type, and to serialise the writers that open one. chatbotId
-// set = that chatbot's only (one open Health drop issue per chatbot, M5-5); absent = the company's (Model error).
+// Params to find the company's open system issue of one type, and to serialise the writers that open one
 export type FindOpenSystemQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
   issueType: NonNullable<QualityIssue["issueType"]>;
-  chatbotId?: string;
+};
+
+// DEV_NOTE: The chatbot's open chatbot-wide issue (M5-5), and to serialise the writers that open one. Found by what an
+// admin can't change (source System, no conversation, the chatbot), never by issue_type, which triage may rewrite.
+export type FindOpenChatbotWideQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
+  chatbotId: string;
 };
 
 // Params to replace a quality issue's note, found by its public ID within one company

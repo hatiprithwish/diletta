@@ -41,8 +41,10 @@ const NOT_TRIAGED = "Not triaged";
 // DEV_NOTE: An issue's title: its conversation's, or for a check on the whole chatbot (a health drop, M5-5, no
 // conversation) the chatbot it is about
 function issueTitle(qualityIssue: Schemas.QualityIssueListItem): string {
-  if (qualityIssue.conversation) return qualityIssue.conversation.title ?? UNTITLED;
-  return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
+  if (qualityIssue.isChatbotWide) {
+    return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
+  }
+  return qualityIssue.conversation?.title ?? UNTITLED;
 }
 
 const TABS: { value: Schemas.QualityIssueListTabEnum; label: string }[] = [
@@ -362,7 +364,7 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
       <div className="mx-[22px] mb-4 flex flex-col gap-2.5 rounded-lg bg-surface-subtle px-3.5 py-3">
         {qualityIssue.excerpt.length === 0 && (
           <p className="text-body text-muted-foreground">
-            {!conversation
+            {qualityIssue.isChatbotWide
               ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
               : qualityIssue.isContentPurged
                 ? "The chat's content was deleted."
@@ -414,14 +416,14 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
 
       {isOpen && (
         <div className="flex flex-col gap-3 border-t px-[22px] py-4">
-          {conversation && (
+          {!qualityIssue.isChatbotWide && (
             <p className="text-caption text-muted-foreground">
               Creating a test rewrites this chat without personal details. You review it before it's
               saved.
             </p>
           )}
           <div className="flex flex-wrap gap-2">
-            {conversation && (
+            {!qualityIssue.isChatbotWide && (
               <Button disabled={isBusy} onClick={createTest}>
                 <Plus aria-hidden />
                 {draftTest.isPending ? "Rewriting…" : "Create test"}

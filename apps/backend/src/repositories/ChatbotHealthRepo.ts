@@ -114,7 +114,6 @@ export default class ChatbotHealthRepo {
         baseline: Schemas.chatbotHealthCounts(rows.baseline),
       });
       if (drops.length === 0) continue;
-      dropCount += 1;
 
       const recorded: Schemas.RecordChatbotHealthDropResponse = await withTenant(
         this.db,
@@ -126,13 +125,15 @@ export default class ChatbotHealthRepo {
             day,
             drops,
           });
-          if (!result.isSuccess) {
+          // DEV_NOTE: Nothing written yet, so this is an answer, not a rollback
+          if (!result.isSuccess && !result.isNotFound) {
             throw new TenantRollbackError(result.message ?? "Health drop not recorded");
           }
           return result;
         },
       );
       const metadata = { companyId, chatbotId, day, drops };
+      if (recorded.isNotFound) continue;
       if (!recorded.isSuccess) {
         isEverySaved = false;
         AppLogger.error({
@@ -142,6 +143,7 @@ export default class ChatbotHealthRepo {
           metadata,
         });
       } else if (recorded.isOpened || recorded.isAdded) {
+        dropCount += 1;
         AppLogger.error({
           category: Schemas.LogCategory.Health,
           action: Schemas.LogAction.RecordChatbotHealthDrop,

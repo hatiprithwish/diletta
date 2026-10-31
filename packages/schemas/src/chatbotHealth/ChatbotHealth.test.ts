@@ -10,6 +10,7 @@ import { ChangeRequestEntityActionEnum } from "../changeRequests";
 import { ConversationOutcomeIntEnum } from "../conversations";
 import { FeedbackRatingIntEnum } from "../feedback";
 import {
+  appendChatbotHealthNote,
   CHATBOT_HEALTH_MIN_RISE_POINTS,
   CHATBOT_HEALTH_MIN_VOLUME,
   ChatbotHealthSignalEnum,
@@ -135,6 +136,31 @@ describe("chatbotHealthNote", () => {
   it("detail needs a day and at least one drop", () => {
     expect(ZChatbotHealthDropDetail.safeParse({ day: "2026-10-30", drops: [] }).success).toBe(
       false,
+    );
+  });
+});
+
+describe("appendChatbotHealthNote", () => {
+  it("adds a line, starting from no note", () => {
+    expect(appendChatbotHealthNote(null, "Oct 30.", 100)).toBe("Oct 30.");
+    expect(appendChatbotHealthNote("Oct 30.", "Oct 31.", 100)).toBe("Oct 30.\nOct 31.");
+  });
+
+  it("stays within the cap over many days, keeping the newest and counting the rest", () => {
+    let note: string | null = null;
+    for (let day = 1; day <= 60; day += 1) {
+      note = appendChatbotHealthNote(note, `Day ${day}: ${"x".repeat(100)}.`, 500);
+      expect(note.length).toBeLessThanOrEqual(500);
+    }
+    const lines = (note ?? "").split("\n");
+    expect(lines.at(-1)).toContain("Day 60");
+    const count = Number(lines[0]?.match(/\d+/)?.[0]);
+    expect(count + lines.length - 1).toBe(60);
+  });
+
+  it("counts one earlier line in the singular", () => {
+    expect(appendChatbotHealthNote("a".repeat(60), "b".repeat(30), 80)).toBe(
+      `…and 1 earlier line (see the activity log)\n${"b".repeat(30)}`,
     );
   });
 });

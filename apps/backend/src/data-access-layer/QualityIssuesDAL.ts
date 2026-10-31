@@ -23,7 +23,7 @@ import Utility from "@/utils/Utility";
 // thumbs-down (M2-8), admin issues from a flag on the Conversations page (M4-4). The Quality page (M4-6) lists, reads,
 // triages and closes them. Every insert sets chatbot_id (the conversation's chatbot, or the chatbot-wide issue's).
 export default class QualityIssuesDAL {
-  // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type[, chatbot]), held until the Repo's transaction ends.
+  // DEV_NOTE: Transaction-scoped advisory lock on (company, issue type), held until the Repo's transaction ends.
   // Two calls that hit the same failure at once take turns, so the second sees the first one's open issue instead
   // of opening a duplicate (there is no unique index to catch it: dismissed and fixed issues of the same type stay).
   async lockOpenSystemQualityIssue(
@@ -33,10 +33,7 @@ export default class QualityIssuesDAL {
     const response: Schemas.ApiResponse = { isSuccess: false };
 
     try {
-      const lockKey =
-        params.chatbotId === undefined
-          ? `quality_issue:system:${params.companyId}:${params.issueType}`
-          : `quality_issue:system:${params.companyId}:${params.issueType}:${params.chatbotId}`;
+      const lockKey = `quality_issue:system:${params.companyId}:${params.issueType}`;
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
 
       response.isSuccess = true;
@@ -56,8 +53,7 @@ export default class QualityIssuesDAL {
     return response;
   }
 
-  // DEV_NOTE: The oldest open system issue of the type (of the chatbot when chatbotId is set), if any. isSuccess with no
-  // qualityIssue = none open.
+  // DEV_NOTE: The oldest open system issue of the type, if any. isSuccess with no qualityIssue = none open.
   async getOpenSystemQualityIssue(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindOpenSystemQualityIssueDALRequest,
@@ -71,8 +67,6 @@ export default class QualityIssuesDAL {
         eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
         eq(qualityIssues.issueType, params.issueType),
       ];
-      if (params.chatbotId !== undefined)
-        conditions.push(eq(qualityIssues.chatbotId, params.chatbotId));
       const [qualityIssue] = await tx
         .select()
         .from(qualityIssues)
@@ -90,6 +84,77 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetOpenSystemQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The same lock for a chatbot's open chatbot-wide issue (M5-5): one open per chatbot
+  async lockOpenChatbotWideQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindOpenChatbotWideQualityIssueDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const lockKey = `quality_issue:chatbot_wide:${params.companyId}:${params.chatbotId}`;
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+      response.isSuccess = true;
+      response.message = "Open chatbot-wide quality issue locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking open chatbot-wide quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockOpenChatbotWideQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The chatbot's oldest open chatbot-wide issue, whatever an admin typed it as. isSuccess with no qualityIssue =
+  // none open.
+  async getOpenChatbotWideQualityIssue(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindOpenChatbotWideQualityIssueDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.chatbotId, params.chatbotId),
+        eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.System),
+        eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
+        isNull(qualityIssues.conversationId),
+      ];
+      const [qualityIssue] = await tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...conditions))
+        .orderBy(asc(qualityIssues.createdAt), asc(qualityIssues.id))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = qualityIssue
+        ? "Open chatbot-wide quality issue fetched successfully"
+        : "No open chatbot-wide quality issue";
+      response.qualityIssue = qualityIssue;
+    } catch (error) {
+      const message = "Unknown error in fetching open chatbot-wide quality issue";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetOpenChatbotWideQualityIssue,
         message,
         error,
         metadata: params,
@@ -150,6 +215,7 @@ export default class QualityIssuesDAL {
             metadata,
           });
           response.message = message;
+          response.isNotFound = true;
           return response;
         }
         chatbotId = conversation.chatbotId;
@@ -166,7 +232,7 @@ export default class QualityIssuesDAL {
 
         if (!chatbot) {
           const message = "Chatbot not found";
-          AppLogger.error({
+          AppLogger.warn({
             category: Schemas.LogCategory.DAL,
             action: Schemas.LogAction.CreateSystemQualityIssue,
             message,
@@ -585,14 +651,18 @@ export default class QualityIssuesDAL {
       .leftJoin(messages, and(...messageJoinConditions));
   }
 
-  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts, on the issue's own chatbot. An issue
-  // must have its conversation row unless it is chatbot-wide (M5-5): one whose conversation is gone stays out, as it did
-  // under the inner join before.
-  private dashboardConditions(params: Schemas.CountDashboardQualityIssuesDALRequest): SQL[] {
-    const conditions: SQL[] = [
+  // DEV_NOTE: An issue's conversation row must exist unless it is chatbot-wide (M5-5): one whose conversation is gone stays
+  // out of every Quality read, as it did under the inner join before
+  private conversationPresent() {
+    return or(isNull(qualityIssues.conversationId), isNotNull(conversations.id));
+  }
+
+  // DEV_NOTE: The list's filters but the tab, shared by the list and its counts, on the issue's own chatbot
+  private dashboardConditions(params: Schemas.CountDashboardQualityIssuesDALRequest) {
+    const conditions = [
       eq(qualityIssues.companyId, params.companyId),
       isNotNull(qualityIssues.chatbotId),
-      or(isNull(qualityIssues.conversationId), isNotNull(conversations.id)) as SQL,
+      this.conversationPresent(),
     ];
     if (params.chatbotId !== null) conditions.push(eq(qualityIssues.chatbotId, params.chatbotId));
     return conditions;
@@ -706,6 +776,7 @@ export default class QualityIssuesDAL {
       const conditions = [
         eq(qualityIssues.publicId, params.publicId),
         eq(qualityIssues.companyId, params.companyId),
+        this.conversationPresent(),
       ];
       const query = this.dashboardQuery(tx)
         .where(and(...conditions))

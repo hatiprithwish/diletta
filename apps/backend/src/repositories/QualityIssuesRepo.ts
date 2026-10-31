@@ -75,6 +75,8 @@ export default class QualityIssuesRepo {
       note: row.note,
       ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedReplyText),
       chatbotName: row.chatbotName,
+      isChatbotWide:
+        row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
       conversation:
         row.conversationPublicId === null
           ? null
@@ -94,9 +96,7 @@ export default class QualityIssuesRepo {
       rating: row.rating,
       excerpt,
       isContentPurged: row.conversationContentPurgedAt !== null,
-      conversation: item.conversation
-        ? { ...item.conversation, chatbotName: row.chatbotName, userName: row.userName }
-        : null,
+      conversation: item.conversation ? { ...item.conversation, userName: row.userName } : null,
       changeRequestPublicId: row.changeRequestPublicId,
       evalCase:
         row.evalCasePublicId !== null && row.evalCaseName !== null

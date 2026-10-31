@@ -2291,14 +2291,14 @@ platformKey|companyId: null|PLATFORM_EVAL_CASES|trigger.*Nightly
 
 ### 3.55 Production Health Is Judged From Live Rollups and Opens One Chatbot-Wide Issue [HIGH]
 
-**Rule:** Daily production health per chatbot (M5-5). The judgement is only `Schemas.chatbotHealthCounts` + `evaluateChatbotHealth` over the chatbot's live `activity_rollups` (yesterday vs the `CHATBOT_HEALTH_BASELINE_DAYS` before it; volume floor on both sides; `CHATBOT_HEALTH_MIN_RISE_POINTS` rise), run by `ChatbotHealthRepo` from the daily `ChatbotHealthCheck` cron (`withPlatform` to list companies only, `withTenant` per company and per drop). A drop is written only through `ChatbotHealthProvider.record(tx, …)`: one open System / Health drop issue per chatbot (advisory lock with `chatbotId`), `conversation_id` null and `chatbot_id` set, a day recorded once (read from its events' `ZChatbotHealthDropDetail`, never from the editable note), each write with its critical event, and a newly recorded drop logs an error. Every `quality_issues` insert sets `chatbot_id`; Quality reads (list, counts, chatbot filter, open counts) use `quality_issues.chatbot_id`, never the conversation's. Only a System issue may have no conversation (`CHK_quality_issues_system_conversation_id`), and such an issue never becomes a test (409 `NoConversation`).
+**Rule:** Daily production health per chatbot (M5-5). The judgement is only `Schemas.chatbotHealthCounts` + `evaluateChatbotHealth` over the chatbot's live `activity_rollups` (yesterday vs the `CHATBOT_HEALTH_BASELINE_DAYS` before it; volume floor on both sides; `CHATBOT_HEALTH_MIN_RISE_POINTS` rise), run by `ChatbotHealthRepo` from the daily `ChatbotHealthCheck` cron (`withPlatform` to list companies only, `withTenant` per company and per drop). A drop is written only through `ChatbotHealthProvider.record(tx, …)`: one open chatbot-wide System issue per chatbot (advisory lock on the chatbot, found by source + no conversation + chatbot, never by the `issue_type` an admin can rewrite), `conversation_id` null and `chatbot_id` set, a day recorded once (`hasChatbotHealthDay` on its events, never from the editable note or a capped read), the note held to `QUALITY_ISSUE_NOTE_MAX_CHARS` (`appendChatbotHealthNote`), each write with its critical event, and a newly recorded drop logs an error. Every `quality_issues` insert sets `chatbot_id`; Quality reads (list, counts, chatbot filter, open counts) use `quality_issues.chatbot_id`, never the conversation's. Only a System issue may have no conversation (`CHK_quality_issues_system_conversation_id`), and such an issue never becomes a test (409 `NoConversation`).
 
 **Violations:**
 
 - A health signal computed from raw tables, from eval conversations, or with its own threshold instead of `evaluateChatbotHealth`
 - A Health drop issue opened outside `ChatbotHealthProvider`, a second open one for a chatbot, or a day's sentence added twice
 - A `qualityIssues` insert without `chatbotId`, or a Quality read that filters by `conversations.chatbotId`
-- A UI that links, excerpts or offers Create test for an issue whose `conversation` is null
+- A UI that decides "chatbot-wide" from a missing `conversation` instead of `isChatbotWide`, or a Quality read that returns an issue whose conversation row is gone
 
 **Detection Pattern:**
 

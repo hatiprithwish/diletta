@@ -37,6 +37,7 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   note: null,
   ratedReply: "Every 6 months, per the Fire safety policy.",
   chatbotName: "eRegister Assistant",
+  isChatbotWide: false,
   conversation: { publicId: "conv_1", title: "Bot gave old fire drill frequency" },
   createdAt: "2026-10-20T13:20:00.000Z",
   updatedAt: "2026-10-20T13:20:00.000Z",
@@ -64,6 +65,7 @@ const ROW_HEALTH: Schemas.QualityIssueListItem = {
   issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.HealthDrop,
   note: "Oct 30: Replies rated down 70% (usually 10%).",
   ratedReply: null,
+  isChatbotWide: true,
   conversation: null,
 };
 
@@ -87,7 +89,6 @@ const DETAIL: Schemas.QualityIssueDetail = {
   conversation: {
     publicId: "conv_1",
     title: "Bot gave old fire drill frequency",
-    chatbotName: "eRegister Assistant",
     userName: "Tom Baker",
   },
   isContentPurged: false,

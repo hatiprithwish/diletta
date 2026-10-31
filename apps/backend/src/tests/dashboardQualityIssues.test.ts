@@ -560,6 +560,8 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
     expect(status).toBe(200);
     expect(body.qualityIssue).toMatchObject({
       publicId: userIssue,
+      isChatbotWide: false,
+      chatbotName: "Support",
       rating: Schemas.FeedbackRatingIntEnum.Down,
       excerpt: [
         { role: Schemas.MessageRoleIntEnum.User, text: QUESTION },
@@ -567,7 +569,6 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
       ],
       conversation: {
         title: "Fire drill frequency",
-        chatbotName: "Support",
         userName: "Priya Shah",
       },
       changeRequestPublicId: null,

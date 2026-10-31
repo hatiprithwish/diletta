@@ -158,3 +158,32 @@ export function chatbotHealthNote(day: ActivityRollupDay, drops: ChatbotHealthDr
   });
   return `${date}: ${parts.join("; ")}.`;
 }
+
+const EARLIER_DAYS_LINE = /^…and (\d+) earlier lines? \(see the activity log\)$/;
+
+// DEV_NOTE: An open issue's note with one more day, held to noteMaxChars so the admin can always still save it: the oldest
+// lines give way to a count (the events keep every day's detail). The newest line always stays.
+export function appendChatbotHealthNote(
+  currentNote: string | null,
+  sentence: string,
+  noteMaxChars: number,
+): string {
+  const lines = currentNote ? currentNote.split("\n") : [];
+  const counted = lines[0]?.match(EARLIER_DAYS_LINE);
+  let dropped = counted ? Number(counted[1]) : 0;
+  if (counted) lines.shift();
+  lines.push(sentence);
+
+  const render = () => {
+    const prefix =
+      dropped === 0
+        ? []
+        : [`…and ${dropped} earlier ${dropped === 1 ? "line" : "lines"} (see the activity log)`];
+    return [...prefix, ...lines].join("\n");
+  };
+  while (render().length > noteMaxChars && lines.length > 1) {
+    lines.shift();
+    dropped += 1;
+  }
+  return render();
+}

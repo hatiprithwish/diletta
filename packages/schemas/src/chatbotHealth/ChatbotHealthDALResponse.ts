@@ -11,3 +11,7 @@ export interface ChatbotHealthRollupRow {
 export interface ChatbotHealthRollupsDALResponse extends ApiResponse {
   rows?: ChatbotHealthRollupRow[];
 }
+
+export interface ChatbotHealthDayDALResponse extends ApiResponse {
+  hasDay?: boolean;
+}

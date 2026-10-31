@@ -17,13 +17,15 @@ A signal drops when yesterday's share is at least **15 percentage points** above
 ## What happens on a drop
 
 - **Quality page.** The chatbot gets one open issue, source Automatic check, type Health drop, titled "Daily health check: <chatbot>". Its note says what dropped, e.g. "Oct 30: Replies rated down 70% (usually 10%)." It has no conversation, so it has no excerpt, no Create test and no Open conversation; the admin marks it fixed or dismisses it.
-- **Another bad day** while that issue is open adds a sentence to its note instead of opening a second issue. A rerun of the same day adds nothing (the days an issue covers are read from its events, not its note).
+- **Another bad day** while that issue is open adds a sentence to its note instead of opening a second issue, even if an admin retyped it. A rerun of the same day adds nothing (the days an issue covers are read from its events, not its note). The note stays within what an admin can save: the oldest lines give way to "…and N earlier lines (see the activity log)".
 - **Our team.** Each newly recorded drop logs an error (`Health` / `RecordChatbotHealthDrop`, with the company, chatbot, day and signals), which reaches Sentry with M6-6.
 - Once the issue is closed, the next drop opens a new one.
 
+**Couldn't-answer lag.** A conversation's outcome is counted on the day it started, and at 04:00 UTC some of yesterday's conversations may not have closed yet, while the baseline days are complete. Yesterday's share can read low, so this signal can miss a regression but won't raise a false alarm.
+
 ## When the check fails
 
-A company whose rollups can't be read, or a drop that can't be written, is logged (`Health` / `CheckChatbotHealth` or `RecordChatbotHealthDrop`) and the sweep goes on with the next company. A missed day isn't judged later: the next run judges its own yesterday. The check reads rollups only, so if the hourly rollup failed for yesterday (`docs/runbooks/rollups.md`), rebuild that day first; the check then sees it the next morning.
+A chatbot removed since its bad day is skipped, with no error. A company whose rollups can't be read, or a drop that can't be written, is logged (`Health` / `CheckChatbotHealth` or `RecordChatbotHealthDrop`) and the sweep goes on with the next company. A missed day isn't judged later: the next run judges its own yesterday. The check reads rollups only, so if the hourly rollup failed for yesterday (`docs/runbooks/rollups.md`), rebuild that day first; the check then sees it the next morning.
 
 ## Tuning
 
