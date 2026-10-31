@@ -24,6 +24,7 @@ import {
   toolDefinitions,
 } from "@/db/tables";
 import worker from "@/index";
+import { setQualityIssueChatbots } from "@/tests/helpers/qualityIssues";
 import ActivityRollupsRepo from "@/repositories/ActivityRollupsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -342,6 +343,7 @@ beforeAll(async () => {
       source: Schemas.QualityIssueSourceIntEnum.Admin,
       createdBy: adminAId,
     });
+    await setQualityIssueChatbots(ownerDb, [companyA]);
     await ownerDb.insert(knowledgeSources).values({
       publicId: Utility.generatePublicId(),
       companyId: companyA,

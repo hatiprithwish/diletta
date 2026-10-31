@@ -21,6 +21,7 @@ import {
   qualityIssues,
 } from "@/db/tables";
 import worker from "@/index";
+import { setQualityIssueChatbots } from "@/tests/helpers/qualityIssues";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -426,6 +427,7 @@ beforeAll(async () => {
         }),
       ])
       .returning({ id: qualityIssues.id, publicId: qualityIssues.publicId });
+    await setQualityIssueChatbots(ownerDb, [companyA, companyB]);
     [
       fixedIssue,
       dismissedIssue,
@@ -779,6 +781,7 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
           createdBy: adminAId,
         })
         .returning({ publicId: qualityIssues.publicId });
+      await setQualityIssueChatbots(ownerDb, [companyA]);
       await ownerDb.delete(chatbots).where(eq(chatbots.id, bot!.id));
       return issue!.publicId;
     });
