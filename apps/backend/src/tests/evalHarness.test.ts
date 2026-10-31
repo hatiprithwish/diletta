@@ -82,7 +82,8 @@ vi.mock("@/providers/logger", () => ({
 // config under test is a Draft. The model is scripted (AI Gateway mocked). afterAll deletes every row it created.
 const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
-const END_TO_END_TIMEOUT_MS = 120_000;
+// DEV_NOTE: Every run also records the active platform cases (M5-5 syncs them into staging), each a /results call
+const END_TO_END_TIMEOUT_MS = 240_000;
 const PRODUCTION_BASE_URL = "https://production.unreachable.invalid/v1/";
 const HOST_USER = "eval-test-user";
 // DEV_NOTE: The config's default tier (Mid). No tier names Anthropic's primary judge, so the judge is the primary, and
