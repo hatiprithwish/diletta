@@ -69,4 +69,4 @@ jobs:
       - name: Run the suite
         run: >-
           uv run --project evals python -m diletta_evals run
-          --chatbot "$NIGHTLY_CHATBOT_ID" --trigger nightly --k "$K"
+          --chatbot "$NIGHTLY_CHATBOT_ID" --trigger nightly --k "$K" --require-tool-cases

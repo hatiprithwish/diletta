@@ -1,3 +1,4 @@
+import type { ChatbotConfigLookup } from "../chatbotConfigs/ChatbotConfigsDALRequest";
 import { z } from "zod";
 import type { ApiResponse } from "../common";
 import {
@@ -222,7 +223,10 @@ export interface EvalJudgeResponse extends EvalRunStepResponse {
 // DEV_NOTE: outboxIds = the audit row of a Gate run's move of its version (M5-4), relayed by the route after the commit
 export interface FinishEvalRunResponse extends EvalRunStepResponse {
   outboxIds?: string[];
-  run?: Pick<EvalRun, "status" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd"> & {
+  run?: Pick<
+    EvalRun,
+    "trigger" | "status" | "failure" | "caseCount" | "passAllKCount" | "hasPassed" | "costUsd"
+  > & {
     failedSafetyCaseCount: number;
   };
 }
@@ -251,7 +255,7 @@ export interface EvalRunChatbotResponse extends EvalRunStepResponse {
 // DEV_NOTE: The config a run starts on (M5-5): by the public id the request named, or by the internal id of the chatbot's
 // published config
 export interface EvalRunConfigTargetResponse extends EvalRunStepResponse {
-  target?: { publicId: string; id?: undefined } | { id: string; publicId?: undefined };
+  target?: ChatbotConfigLookup;
 }
 
 export interface EvalRunConversationResponse extends EvalRunStepResponse {

@@ -462,6 +462,31 @@ export default class EvalCasesDAL {
     return response;
   }
 
+  // DEV_NOTE: Transaction-scoped advisory lock, held until the sync's transaction ends: overlapping syncs take turns
+  // instead of racing on UNQ_eval_cases_platform_key
+  async lockPlatformEvalCases(tx: NodePgTransaction<EmptyRelations>) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${"platform_eval_cases:sync"}, 0))`,
+      );
+      response.isSuccess = true;
+      response.message = "Platform eval cases locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking platform eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockPlatformEvalCases,
+        message,
+        error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Every platform case the sync owns (a platform_key set), on or off, in withPlatform. Case text stays out of
   // the log.
   async getPlatformEvalCases(tx: NodePgTransaction<EmptyRelations>) {
@@ -534,7 +559,8 @@ export default class EvalCasesDAL {
     return response;
   }
 
-  // DEV_NOTE: A keyed platform case rewritten to the case in code and turned on again
+  // DEV_NOTE: A keyed platform case rewritten to the case in code and turned on again. updated_at = clock_timestamp():
+  // publish compares it with the approved gate run's created_at (same clock), so an edited safety case outdates the gate.
   async updatePlatformEvalCase(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpdatePlatformEvalCaseDALRequest,
@@ -556,7 +582,7 @@ export default class EvalCasesDAL {
           expectations: params.expectations,
           isSafety: params.isSafety,
           isActive: true,
-          updatedAt: new Date(),
+          updatedAt: sql`clock_timestamp()`,
         })
         .where(and(...conditions))
         .returning();

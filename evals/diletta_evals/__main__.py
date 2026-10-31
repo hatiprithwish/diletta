@@ -31,7 +31,7 @@ EXIT_COULD_NOT_RUN = 2
 
 # packages/schemas EVAL_RUN_MAX_K, read from the generated type
 MAX_K = next(
-    meta.le for meta in eval_api.CreateEvalRunApiRequest.model_fields["k"].metadata if isinstance(meta, Le)
+    meta.le for meta in eval_api.CreateEvalRunByConfigApiRequest.model_fields["k"].metadata if isinstance(meta, Le)
 )
 TRIGGERS = {
     "manual": eval_api.Trigger.number_2,
@@ -50,7 +50,9 @@ def _run(args: argparse.Namespace) -> int:
         try:
             runner = EvalRunner(EvalApiClient(config, http), host_login_for(config, http))
             target = ChatbotTarget(chatbot_id=args.chatbot) if args.chatbot else ConfigTarget(config_id=args.config)
-            summary = runner.run(target=target, k=args.k, trigger=TRIGGERS[args.trigger])
+            summary = runner.run(
+                target=target, k=args.k, trigger=TRIGGERS[args.trigger], require_tool_cases=args.require_tool_cases
+            )
         except Exception as error:
             # DEV_NOTE: Every error that stops a run is "couldn't run" (CI must never read it as a regression); the
             # expected ones (settings, backend, host) say why, anything else names its type
@@ -94,6 +96,11 @@ def main() -> int:
         choices=sorted(TRIGGERS),
         default="manual",
         help="gate: the publish gate of a config sent to testing (its finish makes it Ready or a draft again)",
+    )
+    run.add_argument(
+        "--require-tool-cases",
+        action="store_true",
+        help="stop the run (exit 2) if no case expects a tool call: the nightly suite must test the action engine",
     )
     run.set_defaults(handler=_run)
     keygen = commands.add_parser("keygen", help="a new platform eval signing key")

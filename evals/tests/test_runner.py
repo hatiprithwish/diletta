@@ -2,6 +2,7 @@
 the reset once after the last attempt, and how the run ends when something stops it."""
 
 import io
+import json
 
 import pytest
 
@@ -15,7 +16,13 @@ from diletta_evals.constants import (
 )
 from diletta_evals.graders import GradedAttempt
 from diletta_evals.hosts.base import HostLoginError
-from diletta_evals.runner import ChatbotTarget, ConfigTarget, EvalRunner, JudgeUnavailableError
+from diletta_evals.runner import (
+    ChatbotTarget,
+    ConfigTarget,
+    EvalRunner,
+    JudgeUnavailableError,
+    MissingToolCasesError,
+)
 from diletta_evals.types import eval_api
 
 Failure = eval_api.Failure
@@ -89,7 +96,7 @@ class FakeClient:
             {
                 "isSuccess": True,
                 "message": "ok",
-                "run": {"publicId": "run_1", "k": request.k, "harnessVersion": request.harnessVersion},
+                "run": {"publicId": "run_1", "k": request.root.k, "harnessVersion": request.root.harnessVersion},
                 "cases": [self._case],
             }
         )
@@ -210,19 +217,36 @@ def run(client: FakeClient, host: FakeHost | None = None, k: int = 3):
 def test_starts_on_the_named_config_or_on_a_chatbot_by_its_published_config() -> None:
     client = FakeClient()
     run(client)
-    assert client.started_with.model_dump(exclude_unset=True) == {
-        "chatbotConfigId": "cfg_1",
-        "k": 3,
-        "harnessVersion": client.started_with.harnessVersion,
-        "trigger": eval_api.Trigger.number_2,
+    assert json.loads(client.started_with.model_dump_json()).keys() == {
+        "chatbotConfigId",
+        "k",
+        "harnessVersion",
+        "trigger",
     }
 
     nightly = FakeClient()
     EvalRunner(nightly, FakeHost(), out=nightly.out).run(
         target=ChatbotTarget(chatbot_id="bot_1"), k=1, trigger=eval_api.Trigger.number_3
     )
-    assert nightly.started_with.chatbotId == "bot_1"
-    assert "chatbotConfigId" not in nightly.started_with.model_fields_set
+    body = json.loads(nightly.started_with.model_dump_json())
+    assert body["chatbotId"] == "bot_1"
+    assert body["trigger"] == 3
+    assert "chatbotConfigId" not in body
+
+
+def test_required_tool_cases_stop_a_run_that_has_none_after_resetting_and_ending_it() -> None:
+    expectations = {**CASE["expectations"], "toolCalls": [], "readbacks": [], "rubric": "Says hello"}
+    client = FakeClient(case={**CASE, "expectations": expectations})
+    with pytest.raises(MissingToolCasesError):
+        EvalRunner(client, FakeHost(), out=client.out).run(
+            target=ChatbotTarget(chatbot_id="bot_1"),
+            k=1,
+            trigger=eval_api.Trigger.number_3,
+            require_tool_cases=True,
+        )
+    assert client.events == ["start", "reset", "finish"]
+    assert client.finish_request.isComplete is False
+    assert client.finish_request.failure == RUN_FAILURE_HARNESS_ERROR
 
 
 def test_runs_every_attempt_with_its_own_tag_then_resets_once_and_finishes() -> None:

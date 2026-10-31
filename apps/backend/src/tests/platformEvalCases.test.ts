@@ -1,13 +1,13 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
-import { eq, inArray, like } from "drizzle-orm";
+import { and, eq, like, lt } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
 import { evalCases } from "@/db/tables";
-import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import AppLogger from "@/providers/logger";
+import PlatformEvalCaseSyncProvider from "@/providers/platformEvalCaseSync";
 import PlatformEvalCasesRepo from "@/repositories/PlatformEvalCasesRepo";
 import Utility from "@/utils/Utility";
 
@@ -22,32 +22,44 @@ vi.mock("@/providers/logger", () => ({
   withRequestContext: vi.fn().mockImplementation((_id, next) => next()),
 }));
 
-// DEV_NOTE: The platform suite's case sync (M5-5) on the Neon staging branch, as diletta_app in withPlatform (the role
-// and transaction the cron uses). Its real cases are what every deploy writes to staging anyway, so they are left in
-// place. The rows a test adds carry the TEST_KEY_PREFIX key and are deleted by afterAll as the owner (platform rows are
-// no company's, so no company cleanup reaches them). A test row is active only for the sync that turns it off: other
-// suites running meanwhile read every active platform case (they tolerate transient ones).
+// DEV_NOTE: The platform suite's case sync (M5-5) on the Neon staging branch, as diletta_app in withPlatform (the role and
+// transaction the cron uses). Staging is shared, so these tests never write the real cases: the sync runs over definitions
+// of its own under TEST_KEY_PREFIX, never a safety case (the CHECK would keep it active for other suites), and each test
+// ends with its rows off. An eval run another suite starts while a row is on holds it in its case set until it finishes,
+// so afterAll (as the owner: no company cleanup reaches a platform row) deletes only rows older than ROW_MAX_AGE_MS, this
+// run's included on the next one. What the sync decides for safety cases is the pure plan's, in
+// platformEvalCaseSyncProvider.test.ts.
 const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 const TEST_KEY_PREFIX = `test.sync_${crypto.randomUUID().slice(0, 8)}`;
+const ROW_MAX_AGE_MS = 60 * 60_000;
 let ownerPool: Pool;
 let ownerDb: NodePgDatabase;
 
-const loaded = Schemas.loadPlatformEvalCases();
-if (!loaded.isSuccess) throw new Error(loaded.message);
-const codeCases = loaded.cases;
+const definition = (
+  suffix: string,
+  overrides: Partial<Schemas.PlatformEvalCaseDefinition> = {},
+): Schemas.PlatformEvalCaseDefinition => ({
+  platformKey: `${TEST_KEY_PREFIX}.${suffix}`,
+  name: `Sync test ${suffix}`,
+  isSafety: false,
+  body: {
+    messages: [{ role: Schemas.EvalCaseMessageRoleEnum.User, text: "Hello?" }],
+    rubric: "Greets the user.",
+    checks: Schemas.EVAL_CASE_NO_CHECKS,
+  },
+  ...overrides,
+});
 
-async function storedByKey() {
-  const rows = await ownerDb
+const sync = async (definitions: Schemas.PlatformEvalCaseDefinition[]) =>
+  await new PlatformEvalCasesRepo(env).sync({ definitions, keyPrefix: TEST_KEY_PREFIX });
+
+async function stored(suffix: string) {
+  const [row] = await ownerDb
     .select()
     .from(evalCases)
-    .where(
-      inArray(
-        evalCases.platformKey,
-        codeCases.map((evalCase) => evalCase.platformKey),
-      ),
-    );
-  return new Map(rows.map((row) => [row.platformKey, row]));
+    .where(eq(evalCases.platformKey, `${TEST_KEY_PREFIX}.${suffix}`));
+  return row;
 }
 
 beforeAll(async () => {
@@ -61,35 +73,30 @@ afterEach(() => {
 
 afterAll(async () => {
   try {
-    await ownerDb.delete(evalCases).where(like(evalCases.platformKey, `${TEST_KEY_PREFIX}%`));
+    const conditions = [
+      like(evalCases.platformKey, "test.sync\\_%"),
+      lt(evalCases.createdAt, new Date(Date.now() - ROW_MAX_AGE_MS)),
+    ];
+    await ownerDb.delete(evalCases).where(and(...conditions));
   } finally {
     await ownerPool.end();
   }
 });
 
 describe("PlatformEvalCasesRepo.sync", () => {
-  it("writes every case in code, active, then changes nothing on a rerun", async () => {
-    const synced = await new PlatformEvalCasesRepo(env).sync();
-    expect(synced.isSuccess).toBe(true);
+  afterEach(async () => {
+    await sync([]);
+  });
 
-    const stored = await storedByKey();
-    for (const evalCase of codeCases) {
-      const row = stored.get(evalCase.platformKey);
-      expect(row).toMatchObject({
-        companyId: null,
-        chatbotId: null,
-        name: evalCase.name,
-        isSafety: evalCase.isSafety,
-        isActive: true,
-        input: evalCase.input,
-        expectations: evalCase.expectations,
-      });
-      // DEV_NOTE: Every runnable path reads it back as the same case
-      expect(Schemas.readEvalCaseBody(row?.input, row?.expectations)).not.toBeNull();
-    }
+  it("writes a new case active, and changes nothing on a rerun", async () => {
+    const created = await sync([definition("new")]);
+    expect(created).toMatchObject({ isSuccess: true, createdCount: 1, updatedCount: 0 });
+    const row = await stored("new");
+    expect(row).toMatchObject({ companyId: null, chatbotId: null, isActive: true });
+    expect(Schemas.readEvalCaseBody(row?.input, row?.expectations)).not.toBeNull();
 
     // DEV_NOTE: jsonb reorders keys; the compare doesn't see that as a change
-    const rerun = await new PlatformEvalCasesRepo(env).sync();
+    const rerun = await sync([definition("new")]);
     expect(rerun).toMatchObject({
       isSuccess: true,
       createdCount: 0,
@@ -97,90 +104,58 @@ describe("PlatformEvalCasesRepo.sync", () => {
       deactivatedCount: 0,
       keptSafetyKeys: [],
     });
+    expect((await stored("new"))?.updatedAt).toEqual(row?.updatedAt);
   });
 
   it("rewrites a case edited outside the code back to the code's", async () => {
-    await new PlatformEvalCasesRepo(env).sync();
-    const [first] = codeCases;
-    if (!first) throw new Error("No platform case in code");
+    await sync([definition("edited")]);
     await ownerDb
       .update(evalCases)
       .set({ name: "Edited by hand" })
-      .where(eq(evalCases.platformKey, first.platformKey));
+      .where(eq(evalCases.platformKey, `${TEST_KEY_PREFIX}.edited`));
 
-    const synced = await new PlatformEvalCasesRepo(env).sync();
-    expect(synced).toMatchObject({ isSuccess: true, updatedCount: 1 });
-    expect((await storedByKey()).get(first.platformKey)?.name).toBe(first.name);
+    expect(await sync([definition("edited")])).toMatchObject({ isSuccess: true, updatedCount: 1 });
+    expect((await stored("edited"))?.name).toBe("Sync test edited");
   });
 
-  it("turns off a keyed case no longer in code, and keeps the code's on", async () => {
-    const removedKey = `${TEST_KEY_PREFIX}.removed`;
-    const [first] = codeCases;
-    if (!first) throw new Error("No platform case in code");
-    await ownerDb.insert(evalCases).values([
-      {
-        publicId: Utility.generatePublicId(),
-        platformKey: removedKey,
-        name: "Removed from code",
-        input: first.input,
-        expectations: first.expectations,
-      },
-    ]);
+  it("turns off a keyed case no longer in code, and turns it on again when it comes back", async () => {
+    await sync([definition("removed"), definition("kept")]);
 
-    const synced = await new PlatformEvalCasesRepo(env).sync();
-    expect(synced).toMatchObject({ isSuccess: true, keptSafetyKeys: [] });
-    expect(synced.deactivatedCount).toBeGreaterThanOrEqual(1);
-    const [removed] = await ownerDb
-      .select()
-      .from(evalCases)
-      .where(eq(evalCases.platformKey, removedKey));
-    expect(removed?.isActive).toBe(false);
-    // DEV_NOTE: The cases in code stay on
-    const stored = await storedByKey();
-    expect(codeCases.every((evalCase) => stored.get(evalCase.platformKey)?.isActive)).toBe(true);
-  });
-
-  it("keeps a safety case no longer in code active and alerts", async () => {
-    const keptKey = `${TEST_KEY_PREFIX}.safety`;
-    const original = EvalCasesDAL.prototype.getPlatformEvalCases;
-    const deactivate = vi.spyOn(EvalCasesDAL.prototype, "deactivatePlatformEvalCases");
-    // DEV_NOTE: The retired safety case is read, never written: it exists only in this read, so no other suite runs it
-    vi.spyOn(EvalCasesDAL.prototype, "getPlatformEvalCases").mockImplementation(async function (
-      this: EvalCasesDAL,
-      tx,
-    ) {
-      const read = await original.call(this, tx);
-      const now = new Date();
-      return {
-        ...read,
-        evalCases: [
-          ...(read.evalCases ?? []),
-          {
-            id: "0",
-            publicId: Utility.generatePublicId(),
-            companyId: null,
-            chatbotId: null,
-            platformKey: keptKey,
-            name: "Retired safety case",
-            input: {},
-            expectations: {},
-            isSafety: true,
-            isActive: true,
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-      };
+    expect(await sync([definition("kept")])).toMatchObject({
+      isSuccess: true,
+      deactivatedCount: 1,
     });
+    expect((await stored("removed"))?.isActive).toBe(false);
+    expect((await stored("kept"))?.isActive).toBe(true);
 
-    const synced = await new PlatformEvalCasesRepo(env).sync();
-    expect(synced).toMatchObject({ isSuccess: true, keptSafetyKeys: [keptKey] });
-    expect(deactivate.mock.calls[0]?.[1].ids).not.toContain("0");
+    expect(await sync([definition("removed"), definition("kept")])).toMatchObject({
+      updatedCount: 1,
+    });
+    expect((await stored("removed"))?.isActive).toBe(true);
+  });
+
+  it("writes nothing when one case in the list is bad", async () => {
+    const synced = await sync([
+      definition("good"),
+      definition("bad", { body: { ...definition("bad").body, rubric: null } }),
+    ]);
+    expect(synced.isSuccess).toBe(false);
+    expect(await stored("good")).toBeUndefined();
+  });
+
+  it("alerts on what the plan kept", async () => {
+    vi.spyOn(PlatformEvalCaseSyncProvider, "plan").mockReturnValueOnce({
+      create: [],
+      update: [],
+      deactivateIds: [],
+      keptSafetyKeys: ["safety.retired"],
+    });
+    const synced = await sync([]);
+    expect(synced).toMatchObject({ isSuccess: true, keptSafetyKeys: ["safety.retired"] });
     expect(AppLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({
         action: Schemas.LogAction.SyncPlatformEvalCases,
-        message: "Platform safety cases no longer in code are still active",
-        metadata: expect.objectContaining({ keptSafetyKeys: [keptKey] }),
+        message: "Platform safety cases removed or demoted in code are still active",
       }),
     );
   });
@@ -195,6 +170,8 @@ describe("PlatformEvalCasesRepo.sync", () => {
       input: {},
       expectations: {},
     });
-    await expect(refused).rejects.toThrow();
+    await expect(refused).rejects.toMatchObject({
+      cause: { constraint: "CHK_eval_cases_platform_key" },
+    });
   });
 });

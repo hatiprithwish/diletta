@@ -66,5 +66,5 @@ export type CreatePlatformEvalCaseDALRequest = PlatformEvalCase;
 export type UpdatePlatformEvalCaseDALRequest = PlatformEvalCase & Pick<EvalCase, "id">;
 
 // DEV_NOTE: Keyed platform cases no longer in code, turned off. Safety ones are left alone (the CHECK keeps a platform
-// safety case active); the Repo never sends one.
+// safety case active); the sync plan never lists one.
 export type DeactivatePlatformEvalCasesDALRequest = { ids: string[] };

@@ -80,6 +80,10 @@ class RunSummary:
     failed_cases: list[str] = field(default_factory=list)
 
 
+class MissingToolCasesError(Exception):
+    """The run was required to hold tool cases and holds none."""
+
+
 @dataclass(frozen=True)
 class ConfigTarget:
     config_id: str
@@ -99,24 +103,35 @@ class EvalRunner:
         self._host = host
         self._out = out
 
-    def run(self, *, target: RunTarget, k: int, trigger: eval_api.Trigger) -> RunSummary:
-        """target: the config to run, or a chatbot whose published config the backend picks at the start (M5-5)."""
+    def run(
+        self, *, target: RunTarget, k: int, trigger: eval_api.Trigger, require_tool_cases: bool = False
+    ) -> RunSummary:
+        """target: the config to run, or a chatbot whose published config the backend picks at the start (M5-5).
+
+        require_tool_cases: stop the run when no case expects a tool call. Platform cases never name a tool, so the
+        nightly suite would otherwise pass on them alone when the chatbot lacks the test host's cases.
+        """
         self._host.prepare()
         if isinstance(target, ChatbotTarget):
-            request = eval_api.CreateEvalRunApiRequest(
-                chatbotId=target.chatbot_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
+            request = eval_api.CreateEvalRunByChatbotApiRequest(
+                chatbotId=target.chatbot_id,
+                k=k,
+                harnessVersion=HARNESS_VERSION,
+                trigger=eval_api.Trigger1(trigger.value),
             )
         else:
-            request = eval_api.CreateEvalRunApiRequest(
+            request = eval_api.CreateEvalRunByConfigApiRequest(
                 chatbotConfigId=target.config_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
             )
-        started = self._client.start_run(request)
+        started = self._client.start_run(eval_api.CreateEvalRunApiRequest(root=request))
         run_id = started.run.publicId
         self._say(f"Run {run_id}: {len(started.cases)} cases × {k} attempts")
 
         failed_cases: list[str] = []
         stopped_by: BaseException | None = None
         try:
+            if require_tool_cases and not any(case.expectations.toolCalls for case in started.cases):
+                raise MissingToolCasesError("The run has no case that expects a tool call: seed the chatbot's cases")
             for case in started.cases:
                 has_case_passed = True
                 for attempt in range(1, k + 1):

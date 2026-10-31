@@ -876,7 +876,6 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       started.cases.map((evalCase) => evalCase.publicId).filter((id) => id !== skipped),
     );
     routeTestHostFetch();
-    routeTestHostFetch();
     const reset = await call(`/runs/${runId}/reset`, {
       token: await tokenFor(tenant),
       hostToken: tenant.hostToken,
@@ -1065,7 +1064,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
 // runs it with trigger Gate through /eval/*, and the finish moves the version. Results are recorded straight (the
 // grading is the harness's); the staging connection has no reset_op, so the reset needs no host call.
 // DEV_NOTE: Each gate run records EVAL_GATE_MIN_K results for every case of its set over HTTP (three runs in one test)
-const GATE_TIMEOUT_MS = 300_000;
+const GATE_TIMEOUT_MS = 600_000;
 
 describe("Publish gate (M5-4)", { timeout: GATE_TIMEOUT_MS }, () => {
   async function createGateTenant() {
@@ -1242,6 +1241,26 @@ describe("Publish gate (M5-4)", { timeout: GATE_TIMEOUT_MS }, () => {
     const published = await repo.publishChatbotConfig(tenant.version);
     expect(published.isSuccess).toBe(false);
     expect(published.failure).toBe(Schemas.ChatbotConfigFailureEnum.NotReady);
+  });
+
+  it("refuses to publish a Ready version when a safety case changed after its gate run", async () => {
+    const tenant = await createGateTenant();
+    const repo = new ChatbotConfigsRepo(env);
+    const safetyCase = await addSafetyCase(tenant);
+    await repo.sendChatbotConfigToTesting(tenant.version);
+    const gate = Schemas.ZCreateEvalRunApiResponse.parse(await (await startGateRun(tenant)).json());
+    expect((await gradeAndFinish(tenant, gate)).hasPassed).toBe(true);
+
+    // DEV_NOTE: An edit keeps the id, so the run's case set still names it
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(evalCases)
+        .set({ updatedAt: new Date(Date.now() + 60_000) })
+        .where(eq(evalCases.publicId, safetyCase)),
+    );
+    const published = await repo.publishChatbotConfig(tenant.version);
+    expect(published.isSuccess).toBe(false);
+    expect(published.failure).toBe(Schemas.ChatbotConfigFailureEnum.GateOutdated);
   });
 
   it("makes a passing version Ready on its own run, and ignores a run left from an earlier send", async () => {

@@ -191,13 +191,14 @@ async function seedTool(
 async function seedEvalCases(
   client: pg.Client,
   companyId: string,
-): Promise<{ name: string; change: string }[] | null> {
-  const chatbot = await client.query<{ id: string }>(
-    "SELECT id FROM chatbots WHERE company_id = $1 AND is_default AND status = $2",
+): Promise<{ chatbotPublicId: string; cases: { name: string; change: string }[] } | null> {
+  const chatbot = await client.query<{ id: string; public_id: string }>(
+    "SELECT id, public_id FROM chatbots WHERE company_id = $1 AND is_default AND status = $2",
     [companyId, Schemas.ChatbotStatusIntEnum.Active],
   );
   const chatbotId = chatbot.rows[0]?.id;
-  if (!chatbotId) return null;
+  const chatbotPublicId = chatbot.rows[0]?.public_id;
+  if (!chatbotId || !chatbotPublicId) return null;
 
   const seeded = [];
   for (const definition of Schemas.TEST_HOST_EVAL_CASES) {
@@ -240,7 +241,7 @@ async function seedEvalCases(
     );
     seeded.push({ name: definition.name, change: "updated" });
   }
-  return seeded;
+  return { chatbotPublicId, cases: seeded };
 }
 
 // DEV_NOTE: What a chat with these tools needs that the seed doesn't make: reported, not created
@@ -322,8 +323,8 @@ async function main() {
         ...seeded.map(({ name, version, change }) => `  ${name} v${version}: ${change}`),
         seededCases === null
           ? "No eval cases seeded: the company has no active default chatbot yet. Rerun after creating it."
-          : "Eval cases on the default chatbot (the nightly suite's own):",
-        ...(seededCases ?? []).map(({ name, change }) => `  ${name}: ${change}`),
+          : `Eval cases on the default chatbot ${seededCases.chatbotPublicId} (set NIGHTLY_CHATBOT_ID to it):`,
+        ...(seededCases?.cases ?? []).map(({ name, change }) => `  ${name}: ${change}`),
         "Pin these in the chatbot's config (tools):",
         JSON.stringify(seeded.map(({ name, version }) => ({ name, version }))),
         gaps.length > 0

@@ -455,6 +455,7 @@ export enum LogAction {
   GetPendingOwnerFiles = "GetPendingOwnerFiles",
   SweepEvalTranscripts = "SweepEvalTranscripts",
   // Nightly platform suite (M5-5)
+  LockPlatformEvalCases = "LockPlatformEvalCases",
   GetPlatformEvalCases = "GetPlatformEvalCases",
   CreatePlatformEvalCase = "CreatePlatformEvalCase",
   UpdatePlatformEvalCase = "UpdatePlatformEvalCase",

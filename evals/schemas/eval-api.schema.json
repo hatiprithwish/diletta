@@ -63,14 +63,19 @@
   ],
   "$defs": {
     "CreateEvalRunApiRequest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CreateEvalRunByConfigApiRequest"
+        },
+        {
+          "$ref": "#/$defs/CreateEvalRunByChatbotApiRequest"
+        }
+      ]
+    },
+    "CreateEvalRunByConfigApiRequest": {
       "type": "object",
       "properties": {
         "chatbotConfigId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "chatbotId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64
@@ -95,10 +100,46 @@
         }
       },
       "required": [
+        "chatbotConfigId",
         "k",
         "harnessVersion",
         "trigger"
-      ]
+      ],
+      "additionalProperties": false
+    },
+    "CreateEvalRunByChatbotApiRequest": {
+      "type": "object",
+      "properties": {
+        "chatbotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "harnessVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "trigger": {
+          "type": "number",
+          "enum": [
+            2,
+            3
+          ]
+        }
+      },
+      "required": [
+        "chatbotId",
+        "k",
+        "harnessVersion",
+        "trigger"
+      ],
+      "additionalProperties": false
     },
     "CreateEvalRunApiResponse": {
       "type": "object",

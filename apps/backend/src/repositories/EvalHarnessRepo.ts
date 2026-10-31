@@ -13,11 +13,11 @@ import EvalRefusalProvider from "@/providers/evalRefusal";
 import EvalTranscriptFilesProvider from "@/providers/evalTranscriptFiles";
 import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
+import NightlySuiteAlertProvider from "@/providers/nightlySuiteAlert";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ChatbotConfigsRepo from "@/repositories/ChatbotConfigsRepo";
 import ConversationsRepo from "@/repositories/ConversationsRepo";
 import EvalTranscriptsRepo from "@/repositories/EvalTranscriptsRepo";
-import NightlySuiteRepo from "@/repositories/NightlySuiteRepo";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -43,7 +43,7 @@ type Tx = NodePgTransaction<EmptyRelations>;
 //   finish: Done (every case of the set ran its k attempts) or Failed, with pass^k over the whole set and the gate's
 //     verdict (Schemas.evalRunGateDecision: threshold + every safety case); a Gate run's finish has its Testing config
 //     moved to Ready (approved_by_run_id) or back to Draft by ChatbotConfigsRepo.applyGateResult (M5-4); a Nightly run
-//     that didn't pass alerts after the commit (NightlySuiteRepo.reportFinishedRun, M5-5).
+//     that didn't pass alerts after the commit (NightlySuiteAlertProvider, M5-5).
 // Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
 // case's input with {case.tag} filled in), not compared to the stored case; the grading is the harness's too.
 // The host bearer token (the harness's, from the host's own login) only passes through: to the DO's memory or the
@@ -705,9 +705,6 @@ export default class EvalHarnessRepo {
     const { identity, request } = params;
     const companyId = identity.companyId;
     const metadata = { companyId, runPublicId: params.runPublicId, isComplete: request.isComplete };
-    // DEV_NOTE: What the committed finish needs for the nightly suite's alert (M5-5), set inside the transaction
-    const finishedRun: { run: Pick<Schemas.EvalRun, "trigger" | "failure"> | null } = { run: null };
-
     const result: Schemas.FinishEvalRunResponse = await withTenant(
       this.db,
       companyId,
@@ -774,7 +771,6 @@ export default class EvalHarnessRepo {
             : this.stepFailure(false, finished.message);
         }
         const { evalRun } = finished;
-        finishedRun.run = { trigger: run.trigger, failure: evalRun.failure };
         const moved =
           run.trigger === Schemas.EvalRunTriggerIntEnum.Gate
             ? await this.chatbotConfigsRepo.applyGateResult(tx, {
@@ -788,7 +784,9 @@ export default class EvalHarnessRepo {
           message: "Eval run finished",
           outboxIds: moved.outboxIds,
           run: {
+            trigger: run.trigger,
             status: evalRun.status,
+            failure: evalRun.failure,
             caseCount: evalRun.caseCount,
             passAllKCount: evalRun.passAllKCount,
             hasPassed: evalRun.hasPassed,
@@ -812,17 +810,11 @@ export default class EvalHarnessRepo {
       message: "Eval run finished",
       metadata: { ...metadata, hasPassed: result.run?.hasPassed ?? null },
     });
-    if (finishedRun.run && result.run) {
-      NightlySuiteRepo.reportFinishedRun({
+    if (result.run) {
+      NightlySuiteAlertProvider.reportFinishedRun({
         companyId,
         runPublicId: params.runPublicId,
-        trigger: finishedRun.run.trigger,
-        status: result.run.status,
-        hasPassed: result.run.hasPassed,
-        caseCount: result.run.caseCount,
-        passAllKCount: result.run.passAllKCount,
-        failedSafetyCaseCount: result.run.failedSafetyCaseCount,
-        failure: finishedRun.run.failure,
+        run: result.run,
       });
     }
     return result;
@@ -836,18 +828,11 @@ export default class EvalHarnessRepo {
     companyId: string,
     request: Schemas.CreateEvalRunApiRequest,
   ): Promise<Schemas.EvalRunConfigTargetResponse> {
-    if (request.chatbotConfigId !== undefined) {
+    if ("chatbotConfigId" in request) {
       return {
         isSuccess: true,
         message: "Config named",
         target: { publicId: request.chatbotConfigId },
-      };
-    }
-    if (request.chatbotId === undefined) {
-      return {
-        isSuccess: false,
-        message: "Name either a config or a chatbot",
-        failure: Schemas.EvalRunStepFailureEnum.Invalid,
       };
     }
     const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {

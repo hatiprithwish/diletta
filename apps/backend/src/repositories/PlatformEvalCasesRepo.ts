@@ -4,20 +4,20 @@ import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import { TenantRollbackError } from "@/db/withTenant";
 import AppLogger from "@/providers/logger";
-import Utility from "@/utils/Utility";
+import PlatformEvalCaseSyncProvider from "@/providers/platformEvalCaseSync";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The platform suite's cases (M5-5): writes Schemas.PLATFORM_EVAL_CASES to eval_cases, run by the hourly
 // PlatformEvalCaseSync cron, so a deploy reaches every environment's database without an owner connection. Platform
-// cases belong to no company, so the sync runs in withPlatform (pattern rule 3.15), all in one transaction: a failed
-// step rolls the whole sync back (TenantRollbackError) and the next hour retries it. Matched by platform_key:
-//   - a key not stored yet → inserted, active;
-//   - a stored key whose name, safety flag or bodies differ from the code (bodies compared through stableStringify,
-//     since jsonb doesn't keep key order), or that is off → rewritten and turned on;
-//   - a stored key no longer in code → turned off, unless it is a safety case: the CHECK keeps a platform safety case
-//     active, so it stays and the sync alerts (error log → Sentry, M6-6) until a migration retires it.
-// A sync that changes nothing writes nothing. No audit row: no company owns these rows and no person made the change (the
-// code review is the record). Case text stays out of every log.
+// cases belong to no company, so the sync runs in withPlatform (pattern rule 3.15), all in one transaction, under a
+// lock so overlapping syncs take turns: a failed step rolls the whole sync back (TenantRollbackError) and the next hour
+// retries it. PlatformEvalCaseSyncProvider.plan decides the writes; a safety case code removed or demoted stays as it is
+// and the sync alerts (error log → Sentry, M6-6) until a migration retires it. A sync that changes nothing writes nothing.
+// No audit row: no company owns these rows and no person made the change (the code review is the record). Case text stays
+// out of every log.
+//
+// The scope is for tests only: they sync their own definitions over rows under their own key prefix, so running the suite
+// never writes this checkout's real cases into the shared staging branch.
 export default class PlatformEvalCasesRepo {
   private db: NodePgDatabase;
   private evalCasesDal: EvalCasesDAL;
@@ -27,8 +27,10 @@ export default class PlatformEvalCasesRepo {
     this.evalCasesDal = new EvalCasesDAL();
   }
 
-  async sync(): Promise<Schemas.SyncPlatformEvalCasesResponse> {
-    const loaded = Schemas.loadPlatformEvalCases();
+  async sync(
+    scope: { definitions: Schemas.PlatformEvalCaseDefinition[]; keyPrefix: string } | null = null,
+  ): Promise<Schemas.SyncPlatformEvalCasesResponse> {
+    const loaded = Schemas.loadPlatformEvalCases(scope?.definitions);
     if (!loaded.isSuccess) {
       AppLogger.error({
         category: Schemas.LogCategory.Eval,
@@ -41,55 +43,35 @@ export default class PlatformEvalCasesRepo {
     const result: Schemas.SyncPlatformEvalCasesResponse = await withPlatform(
       this.db,
       async (tx) => {
+        const locked = await this.evalCasesDal.lockPlatformEvalCases(tx);
+        if (!locked.isSuccess) {
+          throw new TenantRollbackError(locked.message ?? "Platform eval cases couldn't be locked");
+        }
         const stored = await this.evalCasesDal.getPlatformEvalCases(tx);
         if (!stored.isSuccess || !stored.evalCases) {
           throw new TenantRollbackError(stored.message ?? "Platform eval cases couldn't be read");
         }
-        const storedByKey = new Map(
-          stored.evalCases.flatMap((row) => (row.platformKey ? [[row.platformKey, row]] : [])),
+        const plan = PlatformEvalCaseSyncProvider.plan(
+          scope
+            ? stored.evalCases.filter((row) => row.platformKey?.startsWith(scope.keyPrefix))
+            : stored.evalCases,
+          loaded.cases,
         );
 
-        let createdCount = 0;
-        let updatedCount = 0;
-        for (const evalCase of loaded.cases) {
-          const row = storedByKey.get(evalCase.platformKey);
-          if (!row) {
-            const created = await this.evalCasesDal.createPlatformEvalCase(tx, evalCase);
-            if (!created.isSuccess) {
-              throw new TenantRollbackError(
-                created.message ?? "A platform eval case wasn't created",
-              );
-            }
-            createdCount++;
-            continue;
+        for (const evalCase of plan.create) {
+          const created = await this.evalCasesDal.createPlatformEvalCase(tx, evalCase);
+          if (!created.isSuccess) {
+            throw new TenantRollbackError(created.message ?? "A platform eval case wasn't created");
           }
-          const isSame =
-            row.isActive &&
-            row.name === evalCase.name &&
-            row.isSafety === evalCase.isSafety &&
-            Utility.stableStringify(row.input) === Utility.stableStringify(evalCase.input) &&
-            Utility.stableStringify(row.expectations) ===
-              Utility.stableStringify(evalCase.expectations);
-          if (isSame) continue;
-          const updated = await this.evalCasesDal.updatePlatformEvalCase(tx, {
-            ...evalCase,
-            id: row.id,
-          });
+        }
+        for (const evalCase of plan.update) {
+          const updated = await this.evalCasesDal.updatePlatformEvalCase(tx, evalCase);
           if (!updated.isSuccess) {
             throw new TenantRollbackError(updated.message ?? "A platform eval case wasn't updated");
           }
-          updatedCount++;
         }
-
-        const codeKeys = new Set(loaded.cases.map((evalCase) => evalCase.platformKey));
-        const removed = stored.evalCases.filter(
-          (row) => row.platformKey !== null && !codeKeys.has(row.platformKey) && row.isActive,
-        );
-        const keptSafetyKeys = removed.flatMap((row) =>
-          row.isSafety && row.platformKey ? [row.platformKey] : [],
-        );
         const deactivated = await this.evalCasesDal.deactivatePlatformEvalCases(tx, {
-          ids: removed.filter((row) => !row.isSafety).map((row) => row.id),
+          ids: plan.deactivateIds,
         });
         if (!deactivated.isSuccess) {
           throw new TenantRollbackError(
@@ -100,10 +82,10 @@ export default class PlatformEvalCasesRepo {
         return {
           isSuccess: true,
           message: "Platform eval cases synced",
-          createdCount,
-          updatedCount,
+          createdCount: plan.create.length,
+          updatedCount: plan.update.length,
           deactivatedCount: deactivated.changedCount ?? 0,
-          keptSafetyKeys,
+          keptSafetyKeys: plan.keptSafetyKeys,
         };
       },
     );
@@ -125,7 +107,7 @@ export default class PlatformEvalCasesRepo {
       AppLogger.error({
         category: Schemas.LogCategory.Eval,
         action: Schemas.LogAction.SyncPlatformEvalCases,
-        message: "Platform safety cases no longer in code are still active",
+        message: "Platform safety cases removed or demoted in code are still active",
         metadata: { ...metadata, keptSafetyKeys: result.keptSafetyKeys },
       });
     } else if (metadata.createdCount || metadata.updatedCount || metadata.deactivatedCount) {

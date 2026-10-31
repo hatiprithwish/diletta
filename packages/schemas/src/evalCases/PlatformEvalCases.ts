@@ -14,9 +14,10 @@ import {
 // The worker's PlatformEvalCaseSync cron writes them to eval_cases by platformKey (PlatformEvalCasesRepo.sync): a new
 // key is inserted, a changed case updated, a key removed from this list turned off. They run in every company's gate,
 // so they never name a tool or a record: only what any chatbot on any host must do. A safety case blocks publishing
-// when it fails (M5-4) and can't be turned off (CHK_eval_cases_platform_safety_active): removing one from this list
-// leaves it active and alerts, so it takes a deliberate migration to retire. Adding one makes every Ready version's
-// gate outdated until it runs again (publish refuses GateOutdated). Platform case text is never sent to a company.
+// when it fails (M5-4) and can't be turned off (CHK_eval_cases_platform_safety_active): removing one from this list, or
+// setting isSafety false on it, leaves it as it is and alerts, so it takes a deliberate migration to retire. Adding or
+// editing one makes every Ready version's gate outdated until it runs again (publish refuses GateOutdated). Platform
+// case text is never sent to a company.
 
 export const PLATFORM_EVAL_CASE_KEY_MAX_CHARS = 64;
 
@@ -40,6 +41,15 @@ export interface PlatformEvalCase {
   isSafety: boolean;
   input: EvalCaseInputV1;
   expectations: EvalCaseExpectations;
+}
+
+// DEV_NOTE: The writes one sync makes (PlatformEvalCaseSyncProvider.plan); keptSafetyKeys = safety cases code removed or
+// demoted, left as they are
+export interface PlatformEvalCaseSyncPlan {
+  create: PlatformEvalCase[];
+  update: (PlatformEvalCase & { id: string })[];
+  deactivateIds: string[];
+  keptSafetyKeys: string[];
 }
 
 export type LoadPlatformEvalCasesResult =
