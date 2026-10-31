@@ -141,8 +141,8 @@ export default {
   },
 
   // DEV_NOTE: EVENTS_QUEUE consumer (the only queue this worker consumes)
-  async queue(batch: MessageBatch<unknown>, _env: Env, ctx: ExecutionContext) {
-    await consumeEvents(batch);
+  async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext) {
+    await consumeEvents(batch, env, ctx);
     ctx.waitUntil(disposeLogger());
   },
 } satisfies ExportedHandler<Env>;

@@ -564,6 +564,7 @@ export const qualityIssues = table(
     issueType: t.smallint("issue_type").$type<Schemas.QualityIssueTypeIntEnum>(), // null until triage
     note: t.text(),
     evalCaseId: t.bigint("eval_case_id", { mode: "string" }), // → eval_cases.id (became a test)
+    docGapClusterId: t.bigint("doc_gap_cluster_id", { mode: "string" }), // → doc_gap_clusters.id (M5-6)
     createdBy: t.bigint("created_by", { mode: "string" }), // → admins.id, source = admin only
     updatedBy: t.bigint("updated_by", { mode: "string" }), // → admins.id (triage)
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -573,6 +574,11 @@ export const qualityIssues = table(
     t.uniqueIndex("UNQ_quality_issues_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_quality_issues_feedback_id").on(table.feedbackId),
     t.uniqueIndex("UNQ_quality_issues_eval_case_id").on(table.evalCaseId),
+    t.uniqueIndex("UNQ_quality_issues_doc_gap_cluster_id").on(table.docGapClusterId),
+    t.check(
+      "CHK_quality_issues_doc_gap_cluster_id",
+      sql`${table.docGapClusterId} IS NULL OR (${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.System)} AND ${table.conversationId} IS NULL)`,
+    ),
     t.check(
       "CHK_quality_issues_user_feedback_id",
       sql`(${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.User)}) = (${table.feedbackId} IS NOT NULL)`,
@@ -979,6 +985,7 @@ export const docGapClusters = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     label: t.text().notNull(),
     centroid: t.halfvec("centroid", { dimensions: 1024 }).notNull(),
     questionCount: t.integer("question_count").notNull().default(0),
@@ -994,6 +1001,7 @@ export const docGapClusters = table(
   (table) => [
     t.uniqueIndex("UNQ_doc_gap_clusters_public_id").on(table.publicId),
     t.index("IDX_doc_gap_clusters_company_id").on(table.companyId),
+    t.index("IDX_doc_gap_clusters_chatbot_id").on(table.chatbotId),
     t.index("IDX_doc_gap_clusters_answered_by_document_id").on(table.answeredByDocumentId),
   ],
 );
@@ -1005,6 +1013,7 @@ export const docGaps = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     conversationId: t.bigint("conversation_id", { mode: "string" }), // → conversations.id
     messageId: t.bigint("message_id", { mode: "string" }), // → messages.id
     questionGeneric: t.text("question_generic").notNull(),
@@ -1018,6 +1027,7 @@ export const docGaps = table(
     t.uniqueIndex("UNQ_doc_gaps_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_doc_gaps_message_id").on(table.messageId),
     t.index("IDX_doc_gaps_company_id").on(table.companyId),
+    t.index("IDX_doc_gaps_chatbot_id").on(table.chatbotId),
     t.index("IDX_doc_gaps_conversation_id").on(table.conversationId),
     t.index("IDX_doc_gaps_cluster_id").on(table.clusterId),
   ],

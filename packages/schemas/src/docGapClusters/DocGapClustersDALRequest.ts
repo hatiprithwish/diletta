@@ -36,3 +36,22 @@ export type DismissDocGapClusterDALRequest = Pick<DocGapCluster, "companyId" | "
 export type ReopenDocGapClustersDALRequest = Pick<DocGapCluster, "companyId"> & {
   knowledgeDocumentIds: string[];
 };
+
+// DEV_NOTE: The closest group a new question may join (M5-6), locked: Open and Dismissed only, so an Answered group's
+// document having failed starts a new group
+export type FindNearestDocGapClusterDALRequest = Pick<DocGapCluster, "companyId" | "chatbotId"> & {
+  embedding: number[];
+};
+
+export type LockDocGapClusteringDALRequest = Pick<DocGapCluster, "companyId" | "chatbotId">;
+
+export type CreateDocGapClusterDALRequest = Pick<
+  DocGapCluster,
+  "companyId" | "chatbotId" | "label"
+> & { centroid: number[] };
+
+// DEV_NOTE: One more question in the group, with its new centroid
+export type GrowDocGapClusterDALRequest = Pick<
+  DocGapCluster,
+  "companyId" | "id" | "questionCount"
+> & { centroid: number[] };

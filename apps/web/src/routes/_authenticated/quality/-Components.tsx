@@ -38,9 +38,12 @@ import {
 const UNTITLED = "Untitled conversation";
 const NOT_TRIAGED = "Not triaged";
 
-// DEV_NOTE: An issue's title: its conversation's, or for a check on the whole chatbot (a health drop, M5-5, no
-// conversation) the chatbot it is about
+// DEV_NOTE: An issue's title: its conversation's, for a growing group of unanswered questions (M5-6) the group's, or for
+// a check on the whole chatbot (a health drop, M5-5, no conversation) the chatbot it is about
 function issueTitle(qualityIssue: Schemas.QualityIssueListItem): string {
+  if (qualityIssue.docGapCluster) {
+    return `Unanswered questions: ${qualityIssue.docGapCluster.label}`;
+  }
   if (qualityIssue.isChatbotWide) {
     return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
   }
@@ -364,11 +367,13 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
       <div className="mx-[22px] mb-4 flex flex-col gap-2.5 rounded-lg bg-surface-subtle px-3.5 py-3">
         {qualityIssue.excerpt.length === 0 && (
           <p className="text-body text-muted-foreground">
-            {qualityIssue.isChatbotWide
-              ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
-              : qualityIssue.isContentPurged
-                ? "The chat's content was deleted."
-                : "No messages yet."}
+            {qualityIssue.docGapCluster
+              ? "Several people asked this and the help docs had no answer. Use Add a document on this group in Knowledge; that closes this item too."
+              : qualityIssue.isChatbotWide
+                ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
+                : qualityIssue.isContentPurged
+                  ? "The chat's content was deleted."
+                  : "No messages yet."}
           </p>
         )}
         {qualityIssue.excerpt.map((message) => (
@@ -423,6 +428,11 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
             </p>
           )}
           <div className="flex flex-wrap gap-2">
+            {qualityIssue.docGapCluster && (
+              <Button asChild>
+                <Link to="/knowledge">Open Knowledge</Link>
+              </Button>
+            )}
             {!qualityIssue.isChatbotWide && (
               <Button disabled={isBusy} onClick={createTest}>
                 <Plus aria-hidden />

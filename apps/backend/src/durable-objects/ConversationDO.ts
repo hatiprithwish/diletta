@@ -1177,6 +1177,7 @@ export class ConversationDO extends Think<Env> {
         turnId: turn.turnId,
         messages: turn.messages,
         title: turn.title,
+        docGapSignal: turn.docGapSignal,
       });
       if (!recorded.isSuccess) {
         AppLogger.error({
@@ -1187,6 +1188,7 @@ export class ConversationDO extends Think<Env> {
         });
         return false;
       }
+      this.relayEvents(recorded.outboxIds);
       const turnIds = { ...(this.getRuntimeState()?.turnIds ?? {}) };
       if (turn.userMessageId !== null) delete turnIds[turn.userMessageId];
       this.patchRuntimeState({

@@ -1,6 +1,6 @@
 # Quality inbox
 
-The dashboard's Quality page (M4-6) is where a company works through its quality issues: thumbs-downs from users (M2-8), conversations an admin flagged (M4-4) and automatic checks such as a rejected model key (M2-3) or a chatbot's day going clearly worse than usual (M5-5, `docs/runbooks/health.md`). A health drop is about the whole chatbot, not one conversation: it has no excerpt and can't become a test (`test-draft` / `convert` answer 409 `NoConversation`); mark it fixed or dismiss it. Each issue is triaged (a type and a note), then closed one way: marked fixed, dismissed, or turned into a test.
+The dashboard's Quality page (M4-6) is where a company works through its quality issues: thumbs-downs from users (M2-8), conversations an admin flagged (M4-4) and automatic checks such as a rejected model key (M2-3) or a chatbot's day going clearly worse than usual (M5-5, `docs/runbooks/health.md`). A health drop is about the whole chatbot, not one conversation: it has no excerpt and can't become a test (`test-draft` / `convert` answer 409 `NoConversation`); mark it fixed or dismiss it. A growing group of unanswered questions (M5-6, `docs/runbooks/knowledge.md`) opens one item too, titled "Unanswered questions: <question>", with no excerpt and no Create test: answering or dismissing the group on the Knowledge page closes it. Each issue is triaged (a type and a note), then closed one way: marked fixed, dismissed, or turned into a test.
 
 ## Statuses
 

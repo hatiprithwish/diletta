@@ -5,6 +5,7 @@ import DocGapClustersDAL from "@/data-access-layer/DocGapClustersDAL";
 import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import DocGapQualityProvider from "@/providers/docGapQuality";
 import AppLogger from "@/providers/logger";
 import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
@@ -15,7 +16,8 @@ type Tx = NodePgTransaction<EmptyRelations>;
 // the list with its tab counts and each group's newest questions, Answer (the document that closes the group: uploaded
 // or picked by the admin) and Dismiss. Both start from Open under the group's row lock and end it (no reopen by hand;
 // removing the answering document reopens it, KnowledgeDocumentFilesProvider). One withTenant per method; the answer
-// is read back in the same transaction. The clustering that writes the groups and their questions is M5-6.
+// is read back in the same transaction. The clustering that writes the groups and their questions is DocGapsRepo (M5-6);
+// closing a group here also closes the Quality item it opened (DocGapQualityProvider), in the same transaction.
 export default class DocGapClustersRepo {
   private db: NodePgDatabase;
   private dal: DocGapClustersDAL;
@@ -55,6 +57,7 @@ export default class DocGapClustersRepo {
     }
     return {
       publicId: row.publicId,
+      chatbotName: row.chatbotName,
       label: row.label,
       questionCount: row.questionCount,
       docGapClusterStatus: row.status,
@@ -111,6 +114,7 @@ export default class DocGapClustersRepo {
           docGapClusters: rows.map((row) => this.toListItem(row, sampleQuestions[row.id] ?? [])),
           totalRecords: tabCounts[tab],
           tabCounts,
+          chatbotCount: counted.chatbotCount ?? 0,
         };
       },
     );
@@ -159,7 +163,13 @@ export default class DocGapClustersRepo {
           open.row,
           Schemas.AuditEntityActionEnum.Answered,
         );
-        return { ...(await this.readBack(tx, params)), outboxIds: [outboxId] };
+        const issueOutboxIds = await this.closeQualityItem(
+          tx,
+          params,
+          open.row,
+          Schemas.QualityIssueStatusIntEnum.Fixed,
+        );
+        return { ...(await this.readBack(tx, params)), outboxIds: [outboxId, ...issueOutboxIds] };
       },
     );
     return this.logRefusal(result, params, Schemas.LogAction.AnswerDocGapCluster);
@@ -189,7 +199,13 @@ export default class DocGapClustersRepo {
           open.row,
           Schemas.AuditEntityActionEnum.Dismissed,
         );
-        return { ...(await this.readBack(tx, params)), outboxIds: [outboxId] };
+        const issueOutboxIds = await this.closeQualityItem(
+          tx,
+          params,
+          open.row,
+          Schemas.QualityIssueStatusIntEnum.Dismissed,
+        );
+        return { ...(await this.readBack(tx, params)), outboxIds: [outboxId, ...issueOutboxIds] };
       },
     );
     return this.logRefusal(result, params, Schemas.LogAction.DismissDocGapCluster);
@@ -211,6 +227,25 @@ export default class DocGapClustersRepo {
       entity: row,
       label: row.label,
     });
+  }
+
+  // DEV_NOTE: The group's Quality item follows it closed (M5-6); a failure rolls the write back
+  private async closeQualityItem(
+    tx: Tx,
+    params: { companyId: string; adminId: string },
+    row: Schemas.DocGapClusterRow,
+    status: Schemas.QualityIssueCloseStatus,
+  ): Promise<string[]> {
+    const closed = await DocGapQualityProvider.closeForCluster(tx, {
+      companyId: params.companyId,
+      docGapClusterId: row.id,
+      status,
+      adminId: params.adminId,
+    });
+    if (!closed.isSuccess) {
+      throw new TenantRollbackError(closed.message ?? "Quality item not closed");
+    }
+    return closed.outboxId ? [closed.outboxId] : [];
   }
 
   // DEV_NOTE: The group locked (unknown → 404) and checked Open (else failure NotOpen)

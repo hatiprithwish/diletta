@@ -34,6 +34,10 @@ export enum ModelTaskTypeEnum {
   KnowledgeEmbed = "knowledge.embed",
   SearchEmbed = "search.embed",
   SearchRerank = "search.rerank",
+  // DEV_NOTE: Doc gaps (M5-6): the verdict + PII-stripped rewrite on the company's key, the question's embedding on
+  // Workers AI. Background jobs: no conversation on the row.
+  DocGapRewrite = "doc_gap.rewrite",
+  DocGapEmbed = "doc_gap.embed",
 }
 
 // DEV_NOTE: Providers the platform pays for itself (model_calls.provider). Never a company model key provider: a

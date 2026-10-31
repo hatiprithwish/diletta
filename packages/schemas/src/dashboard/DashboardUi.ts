@@ -495,6 +495,7 @@ export interface DashboardDocGapClustersProps {
 // DEV_NOTE: isDismissing = this row's Dismiss is running (the list holds the one mutation)
 export interface DashboardDocGapClusterRowProps {
   cluster: DocGapClusterListItem;
+  hasSeveralChatbots: boolean;
   isDismissing: boolean;
   onAddDocument: (cluster: DocGapClusterListItem) => void;
   onDismiss: (cluster: DocGapClusterListItem) => void;
