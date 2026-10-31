@@ -20,6 +20,7 @@ import WidgetJwtProvider from "@/providers/widgetJwt";
 import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
 import Constants from "@/config/Constants";
 import Utility from "@/utils/Utility";
+import { refuseRedirectError } from "@/tests/helpers/gateway";
 import {
   base64Url,
   claimsFor,
@@ -102,7 +103,8 @@ async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
 
 // DEV_NOTE: Answers the JWKS URL of each listed issuer; any other fetch fails the test loudly
 function mockJwksFetch(responses: Record<string, () => Response>) {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    refuseRedirectError(init);
     const url = input instanceof Request ? input.url : input.toString();
     for (const [issuer, respond] of Object.entries(responses)) {
       if (url === JwksProvider.getJwksUrl(issuer)) return respond();
@@ -381,6 +383,17 @@ describe("JwksProvider", () => {
 
     expect((await JwksProvider.getJwks(env, down)).isSuccess).toBe(false);
     expect((await JwksProvider.getJwks(env, garbage)).isSuccess).toBe(false);
+  });
+
+  it("fails on a redirect without following it", async () => {
+    const moved = randomIssuer();
+    const fetchSpy = mockJwksFetch({
+      [moved]: () =>
+        new Response(null, { status: 302, headers: { Location: "https://elsewhere.example/" } }),
+    });
+
+    expect((await JwksProvider.getJwks(env, moved)).isSuccess).toBe(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a JWKS over the size cap, declared or streamed", async () => {

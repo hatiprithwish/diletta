@@ -996,6 +996,19 @@ describe("ModelRouterRepo key-failure path", () => {
   });
 });
 
+describe("AiGatewayProvider.getLogUsage", () => {
+  it("fails on a redirect without following it", async () => {
+    mockCloudflare(
+      () =>
+        new Response(null, { status: 302, headers: { Location: "https://elsewhere.example/" } }),
+    );
+    const result = await AiGatewayProvider.getLogUsage(routerEnv(), "log-moved");
+    expect(result.isSuccess).toBe(false);
+    expect(result.isNotFound).toBeUndefined();
+    expect(mockedRequests).toHaveLength(1);
+  });
+});
+
 describe("ModelCallsRepo.backfillPendingUsage", () => {
   async function insertPendingCall(
     fixture: Awaited<ReturnType<typeof createFixture>>,
@@ -1534,6 +1547,20 @@ describe("AiGatewayProvider.checkModelKey", () => {
         outcome,
       );
     }
+  });
+
+  it("is Unreachable on a redirect, without following it", async () => {
+    mockCloudflare(
+      () =>
+        new Response(null, { status: 302, headers: { Location: "https://elsewhere.example/" } }),
+    );
+    expect(
+      await AiGatewayProvider.checkModelKey(routerEnv(), {
+        provider: Schemas.ModelProviderEnum.Anthropic,
+        apiKey: KEY,
+      }),
+    ).toBe(Schemas.ModelKeyCheckOutcomeEnum.Unreachable);
+    expect(gatewayRequests()).toHaveLength(1);
   });
 
   it("is Unreachable when the gateway isn't configured or the request fails, and never logs the key", async () => {
