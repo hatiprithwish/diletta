@@ -5,7 +5,7 @@ import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The daily health check's write (M5-5), in the caller's transaction (pattern rule 1.1: a self-contained
+// DEV_NOTE: The daily health check's write (M5-5), in the caller's transaction (a self-contained
 // multi-DAL step a Repo runs inside its own tx; it never opens one, never throws: a failure comes back as isSuccess
 // false and the Repo rolls back). Mirrors ModelKeyFailureProvider, one open issue per chatbot instead of per company:
 //   1. The chatbot's open chatbot-wide issue is locked and read, by what an admin can't change (an admin may retype it).

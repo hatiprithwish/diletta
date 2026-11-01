@@ -54,7 +54,7 @@ export type HostConnection = Pick<
 >;
 
 // DEV_NOTE: Reads the chatbot user's host bearer token from DO memory, per attempt, so a token refreshed between
-// retries is used. Never stored or logged by the adapter (pattern rule 3.11).
+// retries is used. Never stored or logged by the adapter.
 export type HostTokenSource = () => string | null;
 
 // Waits between retries; injectable so tests don't sleep

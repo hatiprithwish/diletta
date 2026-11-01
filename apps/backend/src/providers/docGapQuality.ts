@@ -4,12 +4,12 @@ import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: A group of unanswered questions' one Quality item (M5-6), in the caller's transaction (pattern rule 1.1: a
+// DEV_NOTE: A group of unanswered questions' one Quality item (M5-6), in the caller's transaction (a
 // self-contained multi-DAL step a Repo runs inside its own tx; it never opens one, never throws: a failure comes back as
 // isSuccess false and the Repo rolls back). open: only for a group with no item yet, whatever became of an earlier one,
 // so a group has one item ever (UNQ_quality_issues_doc_gap_cluster_id). closeForCluster: the item follows its group
 // closed by an admin; an item already closed stays as it is. Closing the item leaves the group alone. reopenForClusters:
-// the one way out of a closed status (pattern rule 3.42): a group reopened by removing its document takes its Fixed item
+// the one way out of a closed status: a group reopened by removing its document takes its Fixed item
 // with it.
 export default class DocGapQualityProvider {
   private static dal = new QualityIssuesDAL();

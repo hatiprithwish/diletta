@@ -275,7 +275,7 @@ export default class KnowledgeChunksDAL {
     text: knowledgeChunks.text,
   };
 
-  // DEV_NOTE: The filters both search sides share (pattern rule 3.26), in one place so they can't drift apart: the
+  // DEV_NOTE: The filters both search sides share, in one place so they can't drift apart: the
   // company on both tables, the given sources, the embedding model, and Indexed documents only
   private static searchConditions(params: {
     companyId: string;

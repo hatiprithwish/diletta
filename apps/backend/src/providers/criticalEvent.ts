@@ -4,8 +4,8 @@ import type * as Schemas from "@app/schemas";
 import ActivityLogDAL from "@/data-access-layer/ActivityLogDAL";
 import EventOutboxDAL from "@/data-access-layer/EventOutboxDAL";
 
-// DEV_NOTE: The one writer of critical events (pattern rule 3.5): the activity_log row and the event_outbox row that
-// publishes it, in the caller's tx (pattern rule 1.1: a provider may call a DAL inside the Repo's transaction, never
+// DEV_NOTE: The one writer of critical events: the activity_log row and the event_outbox row that
+// publishes it, in the caller's tx (a provider may call a DAL inside the Repo's transaction, never
 // opening one itself). Every Repo whose change is a critical event calls it inside its own withTenant, next to the
 // change, and throws TenantRollbackError when it fails, so the change, the log row and the outbox row commit
 // together or not at all. After the commit, the caller relays outboxId with EventOutboxRepo.relayEvents in waitUntil;

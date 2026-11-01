@@ -6,7 +6,7 @@ import Utility from "@/utils/Utility";
 // trusted), verifySignature (EVAL_JWT_PUBLIC_JWKS, the platform's own public keys: no host JWKS is ever fetched) and
 // checkClaims (iss, aud, exp, iat, lifetime). EvalHarnessRepo runs them before it reads anything the token names.
 // WebCrypto here verifies the platform's own public signature, not company data, so it stays out of @app/crypto
-// (pattern rule 3.19). The token itself is never logged. Never throws.
+//. The token itself is never logged. Never throws.
 export default class EvalJwtProvider {
   static decode(token: string): Schemas.DecodeEvalJwtResponse {
     const response: Schemas.DecodeEvalJwtResponse = { isSuccess: false };

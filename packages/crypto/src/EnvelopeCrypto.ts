@@ -3,7 +3,7 @@ import type * as Schemas from "@app/schemas";
 // DEV_NOTE: Envelope encryption on WebCrypto AES-256-GCM. The master key (MasterKeyProvider) encrypts one company
 // key per company; the company key encrypts the encrypted_* columns. Pure functions: no DB, no env, no logger.
 // Every method returns { isSuccess, message } and never throws; messages never carry key or plaintext bytes, so
-// the caller can log them as-is. Keys handed out are non-extractable (pattern rule 3.14).
+// the caller can log them as-is. Keys handed out are non-extractable.
 const KEY_BYTE_LENGTH = 32;
 const IV_BYTE_LENGTH = 12;
 const TAG_BYTE_LENGTH = 16;

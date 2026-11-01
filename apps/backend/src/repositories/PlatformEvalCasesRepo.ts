@@ -9,7 +9,7 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The platform suite's cases (M5-5): writes Schemas.PLATFORM_EVAL_CASES to eval_cases, run by the hourly
 // PlatformEvalCaseSync cron, so a deploy reaches every environment's database without an owner connection. Platform
-// cases belong to no company, so the sync runs in withPlatform (pattern rule 3.15), all in one transaction, under a
+// cases belong to no company, so the sync runs in withPlatform, all in one transaction, under a
 // lock so overlapping syncs take turns: a failed step rolls the whole sync back (TenantRollbackError) and the next hour
 // retries it. PlatformEvalCaseSyncProvider.plan decides the writes; a safety case code removed or demoted stays as it is
 // and the sync alerts (error log → Sentry, M6-6) until a migration retires it. A sync that changes nothing writes nothing.

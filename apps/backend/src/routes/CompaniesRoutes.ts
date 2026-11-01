@@ -8,7 +8,7 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Operator routes, mounted at /operator/companies. Chain: checkAuth → authorizePlatform(action)
 // → zValidator → handler. Creating and listing companies span every company, so CompaniesRepo runs them in
-// withPlatform (pattern rule 3.15).
+// withPlatform.
 const CompaniesRoutes = new Hono<AppContext>();
 
 CompaniesRoutes.post(

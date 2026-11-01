@@ -61,7 +61,7 @@ WidgetRoutes.get("/bootstrap", async (c) => {
     return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
   }
 
-  // DEV_NOTE: The query is checked only after the token (rule 3.22): without a valid token the answer is 401 whatever
+  // DEV_NOTE: The query is checked only after the token: without a valid token the answer is 401 whatever
   // the query says; a verified token with a bad query gets 400
   const query = Schemas.ZWidgetBootstrapApiRequest.safeParse(c.req.query());
   const authenticated = await new WidgetAuthRepo(c.env).authenticate({
