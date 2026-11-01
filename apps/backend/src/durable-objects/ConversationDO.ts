@@ -569,6 +569,23 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
+  // DEV_NOTE: The retention purge's wipe (M6-1, DO RPC, ContentRetentionRepo): transcript, runtime state, schedules and
+  // all storage go. destroy() aborts this isolate right after, so the caller may see an error instead of this answer and
+  // retries on its next run, when no state is left and the answer is a plain success. A turn or decision running answers
+  // isBusy and wipes nothing. The caller closed the conversation first, so no widget brings the DO back.
+  async purgeContent(): Promise<string> {
+    await this.__unsafe_ensureInitialized();
+    const hasState = this.getRuntimeState() !== null;
+    const isBusy = hasState && this.isBusy();
+    if (hasState && !isBusy) await this.destroy();
+    const answer: Schemas.ConversationContentWipeResponse = {
+      isSuccess: !isBusy,
+      message: isBusy ? "A turn is running" : "Conversation content wiped",
+      isBusy,
+    };
+    return JSON.stringify(answer);
+  }
+
   // DEV_NOTE: Scheduled at a proposal's expiry (schedule(); public because the scheduler calls it by name). A proposal
   // still Pending at its deadline ends Expired, the pause rejected so the model can say so. A turn or another decision
   // running at the deadline (or a close in progress) delays it by CONVERSATION_CLOSE_RETRY_MS; the database's own

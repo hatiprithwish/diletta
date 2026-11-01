@@ -20,7 +20,7 @@ export const ZContentRetentionDays = z
 export const effectiveContentRetentionDays = (contentRetentionDays: number | null): number =>
   contentRetentionDays ?? DEFAULT_CONTENT_RETENTION_DAYS;
 
-// DEV_NOTE: AI Gateway keeps full prompts in its logs for this long (architecture: short log retention), shown as copy
+// DEV_NOTE: AI Gateway keeps full prompts in its logs for this long at most, with no Logpush copy (ADR 0003), shown as copy
 export const GATEWAY_LOG_RETENTION_DAYS = 7;
 
 // DEV_NOTE: The widget's allowed origins per connection: at least one (a connection with none serves no widget), at most

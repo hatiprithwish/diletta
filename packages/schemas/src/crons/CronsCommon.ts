@@ -11,6 +11,7 @@ export enum CronJobEnum {
   ActivityRollups = "ActivityRollups",
   EvalTranscriptSweep = "EvalTranscriptSweep",
   PlatformEvalCaseSync = "PlatformEvalCaseSync",
+  ContentRetentionPurge = "ContentRetentionPurge",
   // Daily, at Constants.ACTIVITY_LOG_PARTITIONS_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)
   ActivityLogPartitions = "ActivityLogPartitions",
   // Daily, at Constants.NIGHTLY_SUITE_CHECK_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)

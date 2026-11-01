@@ -802,4 +802,44 @@ export default class ChangeRequestsDAL {
 
     return response;
   }
+
+  // DEV_NOTE: Retention purge (M6-1), the backstop past the undo window purge: every status, NeedsHuman too. Status, summary and
+  // counts stay.
+  async clearConversationValues(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(changeRequests.conversationId, params.conversationId),
+        eq(changeRequests.companyId, params.companyId),
+      ];
+      await tx
+        .update(changeRequests)
+        .set({
+          encryptedChanges: null,
+          iv: null,
+          encryptionKeyVersion: null,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation content cleared";
+    } catch (error) {
+      const message = "Unknown error in clearing conversation content";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

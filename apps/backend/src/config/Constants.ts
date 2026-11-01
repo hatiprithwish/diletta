@@ -160,6 +160,10 @@ export default class Constants {
   // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
   static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;
   static readonly CHANGE_REQUEST_PURGE_MAX_BATCHES = 10;
+  // DEV_NOTE: The retention purge (M6-1), hourly: one chat at a time (a DO call, R2, two transactions), at most
+  // CONTENT_PURGE_BATCH_SIZE × CONTENT_PURGE_MAX_BATCHES chats per run; a backlog finishes on later runs.
+  static readonly CONTENT_PURGE_BATCH_SIZE = 50;
+  static readonly CONTENT_PURGE_MAX_BATCHES = 4;
 
   // DEV_NOTE: Eval transcripts (M5-3). getEvalTranscript waits up to EVAL_TRANSCRIPT_IDLE_WAIT_MS (checking every
   // EVAL_TRANSCRIPT_IDLE_POLL_MS) for the attempt's DO to finish a commit or verify still running, then answers; an

@@ -41,3 +41,10 @@ export type GetPendingOwnerFilesDALRequest = Pick<StoredFile, "ownerType"> & {
   createdBefore: Date;
   limit: number;
 };
+
+// DEV_NOTE: The transcript files of one eval attempt's results (M6-1), by run, case and attempt
+export type GetEvalAttemptTranscriptFilesDALRequest = Pick<StoredFile, "companyId"> & {
+  evalRunId: string;
+  evalCaseId: string;
+  attempt: number;
+};

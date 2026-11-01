@@ -21,7 +21,13 @@ Every version of the company key, newest first, with its status, when it was cre
 
 "Keep chat content for" is one of 7, 30, 90, 180 or 365 days, counted from a conversation's last message (`companies.content_retention_days`; empty = 30, shown as the default). Saving records an audit row, unless it changes nothing: saving 30 while on the default stores nothing and records nothing.
 
-- The purge that deletes transcripts past the period is M6-1. Until it runs, the setting is stored and shown, and the page says transcripts are kept until automatic deletion is switched on.
+- The hourly `ContentRetentionPurge` cron (`ContentRetentionRepo`) clears chats past the period, at most `CONTENT_PURGE_BATCH_SIZE` × `CONTENT_PURGE_MAX_BATCHES` a run. Shortening the period applies at the next run and can't be undone: what it clears is gone.
+- **Goes:** the Conversation DO's whole storage (transcript, state, schedules), `messages.content`, `conversations.title`, `tool_calls` args, `change_requests` values (NeedsHuman too: retention is their backstop, the status stays), `feedback.comment`, an eval attempt's transcript (row + R2 object), and `doc_gaps.conversation_id` + `message_id`.
+- **Stays:** message and tool call rows, statuses, outcomes, costs, rollups, ratings, eval grades, and `doc_gaps.question_generic`.
+- **Known exception:** `quality_issues.note` stays. An admin wrote it as their triage record, so an admin who pastes chat text there keeps it there.
+- **Doc gaps:** a purged gap still counts as a question, but its user no longer counts toward a group's 3 different users (the link is gone), so a group growing slower than the retention period may not reach its Quality item.
+- **Order and retries:** close, wipe the DO, delete R2 objects, then one transaction clears the tables and sets `content_purged_at`. A failure or a running turn leaves the chat due for next hour. `destroy()` aborts the DO, so the first run can log "Conversation DO not wiped this run"; the next finds nothing left and finishes.
+- **Stuck purge:** search the logs for `PurgeConversationContent`. `skippedCount` rising every hour on the same chats means a step keeps failing.
 - Model gateway logs are kept 7 days (AI Gateway setting, not this page).
 - **Erase a user** is not on the page yet: user erasure end to end (chats, files, saved credentials) is M6-2.
 

@@ -308,4 +308,38 @@ export default class MessagesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: Retention purge (M6-1): the rows stay as counts, the text goes
+  async clearConversationContent(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(messages.conversationId, params.conversationId),
+        eq(messages.companyId, params.companyId),
+      ];
+      await tx
+        .update(messages)
+        .set({ content: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation content cleared";
+    } catch (error) {
+      const message = "Unknown error in clearing conversation content";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

@@ -641,6 +641,11 @@ export const conversations = table(
     // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
     t.index("IDX_conversations_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_conversations_chatbot_user_id").on(table.chatbotUserId),
+    // DEV_NOTE: The retention purge reads only chats not yet purged (M6-1)
+    t
+      .index("IDX_conversations_last_activity_at_unpurged")
+      .on(table.lastActivityAt)
+      .where(sql`${table.contentPurgedAt} IS NULL`),
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),
     t.index("IDX_conversations_eval_run_id").on(table.evalRunId),

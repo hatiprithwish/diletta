@@ -1,4 +1,18 @@
-import { and, asc, count, desc, eq, exists, gte, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -8,6 +22,7 @@ import {
   chatbotConfigs,
   chatbotUsers,
   chatbots,
+  companies,
   conversations,
   evalCases,
   evalRuns,
@@ -21,6 +36,7 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
@@ -372,6 +388,89 @@ export default class ConversationsDAL {
     );
   }
 
+  // DEV_NOTE: Retention (M6-1), every company (withPlatform): chats past last_activity_at + the company's days. The
+  // shortest option's cut-off lets the partial index narrow the scan before the per-company check.
+  async getConversationsPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetConversationsPastRetentionDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const shortestDays = Math.min(...Schemas.CONTENT_RETENTION_DAYS_OPTIONS);
+      const conditions = [
+        isNull(conversations.contentPurgedAt),
+        lt(conversations.lastActivityAt, new Date(params.now.getTime() - shortestDays * DAY_MS)),
+        sql`${conversations.lastActivityAt} < ${params.now.toISOString()}::timestamptz - make_interval(days => COALESCE(${companies.contentRetentionDays}, ${Schemas.DEFAULT_CONTENT_RETENTION_DAYS}::int))`,
+      ];
+      if (params.afterId !== null) conditions.push(gt(conversations.id, params.afterId));
+      if (params.companyIds !== null) {
+        conditions.push(inArray(conversations.companyId, params.companyIds));
+      }
+      const selected = await tx
+        .select({
+          id: conversations.id,
+          publicId: conversations.publicId,
+          companyId: conversations.companyId,
+          status: conversations.status,
+          evalRunId: conversations.evalRunId,
+          evalCaseId: conversations.evalCaseId,
+          evalAttempt: conversations.evalAttempt,
+          companyPublicId: companies.publicId,
+          contentRetentionDays: companies.contentRetentionDays,
+        })
+        .from(conversations)
+        .innerJoin(companies, eq(companies.id, conversations.companyId))
+        .where(and(...conditions))
+        .orderBy(asc(conversations.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Conversations past retention fetched successfully";
+      response.conversations = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching conversations past retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { afterId: params.afterId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async closeConversationPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CloseConversationPastRetentionDALRequest,
+  ) {
+    const { lastActivityBefore, ...find } = params;
+    return await this.update(
+      tx,
+      find,
+      Schemas.LogAction.PurgeConversationContent,
+      {
+        status: Schemas.ConversationStatusIntEnum.Closed,
+        outcome: sql`COALESCE(${conversations.outcome}, ${Schemas.ConversationOutcomeIntEnum.Abandoned}::smallint)`,
+      },
+      sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open} AND ${conversations.lastActivityAt} < ${lastActivityBefore.toISOString()}::timestamptz`,
+    );
+  }
+
+  // DEV_NOTE: Last step of a purge (M6-1): the title is the first user message, and content_purged_at ends the job
+  async markConversationContentPurged(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindConversationDALRequest,
+  ) {
+    return await this.update(tx, params, Schemas.LogAction.PurgeConversationContent, {
+      title: null,
+      contentPurgedAt: new Date(),
+    });
+  }
+
   // DEV_NOTE: Doc gaps (M5-6): a conversation that closed Answered before the verdict on its last question came in. Only
   // from Closed + Answered; no such row is a success that changes nothing.
   async markClosedConversationUnanswered(
@@ -447,7 +546,7 @@ export default class ConversationsDAL {
     params: Schemas.FindConversationDALRequest,
     action: Schemas.LogAction,
     values: PgUpdateSetSource<typeof conversations>,
-    extraCondition?: ReturnType<typeof eq>,
+    extraCondition?: SQL,
   ) {
     const response: Schemas.ConversationDALResponse = { isSuccess: false };
     const metadata = { ...params };

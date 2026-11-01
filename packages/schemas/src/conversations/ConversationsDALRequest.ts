@@ -71,3 +71,25 @@ export type GetDashboardConversationsDALRequest = ConversationsFilterDALRequest 
 export type GetChatbotConversationCountsDALRequest = Pick<Conversation, "companyId"> & {
   since: Date;
 };
+
+// DEV_NOTE: Platform (withPlatform, every company), M6-1: at most limit conversations past their company's retention
+// at now with content not yet purged, ids above afterId (so one run moves past a chat it had to skip). companyIds null
+// = every company; a list limits it (tests on the shared staging branch)
+export interface GetConversationsPastRetentionDALRequest {
+  companyIds: string[] | null;
+  now: Date;
+  afterId: string | null;
+  limit: number;
+}
+
+// DEV_NOTE: Closes an Open conversation only while its last activity is still before the cut-off (M6-1), keeping an
+// outcome it already has. isNotFound = a new message moved it, or it is no longer Open.
+export type CloseConversationPastRetentionDALRequest = Pick<
+  Conversation,
+  "companyId" | "publicId"
+> & { lastActivityBefore: Date };
+
+// DEV_NOTE: The steps of one chat's purge (M6-1), every table: by conversation, in the Repo's one transaction
+export type ClearConversationContentDALRequest = Pick<Conversation, "companyId"> & {
+  conversationId: string;
+};

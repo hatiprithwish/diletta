@@ -32,6 +32,7 @@ import Constants from "@/config/Constants";
 import worker from "@/index";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ChangeRequestPurgeRepo from "@/repositories/ChangeRequestPurgeRepo";
+import ContentRetentionRepo from "@/repositories/ContentRetentionRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import Utility from "@/utils/Utility";
@@ -1604,6 +1605,62 @@ describe("Action engine: undo window and purge (M3-7)", { timeout: END_TO_END_TI
     await socket.waitFor(isContinuationDone, from);
     return { tenant, socket, verified };
   }
+
+  it("wipes the Conversation DO at the retention purge (M6-1): transcript gone, rows empty", async () => {
+    const { tenant, socket } = await verifyAlpha(320);
+    expect((await getRuntimeState(socket.publicId)).session.conversationPublicId).toBe(
+      socket.publicId,
+    );
+    // DEV_NOTE: Aged before each run, since the turn's read model sync may still move last_activity_at. destroy() aborts
+    // the isolate, which may reach the caller as an error; the next run then finishes.
+    const repo = new ContentRetentionRepo(env);
+    let purgedCount = 0;
+    for (let run = 0; run < 5 && purgedCount === 0; run += 1) {
+      await withOwnerDb((ownerDb) =>
+        ownerDb
+          .update(conversations)
+          .set({ lastActivityAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000) })
+          .where(eq(conversations.publicId, socket.publicId)),
+      );
+      const purged = await repo.purgeExpiredContent({ companyIds: [tenant.companyId] });
+      expect(purged.isSuccess).toBe(true);
+      purgedCount = purged.purgedCount ?? 0;
+    }
+    expect(purgedCount).toBe(1);
+
+    const stub = await getAgentByName(env.CONVERSATION_DO, socket.publicId);
+    expect(await runInDurableObject(stub, (instance) => instance.getConfig())).toBeNull();
+    expect(await runInDurableObject(stub, (instance) => instance.messages.length)).toBe(0);
+
+    await withOwnerDb(async (ownerDb) => {
+      const [conversation] = await ownerDb
+        .select()
+        .from(conversations)
+        .where(eq(conversations.publicId, socket.publicId));
+      expect(conversation!.contentPurgedAt).not.toBeNull();
+      expect(conversation!.title).toBeNull();
+      expect(conversation!.status).toBe(Schemas.ConversationStatusIntEnum.Closed);
+      const rows = await ownerDb
+        .select({ content: messages.content })
+        .from(messages)
+        .where(eq(messages.conversationId, conversation!.id));
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((row) => row.content === null)).toBe(true);
+      const calls = await ownerDb
+        .select({ args: toolCalls.encryptedArgs })
+        .from(toolCalls)
+        .where(eq(toolCalls.conversationId, conversation!.id));
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((row) => row.args === null)).toBe(true);
+      const changes = await ownerDb
+        .select({ values: changeRequests.encryptedChanges, status: changeRequests.status })
+        .from(changeRequests)
+        .where(eq(changeRequests.conversationId, conversation!.id));
+      expect(changes).toEqual([
+        { values: null, status: Schemas.ChangeRequestStatusIntEnum.Verified },
+      ]);
+    });
+  });
 
   it("undoes a verified change from the card's Undo: the record back, Undone, and the next turn hears it", async () => {
     const { tenant, socket, verified } = await verifyAlpha(310, [reply("Noted.")]);
