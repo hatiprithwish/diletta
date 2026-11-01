@@ -193,7 +193,7 @@ export default class MessagesDAL {
   }
 
   // DEV_NOTE: A quality issue's messages (M4-6): the newest params.limit user and assistant messages of one
-  // conversation, up to and including upToMessageId (null = the whole conversation), text only (content->>'text'),
+  // conversation, up to and including upToMessageId and upToCreatedAt (null = the whole conversation), text only (content->>'text'),
   // returned oldest first. Read newest first on IDX_messages_conversation_id, so the cost stays flat as a chat grows.
   async listRecentChatMessages(
     tx: NodePgTransaction<EmptyRelations>,
@@ -211,6 +211,7 @@ export default class MessagesDAL {
         ]),
       ];
       if (params.upToMessageId !== null) conditions.push(lte(messages.id, params.upToMessageId));
+      if (params.upToCreatedAt) conditions.push(lte(messages.createdAt, params.upToCreatedAt));
       const rows = await tx
         .select({
           id: messages.id,

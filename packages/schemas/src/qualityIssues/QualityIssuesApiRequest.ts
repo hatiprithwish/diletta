@@ -2,13 +2,15 @@ import { z } from "zod";
 import { ZPageApiRequest } from "../common";
 import {
   QUALITY_ISSUE_NOTE_MAX_CHARS,
-  QUALITY_TEST_CONFIRMED_TERMS_MAX,
-  QUALITY_TEST_TERM_MAX_CHARS,
   QualityIssueTypeIntEnum,
   ZQualityIssueListTab,
   ZQualityIssueSortColumn,
   ZQualityTestDraft,
 } from "./QualityIssuesCommon";
+import {
+  QUALITY_TEST_CONFIRMED_TERMS_MAX,
+  QUALITY_TEST_TERM_MAX_CHARS,
+} from "./QualityTestPersonalDetails";
 
 // DEV_NOTE: GET /dashboard/quality-issues (M4-6). A company has any number of issues, so the list is paged. botId = a
 // chatbot's public id (DESIGN.md §6); absent = the whole company, unknown → 404. tab absent = Open.

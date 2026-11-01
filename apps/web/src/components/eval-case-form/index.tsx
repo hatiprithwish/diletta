@@ -120,7 +120,11 @@ export function EvalCaseForm({
   submitLabel,
   onSubmit,
   onCancel,
-}: Schemas.DashboardEvalCaseFormProps & { notice?: ReactNode }) {
+  // DEV_NOTE: notice stays off DashboardEvalCaseFormProps: @app/schemas has no React types. Drawn from the form's current
+  // values, under the title.
+}: Schemas.DashboardEvalCaseFormProps & {
+  notice?: (values: Schemas.EvalCaseDraft) => ReactNode;
+}) {
   // DEV_NOTE: One stable key per message, added and removed with it, so a textarea keeps its focus and state
   const [messageKeys, setMessageKeys] = useState(() =>
     defaultValues.messages.map(() => crypto.randomUUID()),
@@ -149,7 +153,11 @@ export function EvalCaseForm({
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>
       </DialogHeader>
-      {notice}
+      {notice && (
+        <form.Subscribe selector={(state) => state.values}>
+          {(values) => notice(values)}
+        </form.Subscribe>
+      )}
       <form.Field name="name" validators={{ onChange: ({ value }) => nameIssue(value) }}>
         {(field) => (
           <Field data-invalid={field.state.meta.errors.length > 0}>

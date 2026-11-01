@@ -5,7 +5,7 @@ import {
   qualityTestDraftHasTerm,
   unconfirmedQualityTestTerms,
   withQualityTestCheckedNames,
-} from "./QualityIssuesCommon";
+} from "./QualityTestPersonalDetails";
 
 const draftOf = (text: string) => ({
   name: "A test",
@@ -48,6 +48,50 @@ describe("findQualityTestPersonalDetails", () => {
     expect(qualityTestDraftHasTerm(draftOf("Priyanka"), "Priya")).toBe(false);
     expect(qualityTestDraftHasTerm(draftOf("Is (priya) in"), "Priya")).toBe(true);
     expect(qualityTestDraftHasTerm(draftOf("c++ guide"), "c++")).toBe(true);
+  });
+
+  it("handles terms with a hyphen on every path", () => {
+    expect(find("Wi-Fi help", ["Is the Wi-Fi down?"])).toEqual([
+      { term: "Wi-Fi", canConfirm: true },
+    ]);
+    expect(find("Can mary-jane log in?", [], "Mary-Jane Doe")).toEqual([
+      { term: "Mary-Jane", canConfirm: false },
+    ]);
+    expect(find("Call 415-555-0100")).toEqual([{ term: "415-555-0100", canConfirm: false }]);
+    expect(qualityTestDraftHasTerm(draftOf("Call 415-555-0100"), "415-555-0100")).toBe(true);
+    expect(qualityTestDraftHasTerm(draftOf("a first-last@acme.com"), "first-last@acme.com")).toBe(
+      true,
+    );
+    expect(withQualityTestCheckedNames([], draftOf("ask jean-luc"), ["jean-luc"])).toEqual([
+      { term: "jean-luc", canConfirm: true },
+    ]);
+  });
+
+  it("finds a number inside a word the way it was flagged", () => {
+    const draft = draftOf("Open ID12345678");
+    expect(find("Open ID12345678")).toEqual([{ term: "12345678", canConfirm: false }]);
+    expect(qualityTestDraftHasTerm(draft, "12345678")).toBe(true);
+  });
+
+  it("doesn't block an everyday word that is part of the user's name", () => {
+    expect(find("The reply will explain it", [], "Will Smith")).toEqual([]);
+    expect(find("Asks for an invoice", [], "An Nguyen")).toEqual([]);
+    expect(find("Can Will log in?", [], "Will Smith")).toEqual([
+      { term: "Will", canConfirm: true },
+    ]);
+  });
+
+  it("skips what a host sends in place of a name", () => {
+    expect(find("What can the user do?", [], "Test User")).toEqual([]);
+  });
+
+  it("finds a possessive's name without its 's", () => {
+    expect(find("Can you ask Daniel?", ["please reset Daniel's password"])).toEqual([
+      { term: "Daniel", canConfirm: true },
+    ]);
+    expect(find("Can you ask Daniel’s team?", ["please reset Daniel’s password"])).toEqual([
+      { term: "Daniel", canConfirm: true },
+    ]);
   });
 
   it("checks the name and rubric too", () => {

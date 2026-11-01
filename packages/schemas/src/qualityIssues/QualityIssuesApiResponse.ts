@@ -10,10 +10,10 @@ import type {
   QualityIssueTypeIntEnum,
   QualityIssueTypeLabelEnum,
   QualityIssueUpdateFailureEnum,
-  QualityTestFlaggedTerm,
   QualityTestDraft,
   QualityTestDraftFailureEnum,
 } from "./QualityIssuesCommon";
+import type { QualityTestFlaggedTerm } from "./QualityTestPersonalDetails";
 
 // DEV_NOTE: One row of the Quality list (M4-6). Status Enum Pattern for source, status and type (issueType null = not
 // triaged yet). ratedReply = the start of the reply a user rated down (user issues; null for the others and once the

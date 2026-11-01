@@ -883,13 +883,31 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
       ...DRAFT,
       messages: [{ role: Schemas.EvalCaseMessageRoleEnum.User, text: "Is elm street covered?" }],
     };
+    // DEV_NOTE: A message sent after the flag doesn't move the chat the check compares: this one would un-flag "Elm"
+    await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb.insert(messages).values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          conversationId: userConversationId,
+          sessionMessageId: crypto.randomUUID(),
+          turnId: Utility.generateUlid(),
+          role: Schemas.MessageRoleIntEnum.User,
+          content: { text: "is elm street open?" },
+          createdAt: new Date(Date.now() + 60_000),
+        }),
+    );
     const refused = await write(`${issue!.publicId}/convert`, withWord);
     expect(refused.status).toBe(409);
     expect(refused.body.flaggedTerms).toEqual(
       expect.arrayContaining([{ term: "Elm", canConfirm: true }]),
     );
 
-    const confirmedTerms = (refused.body.flaggedTerms ?? []).map(({ term }) => term);
+    // DEV_NOTE: Only what cleared a flag counts, not whatever the client sent
+    const confirmedTerms = [
+      ...(refused.body.flaggedTerms ?? []).map(({ term }) => term),
+      "never flagged",
+    ];
     const saved = await write(`${issue!.publicId}/convert`, { ...withWord, confirmedTerms });
     expect(saved.status).toBe(200);
     const row = await issueRow(issue!.publicId);
@@ -898,7 +916,9 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
     const converted = events.find(
       (event) => event.entityAction === Schemas.QualityIssueEntityActionEnum.Converted,
     );
-    expect(converted?.detail).toMatchObject({ confirmedTermCount: confirmedTerms.length });
+    expect(converted?.detail).toMatchObject({
+      confirmedTermCount: confirmedTerms.length - 1,
+    });
     expect(JSON.stringify(converted?.detail)).not.toContain("Elm");
   });
 });

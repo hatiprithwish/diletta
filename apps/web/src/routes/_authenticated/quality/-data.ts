@@ -135,6 +135,7 @@ function onRefused(queryClient: QueryClient, publicId: string, error: Error): bo
 export function isPersonalDetailsRefusal(error: unknown): error is ApiError {
   return (
     error instanceof ApiError &&
+    error.status === 409 &&
     (error.body as Schemas.UpdateQualityIssueApiResponse).failure ===
       Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound
   );

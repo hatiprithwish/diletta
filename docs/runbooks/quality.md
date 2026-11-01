@@ -33,15 +33,16 @@ The server saves what the admin saw, nothing from the model directly, and only a
 
 ### The personal details check (M5-7)
 
-`Schemas.findQualityTestPersonalDetails` runs at draft and again at save, when the server re-reads the chat. It looks at the test's name, messages and rubric.
+`Schemas.findQualityTestPersonalDetails` runs at draft and again at save, when the server re-reads the chat. It looks at the test's name, messages and rubric. Parts a host sends in place of a name ("Test User") are skipped. An issue with no rated reply reads the chat up to when it was opened, so messages sent later never change what the check compares.
 
 | Found in the test                                                                                     | What the admin can do                |
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | A part of the chat user's display name, an email, or a run of 6 or more digits                        | Edit it out. It can't be confirmed.  |
+| A name part that is also an everyday word ("Will", "May"), written as the name is                     | Edit it out, or tick "Not personal". |
 | A capitalised word from inside a sentence of the chat or note (the chat never writes it in lowercase) | Edit it out, or tick "Not personal". |
 | A name the model's check listed (draft only)                                                          | Edit it out, or tick "Not personal". |
 
-A save with something left answers 409 `PersonalDetailsFound` with the terms, writes nothing, and keeps the dialog open. The `converted` event records `confirmedTermCount`, never the words: a wrongly confirmed name stays out of `activity_log`.
+A save with something left answers 409 `PersonalDetailsFound` with the terms, writes nothing, and keeps the dialog open. The `converted` event records `confirmedTermCount` (the flags the confirmation cleared), never the words: a wrongly confirmed name stays out of `activity_log`.
 
 **What isn't guaranteed.** A name opening a sentence or written in lowercase is invisible to the save's rules unless it is part of the user's display name. The model's check flags it at draft, the browser holds the save until it is dealt with, but the server can't enforce that, since the model's names aren't stored. A date written with 6 or more digits counts as a long number; reword it.
 

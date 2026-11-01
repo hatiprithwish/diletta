@@ -2,9 +2,9 @@ import { generateText, Output } from "ai";
 import type { LanguageModel } from "ai";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
+import { fenceDefuser } from "@/providers/promptFence";
 
-// DEV_NOTE: A test can't close its fence early: the fence tag inside a text is defused.
-const FENCE_TAG = /<(\s*\/?\s*test\b)/gi;
+const defuse = fenceDefuser(["test"]);
 
 // DEV_NOTE: Create test's name check (M5-7): one call on the draft alone, for the names the server's rules can't see (a
 // name opening a sentence, one in lowercase). The model comes from the model router (the company's key, budget held).
@@ -24,11 +24,9 @@ export default class QualityTestCheckProvider {
   static prompt(draft: Schemas.QualityTestDraft): string {
     return [
       "<test>",
-      `Name: ${QualityTestCheckProvider.defuse(draft.name)}`,
-      ...draft.messages.map(
-        (message) => `${message.role}: ${QualityTestCheckProvider.defuse(message.text)}`,
-      ),
-      `Rubric: ${QualityTestCheckProvider.defuse(draft.rubric)}`,
+      `Name: ${defuse(draft.name)}`,
+      ...draft.messages.map((message) => `${message.role}: ${defuse(message.text)}`),
+      `Rubric: ${defuse(draft.rubric)}`,
       "</test>",
     ].join("\n");
   }
@@ -58,9 +56,5 @@ export default class QualityTestCheckProvider {
       });
       return null;
     }
-  }
-
-  private static defuse(text: string): string {
-    return text.replace(FENCE_TAG, "&lt;$1");
   }
 }

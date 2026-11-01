@@ -628,6 +628,7 @@ function FlaggedTermsNotice({
                 {canConfirm ? (
                   <label className="flex items-center gap-1.5">
                     <Checkbox
+                      aria-label={`${term} is not personal`}
                       checked={confirmedTerms.includes(term)}
                       onCheckedChange={() => onToggle(term)}
                     />
@@ -642,7 +643,8 @@ function FlaggedTermsNotice({
         )}
         {remainingTerms.length > 0 && (
           <p className="text-destructive">
-            Still to deal with: {remainingTerms.join(", ")}. Edit it out or mark it not personal.
+            Still to deal with: {remainingTerms.join(", ")}. Edit them out, or mark them not
+            personal where you can.
           </p>
         )}
       </AlertDescription>
@@ -658,15 +660,20 @@ function QualityTestForm({
   const convert = useConvertQualityIssue(publicId);
   const [flaggedTerms, setFlaggedTerms] = useState(review.flaggedTerms);
   const [confirmedTerms, setConfirmedTerms] = useState<string[]>([]);
-  const [remainingTerms, setRemainingTerms] = useState<string[]>([]);
+  const [hasTriedSave, setHasTriedSave] = useState(false);
+
+  // DEV_NOTE: Only what the test still holds; a term edited out drops off the list as it goes
+  const presentTerms = (value: Schemas.QualityTestDraft) =>
+    flaggedTerms.filter(({ term }) => Schemas.qualityTestDraftHasTerm(value, term));
+  const remainingTerms = (value: Schemas.QualityTestDraft) =>
+    Schemas.unconfirmedQualityTestTerms(presentTerms(value), confirmedTerms).map(
+      ({ term }) => term,
+    );
 
   const save = async (value: Schemas.QualityTestDraft) => {
+    setHasTriedSave(true);
     // DEV_NOTE: The model's names aren't known to the server at save, so they are held here
-    const left = Schemas.unconfirmedQualityTestTerms(flaggedTerms, confirmedTerms)
-      .map(({ term }) => term)
-      .filter((term) => Schemas.qualityTestDraftHasTerm(value, term));
-    setRemainingTerms(left);
-    if (left.length > 0) return;
+    if (remainingTerms(value).length > 0) return;
     try {
       await convert.mutateAsync({ ...value, confirmedTerms });
     } catch (error) {
@@ -677,7 +684,6 @@ function QualityTestForm({
           ...flaggedTerms,
           ...refused.filter(({ term }) => !known.has(term.toLowerCase())),
         ]);
-        setRemainingTerms(refused.map(({ term }) => term));
         return;
       }
       // DEV_NOTE: Any other 409 (closed meanwhile, or the chatbot is gone) can't succeed on a retry: the review closes
@@ -694,11 +700,11 @@ function QualityTestForm({
       title="Review the test"
       description="The chat was rewritten without personal details. Check that nothing personal is left, then save. The test is saved as you see it."
       submitLabel="Save test"
-      notice={
+      notice={(value) => (
         <FlaggedTermsNotice
-          flaggedTerms={flaggedTerms}
+          flaggedTerms={presentTerms(value)}
           confirmedTerms={confirmedTerms}
-          remainingTerms={remainingTerms}
+          remainingTerms={hasTriedSave ? remainingTerms(value) : []}
           wasVerified={review.wasVerified}
           onToggle={(term) =>
             setConfirmedTerms((terms) =>
@@ -706,7 +712,7 @@ function QualityTestForm({
             )
           }
         />
-      }
+      )}
       onSubmit={save}
       onCancel={onClose}
     />

@@ -466,10 +466,13 @@ describe("Quality issue", () => {
     expect(await within(dialog).findByText(/Still to deal with: Elm, Priya/)).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/convert"))).toBe(false);
 
-    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Not personal" }));
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Elm is not personal" }));
     const name = within(dialog).getByLabelText("Name");
     await userEvent.clear(name);
     await userEvent.type(name, "Elm policy");
+    // DEV_NOTE: The term edited out leaves the list at once, with no save
+    expect(within(dialog).queryByText("Remove this from the test")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Still to deal with/)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Review the test" })).not.toBeInTheDocument(),
@@ -486,7 +489,7 @@ describe("Quality issue", () => {
             body: {
               isSuccess: false,
               failure: Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound,
-              flaggedTerms: [{ term: "Daniel", canConfirm: true }],
+              flaggedTerms: [{ term: DRAFT.name.split(" ")[0]!, canConfirm: true }],
             },
           }
         : defaultApi(url, init),
@@ -496,7 +499,11 @@ describe("Quality issue", () => {
     await userEvent.click(await within(card).findByRole("button", { name: "Create test" }));
     const dialog = await screen.findByRole("dialog", { name: "Review the test" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
-    expect(await within(dialog).findByText(/Still to deal with: Daniel/)).toBeInTheDocument();
+    expect(
+      await within(dialog).findByText(
+        new RegExp(`Still to deal with: ${DRAFT.name.split(" ")[0]}`),
+      ),
+    ).toBeInTheDocument();
     expect(toast.error).toHaveBeenCalledWith(
       "The test still holds personal details. Nothing was saved.",
     );

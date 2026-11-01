@@ -20,5 +20,6 @@ export type ListConversationMessagesDALRequest = Pick<Message, "companyId" | "co
 // to and including upToMessageId (the rated reply; null = the whole conversation), returned oldest first
 export type ListRecentChatMessagesDALRequest = Pick<Message, "companyId" | "conversationId"> & {
   upToMessageId: string | null;
+  upToCreatedAt?: Date | null;
   limit: number;
 };

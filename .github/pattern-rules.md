@@ -2352,7 +2352,7 @@ insert\(docGaps\)|insert\(docGapClusters\)|questionGeneric:|docGapClusterId:
 
 ### 3.57 An Issue Becomes a Test Only Past the Server's Personal Details Check [CRITICAL]
 
-**Rule:** Create test (M5-7). `QualityIssuesRepo.convertQualityIssue` re-reads the chat in its own `withTenant` and runs `Schemas.findQualityTestPersonalDetails` + `unconfirmedQualityTestTerms` on the name, messages and rubric before `createEvalCase`; anything left answers 409 `PersonalDetailsFound` with `flaggedTerms`, nothing written. The chat user's name, emails and long numbers have `canConfirm: false`, so `confirmedTerms` never clears them. Draft runs the same check, then `QualityTestCheckProvider` through the router (`QualityTestCheck`, tier Small, `conversationId` null); a failed check answers `wasVerified: false`, never a made-up clean result. The event carries `confirmedTermCount`, never a term; terms are never logged.
+**Rule:** Create test (M5-7). `QualityIssuesRepo.convertQualityIssue` re-reads the chat in its own `withTenant` and runs `Schemas.findQualityTestPersonalDetails` + `unconfirmedQualityTestTerms` on the name, messages and rubric before `createEvalCase`; anything left answers 409 `PersonalDetailsFound` with `flaggedTerms`, nothing written. The chat user's name (except a part in `QUALITY_TEST_ORDINARY_NAME_PARTS`), emails and long numbers have `canConfirm: false`, so `confirmedTerms` never clears them. An issue with no rated reply reads its chat only up to its `created_at` (`readIssueChat`). Draft runs the same check, then `QualityTestCheckProvider` through the router (`QualityTestCheck`, tier Small, `conversationId` null); a failed check answers `wasVerified: false`, never a made-up clean result. The event carries `confirmedTermCount`, never a term; terms are never logged.
 
 **Violations:**
 
@@ -2371,7 +2371,7 @@ confirmedTerms|flaggedTerms|QualityTestCheck
 
 ```
 - ❌ detail: { confirmedTerms }                                   // a wrongly confirmed name lands in activity_log
-- ✅ detail: { confirmedTermCount: params.confirmedTerms.length }
+- ✅ detail: { confirmedTermCount: found.length }
 ```
 
 **Fix:** Mirror `QualityIssuesRepo.convertQualityIssue` and `providers/qualityTestCheck.ts` (`docs/runbooks/quality.md`).
