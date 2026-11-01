@@ -145,7 +145,12 @@ function defaultApi(url: string, init?: RequestInit) {
       },
     };
   }
-  if (url.endsWith("/test-draft")) return { status: 200, body: { isSuccess: true, draft: DRAFT } };
+  if (url.endsWith("/test-draft")) {
+    return {
+      status: 200,
+      body: { isSuccess: true, draft: DRAFT, flaggedTerms: [], wasVerified: true },
+    };
+  }
   if (url.endsWith("/convert")) {
     const draft = JSON.parse(String(init?.body)) as Schemas.QualityTestDraft;
     return {
@@ -425,10 +430,76 @@ describe("Quality issue", () => {
     expect(JSON.parse(String((convert?.[1] as RequestInit).body))).toEqual({
       ...DRAFT,
       name: "Fire drills",
+      confirmedTerms: [],
     });
     expect(await within(card).findByText("Converted")).toBeInTheDocument();
     expect(within(card).getByText("Fire drills")).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Test saved.");
+  });
+
+  it("holds the save until a flagged term is edited out or marked not personal", async () => {
+    const leaky = { ...DRAFT, name: "Elm and Priya" };
+    const fetchMock = mockApi((url, init) =>
+      url.endsWith("/test-draft")
+        ? {
+            status: 200,
+            body: {
+              isSuccess: true,
+              draft: leaky,
+              flaggedTerms: [
+                { term: "Elm", canConfirm: true },
+                { term: "Priya", canConfirm: false },
+              ],
+              wasVerified: false,
+            },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_1");
+    const card = await detailCard();
+    await userEvent.click(await within(card).findByRole("button", { name: "Create test" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review the test" });
+    expect(within(dialog).getByText(/extra check for names didn't run/)).toBeInTheDocument();
+    expect(within(dialog).getByText("Remove this from the test")).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+    expect(await within(dialog).findByText(/Still to deal with: Elm, Priya/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/convert"))).toBe(false);
+
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Not personal" }));
+    const name = within(dialog).getByLabelText("Name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Elm policy");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Review the test" })).not.toBeInTheDocument(),
+    );
+    const convert = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/convert"));
+    expect(JSON.parse(String((convert?.[1] as RequestInit).body)).confirmedTerms).toEqual(["Elm"]);
+  });
+
+  it("keeps the review open and lists the terms when the server refuses them", async () => {
+    mockApi((url, init) =>
+      url.endsWith("/convert")
+        ? {
+            status: 409,
+            body: {
+              isSuccess: false,
+              failure: Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound,
+              flaggedTerms: [{ term: "Daniel", canConfirm: true }],
+            },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_1");
+    const card = await detailCard();
+    await userEvent.click(await within(card).findByRole("button", { name: "Create test" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review the test" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+    expect(await within(dialog).findByText(/Still to deal with: Daniel/)).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith(
+      "The test still holds personal details. Nothing was saved.",
+    );
   });
 
   it("keeps the review open on an empty field", async () => {

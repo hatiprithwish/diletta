@@ -2,6 +2,8 @@ import { z } from "zod";
 import { ZPageApiRequest } from "../common";
 import {
   QUALITY_ISSUE_NOTE_MAX_CHARS,
+  QUALITY_TEST_CONFIRMED_TERMS_MAX,
+  QUALITY_TEST_TERM_MAX_CHARS,
   QualityIssueTypeIntEnum,
   ZQualityIssueListTab,
   ZQualityIssueSortColumn,
@@ -36,8 +38,14 @@ export const ZTriageQualityIssueApiRequest = z
 export type TriageQualityIssueApiRequest = z.infer<typeof ZTriageQualityIssueApiRequest>;
 
 // DEV_NOTE: POST /dashboard/quality-issues/:publicId/convert: the test as the admin reviewed it (the draft from
-// /test-draft, edited). Saved as it is: the admin confirms there is nothing personal left in it.
-export const ZConvertQualityIssueApiRequest = ZQualityTestDraft;
+// /test-draft, edited). Saved as it is, once the server's check finds nothing personal left: confirmedTerms = flagged
+// words the admin says aren't personal (M5-7).
+export const ZConvertQualityIssueApiRequest = ZQualityTestDraft.extend({
+  confirmedTerms: z
+    .array(z.string().min(1).max(QUALITY_TEST_TERM_MAX_CHARS))
+    .max(QUALITY_TEST_CONFIRMED_TERMS_MAX)
+    .optional(),
+});
 export type ConvertQualityIssueApiRequest = z.infer<typeof ZConvertQualityIssueApiRequest>;
 
 // DEV_NOTE: The Quality pages' URL search (apps/web validateSearch): the tab and the page; an unknown value falls back

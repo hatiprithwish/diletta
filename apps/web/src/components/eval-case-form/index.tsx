@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { useForm } from "@tanstack/react-form";
 import { Plus, X } from "@phosphor-icons/react";
 import * as Schemas from "@app/schemas";
@@ -115,10 +116,11 @@ export function EvalCaseForm({
   canEditMessages,
   title,
   description,
+  notice,
   submitLabel,
   onSubmit,
   onCancel,
-}: Schemas.DashboardEvalCaseFormProps) {
+}: Schemas.DashboardEvalCaseFormProps & { notice?: ReactNode }) {
   // DEV_NOTE: One stable key per message, added and removed with it, so a textarea keeps its focus and state
   const [messageKeys, setMessageKeys] = useState(() =>
     defaultValues.messages.map(() => crypto.randomUUID()),
@@ -147,6 +149,7 @@ export function EvalCaseForm({
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>
       </DialogHeader>
+      {notice}
       <form.Field name="name" validators={{ onChange: ({ value }) => nameIssue(value) }}>
         {(field) => (
           <Field data-invalid={field.state.meta.errors.length > 0}>

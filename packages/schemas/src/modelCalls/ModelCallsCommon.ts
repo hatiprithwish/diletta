@@ -31,6 +31,7 @@ export enum ModelTaskTypeEnum {
   EvalJudge = "eval.judge",
   // DEV_NOTE: Create test on the Quality page (M4-6): a quality issue's chat rewritten without personal details
   QualityTestRewrite = "quality.test_rewrite",
+  QualityTestCheck = "quality.test_check",
   KnowledgeEmbed = "knowledge.embed",
   SearchEmbed = "search.embed",
   SearchRerank = "search.rerank",

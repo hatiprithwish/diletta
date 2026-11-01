@@ -149,11 +149,13 @@ QualityIssuesRoutes.post(
   async (c) => {
     const repo = new QualityIssuesRepo(c.env);
     const companyId = c.get("companyId");
+    const { confirmedTerms, ...draft } = c.req.valid("json");
     const result = await repo.convertQualityIssue({
       companyId,
       adminId: c.get("admin").adminId,
       publicId: c.req.param("publicId"),
-      draft: c.req.valid("json"),
+      draft,
+      confirmedTerms: confirmedTerms ?? [],
     });
     const { response, status } = answerWrite(c.env, c.executionCtx, companyId, result);
     return c.json(response, status);

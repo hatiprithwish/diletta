@@ -109,8 +109,8 @@ export function docGapCandidateSignal(params: {
 // DEV_NOTE: The backstop behind the rewrite's instructions: an email, or a run of six or more digits (a phone, account
 // or record number), means the rewrite kept something it shouldn't, and the question is never stored. Names can't be
 // matched by a pattern; they rest on the rewrite.
-const DOC_GAP_EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
-const DOC_GAP_LONG_NUMBER = /\d(?:[\s().-]*\d){5,}/;
+export const DOC_GAP_EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+export const DOC_GAP_LONG_NUMBER = /\d(?:[\s().-]*\d){5,}/;
 
 export function docGapQuestionHasPersonalDetails(question: string): boolean {
   return DOC_GAP_EMAIL.test(question) || DOC_GAP_LONG_NUMBER.test(question);

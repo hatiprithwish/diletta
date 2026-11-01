@@ -12,6 +12,7 @@ import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
 import QualityIssuesProvider from "@/providers/qualityIssues";
+import QualityTestCheckProvider from "@/providers/qualityTestCheck";
 import QualityTestRewriteProvider from "@/providers/qualityTestRewrite";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import * as Schemas from "@app/schemas";
@@ -27,6 +28,8 @@ type DraftInputs =
   | {
       isSuccess: true;
       source: Schemas.QualityTestRewriteSource;
+      sourceTexts: string[];
+      userName: string | null;
       chatbotId: string;
       routing: Schemas.ConfigSpec["routing"];
     }
@@ -396,7 +399,14 @@ export default class QualityIssuesRepo {
         };
       }
 
-      return { isSuccess: true, source, chatbotId: row.chatbotId, routing: loaded.spec.routing };
+      return {
+        isSuccess: true,
+        source,
+        sourceTexts: QualityIssuesProvider.personalDetailSources(listed.messages ?? [], row.note),
+        userName: row.userName,
+        chatbotId: row.chatbotId,
+        routing: loaded.spec.routing,
+      };
     });
     if (!inputs.isSuccess || !("source" in inputs)) {
       if ("failure" in inputs && inputs.failure) {
@@ -439,7 +449,36 @@ export default class QualityIssuesRepo {
     if (!rewritten.isSuccess) {
       return { isSuccess: false, message: "No test draft", failure: rewritten.failure };
     }
-    return { isSuccess: true, message: "Test draft written", draft: rewritten.draft };
+
+    // DEV_NOTE: The name check (M5-7): a second call that reads the draft alone. Failing leaves the rules' terms and says
+    // so (wasVerified false); the save is held to the rules either way.
+    const flagged = Schemas.findQualityTestPersonalDetails({
+      draft: rewritten.draft,
+      sourceTexts: inputs.sourceTexts,
+      userName: inputs.userName,
+    });
+    const routedCheck = await new ModelRouterRepo(this.env, ctx).getModel({
+      companyId,
+      chatbotId: inputs.chatbotId,
+      chatbotUserId: null,
+      conversationId: null,
+      evalRunId: null,
+      turnId: null,
+      taskType: Schemas.ModelTaskTypeEnum.QualityTestCheck,
+      tier: Schemas.ModelTierEnum.Small,
+      routing: inputs.routing,
+      caps: null,
+    });
+    const names = routedCheck.isSuccess
+      ? await QualityTestCheckProvider.findNames(routedCheck.model, rewritten.draft, logMetadata)
+      : null;
+    return {
+      isSuccess: true,
+      message: "Test draft written",
+      draft: rewritten.draft,
+      flaggedTerms: Schemas.withQualityTestCheckedNames(flagged, rewritten.draft, names ?? []),
+      wasVerified: names !== null,
+    };
   }
 
   // DEV_NOTE: Create test, step 2: the reviewed draft saved as the conversation's chatbot's eval case (input v1,
@@ -479,6 +518,37 @@ export default class QualityIssuesRepo {
           failure: Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound,
         };
       }
+
+      // DEV_NOTE: The server's own check (M5-7), never the browser's word: the chat is read again. A purged chat leaves
+      // the note, the user's name and the patterns.
+      let sourceRows: Schemas.ChatMessageTextRow[] = [];
+      if (row.conversationContentPurgedAt === null) {
+        const listed = await this.messagesDal.listRecentChatMessages(tx, {
+          companyId,
+          conversationId: row.conversationId,
+          upToMessageId: row.ratedMessageId,
+          limit: QualityIssuesProvider.MESSAGES_READ_LIMIT,
+        });
+        if (!listed.isSuccess) throw new TenantRollbackError(listed.message ?? "Chat not read");
+        sourceRows = listed.messages ?? [];
+      }
+      const flaggedTerms = Schemas.unconfirmedQualityTestTerms(
+        Schemas.findQualityTestPersonalDetails({
+          draft,
+          sourceTexts: QualityIssuesProvider.personalDetailSources(sourceRows, row.note),
+          userName: row.userName,
+        }),
+        params.confirmedTerms,
+      );
+      if (flaggedTerms.length > 0) {
+        return {
+          isSuccess: false,
+          message: "The test still holds personal details",
+          failure: Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound,
+          flaggedTerms,
+        };
+      }
+
       const created = await this.evalCasesDal.createEvalCase(tx, {
         companyId,
         chatbotId: row.chatbotId,
@@ -511,7 +581,12 @@ export default class QualityIssuesRepo {
 
       const outboxId = await this.recordEvent(tx, params, row, {
         action: Schemas.QualityIssueEntityActionEnum.Converted,
-        detail: { evalCaseId: created.evalCase.id, issueType: row.issueType },
+        // DEV_NOTE: How many, never which: a wrongly confirmed name stays out of the log
+        detail: {
+          evalCaseId: created.evalCase.id,
+          issueType: row.issueType,
+          confirmedTermCount: params.confirmedTerms.length,
+        },
         dedupeParts: [],
       });
       return { isSuccess: true, message: "Quality issue converted", outboxId };

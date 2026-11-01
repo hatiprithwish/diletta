@@ -166,6 +166,7 @@ Before using any third-party API: check the installed version in `package.json`,
 - From M5-4: publishing a version that isn't Ready on a passed gate run; a pass decision outside `evalRunGateDecision`
 - From M5-5: a platform eval case written outside `PlatformEvalCasesRepo.sync` (seed, migration, route), or one that names a tool; a Gate run started by chatbot; a quality issue inserted without `chatbot_id`, or one with no conversation that isn't System; a health judgement on eval traffic or outside `evaluateChatbotHealth`
 - From M5-6: raw chat text in `doc_gaps`, a log or an event; a `question_generic` that skipped `parseDocGapRewrite`; a Quality item per question, or outside `DocGapQualityProvider`; a transaction held across the doc gap rewrite or embed
+- From M5-7: an issue's test saved past `findQualityTestPersonalDetails`, a user name, email or long number made confirmable, or a flagged term in a log or event
 - `npm`/`yarn` — `pnpm` always
 
 ## Commands

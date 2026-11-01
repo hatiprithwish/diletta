@@ -280,6 +280,7 @@ describe("A Health drop issue on the Quality page", () => {
       companyId: companyA,
       adminId: adminAId,
       publicId,
+      confirmedTerms: [],
       draft: {
         name: "Not a test",
         messages: [{ role: Schemas.EvalCaseMessageRoleEnum.User, text: "Hi" }],
@@ -408,6 +409,7 @@ describe("A Health drop issue on the Quality page", () => {
     const converted = await repo.convertQualityIssue({
       ...scope,
       adminId: adminAId,
+      confirmedTerms: [],
       draft: {
         name: "A test",
         messages: [{ role: Schemas.EvalCaseMessageRoleEnum.User, text: "Hello?" }],

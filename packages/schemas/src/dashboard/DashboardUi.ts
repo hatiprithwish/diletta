@@ -45,7 +45,8 @@ import type {
   QualityIssueDetail,
   QualityIssueListItem,
   QualityPageSearch,
-  QualityTestDraft,
+  QualityTestFlaggedTerm,
+  QualityTestReview,
 } from "../qualityIssues";
 import type {
   ImpactRangeEnum,
@@ -317,10 +318,20 @@ export interface DashboardQualityDetailProps {
   qualityIssue: QualityIssueDetail;
 }
 
-// DEV_NOTE: Create test's review: the draft to edit and save (null = closed)
+// DEV_NOTE: What Create test's check flagged, in the review: confirmed = ticked as not personal, remaining = what stopped
+// the last save
+export interface DashboardQualityFlaggedTermsProps {
+  flaggedTerms: QualityTestFlaggedTerm[];
+  confirmedTerms: string[];
+  remainingTerms: string[];
+  wasVerified: boolean;
+  onToggle: (term: string) => void;
+}
+
+// DEV_NOTE: Create test's review: the draft to edit and save, with what the check flagged (null = closed)
 export interface DashboardQualityTestDialogProps {
   publicId: string;
-  draft: QualityTestDraft | null;
+  review: QualityTestReview | null;
   onClose: () => void;
 }
 

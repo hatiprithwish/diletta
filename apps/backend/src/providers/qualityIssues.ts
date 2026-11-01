@@ -86,6 +86,12 @@ export default class QualityIssuesProvider {
     };
   }
 
+  // DEV_NOTE: What a test may not repeat a name from (M5-7): the messages read for the issue and the admin's note
+  static personalDetailSources(rows: Schemas.ChatMessageTextRow[], note: string | null): string[] {
+    const texts = QualityIssuesProvider.lines(rows).map((line) => line.text);
+    return note === null ? texts : [...texts, note];
+  }
+
   // DEV_NOTE: A user issue's reply is the rated one, wherever it sits, even with no text (then only what came before it
   // is used, never another reply). Any other issue, or a rated reply missing from the rows, is about the last reply,
   // unless the last line is the user's: a question nobody answered is what the issue is about.
