@@ -117,6 +117,8 @@ const UPDATE_FAILURE_TEXT: Record<Schemas.QualityIssueUpdateFailureEnum, string>
     "This conversation's chatbot was removed, so the test can't be saved. Nothing changed.",
   [Schemas.QualityIssueUpdateFailureEnum.NoConversation]:
     "This issue is about the whole chatbot, not one conversation, so it can't become a test. Nothing changed.",
+  [Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound]:
+    "The test still holds personal details. Nothing was saved.",
 };
 
 // DEV_NOTE: A 409: someone else closed or converted the issue first (or, on save, its chatbot is gone). The detail and
@@ -128,6 +130,15 @@ function onRefused(queryClient: QueryClient, publicId: string, error: Error): bo
   const failure = (error.body as Schemas.UpdateQualityIssueApiResponse).failure;
   toast.error(UPDATE_FAILURE_TEXT[failure ?? Schemas.QualityIssueUpdateFailureEnum.NotOpen]);
   return true;
+}
+
+export function isPersonalDetailsRefusal(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    (error.body as Schemas.UpdateQualityIssueApiResponse).failure ===
+      Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound
+  );
 }
 
 // DEV_NOTE: Sets the issue type or the note (each saved on its own)
@@ -238,6 +249,13 @@ export function useConvertQualityIssue(publicId: string) {
       toast.success("Test saved.");
     },
     onError: (error) => {
+      // DEV_NOTE: The review stays open and lists what's left (M5-7); the issue itself didn't change
+      if (isPersonalDetailsRefusal(error)) {
+        toast.error(
+          UPDATE_FAILURE_TEXT[Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound],
+        );
+        return;
+      }
       if (onRefused(queryClient, publicId, error)) return;
       toast.error("The test wasn't saved. Nothing changed, try again.");
     },

@@ -36,6 +36,7 @@ export * from "./knowledgeSearch";
 export * from "./files";
 export * from "./docGapClusters";
 export * from "./docGaps";
+export * from "./personalDetails";
 export * from "./activityLog";
 export * from "./activityRollups";
 export * from "./chatbotHealth";

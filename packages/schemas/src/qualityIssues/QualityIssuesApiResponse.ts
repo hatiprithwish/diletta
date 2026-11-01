@@ -13,6 +13,7 @@ import type {
   QualityTestDraft,
   QualityTestDraftFailureEnum,
 } from "./QualityIssuesCommon";
+import type { QualityTestFlaggedTerm } from "./QualityTestPersonalDetails";
 
 // DEV_NOTE: One row of the Quality list (M4-6). Status Enum Pattern for source, status and type (issueType null = not
 // triaged yet). ratedReply = the start of the reply a user rated down (user issues; null for the others and once the
@@ -84,11 +85,15 @@ export interface GetQualityIssuesOpenCountApiResponse extends ApiResponse {
 export interface UpdateQualityIssueApiResponse extends ApiResponse {
   qualityIssue?: QualityIssueDetail;
   failure?: QualityIssueUpdateFailureEnum;
+  // DEV_NOTE: failure PersonalDetailsFound: what still has to go or be confirmed
+  flaggedTerms?: QualityTestFlaggedTerm[];
 }
 
 // DEV_NOTE: POST …/:publicId/test-draft: the rewritten chat to review, saved nowhere. failure says why there is none
 // (QUALITY_TEST_DRAFT_FAILURE_HTTP_STATUS_MAP).
 export interface DraftQualityTestApiResponse extends ApiResponse {
   draft?: QualityTestDraft;
+  flaggedTerms?: QualityTestFlaggedTerm[];
+  wasVerified?: boolean;
   failure?: QualityTestDraftFailureEnum;
 }

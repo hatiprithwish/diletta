@@ -7,6 +7,10 @@ import {
   ZQualityIssueSortColumn,
   ZQualityTestDraft,
 } from "./QualityIssuesCommon";
+import {
+  QUALITY_TEST_CONFIRMED_TERMS_MAX,
+  QUALITY_TEST_TERM_MAX_CHARS,
+} from "./QualityTestPersonalDetails";
 
 // DEV_NOTE: GET /dashboard/quality-issues (M4-6). A company has any number of issues, so the list is paged. botId = a
 // chatbot's public id (DESIGN.md §6); absent = the whole company, unknown → 404. tab absent = Open.
@@ -36,8 +40,14 @@ export const ZTriageQualityIssueApiRequest = z
 export type TriageQualityIssueApiRequest = z.infer<typeof ZTriageQualityIssueApiRequest>;
 
 // DEV_NOTE: POST /dashboard/quality-issues/:publicId/convert: the test as the admin reviewed it (the draft from
-// /test-draft, edited). Saved as it is: the admin confirms there is nothing personal left in it.
-export const ZConvertQualityIssueApiRequest = ZQualityTestDraft;
+// /test-draft, edited). Saved as it is, once the server's check finds nothing personal left: confirmedTerms = flagged
+// words the admin says aren't personal (M5-7).
+export const ZConvertQualityIssueApiRequest = ZQualityTestDraft.extend({
+  confirmedTerms: z
+    .array(z.string().min(1).max(QUALITY_TEST_TERM_MAX_CHARS))
+    .max(QUALITY_TEST_CONFIRMED_TERMS_MAX)
+    .optional(),
+});
 export type ConvertQualityIssueApiRequest = z.infer<typeof ZConvertQualityIssueApiRequest>;
 
 // DEV_NOTE: The Quality pages' URL search (apps/web validateSearch): the tab and the page; an unknown value falls back

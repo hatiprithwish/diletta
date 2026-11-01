@@ -22,28 +22,45 @@ Each action writes one `quality_issue.<action>` event to `activity_log` and `eve
    - It runs on the company's own key, and the budget is held like any other call.
    - The call is recorded as the chatbot's, with no conversation, so it shows under Usage › Test runs and never adds to the conversation's cost.
    - Nothing is saved.
-2. **Review.** The admin edits the name, each message and the rubric (what a good reply does and must not do).
+   - A second router call (`quality.test_check`, tier Small, same budget and Usage line) reads the draft alone and lists the names it finds. If it doesn't run, the draft still comes back and the dialog says the extra check was skipped.
+2. **Review.** The admin edits the name, each message and the rubric (what a good reply does and must not do). The dialog lists what the check flagged (see below).
 3. **Save.** `POST /dashboard/quality-issues/:publicId/convert` writes the reviewed draft as the chatbot's `eval_cases` row and moves the issue to Converted, in one transaction:
    - `input` holds `{schemaVersion: 1, messages}`, ending with the user's question.
    - `expectations` holds `{schemaVersion: 1, rubric}`.
    - The row is active and is never a safety case.
 
-The admin's review is the PII check: the server saves what the admin saw, nothing from the model directly.
+The server saves what the admin saw, nothing from the model directly, and only after its own check passes.
+
+### The personal details check (M5-7)
+
+`Schemas.findQualityTestPersonalDetails` runs at draft and again at save, when the server re-reads the chat. It looks at the test's name, messages and rubric. Parts a host sends in place of a name ("Test User") are skipped. An issue with no rated reply reads the chat up to when it was opened, so messages sent later never change what the check compares.
+
+| Found in the test                                                                                     | What the admin can do                |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| A part of the chat user's display name, an email, or a run of 6 or more digits                        | Edit it out. It can't be confirmed.  |
+| A name part that is also an everyday word ("Will", "May"), written as the name is                     | Edit it out, or tick "Not personal". |
+| A capitalised word from inside a sentence of the chat or note (the chat never writes it in lowercase) | Edit it out, or tick "Not personal". |
+| A name the model's check listed (draft only)                                                          | Edit it out, or tick "Not personal". |
+
+A save with something left answers 409 `PersonalDetailsFound` with the terms, writes nothing, and keeps the dialog open. The `converted` event records `confirmedTermCount` (the flags the confirmation cleared), never the words: a wrongly confirmed name stays out of `activity_log`.
+
+**What isn't guaranteed.** A name opening a sentence or written in lowercase is invisible to the save's rules unless it is part of the user's display name. The model's check flags it at draft, the browser holds the save until it is dealt with, but the server can't enforce that, since the model's names aren't stored. A date written with 6 or more digits counts as a long number; reword it.
 
 ### When there is no draft or the save is refused
 
-| Answer     | `failure`           | Meaning and what to do                                                                                                                                                                           |
-| ---------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 409        | `NotOpen`           | The issue was closed meanwhile.                                                                                                                                                                  |
-| 409        | `NoConversation`    | The chat's content was purged, or the user never asked anything. Dismiss or mark it fixed instead.                                                                                               |
-| 409        | `NoPublishedConfig` | The chatbot has no published config, so there is no routing to call. Publish it (Settings › Bots).                                                                                               |
-| 503        | `ModelUnavailable`  | The router refused: no active key for the Mid tier's provider, the budget is used up, or the provider is down. Check Settings › Model keys and Budget; a rejected key also opens a system issue. |
-| 502        | `RewriteFailed`     | The model's answer wasn't a usable draft (not the shape asked for, or over the limits). Try again.                                                                                               |
-| 409 (save) | `ChatbotNotFound`   | The conversation's chatbot was removed, so no chatbot can own the test. Nothing was written; dismiss the issue or mark it fixed.                                                                 |
+| Answer     | `failure`              | Meaning and what to do                                                                                                                                                                           |
+| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 409        | `NotOpen`              | The issue was closed meanwhile.                                                                                                                                                                  |
+| 409        | `NoConversation`       | The chat's content was purged, or the user never asked anything. Dismiss or mark it fixed instead.                                                                                               |
+| 409        | `NoPublishedConfig`    | The chatbot has no published config, so there is no routing to call. Publish it (Settings › Bots).                                                                                               |
+| 503        | `ModelUnavailable`     | The router refused: no active key for the Mid tier's provider, the budget is used up, or the provider is down. Check Settings › Model keys and Budget; a rejected key also opens a system issue. |
+| 502        | `RewriteFailed`        | The model's answer wasn't a usable draft (not the shape asked for, or over the limits). Try again.                                                                                               |
+| 409 (save) | `PersonalDetailsFound` | The test still holds a flagged term. Nothing was written; the dialog lists it. Edit it out or, where allowed, tick "Not personal".                                                               |
+| 409 (save) | `ChatbotNotFound`      | The conversation's chatbot was removed, so no chatbot can own the test. Nothing was written; dismiss the issue or mark it fixed.                                                                 |
 
 ## What M5 adds
 
-M5-1 extends the case shape (readback asserts, tool calls, forbidden tools) as v2, with an upgrader from v1; stored v1 rows are never rewritten. M5-7 hardens the rewrite (graders, a check that no name from the chat survives). Until the eval harness runs (M5-2), a saved test is stored but not yet run.
+M5-1 extends the case shape (readback asserts, tool calls, forbidden tools) as v2, with an upgrader from v1; stored v1 rows are never rewritten. M5-7 added the personal details check above. A saved test runs through the eval harness (`docs/runbooks/evals.md`).
 
 ## Checking by hand
 

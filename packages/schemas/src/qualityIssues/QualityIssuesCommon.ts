@@ -196,6 +196,8 @@ export enum QualityIssueUpdateFailureEnum {
   ChatbotNotFound = "ChatbotNotFound",
   // DEV_NOTE: Convert only: a chatbot-wide system issue (a health drop, M5-5) has no conversation to turn into a test
   NoConversation = "NoConversation",
+  // DEV_NOTE: Convert only (M5-7): the reviewed test still holds a personal detail the admin didn't confirm
+  PersonalDetailsFound = "PersonalDetailsFound",
 }
 
 // DEV_NOTE: Why Create test produced no draft. NotOpen: the issue was closed meanwhile. NoConversation: the chat has
@@ -246,4 +248,11 @@ export const ZQualityTestRewriteOutput = z.object({
   rubric: z
     .string()
     .describe("What a good reply to the last question must do and must not do, as short criteria"),
+});
+
+// DEV_NOTE: What the name check asks of its model (M5-7). Plain types only, as above.
+export const ZQualityTestCheckOutput = z.object({
+  names: z
+    .array(z.string())
+    .describe("Every name of a real person, written exactly as it appears in the test"),
 });
