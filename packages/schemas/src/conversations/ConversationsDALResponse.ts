@@ -30,11 +30,25 @@ export interface ChatbotConversationCountsDALResponse extends ApiResponse {
 // DEV_NOTE: A chat the retention purge (M6-1) has to clear
 export type ConversationPastRetentionRow = Pick<
   Conversation,
-  "id" | "publicId" | "companyId" | "status" | "evalRunId" | "evalCaseId" | "evalAttempt"
->;
+  | "id"
+  | "publicId"
+  | "companyId"
+  | "chatbotUserId"
+  | "status"
+  | "evalRunId"
+  | "evalCaseId"
+  | "evalAttempt"
+> & {
+  // DEV_NOTE: Set = its user was erased (M6-2): due whatever its age
+  erasedAt: Date | null;
+};
 
 export interface ConversationsPastRetentionDALResponse extends ApiResponse {
   conversations?: ConversationPastRetentionRow[];
+}
+
+export interface OldestErasedUserPendingDALResponse extends ApiResponse {
+  erasedAt?: Date | null;
 }
 
 export interface OldestConversationPastRetentionDALResponse extends ApiResponse {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ZPageApiRequest } from "../common";
+import { ZChatbotUserBase } from "../chatbotUsers/ChatbotUsersCommon";
 import { ZOrigin } from "../companyConnections/CompanyConnectionsCommon";
 import {
   ALLOWED_ORIGINS_MAX,
@@ -24,6 +25,10 @@ export const ZUpdateContentRetentionApiRequest = z.object({
   contentRetentionDays: ZContentRetentionDays,
 });
 export type UpdateContentRetentionApiRequest = z.infer<typeof ZUpdateContentRetentionApiRequest>;
+
+// POST /dashboard/security/erase-user: the host's own id for the user
+export const ZEraseChatbotUserApiRequest = ZChatbotUserBase.pick({ hostUserId: true });
+export type EraseChatbotUserApiRequest = z.infer<typeof ZEraseChatbotUserApiRequest>;
 
 // GET /dashboard/security/injection-events: newest first by default
 export const ZGetInjectionEventsApiRequest = ZPageApiRequest.extend({

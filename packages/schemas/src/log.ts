@@ -58,6 +58,7 @@ export enum LogAction {
   ListChatbotUsers = "ListChatbotUsers",
   CountChatbotUsers = "CountChatbotUsers",
   UpdateChatbotUser = "UpdateChatbotUser",
+  EraseChatbotUser = "EraseChatbotUser",
 
   // Company connections
   CreateCompanyConnection = "CreateCompanyConnection",

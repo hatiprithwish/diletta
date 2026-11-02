@@ -16,6 +16,7 @@ import {
 } from "@app/ui/components/alert-dialog";
 import { Button } from "@app/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@app/ui/components/field";
+import { Input } from "@app/ui/components/input";
 import {
   Select,
   SelectContent,
@@ -45,6 +46,7 @@ import {
   useAuditLog,
   useAuditLogCount,
   useContentRetention,
+  useEraseChatbotUser,
   useEncryptionKeys,
   useExportAuditLog,
   useInjectionEvents,
@@ -87,7 +89,7 @@ function SectionNote({ children }: PropsWithChildren) {
   );
 }
 
-// DEV_NOTE: The whole /security body (DESIGN.md dashboard-Security). Erase a user is left out until erasure is built
+// DEV_NOTE: The whole /security body (DESIGN.md dashboard-Security)
 // end to end (M6-2).
 export function SecurityPage({ search }: Schemas.DashboardSecurityPageProps) {
   const navigate = useNavigate();
@@ -315,13 +317,14 @@ function Retention() {
   const retention = query.data?.retention;
 
   return (
-    <section className="flex flex-col gap-4" aria-label="Retention">
-      <SectionHeader title="Retention" />
+    <section className="flex flex-col gap-4" aria-label="Retention and erasure">
+      <SectionHeader title="Retention and erasure" />
       {query.isPending && <Skeleton className="h-40 rounded-xl" aria-label="Loading" />}
       {!query.isPending && !retention && (
         <PageError title="Retention didn't load" onRetry={() => void query.refetch()} />
       )}
       {retention && <RetentionForm key={retention.contentRetentionDays} retention={retention} />}
+      <EraseUserForm />
     </section>
   );
 }
@@ -388,6 +391,67 @@ function RetentionForm({ retention }: Schemas.DashboardSecurityRetentionFormProp
           </div>
         )}
       </form.Subscribe>
+    </form>
+  );
+}
+
+// DEV_NOTE: Erasing can't be undone, so it always asks first. The id is the host's own, a machine value.
+function EraseUserForm() {
+  const erase = useEraseChatbotUser();
+  const [hostUserId, setHostUserId] = useState("");
+  const [isConfirming, setIsConfirming] = useState(false);
+  const trimmed = hostUserId.trim();
+
+  return (
+    <form
+      className="flex flex-col gap-4 rounded-xl border px-[22px] py-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (trimmed) setIsConfirming(true);
+      }}
+    >
+      <Field className="max-w-sm">
+        <FieldLabel htmlFor="erase-user-id">Erase a user</FieldLabel>
+        <Input
+          id="erase-user-id"
+          className="font-mono"
+          autoComplete="off"
+          value={hostUserId}
+          onChange={(event) => setHostUserId(event.target.value)}
+        />
+        <FieldDescription>Enter their user ID in your app.</FieldDescription>
+      </Field>
+      <p className="text-caption text-muted-foreground">
+        Erasing a user removes their chats, files and saved credentials, and keeps anonymous counts.
+        Model gateway logs clear on their own within {Schemas.GATEWAY_LOG_RETENTION_DAYS} days.
+        Changes already made in your app stay there.
+      </p>
+      <div>
+        <Button type="submit" variant="outline" disabled={!trimmed || erase.isPending}>
+          {erase.isPending ? "Erasing…" : "Erase user"}
+        </Button>
+      </div>
+      <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Erase this user?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Their chats, files and saved credentials are deleted for good. This can't be undone.
+              If they use the chatbot again, they start as a new user.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() =>
+                erase.mutate({ hostUserId: trimmed }, { onSuccess: () => setHostUserId("") })
+              }
+            >
+              Erase user
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   );
 }

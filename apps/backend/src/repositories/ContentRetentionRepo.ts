@@ -8,6 +8,7 @@ import DocGapsDAL from "@/data-access-layer/DocGapsDAL";
 import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
 import FilesDAL from "@/data-access-layer/FilesDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
+import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import ToolCallsDAL from "@/data-access-layer/ToolCallsDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
@@ -29,6 +30,8 @@ import * as Schemas from "@app/schemas";
 //      above leaves the chat due; a read model write can't follow, since the wipe waits for any sync and the DO is gone.
 // eval_results is append-only, so a result keeps its transcript_file_id with no files row behind it: the Tests page's
 // left join reads that as no transcript. Admin notes on quality issues stay (their own triage record, not chat text).
+// A chat of an erased user (M6-2) takes the same steps whatever its age, and its notes go too: right after the erasure
+// (purgeErasedUserContent), then in the hourly run for whatever that left, such as a chat with a turn running.
 // One chat's failure is logged and skipped; the run carries on past it. No chat text reaches a log.
 export default class ContentRetentionRepo {
   private env: Env;
@@ -40,6 +43,7 @@ export default class ContentRetentionRepo {
   private feedbackDal: FeedbackDAL;
   private filesDal: FilesDAL;
   private messagesDal: MessagesDAL;
+  private qualityIssuesDal: QualityIssuesDAL;
   private toolCallsDal: ToolCallsDAL;
 
   constructor(env: Env) {
@@ -52,6 +56,7 @@ export default class ContentRetentionRepo {
     this.feedbackDal = new FeedbackDAL();
     this.filesDal = new FilesDAL();
     this.messagesDal = new MessagesDAL();
+    this.qualityIssuesDal = new QualityIssuesDAL();
     this.toolCallsDal = new ToolCallsDAL();
   }
 
@@ -134,6 +139,62 @@ export default class ContentRetentionRepo {
     };
   }
 
+  // DEV_NOTE: After an erasure's commit, so the admin isn't kept waiting and a failure can't undo it
+  static purgeErasedUserInBackground(
+    env: Env,
+    ctx: { waitUntil(promise: Promise<unknown>): void },
+    params: { companyId: string; chatbotUserId?: string },
+  ): void {
+    const { companyId, chatbotUserId } = params;
+    if (!chatbotUserId) return;
+    ctx.waitUntil(
+      new ContentRetentionRepo(env).purgeErasedUserContent({ companyId, chatbotUserId }),
+    );
+  }
+
+  // DEV_NOTE: One pass over the erased user's chats, inside what waitUntil allows. What it skips or doesn't reach is due
+  // in the hourly run. Never throws.
+  async purgeErasedUserContent(params: {
+    companyId: string;
+    chatbotUserId: string;
+    timeBudgetMs?: number;
+  }): Promise<Schemas.PurgeConversationContentResponse> {
+    const { companyId, chatbotUserId } = params;
+    const deadline =
+      Date.now() + (params.timeBudgetMs ?? Constants.USER_ERASE_PURGE_TIME_BUDGET_MS);
+    const read = await withTenant(this.db, companyId, async (tx) => {
+      const company = await this.companiesDal.getCompanyDetails(tx, { companyId });
+      if (!company.isSuccess || !company.company) throw new TenantRollbackError(company.message);
+      const due = await this.conversationsDal.getUserConversationsToPurge(tx, {
+        companyId,
+        chatbotUserId,
+        limit: Constants.CONTENT_PURGE_BATCH_SIZE,
+      });
+      if (!due.isSuccess || !due.conversations) throw new TenantRollbackError(due.message);
+      return {
+        isSuccess: true,
+        message: due.message,
+        company: company.company,
+        conversations: due.conversations,
+      };
+    });
+    if (!read.isSuccess || !("company" in read)) {
+      return { isSuccess: false, message: read.message, purgedCount: 0, skippedCount: 0 };
+    }
+
+    let purgedCount = 0;
+    let skippedCount = 0;
+    for (const row of read.conversations) {
+      if (Date.now() >= deadline) break;
+      if (await this.purgeConversation(row, read.company, new Date())) {
+        purgedCount += 1;
+      } else {
+        skippedCount += 1;
+      }
+    }
+    return { isSuccess: true, message: "Erased user's content purged", purgedCount, skippedCount };
+  }
+
   // DEV_NOTE: The one place a company's cut-off is worked out
   private retentionCutoff(company: Schemas.CompanyRetentionRow, now: Date): Date {
     const days = Schemas.effectiveContentRetentionDays(company.contentRetentionDays);
@@ -182,8 +243,17 @@ export default class ContentRetentionRepo {
             lastActivityBefore,
           }),
       );
-      if (!oldest.lastActivityAt) continue;
-      const overdueMs = lastActivityBefore.getTime() - oldest.lastActivityAt.getTime();
+      const erased: Schemas.OldestErasedUserPendingDALResponse = await withTenant(
+        this.db,
+        company.id,
+        async (tx) =>
+          await this.conversationsDal.getOldestErasedUserPending(tx, { companyId: company.id }),
+      );
+      // DEV_NOTE: Past the cut-off, or since the erasure (M6-2), whichever has waited longer
+      const overdueMs = Math.max(
+        oldest.lastActivityAt ? lastActivityBefore.getTime() - oldest.lastActivityAt.getTime() : 0,
+        erased.erasedAt ? now.getTime() - erased.erasedAt.getTime() : 0,
+      );
       if (overdueMs < Constants.CONTENT_PURGE_OVERDUE_ALERT_MS) continue;
       overdueCompanyCount += 1;
       AppLogger.error({
@@ -205,7 +275,11 @@ export default class ContentRetentionRepo {
     const { companyId, publicId } = row;
 
     if (row.status === Schemas.ConversationStatusIntEnum.Open) {
-      const closed = await this.closeConversation(row, lastActivityBefore);
+      // DEV_NOTE: An erased user's chat closes whatever its last activity, so the cut-off is past any chat
+      const closeBefore = row.erasedAt
+        ? new Date(Date.now() + Constants.DAY_MS)
+        : lastActivityBefore;
+      const closed = await this.closeConversation(row, closeBefore);
       if (!closed.isSuccess) return false;
     }
 
@@ -224,6 +298,14 @@ export default class ContentRetentionRepo {
         await this.changeRequestsDal.clearConversationValues(tx, request),
         await this.docGapsDal.clearConversationRefs(tx, request),
         await this.filesDal.deleteFiles(tx, { companyId, ids: fileIds }),
+        ...(row.erasedAt
+          ? [
+              await this.qualityIssuesDal.clearChatbotUserNotes(tx, {
+                companyId,
+                chatbotUserId: row.chatbotUserId,
+              }),
+            ]
+          : []),
         await this.conversationsDal.markConversationContentPurged(tx, { companyId, publicId }),
       ];
       const failed = steps.find((step) => !step.isSuccess);

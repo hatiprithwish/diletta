@@ -47,6 +47,7 @@ export enum AuditEntityActionEnum {
   OriginsChanged = "origins_changed",
   Rotated = "rotated",
   RetentionChanged = "retention_changed",
+  UserErased = "user_erased",
   MadeDefault = "made_default",
   Discarded = "discarded",
   Published = "published",
@@ -105,6 +106,7 @@ export const AUDIT_ENTITY_ACTIONS = {
   [AuditEntityTypeEnum.CompanyEncryptionKey]: [AuditEntityActionEnum.Rotated],
   [AuditEntityTypeEnum.Company]: [
     AuditEntityActionEnum.RetentionChanged,
+    AuditEntityActionEnum.UserErased,
     AuditEntityActionEnum.TurnedOn,
     AuditEntityActionEnum.TurnedOff,
     AuditEntityActionEnum.BudgetChanged,

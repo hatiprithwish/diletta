@@ -1,4 +1,19 @@
-import { and, asc, count, desc, eq, exists, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  min,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -22,6 +37,19 @@ import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
+
+// DEV_NOTE: What purging one chat needs (M6-1); erasedAt set = its user was erased (M6-2)
+const PURGE_ROW_COLUMNS = {
+  id: conversations.id,
+  publicId: conversations.publicId,
+  companyId: conversations.companyId,
+  chatbotUserId: conversations.chatbotUserId,
+  status: conversations.status,
+  evalRunId: conversations.evalRunId,
+  evalCaseId: conversations.evalCaseId,
+  evalAttempt: conversations.evalAttempt,
+  erasedAt: chatbotUsers.erasedAt,
+};
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). title is chat content (the first user
@@ -384,23 +412,25 @@ export default class ConversationsDAL {
       const conditions = [
         eq(conversations.companyId, params.companyId),
         isNull(conversations.contentPurgedAt),
-        lt(conversations.lastActivityAt, params.lastActivityBefore),
+        // DEV_NOTE: A chat of an erased user (M6-2) is due whatever its age: a turn that was running, or one started as
+        // the user was erased, is picked up here
+        or(
+          lt(conversations.lastActivityAt, params.lastActivityBefore),
+          isNotNull(chatbotUsers.erasedAt),
+        ),
         or(
           isNull(conversations.contentPurgeAttemptedAt),
           lt(conversations.contentPurgeAttemptedAt, params.now),
         ),
       ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
       const selected = await tx
-        .select({
-          id: conversations.id,
-          publicId: conversations.publicId,
-          companyId: conversations.companyId,
-          status: conversations.status,
-          evalRunId: conversations.evalRunId,
-          evalCaseId: conversations.evalCaseId,
-          evalAttempt: conversations.evalAttempt,
-        })
+        .select(PURGE_ROW_COLUMNS)
         .from(conversations)
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
         .where(and(...conditions))
         .orderBy(
           sql`${conversations.contentPurgeAttemptedAt} ASC NULLS FIRST`,
@@ -420,6 +450,124 @@ export default class ConversationsDAL {
         message,
         error,
         metadata: { companyId: params.companyId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One user's chats not yet purged, for the pass right after their erasure (M6-2)
+  async getUserConversationsToPurge(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetUserConversationsToPurgeDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.chatbotUserId, params.chatbotUserId),
+        isNull(conversations.contentPurgedAt),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      response.conversations = await tx
+        .select(PURGE_ROW_COLUMNS)
+        .from(conversations)
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(conversations.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "User's conversations to purge fetched successfully";
+    } catch (error) {
+      const message = "Unknown error in fetching the user's conversations to purge";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId, chatbotUserId: params.chatbotUserId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every chat the user had, purged ones too: the number on the erasure's audit row
+  async getUserConversationsCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ChatbotUserContentDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.chatbotUserId, params.chatbotUserId),
+      ];
+      const [counted] = await tx
+        .select({ total: count() })
+        .from(conversations)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "User's conversations counted successfully";
+      response.totalRecords = counted?.total ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting the user's conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: When the longest-waiting erased user with a chat still to purge was erased (M6-2), for the overdue alert
+  async getOldestErasedUserPending(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Pick<Schemas.Conversation, "companyId">,
+  ) {
+    const response: Schemas.OldestErasedUserPendingDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        isNotNull(chatbotUsers.erasedAt),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      const [oldest] = await tx
+        .select({ erasedAt: min(chatbotUsers.erasedAt) })
+        .from(conversations)
+        .innerJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Oldest erased user pending fetched successfully";
+      response.erasedAt = oldest?.erasedAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in fetching the oldest erased user pending";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
       });
       response.message = message;
     }

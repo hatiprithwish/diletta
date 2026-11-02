@@ -81,6 +81,13 @@ export type GetConversationsPastRetentionDALRequest = Pick<Conversation, "compan
   limit: number;
 };
 
+export type GetUserConversationsToPurgeDALRequest = Pick<
+  Conversation,
+  "companyId" | "chatbotUserId"
+> & {
+  limit: number;
+};
+
 export type MarkConversationsPurgeAttemptedDALRequest = Pick<Conversation, "companyId"> & {
   ids: string[];
   now: Date;

@@ -206,6 +206,37 @@ export default class ChatbotUserSecretsDAL {
     return response;
   }
 
+  // DEV_NOTE: The erasure (M6-2): every credential of the user, on every connection. Gone, not disabled.
+  async deleteChatbotUserSecrets(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ChatbotUserContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotUserSecrets.chatbotUserId, params.chatbotUserId),
+        eq(chatbotUserSecrets.companyId, params.companyId),
+      ];
+      await tx.delete(chatbotUserSecrets).where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Chatbot user secrets deleted successfully";
+    } catch (error) {
+      const message = "Unknown error in deleting chatbot user secrets";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async updateChatbotUserSecret(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpdateChatbotUserSecretDALRequest,

@@ -507,6 +507,51 @@ export default class QualityIssuesDAL {
     return response;
   }
 
+  // DEV_NOTE: The erasure (M6-2): an admin's note on the user's chats may name them. The issues stay, without it.
+  async clearChatbotUserNotes(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ChatbotUserContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conversationConditions = [
+        eq(conversations.chatbotUserId, params.chatbotUserId),
+        eq(conversations.companyId, params.companyId),
+      ];
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        isNotNull(qualityIssues.note),
+        inArray(
+          qualityIssues.conversationId,
+          tx
+            .select({ id: conversations.id })
+            .from(conversations)
+            .where(and(...conversationConditions)),
+        ),
+      ];
+      await tx
+        .update(qualityIssues)
+        .set({ note: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Chatbot user's quality issue notes cleared successfully";
+    } catch (error) {
+      const message = "Unknown error in clearing the chatbot user's quality issue notes";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Open issues by source, by the issue's own chatbot. userCount = the thumbs-down ones.
   async getOpenQualityIssueCounts(
     tx: NodePgTransaction<EmptyRelations>,

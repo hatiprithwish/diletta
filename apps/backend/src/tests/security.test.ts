@@ -459,6 +459,27 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
     expect(other.body.retention?.isDefault).toBe(true);
   });
 
+  it("erases a user for an admin only, and never answers with an internal id", async () => {
+    const hostUserId = `erase-${crypto.randomUUID()}`;
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.insert(chatbotUsers).values({ companyId: companyA, hostUserId });
+    });
+    const path = "/dashboard/security/erase-user";
+
+    expect((await call("POST", path, { as: operator, body: { hostUserId } })).status).toBe(403);
+    expect((await call("POST", path, { as: adminB, body: { hostUserId } })).status).toBe(404);
+    expect((await call("POST", path, { as: adminA, body: { hostUserId: " " } })).status).toBe(400);
+
+    const erased = await call("POST", path, { as: adminA, body: { hostUserId } });
+    expect(erased.status).toBe(200);
+    expect(erased.body).toEqual({
+      isSuccess: true,
+      message: "User erased",
+      conversationCount: 0,
+    });
+    expect((await call("POST", path, { as: adminA, body: { hostUserId } })).status).toBe(404);
+  });
+
   it("lists the issues typed Prompt injection newest first, never another company's", async () => {
     const { status, body } = await call("GET", "/dashboard/security/injection-events", {
       as: adminA,
@@ -500,6 +521,7 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
   it("shows this page's writes in the audit log, in words", async () => {
     const { body } = await call("GET", "/dashboard/audit-log", { as: adminA });
     expect(body.auditLog?.map((entry) => [entry.actorName, entry.action, entry.on])).toEqual([
+      ["Ana Ruiz", "Erased a user", "0 chats"],
       ["Ana Ruiz", "Changed chat retention", "90 days"],
       ["Ana Ruiz", "Rotated encryption key", "v2"],
       ["Ana Ruiz", "Changed allowed origins", "Production"],

@@ -237,6 +237,29 @@ export function useUpdateContentRetention() {
   });
 }
 
+export function useEraseChatbotUser() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.EraseChatbotUserApiRequest) =>
+      apiClient<Schemas.EraseChatbotUserApiResponse>("/dashboard/security/erase-user", getToken, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      refreshAuditLog(queryClient);
+      toast.success("User erased. Any chat still running is deleted within the hour.");
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 404) {
+        toast.error("No user with that ID. They may already be erased.");
+        return;
+      }
+      toast.error("The user wasn't erased. Nothing changed, try again.");
+    },
+  });
+}
+
 const CSV_HEADER = ["Who", "Action", "On", "When"];
 
 // DEV_NOTE: Downloads the newest AUDIT_LOG_EXPORT_MAX_ROWS rows as a CSV. It reads, but runs on a click, so it's a

@@ -81,6 +81,18 @@ export interface GetContentRetentionApiResponse extends ApiResponse {
 
 export type UpdateContentRetentionApiResponse = GetContentRetentionApiResponse;
 
+// DEV_NOTE: The erased user's identity and credentials are gone by this answer; their chats follow right after it, a busy
+// one within the hour. conversationCount counts every chat they had, purged ones too.
+export interface EraseChatbotUserApiResponse extends ApiResponse {
+  conversationCount?: number;
+}
+
+// DEV_NOTE: What the route needs after the commit (M6-2): neither reaches the client
+export interface EraseChatbotUserRepoResponse extends EraseChatbotUserApiResponse {
+  chatbotUserId?: string;
+  outboxIds?: string[];
+}
+
 // DEV_NOTE: A prompt-injection event: for now a quality issue typed Prompt injection. detectedIn = the admin's note,
 // else where the issue came from; the conversation's title is null once purged.
 export interface InjectionEvent {
