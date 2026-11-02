@@ -23,9 +23,16 @@ const USER_PREFIX = "user:";
 // concurrent calls can't both take the last of the budget. Fails closed: no ledger for the current period (Neon
 // unreachable) refuses with Unavailable. A failed load isn't retried for BUDGET_LOAD_RETRY_MS (a stale budget is kept
 // meanwhile), so an outage doesn't add a Neon timeout to every call.
+//
+// Timings (M6-5, the load test): each admitTurn / reserve / settle is timed from its start to its answer, and the last
+// BUDGET_TIMING_MAX_SAMPLES of each are kept in memory (getTimings, resetTimings; lost when the DO is evicted, which
+// getTimings shows as a later timingsSince). Workers' clock moves only at I/O, so a call that never waits (a ledger
+// already loaded) counts 0 ms and one that waits for Neon counts the wait: the time that varies under load.
 export class BudgetDO extends DurableObject<Env> {
   private loading: Promise<void> | null = null;
   private lastFailedLoadAt = 0;
+  private samples: Record<Schemas.BudgetTimedOperationEnum, number[]> = BudgetDO.emptySamples();
+  private timingsSince = Date.now();
 
   // DEV_NOTE: The only way to reach a company's BudgetDO, so the naming rule lives in one place
   static forCompany(env: Env, companyId: string): DurableObjectStub<BudgetDO> {
@@ -33,6 +40,105 @@ export class BudgetDO extends DurableObject<Env> {
   }
 
   async admitTurn(raw: Schemas.AdmitBudgetTurnRequest): Promise<Schemas.BudgetAdmissionResponse> {
+    return await this.timed(Schemas.BudgetTimedOperationEnum.AdmitTurn, () =>
+      this.runAdmitTurn(raw),
+    );
+  }
+
+  async reserve(raw: Schemas.ReserveBudgetRequest): Promise<Schemas.BudgetReservationResponse> {
+    return await this.timed(Schemas.BudgetTimedOperationEnum.Reserve, () => this.runReserve(raw));
+  }
+
+  async settle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
+    return await this.timed(Schemas.BudgetTimedOperationEnum.Settle, () => this.runSettle(raw));
+  }
+
+  // DEV_NOTE: The ledger as it stands, for the load test (M6-5): the same opening as a reserve (loaded when due,
+  // expired holds charged first), then nothing written
+  async getSnapshot(
+    raw: Schemas.GetBudgetSnapshotRequest,
+  ): Promise<Schemas.BudgetSnapshotResponse> {
+    const parsed = Schemas.ZGetBudgetSnapshotRequest.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        isSuccess: false,
+        message: this.reject(Schemas.LogAction.GetBudgetSnapshot, raw).message,
+      };
+    }
+    const opened = await this.openLedger(parsed.data.companyId);
+    if (!opened) return { isSuccess: false, message: "No usable ledger" };
+    const { ledger, reservations } = opened;
+    return {
+      isSuccess: true,
+      message: "Budget snapshot read",
+      snapshot: {
+        spentMicros: ledger.spentMicros,
+        budgetMicros: ledger.budgetMicros,
+        heldMicros: reservations.reduce((sum, reservation) => sum + reservation.amountMicros, 0),
+        openReservationCount: reservations.length,
+      },
+    };
+  }
+
+  getTimings(): Schemas.BudgetTimingsResponse {
+    return {
+      isSuccess: true,
+      message: "Budget timings read",
+      timingsSince: this.timingsSince,
+      timings: {
+        admitTurn: Schemas.summarizeDurations(
+          this.samples[Schemas.BudgetTimedOperationEnum.AdmitTurn].slice(
+            -Schemas.BUDGET_TIMING_MAX_SAMPLES,
+          ),
+        ),
+        reserve: Schemas.summarizeDurations(
+          this.samples[Schemas.BudgetTimedOperationEnum.Reserve].slice(
+            -Schemas.BUDGET_TIMING_MAX_SAMPLES,
+          ),
+        ),
+        settle: Schemas.summarizeDurations(
+          this.samples[Schemas.BudgetTimedOperationEnum.Settle].slice(
+            -Schemas.BUDGET_TIMING_MAX_SAMPLES,
+          ),
+        ),
+      },
+    };
+  }
+
+  resetTimings(): Schemas.ApiResponse {
+    this.samples = BudgetDO.emptySamples();
+    this.timingsSince = Date.now();
+    return { isSuccess: true, message: "Budget timings reset" };
+  }
+
+  private static emptySamples(): Record<Schemas.BudgetTimedOperationEnum, number[]> {
+    return {
+      [Schemas.BudgetTimedOperationEnum.AdmitTurn]: [],
+      [Schemas.BudgetTimedOperationEnum.Reserve]: [],
+      [Schemas.BudgetTimedOperationEnum.Settle]: [],
+    };
+  }
+
+  private async timed<T>(
+    operation: Schemas.BudgetTimedOperationEnum,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now();
+    try {
+      return await run();
+    } finally {
+      const samples = this.samples[operation];
+      samples.push(Date.now() - startedAt);
+      // DEV_NOTE: Trimmed in chunks, so a busy DO doesn't shift the array on every call
+      if (samples.length >= Schemas.BUDGET_TIMING_MAX_SAMPLES * 2) {
+        samples.splice(0, samples.length - Schemas.BUDGET_TIMING_MAX_SAMPLES);
+      }
+    }
+  }
+
+  private async runAdmitTurn(
+    raw: Schemas.AdmitBudgetTurnRequest,
+  ): Promise<Schemas.BudgetAdmissionResponse> {
     const action = Schemas.LogAction.AdmitBudgetTurn;
     const parsed = Schemas.ZAdmitBudgetTurnRequest.safeParse(raw);
     if (!parsed.success) return this.reject(action, raw);
@@ -63,7 +169,9 @@ export class BudgetDO extends DurableObject<Env> {
     return { isSuccess: true, message: "Turn admitted" };
   }
 
-  async reserve(raw: Schemas.ReserveBudgetRequest): Promise<Schemas.BudgetReservationResponse> {
+  private async runReserve(
+    raw: Schemas.ReserveBudgetRequest,
+  ): Promise<Schemas.BudgetReservationResponse> {
     const action = Schemas.LogAction.ReserveBudget;
     const parsed = Schemas.ZReserveBudgetRequest.safeParse(raw);
     if (!parsed.success) return this.reject(action, raw);
@@ -111,7 +219,7 @@ export class BudgetDO extends DurableObject<Env> {
 
   // DEV_NOTE: No Neon read: a settle only moves a hold into spend. An unknown id (already expired and counted, or
   // settled twice) is a no-op success.
-  async settle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
+  private async runSettle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
     const parsed = Schemas.ZSettleBudgetRequest.safeParse(raw);
     if (!parsed.success) return this.reject(Schemas.LogAction.SettleBudget, raw);
     const request = parsed.data;

@@ -3,14 +3,18 @@
     uv run --project evals python -m diletta_evals run --config <chatbotConfigPublicId> [--k 3] [--trigger gate]
     uv run --project evals python -m diletta_evals run --chatbot <chatbotPublicId> --trigger nightly
     uv run --project evals python -m diletta_evals keygen [--kid <kid>]
+    uv run --project evals python -m diletta_evals load [--users 50] [--turns 4] [--report load-report.json]
 
 run: exit 0 when the run passed, 1 when it ran and failed (the chatbot regressed), 2 when it couldn't run: settings,
 the backend or the host, or any error that stopped the run before its verdict (never read as the chatbot failing).
+load (M6-5, docs/runbooks/load.md): exit 0 when the platform met the load target, 1 when it ran and missed it, 2 when it
+couldn't run (settings, the backend or the host).
 keygen: a new platform eval key; the private JWK goes to the harness's EVAL_JWT_PRIVATE_KEY, the JWKS to the worker's
 EVAL_JWT_PUBLIC_JWKS secret.
 """
 
 import argparse
+import asyncio
 import json
 import sys
 from datetime import UTC, datetime
@@ -22,6 +26,7 @@ from diletta_evals.client import EvalApiClient
 from diletta_evals.config import ConfigError, load_config
 from diletta_evals.eval_jwt import generate_key_pair
 from diletta_evals.hosts import host_login_for
+from diletta_evals.load.constants import TARGET_CONCURRENT_CHATS
 from diletta_evals.runner import ChatbotTarget, ConfigTarget, EvalRunner
 from diletta_evals.types import eval_api
 
@@ -61,6 +66,43 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT_PASSED if summary.has_passed else EXIT_FAILED
 
 
+def _load(args: argparse.Namespace) -> int:
+    # DEV_NOTE: Imported here, so a plain eval run never loads the socket client
+    from diletta_evals.load.config import load_load_settings
+    from diletta_evals.load.runner import LoadArgs, LoadRunError, run_load
+
+    try:
+        settings = load_load_settings()
+    except ConfigError as error:
+        sys.stderr.write(f"{error}\n")
+        return EXIT_COULD_NOT_RUN
+    try:
+        report = asyncio.run(
+            run_load(
+                settings,
+                LoadArgs(
+                    users=args.users,
+                    turns=args.turns,
+                    think_seconds=args.think_seconds,
+                    ramp_seconds=args.ramp_seconds,
+                    rate_down_percent=args.rate_down_percent,
+                    contention_calls=args.contention_calls,
+                    drain_seconds=args.drain_seconds,
+                    report_path=args.report,
+                ),
+            )
+        )
+    except Exception as error:
+        # DEV_NOTE: As for a run: anything that stops the load test before its verdict is "couldn't run", never a miss
+        if not isinstance(error, LoadRunError):
+            sys.stderr.write(f"The load test couldn't finish: {type(error).__name__}: {error}\n")
+        else:
+            sys.stderr.write(f"The load test couldn't finish: {error}\n")
+        return EXIT_COULD_NOT_RUN
+    sys.stdout.write("PASSED\n" if report.is_passed else "FAILED\n")
+    return EXIT_PASSED if report.is_passed else EXIT_FAILED
+
+
 def _keygen(args: argparse.Namespace) -> int:
     kid = args.kid or f"eval-{datetime.now(UTC):%Y%m%d}"
     private_jwk, public_jwks = generate_key_pair(kid)
@@ -78,6 +120,20 @@ def _k(value: str) -> int:
     if not 1 <= k <= MAX_K:
         raise argparse.ArgumentTypeError(f"k is 1..{MAX_K}")
     return k
+
+
+def _positive(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _even_at_least_two(value: str) -> int:
+    number = int(value)
+    if number < 2 or number % 2:
+        raise argparse.ArgumentTypeError("must be an even number, at least 2 (about half the holds must fit)")
+    return number
 
 
 def main() -> int:
@@ -103,6 +159,16 @@ def main() -> int:
         help="stop the run (exit 2) if no case expects a tool call: the nightly suite must test the action engine",
     )
     run.set_defaults(handler=_run)
+    load = commands.add_parser("load", help="the load test: concurrent widget chats and BudgetDO contention (staging)")
+    load.add_argument("--users", type=_positive, default=TARGET_CONCURRENT_CHATS, help=f"concurrent chats, default {TARGET_CONCURRENT_CHATS} (fewer is a smoke run that cannot meet the target)")
+    load.add_argument("--turns", type=_positive, default=4, help="turns each user sends, default 4")
+    load.add_argument("--think-seconds", type=float, default=7.0, help="seconds between a user's turns, default 7 (a user may send 10 a minute)")
+    load.add_argument("--ramp-seconds", type=float, default=10.0, help="seconds over which the users connect, default 10")
+    load.add_argument("--rate-down-percent", type=int, default=20, help="percent of users who rate their first reply down (each writes an outbox event), default 20")
+    load.add_argument("--contention-calls", type=_even_at_least_two, default=200, help="holds sent at once in the contention phase, default 200")
+    load.add_argument("--drain-seconds", type=float, default=180.0, help="how long to wait for spend and the outbox to settle, default 180")
+    load.add_argument("--report", help="write the report as JSON to this path")
+    load.set_defaults(handler=_load)
     keygen = commands.add_parser("keygen", help="a new platform eval signing key")
     keygen.add_argument("--kid", help="the key id (default eval-<date>)")
     keygen.set_defaults(handler=_keygen)

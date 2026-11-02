@@ -96,6 +96,7 @@ export default class EvalAuthRepo {
       message: "Eval caller authenticated",
       identity: {
         companyId,
+        companyPublicId: jwt.claims.company,
         connectionId: connection.id,
         connection: {
           adapterType: connection.adapterType,

@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "windowResponse": {
+      "$ref": "#/$defs/EvalLoadWindowApiResponse"
+    },
+    "summaryRequest": {
+      "$ref": "#/$defs/EvalLoadSummaryApiRequest"
+    },
+    "summaryResponse": {
+      "$ref": "#/$defs/EvalLoadSummaryApiResponse"
+    },
+    "reserveRequest": {
+      "$ref": "#/$defs/EvalLoadReserveApiRequest"
+    },
+    "reserveResponse": {
+      "$ref": "#/$defs/EvalLoadReserveApiResponse"
+    },
+    "releaseRequest": {
+      "$ref": "#/$defs/EvalLoadReleaseApiRequest"
+    },
+    "releaseResponse": {
+      "$ref": "#/$defs/EvalLoadReleaseApiResponse"
+    },
+    "refusal": {
+      "$ref": "#/$defs/EvalRefusalApiResponse"
+    },
+    "constants": {
+      "$ref": "#/$defs/EvalLoadConstants"
+    }
+  },
+  "required": [
+    "windowResponse",
+    "summaryRequest",
+    "summaryResponse",
+    "reserveRequest",
+    "reserveResponse",
+    "releaseRequest",
+    "releaseResponse",
+    "refusal",
+    "constants"
+  ],
+  "$defs": {
+    "EvalLoadWindowApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        },
+        "budget": {
+          "$ref": "#/$defs/BudgetSnapshot"
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "startedAt",
+        "budget"
+      ]
+    },
+    "BudgetSnapshot": {
+      "type": "object",
+      "properties": {
+        "spentMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "budgetMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "heldMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "openReservationCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "spentMicros",
+        "budgetMicros",
+        "heldMicros",
+        "openReservationCount"
+      ]
+    },
+    "EvalLoadSummaryApiRequest": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "since"
+      ]
+    },
+    "EvalLoadSummaryApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "budget": {
+          "$ref": "#/$defs/BudgetSnapshot"
+        },
+        "timings": {
+          "$ref": "#/$defs/BudgetTimings"
+        },
+        "timingsSince": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "modelCalls": {
+          "$ref": "#/$defs/LoadModelCallStats"
+        },
+        "outbox": {
+          "$ref": "#/$defs/LoadOutboxStats"
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "budget",
+        "timings",
+        "timingsSince",
+        "modelCalls",
+        "outbox"
+      ]
+    },
+    "BudgetTimings": {
+      "type": "object",
+      "properties": {
+        "admitTurn": {
+          "$ref": "#/$defs/BudgetOperationTimings"
+        },
+        "reserve": {
+          "$ref": "#/$defs/BudgetOperationTimings"
+        },
+        "settle": {
+          "$ref": "#/$defs/BudgetOperationTimings"
+        }
+      },
+      "required": [
+        "admitTurn",
+        "reserve",
+        "settle"
+      ]
+    },
+    "BudgetOperationTimings": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "p50Ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "p95Ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "count",
+        "p50Ms",
+        "p95Ms",
+        "maxMs"
+      ]
+    },
+    "LoadModelCallStats": {
+      "type": "object",
+      "properties": {
+        "callCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pendingCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "costMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "callCount",
+        "pendingCount",
+        "costMicros"
+      ]
+    },
+    "LoadOutboxStats": {
+      "type": "object",
+      "properties": {
+        "eventCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "publishedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unpublishedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "lagP50Ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lagP95Ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lagMaxMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "eventCount",
+        "publishedCount",
+        "unpublishedCount",
+        "lagP50Ms",
+        "lagP95Ms",
+        "lagMaxMs"
+      ]
+    },
+    "EvalLoadReserveApiRequest": {
+      "type": "object",
+      "properties": {
+        "amountMicros": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        }
+      },
+      "required": [
+        "amountMicros"
+      ]
+    },
+    "EvalLoadReserveApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "isAdmitted": {
+          "type": "boolean"
+        },
+        "reservationId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "refusal": {
+          "type": "string",
+          "enum": [
+            "CompanyBudget",
+            "UserDailyCost",
+            "UserMessageRate",
+            "ConversationTurnRate",
+            "ConversationCost",
+            "TurnCost",
+            "TurnTokens",
+            "Unavailable"
+          ]
+        },
+        "serverMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "isAdmitted",
+        "serverMs"
+      ]
+    },
+    "EvalLoadReleaseApiRequest": {
+      "type": "object",
+      "properties": {
+        "reservationId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        }
+      },
+      "required": [
+        "reservationId"
+      ]
+    },
+    "EvalLoadReleaseApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "serverMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message",
+        "serverMs"
+      ]
+    },
+    "EvalRefusalApiResponse": {
+      "type": "object",
+      "properties": {
+        "isSuccess": {
+          "type": "boolean",
+          "const": false
+        },
+        "message": {
+          "type": "string"
+        },
+        "failure": {
+          "type": "string",
+          "enum": [
+            "Unauthorized",
+            "Forbidden",
+            "ServerError",
+            "ChatbotUnavailable",
+            "BudgetRefused",
+            "NotFound",
+            "NotRunning",
+            "Invalid",
+            "Duplicate",
+            "Incomplete",
+            "NotTesting",
+            "NoPublishedConfig",
+            "HostFailed",
+            "JudgeUnavailable"
+          ]
+        }
+      },
+      "required": [
+        "isSuccess",
+        "message"
+      ]
+    },
+    "EvalLoadConstants": {
+      "type": "object",
+      "properties": {
+        "targetConcurrentChats": {
+          "type": "number",
+          "const": 50
+        },
+        "budgetOpP95MaxMs": {
+          "type": "number",
+          "const": 250
+        },
+        "outboxLagP95MaxMs": {
+          "type": "number",
+          "const": 60000
+        },
+        "stubModelKeyPrefix": {
+          "type": "string",
+          "const": "diletta-load-stub-"
+        },
+        "contentionMaxAmountMicros": {
+          "type": "number",
+          "const": 1000000000
+        },
+        "widgetSubprotocol": {
+          "type": "string",
+          "const": "diletta.v1"
+        },
+        "widgetChatRequestFrameType": {
+          "type": "string",
+          "const": "cf_agent_use_chat_request"
+        },
+        "widgetHostTokenFrameType": {
+          "type": "string",
+          "const": "host_token"
+        },
+        "widgetFeedbackFrameType": {
+          "type": "string",
+          "const": "feedback"
+        },
+        "feedbackRatingDown": {
+          "type": "number",
+          "const": 2
+        }
+      },
+      "required": [
+        "targetConcurrentChats",
+        "budgetOpP95MaxMs",
+        "outboxLagP95MaxMs",
+        "stubModelKeyPrefix",
+        "contentionMaxAmountMicros",
+        "widgetSubprotocol",
+        "widgetChatRequestFrameType",
+        "widgetHostTokenFrameType",
+        "widgetFeedbackFrameType",
+        "feedbackRatingDown"
+      ]
+    }
+  },
+  "title": "EvalLoad",
+  "description": "The load test's /eval/load/* API (M6-5): every request and answer, by name, and the load test's constants (each a literal, read by the harness); the root object is never sent"
+}

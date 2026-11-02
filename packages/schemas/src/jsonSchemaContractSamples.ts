@@ -22,6 +22,21 @@ import {
   EvalReadbackVerdictEnum,
   EvalTurnStatusEnum,
 } from "./evalHarness";
+import {
+  LOAD_CONTENTION_MAX_AMOUNT_MICROS,
+  LOAD_STUB_MODEL_KEY_PREFIX,
+  LOAD_TEST_BUDGET_OP_P95_MAX_MS,
+  LOAD_TEST_OUTBOX_LAG_P95_MAX_MS,
+  LOAD_TEST_TARGET_CONCURRENT_CHATS,
+} from "./evalLoad";
+import { BudgetRefusalEnum } from "./budget";
+import {
+  WIDGET_FEEDBACK_FRAME_TYPE,
+  WIDGET_HOST_TOKEN_FRAME_TYPE,
+  WidgetChatFrameTypeEnum,
+} from "./conversations/ConversationsWidgetFrames";
+import { FeedbackRatingIntEnum } from "./feedback";
+import { WIDGET_SUBPROTOCOL } from "./widgetAuth/WidgetAuthCommon";
 import { TEST_HOST_ADMIN_HEADER, TEST_HOST_TOKEN_MAX_LIFETIME_SECONDS } from "./testHost";
 import {
   EvalRunFailureIntEnum,
@@ -208,6 +223,71 @@ const evalApi = {
   refusal: { isSuccess: false, message: "Forbidden", failure: "Forbidden" },
 };
 
+const budgetOperationTimings = { count: 120, p50Ms: 3, p95Ms: 41, maxMs: 90 };
+
+const evalLoad = {
+  windowResponse: {
+    isSuccess: true,
+    message: "Load window started",
+    startedAt: "2026-11-02T10:00:00.000Z",
+    budget: {
+      spentMicros: 1_200_000,
+      budgetMicros: 10_000_000,
+      heldMicros: 0,
+      openReservationCount: 0,
+    },
+  },
+  summaryRequest: { since: "2026-11-02T10:00:00.000Z" },
+  summaryResponse: {
+    isSuccess: true,
+    message: "Load summary read",
+    budget: {
+      spentMicros: 1_500_000,
+      budgetMicros: 10_000_000,
+      heldMicros: 40_000,
+      openReservationCount: 2,
+    },
+    timings: {
+      admitTurn: budgetOperationTimings,
+      reserve: budgetOperationTimings,
+      settle: budgetOperationTimings,
+    },
+    timingsSince: 1_793_613_600_000,
+    modelCalls: { callCount: 120, pendingCount: 0, costMicros: 300_000 },
+    outbox: {
+      eventCount: 30,
+      publishedCount: 30,
+      unpublishedCount: 0,
+      lagP50Ms: 220,
+      lagP95Ms: 900,
+      lagMaxMs: 1_400,
+    },
+  },
+  reserveRequest: { amountMicros: 40_000 },
+  reserveResponse: {
+    isSuccess: true,
+    message: "Budget reserved",
+    isAdmitted: true,
+    reservationId: "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+    serverMs: 12,
+  },
+  releaseRequest: { reservationId: "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11" },
+  releaseResponse: { isSuccess: true, message: "Budget released", serverMs: 7 },
+  refusal: { isSuccess: false, message: "Forbidden", failure: "Forbidden" },
+  constants: {
+    targetConcurrentChats: LOAD_TEST_TARGET_CONCURRENT_CHATS,
+    budgetOpP95MaxMs: LOAD_TEST_BUDGET_OP_P95_MAX_MS,
+    outboxLagP95MaxMs: LOAD_TEST_OUTBOX_LAG_P95_MAX_MS,
+    stubModelKeyPrefix: LOAD_STUB_MODEL_KEY_PREFIX,
+    contentionMaxAmountMicros: LOAD_CONTENTION_MAX_AMOUNT_MICROS,
+    widgetSubprotocol: WIDGET_SUBPROTOCOL,
+    widgetChatRequestFrameType: WidgetChatFrameTypeEnum.ChatRequest,
+    widgetHostTokenFrameType: WIDGET_HOST_TOKEN_FRAME_TYPE,
+    widgetFeedbackFrameType: WIDGET_FEEDBACK_FRAME_TYPE,
+    feedbackRatingDown: FeedbackRatingIntEnum.Down,
+  },
+};
+
 const evalConstants = {
   evalJwtIssuer: EVAL_JWT_ISSUER,
   evalJwtAudience: EVAL_JWT_AUDIENCE,
@@ -377,6 +457,50 @@ export const JSON_SCHEMA_CONTRACT_SAMPLES: Record<string, JsonSchemaContractSamp
         ...evalApi,
         recordResultRequest: { ...evalApi.recordResultRequest, latencyMs: 2 ** 31 },
       },
+    ],
+  },
+  "eval-load.schema.json": {
+    valid: [
+      evalLoad,
+      {
+        ...evalLoad,
+        reserveResponse: {
+          isSuccess: true,
+          message: "Budget refused",
+          isAdmitted: false,
+          refusal: BudgetRefusalEnum.CompanyBudget,
+          serverMs: 4,
+        },
+      },
+    ],
+    invalid: [
+      { ...evalLoad, windowResponse: { ...evalLoad.windowResponse, startedAt: "yesterday" } },
+      { ...evalLoad, summaryRequest: { since: "" } },
+      {
+        ...evalLoad,
+        summaryResponse: {
+          ...evalLoad.summaryResponse,
+          timings: { admitTurn: budgetOperationTimings },
+        },
+      },
+      {
+        ...evalLoad,
+        summaryResponse: {
+          ...evalLoad.summaryResponse,
+          modelCalls: { ...evalLoad.summaryResponse.modelCalls, callCount: -1 },
+        },
+      },
+      { ...evalLoad, reserveRequest: { amountMicros: 0 } },
+      { ...evalLoad, reserveRequest: { amountMicros: LOAD_CONTENTION_MAX_AMOUNT_MICROS + 1 } },
+      { ...evalLoad, reserveResponse: { ...evalLoad.reserveResponse, refusal: "Teapot" } },
+      { ...evalLoad, releaseRequest: { reservationId: "not-a-uuid" } },
+      { ...evalLoad, refusal: { ...evalLoad.refusal, failure: "Teapot" } },
+      { ...evalLoad, constants: { ...evalLoad.constants, targetConcurrentChats: 51 } },
+      {
+        ...evalLoad,
+        constants: { ...evalLoad.constants, feedbackRatingDown: FeedbackRatingIntEnum.Up },
+      },
+      { ...evalLoad, constants: { ...evalLoad.constants, widgetSubprotocol: "diletta.v0" } },
     ],
   },
   "eval-case-tag.schema.json": {

@@ -24,6 +24,8 @@ export enum LogCategory {
   Insights = "Insights",
   // DEV_NOTE: The eval harness's /eval/* API (M5-2)
   Eval = "Eval",
+  // DEV_NOTE: The load test's /eval/load/* API (M6-5)
+  LoadTest = "LoadTest",
 }
 
 export enum LogAction {
@@ -503,4 +505,15 @@ export enum LogAction {
   // Prompt injection (M6-4)
   DetectPromptInjection = "DetectPromptInjection",
   RecordPromptInjection = "RecordPromptInjection",
+  // Load test (M6-5)
+  AuthorizeLoadTest = "AuthorizeLoadTest",
+  StartLoadWindow = "StartLoadWindow",
+  GetLoadSummary = "GetLoadSummary",
+  ReserveLoadBudget = "ReserveLoadBudget",
+  ReleaseLoadBudget = "ReleaseLoadBudget",
+  GetBudgetSnapshot = "GetBudgetSnapshot",
+  GetBudgetTimings = "GetBudgetTimings",
+  ResetBudgetTimings = "ResetBudgetTimings",
+  GetLoadModelCallStats = "GetLoadModelCallStats",
+  GetLoadOutboxStats = "GetLoadOutboxStats",
 }

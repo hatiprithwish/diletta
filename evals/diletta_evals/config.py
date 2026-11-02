@@ -52,7 +52,12 @@ def _required(name: str) -> str:
     return value
 
 
-def load_config() -> HarnessConfig:
+def required_setting(name: str) -> str:
+    return _required(name)
+
+
+def load_private_jwk() -> dict[str, object]:
+    """EVAL_JWT_PRIVATE_KEY, checked: a private P-256 JWK with a kid (the worker verifies ES256 only)."""
     try:
         private_jwk = json.loads(_required("EVAL_JWT_PRIVATE_KEY"))
     except json.JSONDecodeError as error:
@@ -66,6 +71,11 @@ def load_config() -> HarnessConfig:
         raise ConfigError("EVAL_JWT_PRIVATE_KEY is not an EC private JWK") from error
     if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
         raise ConfigError("EVAL_JWT_PRIVATE_KEY must be a P-256 (ES256) private key")
+    return private_jwk
+
+
+def load_config() -> HarnessConfig:
+    private_jwk = load_private_jwk()
 
     raw_kind = os.environ.get("EVAL_HOST_KIND", HostKind.TEST_HOST.value).strip()
     try:

@@ -72,8 +72,10 @@ export default class AiGatewayProvider {
     const logMetadata = { provider: params.provider, model: params.model };
 
     try {
-      const token = await AiGatewayProvider.getGatewayToken(env);
-      if (!token || !env.AI_GATEWAY_ACCOUNT_ID || !env.AI_GATEWAY_NAME) {
+      // DEV_NOTE: A stub key (M6-5, ADR 0005) talks to the stub model, with no gateway token and no gateway headers
+      const stubBaseUrl = AiGatewayProvider.getStubBaseUrl(env, params.apiKey);
+      const token = stubBaseUrl ? null : await AiGatewayProvider.getGatewayToken(env);
+      if (!stubBaseUrl && (!token || !env.AI_GATEWAY_ACCOUNT_ID || !env.AI_GATEWAY_NAME)) {
         const message = "AI Gateway is not configured";
         AppLogger.error({
           category: Schemas.LogCategory.ModelRouter,
@@ -85,16 +87,20 @@ export default class AiGatewayProvider {
       }
 
       const model = PROVIDER_MODEL_FACTORY[params.provider](
-        {
-          baseURL: `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}`,
-          apiKey: params.apiKey,
-          headers: {
-            "cf-aig-authorization": `Bearer ${token}`,
-            "cf-aig-metadata": JSON.stringify(
-              Object.fromEntries(Object.entries(params.metadata).slice(0, MAX_METADATA_ENTRIES)),
-            ),
-          },
-        },
+        stubBaseUrl
+          ? { baseURL: stubBaseUrl, apiKey: params.apiKey, headers: {} }
+          : {
+              baseURL: `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}`,
+              apiKey: params.apiKey,
+              headers: {
+                "cf-aig-authorization": `Bearer ${token}`,
+                "cf-aig-metadata": JSON.stringify(
+                  Object.fromEntries(
+                    Object.entries(params.metadata).slice(0, MAX_METADATA_ENTRIES),
+                  ),
+                ),
+              },
+            },
         params.model,
       );
 
@@ -114,6 +120,16 @@ export default class AiGatewayProvider {
       });
       return { isSuccess: false, message, failure: Schemas.ModelRouterFailureEnum.ServerError };
     }
+  }
+
+  // DEV_NOTE: The stub model's base URL (M6-5, ADR 0005) when this key is a stub key and this env has one
+  // (MODEL_BASE_URL_OVERRIDE, staging only), else null. A real company's key never matches, so setting the override
+  // can't redirect its calls.
+  static getStubBaseUrl(env: Env, apiKey: string): string | null {
+    const override = env.MODEL_BASE_URL_OVERRIDE.trim();
+    return override && apiKey.startsWith(Schemas.LOAD_STUB_MODEL_KEY_PREFIX)
+      ? override.replace(/\/+$/, "")
+      : null;
   }
 
   // DEV_NOTE: Token counts from the gateway's log of one call (Cloudflare API, AI Gateway Read), for the usage
@@ -283,8 +299,10 @@ export default class AiGatewayProvider {
     const logMetadata = { provider: params.provider };
 
     try {
-      const token = await AiGatewayProvider.getGatewayToken(env);
-      if (!token || !env.AI_GATEWAY_ACCOUNT_ID || !env.AI_GATEWAY_NAME) {
+      // DEV_NOTE: A stub key (M6-5, ADR 0005) is checked against the stub model, never the gateway
+      const stubBaseUrl = AiGatewayProvider.getStubBaseUrl(env, params.apiKey);
+      const token = stubBaseUrl ? null : await AiGatewayProvider.getGatewayToken(env);
+      if (!stubBaseUrl && (!token || !env.AI_GATEWAY_ACCOUNT_ID || !env.AI_GATEWAY_NAME)) {
         AppLogger.error({
           category: Schemas.LogCategory.ModelRouter,
           action: Schemas.LogAction.CheckModelKey,
@@ -297,13 +315,19 @@ export default class AiGatewayProvider {
       // DEV_NOTE: Workers refuses redirect: "error". "manual" hands a 3xx back unfollowed, so the key never follows it;
       // it ends as Unreachable below
       const res = await fetch(
-        `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}/models`,
+        stubBaseUrl
+          ? `${stubBaseUrl}/models`
+          : `${GATEWAY_BASE_URL}/${env.AI_GATEWAY_ACCOUNT_ID}/${env.AI_GATEWAY_NAME}/${PROVIDER_PATH[params.provider]}/models`,
         {
           headers: {
             ...PROVIDER_KEY_HEADERS[params.provider](params.apiKey),
-            "cf-aig-authorization": `Bearer ${token}`,
-            // DEV_NOTE: Always ask the provider: a cached answer would check nothing
-            "cf-aig-skip-cache": "true",
+            ...(stubBaseUrl
+              ? {}
+              : {
+                  "cf-aig-authorization": `Bearer ${token}`,
+                  // DEV_NOTE: Always ask the provider: a cached answer would check nothing
+                  "cf-aig-skip-cache": "true",
+                }),
           },
           redirect: "manual",
           signal: AbortSignal.timeout(Constants.MODEL_KEY_CHECK_TIMEOUT_MS),

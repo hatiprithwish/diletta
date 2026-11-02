@@ -28,6 +28,10 @@ A turn's message-rate and turn-rate slots are used only once its model is routed
 
 When a new month starts, BudgetDO seeds the month from `SUM(model_calls.cost_usd)` since the 1st (UTC). Pending rows add 0 until backfilled, so a seed taken right after the 1st can be a few cents low. Knowledge embeddings (tier Embed, Workers AI, M2-5) are left out: the platform pays for them, not the company's key.
 
+## Timings (M6-5)
+
+`BudgetDO` times every `admitTurn`, `reserve` and `settle` from its start to its answer and keeps the last 5,000 of each in memory (`getTimings`; lost when the DO is evicted). Workers' clock moves only at I/O, so a call that never waits counts 0 ms and one that waits for Neon (the ledger's load) counts the wait. The load test reads them (`docs/runbooks/load.md`); nothing else does.
+
 ## Change a company's budget
 
 A company admin sets it on Settings › Budget (M4-10, `/settings/budget`, `PUT /dashboard/settings/budget`): a dollar amount per billing period (the UTC month), above $0, whole cents, at most `SPENDING_BUDGET_MAX_USD`. Saving the amount already in force (the $10 default included) changes nothing and records nothing; any other amount records a "Changed spending budget" audit row (Security › Audit log). The page also shows this period's spend: `SUM(model_calls.cost_usd)` since the 1st, without embeddings, the same sum BudgetDO is seeded from. It is read from Neon, so it can trail BudgetDO by calls still being backfilled (Pending rows add 0) and by holds in flight.
