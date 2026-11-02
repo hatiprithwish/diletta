@@ -17,13 +17,13 @@ type Tx = NodePgTransaction<EmptyRelations>;
 // recordModelCall writes what the recording middleware (ModelCallRecordingProvider) saw, priced from MODEL_PRICES.
 //
 // A call that reached the provider but ended without usage (stream cut or cancelled, connection lost) was still
-// billed, so its row is Pending, never a silent $0. The per-minute Cron reads each Pending row's AI Gateway log once
+// billed, so its row is Pending, never a silent $0. The Cron reads each Pending row's AI Gateway log once
 // the row is MODEL_CALL_BACKFILL_MIN_AGE_MS old (the log is written after the call):
 //   - log with token counts → Backfilled. The log's tokens_in has no cache split, so every input token is priced at
 //     the dearer of the input and cache-write prices (cache writes cost more on Anthropic): an overcount, never an
 //     under. tokens_out at the output price.
 //   - no log or no counts yet → stays Pending; past MODEL_CALL_BACKFILL_MAX_AGE_MS → Unknown + an error log.
-//   - a failed lookup (API down, bad token) → stays Pending and is retried next minute, until the max age.
+//   - a failed lookup (API down, bad token) → stays Pending and is retried next tick, until the max age.
 // The Pending read spans companies (withPlatform); each row is settled in its own company's
 // withTenant, and only while still Pending, so overlapping sweeps never settle a row twice. Lookups run
 // MODEL_CALL_BACKFILL_CONCURRENCY at a time, so a batch of slow ones still finishes well inside a minute. A row that

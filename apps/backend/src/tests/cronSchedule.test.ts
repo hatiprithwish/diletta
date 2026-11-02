@@ -75,12 +75,14 @@ const {
 const at = (iso: string) => Date.parse(iso);
 
 describe("CronScheduleProvider.getDueJobs", () => {
-  it("runs the every-minute jobs on every minute", () => {
-    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:37:00Z"))).toEqual([
-      OutboxSweep,
-      ModelCallUsageBackfill,
-      ChangeRequestPurge,
-    ]);
+  it("runs the every-tick jobs on every tick that isn't the top of the hour", () => {
+    for (const minute of ["15", "30", "45"]) {
+      expect(CronScheduleProvider.getDueJobs(at(`2026-10-11T14:${minute}:00Z`))).toEqual([
+        OutboxSweep,
+        ModelCallUsageBackfill,
+        ChangeRequestPurge,
+      ]);
+    }
   });
 
   it("adds the knowledge re-sync, the activity rollups, the eval transcript sweep and the platform case sync at the top of every hour", () => {
@@ -108,7 +110,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       ContentRetentionPurge,
       ActivityLogPartitions,
     ]);
-    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:01:00Z"))).not.toContain(
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:15:00Z"))).not.toContain(
       ActivityLogPartitions,
     );
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T15:00:00Z"))).not.toContain(
@@ -197,7 +199,7 @@ describe("scheduled()", () => {
     expect(runChatbotHealthCheck).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
-    await run(Constants.CRON_TRIGGER, "2026-10-11T03:01:00Z");
+    await run(Constants.CRON_TRIGGER, "2026-10-11T03:15:00Z");
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).not.toHaveBeenCalled();

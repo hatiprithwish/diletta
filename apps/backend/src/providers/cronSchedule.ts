@@ -4,7 +4,7 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: Which jobs the one cron trigger runs at a scheduled time (controller.scheduledTime, epoch ms, the minute the
 // run was scheduled for, not when it started). Pure, so the schedule is unit-tested without a Worker. Times are UTC. A
 // tick Cloudflare skips skips its jobs too: the hourly re-sync picks up still-due sources next hour, and partitions are
-// kept months ahead with an alert when one is missing, and the change request purge empties what it missed next minute.
+// kept months ahead with an alert when one is missing, and the change request purge empties what it missed next tick.
 // Activity rollups rebuild today and yesterday every hour, so a skipped hour is caught up by the next, and the eval
 // transcript sweep removes next hour what it missed. The platform case sync is idempotent (next hour writes what it
 // missed); a skipped missed-suite check only delays that alert a day, while the suite's own job still fails loudly;

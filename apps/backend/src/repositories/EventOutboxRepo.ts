@@ -79,7 +79,7 @@ export default class EventOutboxRepo {
   }
 
   // DEV_NOTE: Cron sweep across companies: pending rows older than OUTBOX_SWEEP_MIN_AGE_MS, oldest first, one
-  // transaction per batch. Stops when the Queue is unavailable (or the DB fails) and resumes next minute. companyIds
+  // transaction per batch. Stops when the Queue is unavailable (or the DB fails) and resumes next tick. companyIds
   // limits it to some companies (tests on the shared staging branch); the Cron passes null.
   async sweepPendingEvents(params: {
     companyIds: string[] | null;
@@ -180,7 +180,7 @@ export default class EventOutboxRepo {
 
   // DEV_NOTE: A failed sendBatch doesn't say which message it choked on, so each row is retried on its own.
   // - None sent: the Queue itself is failing (an outage). Rows stay pending with lastError and no attempt counted, so
-  //   an outage of any length never turns events into Failed; the sweep stops and retries next minute.
+  //   an outage of any length never turns events into Failed; the sweep stops and retries next tick.
   // - Some sent: the rest were rejected for themselves (e.g. too large). Healthy rows publish; each rejected row
   //   counts an attempt and moves to Failed at OUTBOX_MAX_ATTEMPTS, so it can't hold the batch back for long.
   private async sendOneByOne(

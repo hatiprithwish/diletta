@@ -753,7 +753,7 @@ export const modelCalls = table(
     wasEscalated: t.boolean("was_escalated").notNull().default(false),
     errorCode: t.text("error_code"),
     // DEV_NOTE: Where tokens and cost came from (ModelCallUsageStatusIntEnum). Pending rows are filled from the AI
-    // Gateway log by the per-minute Cron; Unknown means cost 0 is not a real price.
+    // Gateway log by the Cron; Unknown means cost 0 is not a real price.
     usageStatus: t
       .smallint("usage_status")
       .$type<Schemas.ModelCallUsageStatusIntEnum>()

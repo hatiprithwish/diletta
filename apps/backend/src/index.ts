@@ -124,7 +124,7 @@ export default {
     return app.fetch(req, env, ctx);
   },
 
-  // DEV_NOTE: One cron trigger (Constants.CRON_TRIGGER, every minute); CronScheduleProvider picks the jobs due at its
+  // DEV_NOTE: One cron trigger (Constants.CRON_TRIGGER, every 15 minutes); CronScheduleProvider picks the jobs due at its
   // scheduled time. Jobs are independent: one failing never skips another (each logs its own failures).
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron !== Constants.CRON_TRIGGER) {
