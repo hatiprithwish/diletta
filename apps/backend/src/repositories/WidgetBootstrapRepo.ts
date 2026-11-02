@@ -9,7 +9,8 @@ import * as Schemas from "@app/schemas";
 // calls it after WidgetAuthRepo.authenticate, so the identity is verified and the chatbot active. It reads only: no
 // chatbot user, conversation or event is created, so a page view or an opened panel leaves no rows behind. The widget
 // settings come from the published config through loadConfigSpec, like a turn's; a chatbot with no loadable
-// published config answers widget: null (the widget shows it as unavailable, as a turn would).
+// published config answers widget: null (the widget shows it as unavailable, as a turn would). linkOrigins are the
+// connection's allowed origins: the widget links a reply only to those and to its cited sources (M6-4).
 export default class WidgetBootstrapRepo {
   private db: NodePgDatabase;
   private chatbotConfigsDal: ChatbotConfigsDAL;
@@ -24,6 +25,7 @@ export default class WidgetBootstrapRepo {
   }): Promise<Schemas.WidgetBootstrapResponse> {
     const { identity } = params;
     const chatbot = { publicId: identity.chatbotPublicId, name: identity.chatbotName };
+    const linkOrigins = identity.allowedOrigins;
 
     const published: Schemas.ChatbotConfigDALResponse = await withTenant(
       this.db,
@@ -40,7 +42,7 @@ export default class WidgetBootstrapRepo {
         return {
           isSuccess: true,
           message: "Chatbot has no published config",
-          bootstrap: { chatbot, widget: null },
+          bootstrap: { chatbot, linkOrigins, widget: null },
         };
       }
       return {
@@ -70,7 +72,7 @@ export default class WidgetBootstrapRepo {
       return {
         isSuccess: true,
         message: "Published config could not be loaded",
-        bootstrap: { chatbot, widget: null },
+        bootstrap: { chatbot, linkOrigins, widget: null },
       };
     }
 
@@ -80,6 +82,7 @@ export default class WidgetBootstrapRepo {
       message: "Widget bootstrap loaded",
       bootstrap: {
         chatbot,
+        linkOrigins,
         widget: {
           greeting: widget.greeting,
           suggestions: widget.suggestions,

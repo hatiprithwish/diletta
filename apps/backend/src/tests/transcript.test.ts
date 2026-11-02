@@ -9,12 +9,26 @@ const user = (id: string, text: string) => ({
   role: "user" as const,
   text,
   searchCitations: [],
+  searchStatuses: [],
+  hasWithheldSearch: false,
+  hasUnfinishedTool: false,
 });
 const assistant = (
   id: string,
   text: string,
   searchCitations: Schemas.KnowledgeCitation[] = [],
-) => ({ id, role: "assistant" as const, text, searchCitations });
+  searchStatuses: Schemas.SearchHelpDocsStatusEnum[] = [],
+  hasUnfinishedTool = false,
+  hasWithheldSearch = false,
+) => ({
+  id,
+  role: "assistant" as const,
+  text,
+  searchCitations,
+  searchStatuses,
+  hasWithheldSearch,
+  hasUnfinishedTool,
+});
 
 const citation = (n: number, documentPublicId: string): Schemas.KnowledgeCitation => ({
   n,
@@ -39,6 +53,7 @@ function unsynced(
     lastSyncedTurnId: options.lastSyncedTurnId ?? null,
     mintTurnId: () => `minted-${++minted}`,
     titleMaxChars: 10,
+    isInjectionFlagged: false,
   });
 }
 
@@ -70,9 +85,33 @@ describe("TranscriptProvider.toEntries", () => {
         { id: "s", role: "system", parts: [{ type: "text", text: "sys" }] },
       ]),
     ).toEqual([
-      { id: "u", role: "user", text: "Hi", searchCitations: [] },
-      { id: "a", role: "assistant", text: "Hello there", searchCitations: [] },
-      { id: "s", role: "other", text: "sys", searchCitations: [] },
+      {
+        id: "u",
+        role: "user",
+        text: "Hi",
+        searchCitations: [],
+        searchStatuses: [],
+        hasWithheldSearch: false,
+        hasUnfinishedTool: false,
+      },
+      {
+        id: "a",
+        role: "assistant",
+        text: "Hello there",
+        searchCitations: [],
+        searchStatuses: [],
+        hasWithheldSearch: false,
+        hasUnfinishedTool: false,
+      },
+      {
+        id: "s",
+        role: "other",
+        text: "sys",
+        searchCitations: [],
+        searchStatuses: [],
+        hasWithheldSearch: false,
+        hasUnfinishedTool: false,
+      },
     ]);
   });
 
@@ -138,6 +177,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
       turns: [
         {
           turnId: "turn-1",
+          docGapSignal: null,
           userMessageId: "u1",
           title: "First ques",
           lastEntryId: "a1",
@@ -145,6 +185,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
         },
         {
           turnId: "turn-2",
+          docGapSignal: null,
           userMessageId: "u2",
           title: "Second",
           lastEntryId: "a2",
@@ -162,6 +203,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
     expect(result.turns).toHaveLength(1);
     expect(result.turns[0]).toMatchObject({
       turnId: "minted-1",
+      docGapSignal: null,
       userMessageId: "u2",
       lastEntryId: "u2",
     });
@@ -186,6 +228,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
     expect(result.turns).toEqual([
       {
         turnId: "turn-1",
+        docGapSignal: null,
         userMessageId: null,
         title: null,
         lastEntryId: "a1",
@@ -198,7 +241,15 @@ describe("TranscriptProvider.unsyncedTurns", () => {
     const result = unsynced([
       user("u1", "Q"),
       assistant("a1", ""),
-      { id: "s1", role: "other", text: "sys", searchCitations: [] },
+      {
+        id: "s1",
+        role: "other",
+        text: "sys",
+        searchCitations: [],
+        searchStatuses: [],
+        hasWithheldSearch: false,
+        hasUnfinishedTool: false,
+      },
     ]);
     expect(result.turns[0]?.lastEntryId).toBe("s1");
     expect(result.turns[0]?.messages.map((message) => message.sessionMessageId)).toEqual(["u1"]);
@@ -231,5 +282,80 @@ describe("TranscriptProvider.unsyncedTurns", () => {
     expect(
       unsynced([user("u1", "Q"), assistant("a1", "A")], { lastSyncedMessageId: "a1" }),
     ).toEqual({ turns: [], isPositionLost: false });
+  });
+
+  describe("docGapSignal (M5-6)", () => {
+    const { Found, NoResults, Unavailable } = Schemas.SearchHelpDocsStatusEnum;
+    const signalOf = (entries: Schemas.TranscriptEntry[], isInjectionFlagged = false) =>
+      TranscriptProvider.unsyncedTurns({
+        entries,
+        lastSyncedMessageId: null,
+        turnIds: {},
+        lastSyncedTurnId: null,
+        mintTurnId: () => "turn",
+        titleMaxChars: 80,
+        isInjectionFlagged,
+      }).turns[0]?.docGapSignal;
+    const question: Schemas.TranscriptEntry = {
+      id: "u",
+      role: "user",
+      text: "How?",
+      searchCitations: [],
+      searchStatuses: [],
+      hasWithheldSearch: false,
+      hasUnfinishedTool: false,
+    };
+
+    // DEV_NOTE: M6-4: a hit withheld for holding a prompt injection (the doc exists), or a conversation flagged by one
+    // in the user's message (its text never goes on to the rewrite model)
+    it("marks no turn whose search withheld a hit, nor any turn of a flagged conversation", () => {
+      expect(
+        signalOf([question, assistant("a", "I don't know", [], [NoResults], false, true)]),
+      ).toBeNull();
+      expect(
+        signalOf([question, assistant("a", "I don't know", [], [NoResults])], true),
+      ).toBeNull();
+    });
+
+    it("marks an uncited reply after a search, across the turn's messages", () => {
+      expect(signalOf([question, assistant("a", "I don't know", [], [NoResults])])).toBe(
+        Schemas.DocGapSignalIntEnum.LowRetrieval,
+      );
+      expect(
+        signalOf([
+          question,
+          assistant("s", "", [], [Found]),
+          assistant("a", "I couldn't find that"),
+        ]),
+      ).toBe(Schemas.DocGapSignalIntEnum.Idk);
+    });
+
+    it("leaves out a cited reply, no search, an outage and a slice with no question", () => {
+      const cited = { n: 1, documentPublicId: "kd", title: "T", sourceUrl: null };
+      expect(signalOf([question, assistant("a", "Yes [1]", [cited], [Found])])).toBeNull();
+      expect(signalOf([question, assistant("a", "Hello")])).toBeNull();
+      expect(signalOf([question, assistant("a", "Down", [], [Unavailable])])).toBeNull();
+      expect(signalOf([assistant("a", "Late", [], [NoResults])])).toBeNull();
+    });
+
+    it("leaves out a turn paused for an approval, on its text so far and on its continuation", () => {
+      expect(
+        signalOf([question, assistant("a", "Please approve this", [], [NoResults], true)]),
+      ).toBeNull();
+      // DEV_NOTE: The continuation has no user message in its slice
+      expect(signalOf([assistant("b", "Done, it is updated")])).toBeNull();
+    });
+
+    it("reads an approval's pause from the tool part's state", () => {
+      const part = (state: string) =>
+        ({ type: "tool-update_record", toolCallId: "t", state, input: {} }) as never;
+      const unfinished = (state: string) =>
+        TranscriptProvider.toEntries([{ id: "a", role: "assistant", parts: [part(state)] }])[0]
+          ?.hasUnfinishedTool;
+      expect(unfinished("approval-requested")).toBe(true);
+      expect(unfinished("input-available")).toBe(true);
+      expect(unfinished("output-available")).toBe(false);
+      expect(unfinished("output-denied")).toBe(false);
+    });
   });
 });

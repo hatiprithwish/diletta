@@ -33,14 +33,14 @@ Four lanes, owned by 2–4 engineers; with two people, one owns Platform + Runti
 **Agreements**
 
 - One task = one pull request = one Claude Code session, started from the task's row in this doc.
-- The Pattern Enforcer reviews every PR first, then a human does. Security-critical paths need a second reviewer: RLS, crypto, auth, action engine, budget.
+- A human reviews every PR. Security-critical paths need a second reviewer: RLS, crypto, auth, action engine, budget.
 - The v0.15 diagram is the schema source of truth. A PR that changes a table updates the diagram in the same PR.
 - Changing a locked decision (Architecture baseline) needs a short ADR in `docs/adr/` first.
 - The `staging` branch deploys to staging. `main` deploys to production.
 
 ## Repository and tooling
 
-Companion starts from the team scaffold ([hatiprithwish/diletta](https://github.com/hatiprithwish/scaffold)): a pnpm workspace built with `pnpm -r`, no Turborepo, keeping its folder names, golden files, `llm-context/` docs and Pattern Enforcer. New pieces are marked _new_; the Python eval harness builds with its own toolchain.
+Companion starts from the team scaffold ([hatiprithwish/diletta](https://github.com/hatiprithwish/scaffold)): a pnpm workspace built with `pnpm -r`, no Turborepo, keeping its folder names, golden files, and `llm-context/` docs. New pieces are marked _new_; the Python eval harness builds with its own toolchain.
 
 ```text
 companion/                    (from scaffold)
@@ -63,7 +63,7 @@ companion/                    (from scaffold)
   llm-context/    scaffold docs + new: neon, hyperdrive, durable-objects,
                   think, ai-gateway, queues, pgvector
   docs/           new: architecture/ (v0.15 diagram), adr/, runbooks/
-  .github/        scaffold deploy workflows + Pattern Enforcer
+  .github/        scaffold deploy workflows
   CLAUDE.md
 ```
 
@@ -73,7 +73,7 @@ companion/                    (from scaffold)
 | Staging     | scaffold staging workflows, on push to `staging`  | Neon staging          | our test company, eRegister staging |
 | Production  | scaffold production workflows, on merge to `main` | Neon production       | eRegister live                      |
 
-CI on every PR: lint, typecheck, unit tests, integration and RLS tests against Neon staging, a JSON Schema drift check between `packages/schemas` and `evals/`, and the Pattern Enforcer against `.github/pattern-rules.md`. Merges to `main` also run the platform eval suite against staging.
+CI on every PR: lint, typecheck, unit tests, integration and RLS tests against Neon staging, a JSON Schema drift check between `packages/schemas` and `evals/`. Merges to `main` also run the platform eval suite against staging.
 
 ## Architecture baseline
 
@@ -149,14 +149,14 @@ Each row is one PR for one Claude Code session. Start a session with: "Read CLAU
 
 Exit: the scaffold runs on Neon Postgres with the tenant transaction pattern as a golden file, `staging` deploys to staging and `main` to production. There are two environments only (staging, production) and two Neon branches; local dev uses staging. No dev branch, no per-PR preview Worker or Neon branch.
 
-| ID   | Task                                                                                                                                                                           | Done when                                                  | Lane     |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | -------- |
-| M0-1 | Create the companion repo from the scaffold; rename Workers; keep Notes as the golden example until M0-5 replaces it                                                           | `pnpm dev` runs web + backend                              | Platform |
-| M0-2 | D1 → Neon Postgres via Hyperdrive: Drizzle pg client, `bigint` identity ids, `updated_at NOT NULL default now()`, a raw-SQL migration folder for RLS, partitions and `halfvec` | Notes golden files pass their tests on Postgres            | Platform |
-| M0-4 | Move shadcn from `apps/web/src/shadcn/ui` to `packages/ui`; Tailwind preset; lime theme, light + dark                                                                          | `apps/web` builds from `packages/ui`                       | Product  |
-| M0-5 | Tenant pattern: `withTenant(companyId, tx)` helper; DAL methods take `tx`; transactional flows throw to roll back; new golden DAL + Repo on a tenant table                     | Golden files listed in CLAUDE.md                           | Platform |
-| M0-6 | Extend CLAUDE.md, `pattern-rules.md` and `llm-context/` (Neon, Hyperdrive, Durable Objects, Think, AI Gateway, Queues, pgvector)                                               | Pattern Enforcer flags a tenant query outside `withTenant` | Platform |
-| M0-7 | Secrets Store master key, `.dev.vars` template                                                                                                                                 | Local and staging read the master key                      | Platform |
+| ID   | Task                                                                                                                                                                           | Done when                                          | Lane     |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------- |
+| M0-1 | Create the companion repo from the scaffold; rename Workers; keep Notes as the golden example until M0-5 replaces it                                                           | `pnpm dev` runs web + backend                      | Platform |
+| M0-2 | D1 → Neon Postgres via Hyperdrive: Drizzle pg client, `bigint` identity ids, `updated_at NOT NULL default now()`, a raw-SQL migration folder for RLS, partitions and `halfvec` | Notes golden files pass their tests on Postgres    | Platform |
+| M0-4 | Move shadcn from `apps/web/src/shadcn/ui` to `packages/ui`; Tailwind preset; lime theme, light + dark                                                                          | `apps/web` builds from `packages/ui`               | Product  |
+| M0-5 | Tenant pattern: `withTenant(companyId, tx)` helper; DAL methods take `tx`; transactional flows throw to roll back; new golden DAL + Repo on a tenant table                     | Golden files listed in CLAUDE.md                   | Platform |
+| M0-6 | Extend CLAUDE.md and `llm-context/` (Neon, Hyperdrive, Durable Objects, Think, AI Gateway, Queues, pgvector)                                                                   | CLAUDE.md bans a tenant query outside `withTenant` | Platform |
+| M0-7 | Secrets Store master key, `.dev.vars` template                                                                                                                                 | Local and staging read the master key              | Platform |
 
 ### M1 Data, tenancy, crypto
 
@@ -314,7 +314,8 @@ eRegister goes live when every box below is ticked.
 - [x] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7) — 200 KiB gzipped for the script-tag bundle (`WIDGET_BUNDLE_MAX_GZIP_BYTES`, the build fails above it); 170.7 KiB at M2-7, with the widget's own small markdown parser instead of a library.
 - [x] Approval expiry and undo window default values (M3-4, M3-7) — approval expiry decided in M3-4: 15 minutes (`CHANGE_REQUEST_APPROVAL_EXPIRY_MS`); undo window decided in M3-7: 1 hour from the end (`CHANGE_REQUEST_UNDO_WINDOW_MS`), values purged after it (NeedsHuman kept until resolved).
 - [ ] Load test target: concurrent conversations per company (M6-5)
-- [ ] Cluster size that opens a Quality item (M5-6)
+- [x] Cluster size that opens a Quality item (M5-6) — 5 questions from 3 different users (`DOC_GAP_QUALITY_MIN_QUESTIONS`, `DOC_GAP_QUALITY_MIN_USERS`), joined at cosine ≥ 0.85; starting values, tune on real traffic.
+- [x] Logpush for gateway logs (M6-1): dropped, gateway logs alone at 7 days at most (ADR 0003).
 - [ ] Budget alerts at 50 / 80 / 100% of `spending_budget` (Cron in the architecture): no task owns them after M2-4. Fold into M6-6, or a new task? (see `docs/runbooks/budget.md` › Known gaps)
 - [x] Tool args must be checked against the tool's `input_schema` before `renderToolOp` (types, enums, required; the renderer drops a missing arg's key). Needs a JSON Schema validator: zod `z.fromJSONSchema` if it covers the keywords used, else a new package (ask first) (M3-4) — zod's `fromJSONSchema` (`Schemas.validateToolArgs`); a schema it can't convert is refused on save and activation, and left out of a turn.
 - [x] A pinned tool version that is Disabled: leave the tool out of the turn, or refuse the turn? And should disabling a version pinned by a published config be blocked? (M3-4, M4-10) — M3-4: left out of the turn and logged. M4-10: disabling a version a Published config pins is refused (409 `PinnedByPublishedConfig`), and publish refuses a pin that isn't Active.

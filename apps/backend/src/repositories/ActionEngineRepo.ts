@@ -19,7 +19,7 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: The action engine's database side (M3-4): host tool calls and the change requests of writes, from the
 // Conversation DO. Every internal id comes from the DO's verified session; the widget names a change request only by
 // its public id, and only one of this very conversation matches. Statuses are re-checked on every step, never only at
-// connect (rule 3.23): the conversation open, the company and chatbot active, and for anything that writes to the host
+// connect: the conversation open, the company and chatbot active, and for anything that writes to the host
 // the company not read-only (is_read_only: the agent may only read).
 //
 // Values: args and the change payload (args, read-before response, diff) are encrypted here, before the DAL, under the

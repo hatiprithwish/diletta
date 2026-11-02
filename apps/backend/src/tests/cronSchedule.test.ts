@@ -7,10 +7,15 @@ import CronScheduleProvider from "@/providers/cronSchedule";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runContentRetentionPurge from "@/crons/ContentRetentionPurgeCron";
+import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
+import runKeyRotationSweep from "@/crons/KeyRotationSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
+import runNightlySuiteCheck from "@/crons/NightlySuiteCheckCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
+import runPlatformEvalCaseSync from "@/crons/PlatformEvalCaseSyncCron";
 import worker from "@/index";
 
 // Declare env type for this test suite
@@ -34,12 +39,27 @@ vi.mock("@/crons/ModelCallUsageBackfillCron", () => ({
 vi.mock("@/crons/ChangeRequestPurgeCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/crons/KeyRotationSweepCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/crons/KnowledgeResyncCron", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/crons/ActivityLogPartitionsCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/crons/ActivityRollupsCron", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@/crons/ContentRetentionPurgeCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/crons/EvalTranscriptSweepCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/crons/PlatformEvalCaseSyncCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/crons/NightlySuiteCheckCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/crons/ChatbotHealthCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -47,30 +67,41 @@ const {
   OutboxSweep,
   ModelCallUsageBackfill,
   ChangeRequestPurge,
+  KeyRotationSweep,
   KnowledgeResync,
   ActivityRollups,
   EvalTranscriptSweep,
+  PlatformEvalCaseSync,
+  ContentRetentionPurge,
   ActivityLogPartitions,
+  NightlySuiteCheck,
+  ChatbotHealthCheck,
 } = Schemas.CronJobEnum;
 const at = (iso: string) => Date.parse(iso);
 
 describe("CronScheduleProvider.getDueJobs", () => {
-  it("runs the every-minute jobs on every minute", () => {
-    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:37:00Z"))).toEqual([
-      OutboxSweep,
-      ModelCallUsageBackfill,
-      ChangeRequestPurge,
-    ]);
+  it("runs the every-tick jobs on every tick that isn't the top of the hour", () => {
+    for (const minute of ["15", "30", "45"]) {
+      expect(CronScheduleProvider.getDueJobs(at(`2026-10-11T14:${minute}:00Z`))).toEqual([
+        OutboxSweep,
+        ModelCallUsageBackfill,
+        ChangeRequestPurge,
+        KeyRotationSweep,
+      ]);
+    }
   });
 
-  it("adds the knowledge re-sync, the activity rollups and the eval transcript sweep at the top of every hour", () => {
+  it("adds the knowledge re-sync, the activity rollups, the eval transcript sweep and the platform case sync at the top of every hour", () => {
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T14:00:00Z"))).toEqual([
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
+      PlatformEvalCaseSync,
+      ContentRetentionPurge,
     ]);
   });
 
@@ -79,16 +110,61 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
+      PlatformEvalCaseSync,
+      ContentRetentionPurge,
       ActivityLogPartitions,
     ]);
-    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:01:00Z"))).not.toContain(
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:15:00Z"))).not.toContain(
       ActivityLogPartitions,
     );
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T15:00:00Z"))).not.toContain(
       ActivityLogPartitions,
+    );
+  });
+
+  it("adds the chatbot health check at 04:00 UTC only", () => {
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T04:00:00Z"))).toEqual([
+      OutboxSweep,
+      ModelCallUsageBackfill,
+      ChangeRequestPurge,
+      KeyRotationSweep,
+      KnowledgeResync,
+      ActivityRollups,
+      EvalTranscriptSweep,
+      PlatformEvalCaseSync,
+      ContentRetentionPurge,
+      ChatbotHealthCheck,
+    ]);
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T04:01:00Z"))).not.toContain(
+      ChatbotHealthCheck,
+    );
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:00:00Z"))).not.toContain(
+      ChatbotHealthCheck,
+    );
+  });
+
+  it("adds the nightly suite's missed-run check at 06:00 UTC only", () => {
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:00:00Z"))).toEqual([
+      OutboxSweep,
+      ModelCallUsageBackfill,
+      ChangeRequestPurge,
+      KeyRotationSweep,
+      KnowledgeResync,
+      ActivityRollups,
+      EvalTranscriptSweep,
+      PlatformEvalCaseSync,
+      ContentRetentionPurge,
+      NightlySuiteCheck,
+    ]);
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:01:00Z"))).not.toContain(
+      NightlySuiteCheck,
+    );
+    expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:00:00Z"))).not.toContain(
+      NightlySuiteCheck,
     );
   });
 
@@ -102,6 +178,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
     ]);
   });
 });
@@ -123,18 +200,26 @@ describe("scheduled()", () => {
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
     expect(runModelCallUsageBackfill).toHaveBeenCalledTimes(1);
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
+    expect(runKeyRotationSweep).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).toHaveBeenCalledTimes(1);
     expect(runActivityRollups).toHaveBeenCalledTimes(1);
     expect(runEvalTranscriptSweep).toHaveBeenCalledTimes(1);
+    expect(runContentRetentionPurge).toHaveBeenCalledTimes(1);
+    expect(runPlatformEvalCaseSync).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
+    expect(runNightlySuiteCheck).not.toHaveBeenCalled();
+    expect(runChatbotHealthCheck).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
-    await run(Constants.CRON_TRIGGER, "2026-10-11T03:01:00Z");
+    await run(Constants.CRON_TRIGGER, "2026-10-11T03:15:00Z");
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
+    expect(runKeyRotationSweep).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).not.toHaveBeenCalled();
     expect(runActivityRollups).not.toHaveBeenCalled();
     expect(runEvalTranscriptSweep).not.toHaveBeenCalled();
+    expect(runContentRetentionPurge).not.toHaveBeenCalled();
+    expect(runPlatformEvalCaseSync).not.toHaveBeenCalled();
     expect(runActivityLogPartitions).not.toHaveBeenCalled();
   });
 

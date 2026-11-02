@@ -28,8 +28,12 @@ export type GetChatbotConfigsCountDALRequest = Pick<ChatbotConfig, "companyId" |
 // decides on a status no concurrent write can change in between.
 // DEV_NOTE: By public id or internal id. chatbotId set = only that chatbot's config (the dashboard's); unset = any
 // chatbot's (an eval run's config, M5-2, checked against its chatbot by the caller).
+export type ChatbotConfigLookup =
+  | { publicId: string; id?: undefined }
+  | { id: string; publicId?: undefined };
+
 export type GetChatbotConfigDetailsDALRequest = Pick<ChatbotConfig, "companyId"> &
-  ({ publicId: string; id?: undefined } | { id: string; publicId?: undefined }) & {
+  ChatbotConfigLookup & {
     chatbotId?: string;
     isForUpdate?: boolean;
   };

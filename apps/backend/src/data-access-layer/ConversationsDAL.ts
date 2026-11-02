@@ -1,4 +1,20 @@
-import { and, asc, count, desc, eq, exists, gte, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  min,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -22,6 +38,19 @@ import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
+
+// DEV_NOTE: What purging one chat needs (M6-1); erasedAt set = its user was erased (M6-2)
+const PURGE_ROW_COLUMNS = {
+  id: conversations.id,
+  publicId: conversations.publicId,
+  companyId: conversations.companyId,
+  chatbotUserId: conversations.chatbotUserId,
+  status: conversations.status,
+  evalRunId: conversations.evalRunId,
+  evalCaseId: conversations.evalCaseId,
+  evalAttempt: conversations.evalAttempt,
+  erasedAt: chatbotUsers.erasedAt,
+};
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). title is chat content (the first user
@@ -372,6 +401,368 @@ export default class ConversationsDAL {
     );
   }
 
+  // DEV_NOTE: Retention (M6-1), one company's chats past its cut-off, a range on the partial index. Never tried first,
+  // then tried longest ago, then oldest; a chat already tried in this run (attempted at now) is left out.
+  async getConversationsPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetConversationsPastRetentionDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
+        or(
+          isNull(conversations.contentPurgeAttemptedAt),
+          lt(conversations.contentPurgeAttemptedAt, params.now),
+        ),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      const selected = await tx
+        .select(PURGE_ROW_COLUMNS)
+        .from(conversations)
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .orderBy(
+          sql`${conversations.contentPurgeAttemptedAt} ASC NULLS FIRST`,
+          asc(conversations.lastActivityAt),
+          asc(conversations.id),
+        )
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Conversations past retention fetched successfully";
+      response.conversations = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching conversations past retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Chats of the company's erased users (M6-2), due whatever their age: a turn that was running, or a chat
+  // started as the user was erased, is picked up here. Its own read, from the erased users, so the cut-off read above
+  // stays a range on its index.
+  async getErasedUsersConversationsToPurge(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetErasedUsersConversationsToPurgeDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotUsers.companyId, params.companyId),
+        isNotNull(chatbotUsers.erasedAt),
+        isNull(conversations.contentPurgedAt),
+        or(
+          isNull(conversations.contentPurgeAttemptedAt),
+          lt(conversations.contentPurgeAttemptedAt, params.now),
+        ),
+      ];
+      const joinConditions = [
+        eq(conversations.chatbotUserId, chatbotUsers.id),
+        eq(conversations.companyId, chatbotUsers.companyId),
+      ];
+      response.conversations = await tx
+        .select(PURGE_ROW_COLUMNS)
+        .from(chatbotUsers)
+        .innerJoin(conversations, and(...joinConditions))
+        .where(and(...conditions))
+        .orderBy(
+          sql`${conversations.contentPurgeAttemptedAt} ASC NULLS FIRST`,
+          asc(conversations.id),
+        )
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Erased users' conversations fetched successfully";
+    } catch (error) {
+      const message = "Unknown error in fetching erased users' conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One user's chats not yet purged, a page at a time, for the pass right after their erasure (M6-2)
+  async getUserConversationsToPurge(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetUserConversationsToPurgeDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.chatbotUserId, params.chatbotUserId),
+        isNull(conversations.contentPurgedAt),
+      ];
+      if (params.afterId) conditions.push(gt(conversations.id, params.afterId));
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      response.conversations = await tx
+        .select(PURGE_ROW_COLUMNS)
+        .from(conversations)
+        .leftJoin(chatbotUsers, and(...userJoinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(conversations.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "User's conversations to purge fetched successfully";
+    } catch (error) {
+      const message = "Unknown error in fetching the user's conversations to purge";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId, chatbotUserId: params.chatbotUserId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every chat the user had, purged ones too: the number on the erasure's audit row
+  async getUserConversationsCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ChatbotUserContentDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.chatbotUserId, params.chatbotUserId),
+      ];
+      const [counted] = await tx
+        .select({ total: count() })
+        .from(conversations)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "User's conversations counted successfully";
+      response.totalRecords = counted?.total ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting the user's conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: When the longest-waiting erased user with a chat still to purge was erased (M6-2), for the overdue alert
+  async getOldestErasedUserPending(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Pick<Schemas.Conversation, "companyId">,
+  ) {
+    const response: Schemas.OldestErasedUserPendingDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        isNotNull(chatbotUsers.erasedAt),
+      ];
+      const userJoinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      const [oldest] = await tx
+        .select({ erasedAt: min(chatbotUsers.erasedAt) })
+        .from(chatbotUsers)
+        .innerJoin(conversations, and(...userJoinConditions))
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Oldest erased user pending fetched successfully";
+      response.erasedAt = oldest?.erasedAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in fetching the oldest erased user pending";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Stamped when a batch is read, not when a chat fails, so a chat that kills the run still goes to the back
+  async markConversationsPurgeAttempted(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MarkConversationsPurgeAttemptedDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        inArray(conversations.id, params.ids),
+      ];
+      await tx
+        .update(conversations)
+        .set({ contentPurgeAttemptedAt: params.now, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversations marked as tried";
+    } catch (error) {
+      const message = "Unknown error in marking conversations as tried";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId, count: params.ids.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: How far behind the purge is for one company, tried or not; no row = lastActivityAt null
+  async getOldestConversationPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetOldestConversationPastRetentionDALRequest,
+  ) {
+    const response: Schemas.OldestConversationPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
+      ];
+      const [oldest] = await tx
+        .select({ lastActivityAt: conversations.lastActivityAt })
+        .from(conversations)
+        .where(and(...conditions))
+        .orderBy(asc(conversations.lastActivityAt))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = "Oldest conversation past retention fetched successfully";
+      response.lastActivityAt = oldest?.lastActivityAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in fetching the oldest conversation past retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async closeConversationPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CloseConversationPastRetentionDALRequest,
+  ) {
+    const { lastActivityBefore, outcome, ...find } = params;
+    return await this.update(
+      tx,
+      find,
+      Schemas.LogAction.PurgeConversationContent,
+      {
+        status: Schemas.ConversationStatusIntEnum.Closed,
+        outcome: sql`COALESCE(${conversations.outcome}, ${outcome}::smallint)`,
+      },
+      // DEV_NOTE: No cut-off = an erased user's chat (M6-2), which closes whatever its last activity
+      lastActivityBefore
+        ? sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open} AND ${conversations.lastActivityAt} < ${lastActivityBefore.toISOString()}::timestamptz`
+        : sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open}`,
+    );
+  }
+
+  // DEV_NOTE: Last step of a purge (M6-1): the title is the first user message, and content_purged_at ends the job
+  async markConversationContentPurged(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindConversationDALRequest,
+  ) {
+    return await this.update(tx, params, Schemas.LogAction.PurgeConversationContent, {
+      title: null,
+      contentPurgedAt: new Date(),
+    });
+  }
+
+  // DEV_NOTE: Doc gaps (M5-6): a conversation that closed Answered before the verdict on its last question came in. Only
+  // from Closed + Answered; no such row is a success that changes nothing.
+  async markClosedConversationUnanswered(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MarkClosedConversationUnansweredDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.id, params.id),
+        eq(conversations.companyId, params.companyId),
+        eq(conversations.status, Schemas.ConversationStatusIntEnum.Closed),
+        eq(conversations.outcome, Schemas.ConversationOutcomeIntEnum.Answered),
+      ];
+      await tx
+        .update(conversations)
+        .set({ outcome: Schemas.ConversationOutcomeIntEnum.Idk, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Closed conversation checked for its unanswered question";
+    } catch (error) {
+      const message = "Unknown error in marking closed conversation unanswered";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.MarkClosedConversationUnanswered,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: A reference check before an update: the failed response when lookup finds no row (or fails), else null
   private async findMissing(
     tx: NodePgTransaction<EmptyRelations>,
@@ -410,7 +801,7 @@ export default class ConversationsDAL {
     params: Schemas.FindConversationDALRequest,
     action: Schemas.LogAction,
     values: PgUpdateSetSource<typeof conversations>,
-    extraCondition?: ReturnType<typeof eq>,
+    extraCondition?: SQL,
   ) {
     const response: Schemas.ConversationDALResponse = { isSuccess: false };
     const metadata = { ...params };

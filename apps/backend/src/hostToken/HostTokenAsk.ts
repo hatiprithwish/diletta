@@ -1,5 +1,5 @@
 // DEV_NOTE: The Conversation DO's ask for a fresh host token (M3-8), one per DO instance, in memory only (it holds no
-// token: the DO keeps that, pattern rule 3.11). Stateful (unlike the static providers/), so it lives in hostToken/.
+// token: the DO keeps that). Stateful (unlike the static providers/), so it lives in hostToken/.
 //   - request(): asks every open socket (ask() sends token_needed, reason refresh, and returns how many it reached)
 //     and resolves true on the next arrived(), false after waitMs, or false at once when no socket is open.
 //   - Steps asking while one ask is pending share it.

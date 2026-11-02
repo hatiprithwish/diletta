@@ -14,3 +14,5 @@ export type GetActivityLogsByEntityDALRequest = Pick<ActivityLog, "companyId" | 
   entityId: string;
   limit: number;
 };
+
+export type GetActivityLogDALRequest = Pick<ActivityLog, "companyId" | "id">;

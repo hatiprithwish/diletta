@@ -36,6 +36,9 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   issueTypeLabel: null,
   note: null,
   ratedReply: "Every 6 months, per the Fire safety policy.",
+  chatbotName: "eRegister Assistant",
+  isChatbotWide: false,
+  docGapCluster: null,
   conversation: { publicId: "conv_1", title: "Bot gave old fire drill frequency" },
   createdAt: "2026-10-20T13:20:00.000Z",
   updatedAt: "2026-10-20T13:20:00.000Z",
@@ -53,9 +56,24 @@ const ROW_SYSTEM: Schemas.QualityIssueListItem = {
   conversation: { publicId: "conv_2", title: null },
 };
 
+// DEV_NOTE: A daily health check's issue (M5-5): about the whole chatbot, no conversation
+const ROW_HEALTH: Schemas.QualityIssueListItem = {
+  ...ROW_USER,
+  publicId: "qi_3",
+  source: Schemas.QualityIssueSourceIntEnum.System,
+  sourceLabel: Schemas.QualityIssueSourceLabelEnum.System,
+  issueType: Schemas.QualityIssueTypeIntEnum.HealthDrop,
+  issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.HealthDrop,
+  note: "Oct 30: Replies rated down 70% (usually 10%).",
+  ratedReply: null,
+  isChatbotWide: true,
+  docGapCluster: null,
+  conversation: null,
+};
+
 const LIST: Schemas.GetQualityIssuesApiResponse = {
   isSuccess: true,
-  qualityIssues: [ROW_USER, ROW_SYSTEM],
+  qualityIssues: [ROW_USER, ROW_SYSTEM, ROW_HEALTH],
   totalRecords: 7,
   tabCounts: { open: 7, converted: 12, fixed: 9, dismissed: 15 },
 };
@@ -73,7 +91,6 @@ const DETAIL: Schemas.QualityIssueDetail = {
   conversation: {
     publicId: "conv_1",
     title: "Bot gave old fire drill frequency",
-    chatbotName: "eRegister Assistant",
     userName: "Tom Baker",
   },
   isContentPurged: false,
@@ -128,7 +145,12 @@ function defaultApi(url: string, init?: RequestInit) {
       },
     };
   }
-  if (url.endsWith("/test-draft")) return { status: 200, body: { isSuccess: true, draft: DRAFT } };
+  if (url.endsWith("/test-draft")) {
+    return {
+      status: 200,
+      body: { isSuccess: true, draft: DRAFT, flaggedTerms: [], wasVerified: true },
+    };
+  }
   if (url.endsWith("/convert")) {
     const draft = JSON.parse(String(init?.body)) as Schemas.QualityTestDraft;
     return {
@@ -408,10 +430,83 @@ describe("Quality issue", () => {
     expect(JSON.parse(String((convert?.[1] as RequestInit).body))).toEqual({
       ...DRAFT,
       name: "Fire drills",
+      confirmedTerms: [],
     });
     expect(await within(card).findByText("Converted")).toBeInTheDocument();
     expect(within(card).getByText("Fire drills")).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Test saved.");
+  });
+
+  it("holds the save until a flagged term is edited out or marked not personal", async () => {
+    const leaky = { ...DRAFT, name: "Elm and Priya" };
+    const fetchMock = mockApi((url, init) =>
+      url.endsWith("/test-draft")
+        ? {
+            status: 200,
+            body: {
+              isSuccess: true,
+              draft: leaky,
+              flaggedTerms: [
+                { term: "Elm", canConfirm: true },
+                { term: "Priya", canConfirm: false },
+              ],
+              wasVerified: false,
+            },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_1");
+    const card = await detailCard();
+    await userEvent.click(await within(card).findByRole("button", { name: "Create test" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review the test" });
+    expect(within(dialog).getByText(/extra check for names didn't run/)).toBeInTheDocument();
+    expect(within(dialog).getByText("Remove this from the test")).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+    expect(await within(dialog).findByText(/Still to deal with: Elm, Priya/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/convert"))).toBe(false);
+
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Elm is not personal" }));
+    const name = within(dialog).getByLabelText("Name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Elm policy");
+    // DEV_NOTE: The term edited out leaves the list at once, with no save
+    expect(within(dialog).queryByText("Remove this from the test")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Still to deal with/)).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Review the test" })).not.toBeInTheDocument(),
+    );
+    const convert = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/convert"));
+    expect(JSON.parse(String((convert?.[1] as RequestInit).body)).confirmedTerms).toEqual(["Elm"]);
+  });
+
+  it("keeps the review open and lists the terms when the server refuses them", async () => {
+    mockApi((url, init) =>
+      url.endsWith("/convert")
+        ? {
+            status: 409,
+            body: {
+              isSuccess: false,
+              failure: Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound,
+              flaggedTerms: [{ term: DRAFT.name.split(" ")[0]!, canConfirm: true }],
+            },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_1");
+    const card = await detailCard();
+    await userEvent.click(await within(card).findByRole("button", { name: "Create test" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review the test" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save test" }));
+    expect(
+      await within(dialog).findByText(
+        new RegExp(`Still to deal with: ${DRAFT.name.split(" ")[0]}`),
+      ),
+    ).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith(
+      "The test still holds personal details. Nothing was saved.",
+    );
   });
 
   it("keeps the review open on an empty field", async () => {
@@ -484,6 +579,69 @@ describe("Quality issue", () => {
     mockApi(withExcerpt(false));
     renderPage("/quality/qi_1");
     expect(await within(await detailCard()).findByText("No messages yet.")).toBeInTheDocument();
+  });
+
+  it("shows a health drop on the whole chatbot with its note, and no test or conversation to open", async () => {
+    const health: Schemas.QualityIssueDetail = {
+      ...ROW_HEALTH,
+      rating: null,
+      excerpt: [],
+      isContentPurged: false,
+      conversation: null,
+      changeRequestPublicId: null,
+      evalCase: null,
+    };
+    mockApi((url, init) =>
+      url.includes("/dashboard/quality-issues/qi_3")
+        ? { status: 200, body: { isSuccess: true, qualityIssue: health } }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_3");
+    const card = await detailCard();
+    expect(
+      await within(card).findByRole("heading", {
+        name: "Daily health check: eRegister Assistant",
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).getByText(/looks at the whole chatbot's day/)).toBeInTheDocument();
+    expect(within(card).getByDisplayValue(ROW_HEALTH.note ?? "")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("link", { name: "Open conversation" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Mark fixed" })).toBeInTheDocument();
+  });
+
+  it("shows a growing group of unanswered questions with its label and a way to Knowledge, no test", async () => {
+    const gapItem: Schemas.QualityIssueDetail = {
+      ...ROW_HEALTH,
+      publicId: "qi_3",
+      issueType: Schemas.QualityIssueTypeIntEnum.KnowledgeGap,
+      issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.KnowledgeGap,
+      note: "People keep asking something the help docs don't answer.",
+      docGapCluster: { label: "How do I archive a register?" },
+      rating: null,
+      excerpt: [],
+      isContentPurged: false,
+      conversation: null,
+      changeRequestPublicId: null,
+      evalCase: null,
+    };
+    mockApi((url, init) =>
+      url.includes("/dashboard/quality-issues/qi_3")
+        ? { status: 200, body: { isSuccess: true, qualityIssue: gapItem } }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_3");
+    const card = await detailCard();
+    expect(
+      await within(card).findByRole("heading", {
+        name: "Unanswered questions: How do I archive a register?",
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "Open Knowledge" })).toHaveAttribute(
+      "href",
+      "/knowledge",
+    );
+    expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
   });
 
   it("keeps a saved note when the answer carries no issue", async () => {

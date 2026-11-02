@@ -12,6 +12,7 @@ import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
 import QualityIssuesProvider from "@/providers/qualityIssues";
+import QualityTestCheckProvider from "@/providers/qualityTestCheck";
 import QualityTestRewriteProvider from "@/providers/qualityTestRewrite";
 import ModelRouterRepo from "@/repositories/ModelRouterRepo";
 import * as Schemas from "@app/schemas";
@@ -27,10 +28,15 @@ type DraftInputs =
   | {
       isSuccess: true;
       source: Schemas.QualityTestRewriteSource;
+      sourceTexts: string[];
+      userName: string | null;
       chatbotId: string;
       routing: Schemas.ConfigSpec["routing"];
     }
   | Schemas.DraftQualityTestApiResponse;
+
+// DEV_NOTE: What both of Create test's router calls share
+type DraftRouterParams = Omit<Schemas.GetModelRequest, "taskType" | "tier">;
 
 // DEV_NOTE: Tenant Repo — quality issues as the dashboard works them. M4-4: flag a conversation into the inbox. M4-6:
 // the Quality list with its tab counts, one issue with its excerpt, the sidebar's open count, triage (type + note),
@@ -60,7 +66,7 @@ export default class QualityIssuesRepo {
   }
 
   // DEV_NOTE: Status Enum Pattern — source, status and type each as int + label. A purged conversation's title and
-  // rated reply stay out.
+  // rated reply stay out. A chatbot-wide system issue (a health drop, M5-5) has no conversation.
   private toListItem(row: Schemas.DashboardQualityIssueRow): Schemas.QualityIssueListItem {
     const isPurged = row.conversationContentPurgedAt !== null;
     return {
@@ -74,10 +80,14 @@ export default class QualityIssuesRepo {
         row.issueType === null ? null : Schemas.QUALITY_ISSUE_TYPE_LABEL_MAP[row.issueType],
       note: row.note,
       ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedReplyText),
-      conversation: {
-        publicId: row.conversationPublicId,
-        title: isPurged ? null : row.conversationTitle,
-      },
+      chatbotName: row.chatbotName,
+      isChatbotWide:
+        row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
+      docGapCluster: row.docGapClusterLabel !== null ? { label: row.docGapClusterLabel } : null,
+      conversation:
+        row.conversationPublicId === null
+          ? null
+          : { publicId: row.conversationPublicId, title: isPurged ? null : row.conversationTitle },
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -93,11 +103,7 @@ export default class QualityIssuesRepo {
       rating: row.rating,
       excerpt,
       isContentPurged: row.conversationContentPurgedAt !== null,
-      conversation: {
-        ...item.conversation,
-        chatbotName: row.chatbotName,
-        userName: row.userName,
-      },
+      conversation: item.conversation ? { ...item.conversation, userName: row.userName } : null,
       changeRequestPublicId: row.changeRequestPublicId,
       evalCase:
         row.evalCasePublicId !== null && row.evalCaseName !== null
@@ -106,9 +112,11 @@ export default class QualityIssuesRepo {
     };
   }
 
-  // DEV_NOTE: A prompt-injection event on the Security page (M4-9): the admin's note says where it was found, else the
-  // issue's source; a purged conversation's title stays out
-  private toInjectionEvent(row: Schemas.DashboardQualityIssueRow): Schemas.InjectionEvent {
+  // DEV_NOTE: A prompt-injection event on the Security page (M4-9): the note says where it was found (the admin's, or
+  // the runtime's for an automatic one, M6-4), else the issue's source; a purged conversation's title stays out. The DAL reads only issues with their conversation.
+  private toInjectionEvent(
+    row: Schemas.DashboardQualityIssueRow & { conversationPublicId: string },
+  ): Schemas.InjectionEvent {
     return {
       publicId: row.publicId,
       conversationPublicId: row.conversationPublicId,
@@ -116,13 +124,13 @@ export default class QualityIssuesRepo {
       detectedIn: row.note ?? Schemas.QUALITY_ISSUE_SOURCE_LABEL_MAP[row.source],
       status: row.status,
       statusLabel: Schemas.QUALITY_ISSUE_STATUS_LABEL_MAP[row.status],
-      actionLabel: Schemas.INJECTION_EVENT_ACTION_LABEL_MAP[row.status],
+      actionLabel: Schemas.injectionEventActionLabel(row.source, row.status),
       createdAt: row.createdAt.toISOString(),
     };
   }
 
-  // DEV_NOTE: The Security page's prompt-injection events (M4-9): issues typed Prompt injection, any status, newest first.
-  // M6-4 adds the automatic detections.
+  // DEV_NOTE: The Security page's prompt-injection events (M4-9): issues typed Prompt injection, any status, newest first,
+  // the runtime's automatic detections (M6-4) included.
   async getInjectionEvents(
     params: Schemas.GetInjectionEventsApiRequest & { companyId: string },
   ): Promise<Schemas.GetInjectionEventsApiResponse> {
@@ -142,7 +150,11 @@ export default class QualityIssuesRepo {
         );
         return {
           ...rest,
-          injectionEvents: qualityIssues?.map((row) => this.toInjectionEvent(row)),
+          injectionEvents: qualityIssues?.flatMap((row) =>
+            row.conversationPublicId === null
+              ? []
+              : [this.toInjectionEvent({ ...row, conversationPublicId: row.conversationPublicId })],
+          ),
         };
       },
     );
@@ -296,7 +308,8 @@ export default class QualityIssuesRepo {
       const outboxId = await this.recordEvent(tx, params, row, {
         action: Schemas.QUALITY_ISSUE_CLOSE_ENTITY_ACTION_MAP[params.status],
         detail: { status: params.status, issueType: row.issueType },
-        dedupeParts: [],
+        // DEV_NOTE: An item reopened with its group (M5-6) can close again, and that close is its own event
+        dedupeParts: [row.updatedAt.toISOString()],
       });
       return { isSuccess: true, message: "Quality issue closed", outboxId };
     });
@@ -329,6 +342,13 @@ export default class QualityIssuesRepo {
           "Only an open issue can become a test",
         );
       }
+      // DEV_NOTE: A chatbot-wide issue (a health drop, M5-5) has no chat to turn into a test
+      if (row.conversationId === null || row.chatbotId === null) {
+        return refuse(
+          Schemas.QualityTestDraftFailureEnum.NoConversation,
+          "The issue isn't about one conversation",
+        );
+      }
       if (row.conversationContentPurgedAt !== null) {
         return refuse(
           Schemas.QualityTestDraftFailureEnum.NoConversation,
@@ -336,12 +356,7 @@ export default class QualityIssuesRepo {
         );
       }
 
-      const listed = await this.messagesDal.listRecentChatMessages(tx, {
-        companyId,
-        conversationId: row.conversationId,
-        upToMessageId: row.ratedMessageId,
-        limit: QualityIssuesProvider.MESSAGES_READ_LIMIT,
-      });
+      const listed = await this.readIssueChat(tx, companyId, row, row.conversationId);
       if (!listed.isSuccess) return { isSuccess: false, message: listed.message };
       const source = QualityIssuesProvider.rewriteSource(
         listed.messages ?? [],
@@ -382,7 +397,14 @@ export default class QualityIssuesRepo {
         };
       }
 
-      return { isSuccess: true, source, chatbotId: row.chatbotId, routing: loaded.spec.routing };
+      return {
+        isSuccess: true,
+        source,
+        sourceTexts: QualityIssuesProvider.personalDetailSources(listed.messages ?? [], row.note),
+        userName: row.userName,
+        chatbotId: row.chatbotId,
+        routing: loaded.spec.routing,
+      };
     });
     if (!inputs.isSuccess || !("source" in inputs)) {
       if ("failure" in inputs && inputs.failure) {
@@ -397,17 +419,21 @@ export default class QualityIssuesRepo {
     }
 
     const logMetadata = { companyId, publicId: params.publicId };
-    const routed = await new ModelRouterRepo(this.env, ctx).getModel({
+    const router = new ModelRouterRepo(this.env, ctx);
+    const routerParams: DraftRouterParams = {
       companyId,
       chatbotId: inputs.chatbotId,
       chatbotUserId: null,
       conversationId: null,
       evalRunId: null,
       turnId: null,
-      taskType: Schemas.ModelTaskTypeEnum.QualityTestRewrite,
-      tier: Schemas.ModelTierEnum.Mid,
       routing: inputs.routing,
       caps: null,
+    };
+    const routed = await router.getModel({
+      ...routerParams,
+      taskType: Schemas.ModelTaskTypeEnum.QualityTestRewrite,
+      tier: Schemas.ModelTierEnum.Mid,
     });
     if (!routed.isSuccess) {
       return {
@@ -425,7 +451,37 @@ export default class QualityIssuesRepo {
     if (!rewritten.isSuccess) {
       return { isSuccess: false, message: "No test draft", failure: rewritten.failure };
     }
-    return { isSuccess: true, message: "Test draft written", draft: rewritten.draft };
+
+    const flagged = Schemas.findQualityTestPersonalDetails({
+      draft: rewritten.draft,
+      sourceTexts: inputs.sourceTexts,
+      userName: inputs.userName,
+    });
+    const names = await this.findDraftNames(router, routerParams, rewritten.draft, logMetadata);
+    return {
+      isSuccess: true,
+      message: "Test draft written",
+      draft: rewritten.draft,
+      flaggedTerms: Schemas.withQualityTestCheckedNames(flagged, rewritten.draft, names ?? []),
+      wasVerified: names !== null,
+    };
+  }
+
+  // DEV_NOTE: The name check (M5-7): a second call that reads the draft alone. null = it didn't run; the save is held to
+  // the rules either way.
+  private async findDraftNames(
+    router: ModelRouterRepo,
+    routerParams: DraftRouterParams,
+    draft: Schemas.QualityTestDraft,
+    logMetadata: Record<string, string>,
+  ): Promise<string[] | null> {
+    const routed = await router.getModel({
+      ...routerParams,
+      taskType: Schemas.ModelTaskTypeEnum.QualityTestCheck,
+      tier: Schemas.ModelTierEnum.Small,
+    });
+    if (!routed.isSuccess) return null;
+    return await QualityTestCheckProvider.findNames(routed.model, draft, logMetadata);
   }
 
   // DEV_NOTE: Create test, step 2: the reviewed draft saved as the conversation's chatbot's eval case (input v1,
@@ -448,6 +504,46 @@ export default class QualityIssuesRepo {
         checks: Schemas.EVAL_CASE_NO_CHECKS,
       });
       if (!stored.isSuccess) throw new TenantRollbackError(stored.message);
+
+      // DEV_NOTE: A chatbot-wide issue (M5-5) has no conversation to become a test; an issue older than M5-5 whose
+      // conversation row is gone has no chatbot to own one
+      if (row.conversationId === null) {
+        return {
+          isSuccess: false,
+          message: "The issue isn't about one conversation",
+          failure: Schemas.QualityIssueUpdateFailureEnum.NoConversation,
+        };
+      }
+      if (row.chatbotId === null) {
+        return {
+          isSuccess: false,
+          message: "The conversation's chatbot no longer exists",
+          failure: Schemas.QualityIssueUpdateFailureEnum.ChatbotNotFound,
+        };
+      }
+
+      // DEV_NOTE: The server's own check (M5-7), never the browser's word: the chat is read again. A purged chat leaves
+      // the note, the user's name and the patterns.
+      let sourceRows: Schemas.ChatMessageTextRow[] = [];
+      if (row.conversationContentPurgedAt === null) {
+        const listed = await this.readIssueChat(tx, companyId, row, row.conversationId);
+        if (!listed.isSuccess) throw new TenantRollbackError(listed.message ?? "Chat not read");
+        sourceRows = listed.messages ?? [];
+      }
+      const found = Schemas.findQualityTestPersonalDetails({
+        draft,
+        sourceTexts: QualityIssuesProvider.personalDetailSources(sourceRows, row.note),
+        userName: row.userName,
+      });
+      const flaggedTerms = Schemas.unconfirmedQualityTestTerms(found, params.confirmedTerms);
+      if (flaggedTerms.length > 0) {
+        return {
+          isSuccess: false,
+          message: "The test still holds personal details",
+          failure: Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound,
+          flaggedTerms,
+        };
+      }
 
       const created = await this.evalCasesDal.createEvalCase(tx, {
         companyId,
@@ -481,7 +577,12 @@ export default class QualityIssuesRepo {
 
       const outboxId = await this.recordEvent(tx, params, row, {
         action: Schemas.QualityIssueEntityActionEnum.Converted,
-        detail: { evalCaseId: created.evalCase.id, issueType: row.issueType },
+        // DEV_NOTE: How many, never which: a wrongly confirmed name stays out of the log
+        detail: {
+          evalCaseId: created.evalCase.id,
+          issueType: row.issueType,
+          confirmedTermCount: found.length,
+        },
         dedupeParts: [],
       });
       return { isSuccess: true, message: "Quality issue converted", outboxId };
@@ -668,26 +769,39 @@ export default class QualityIssuesRepo {
     return { ...written, qualityIssue: detail.qualityIssue };
   }
 
+  // DEV_NOTE: The chat an issue is about, the same on every read (M5-7): up to its rated reply, or for an issue with none,
+  // up to when it was opened, so messages sent after it never move what its draft and save compare.
+  private async readIssueChat(
+    tx: Tx,
+    companyId: string,
+    row: Schemas.DashboardQualityIssueRow,
+    conversationId: string,
+  ) {
+    return await this.messagesDal.listRecentChatMessages(tx, {
+      companyId,
+      conversationId,
+      upToMessageId: row.ratedMessageId,
+      upToCreatedAt: row.ratedMessageId === null ? row.createdAt : null,
+      limit: QualityIssuesProvider.MESSAGES_READ_LIMIT,
+    });
+  }
+
   // DEV_NOTE: The detail with its excerpt (QualityIssuesProvider), read in the caller's transaction from the newest
-  // messages up to the rated reply (MESSAGES_READ_LIMIT, text only). A purged chat has none (no messages are read).
+  // messages up to the rated reply (MESSAGES_READ_LIMIT, text only). A purged chat, or a chatbot-wide issue with no
+  // chat (M5-5), has none (no messages are read).
   private async withExcerpt(
     tx: Tx,
     companyId: string,
     row: Schemas.DashboardQualityIssueRow,
   ): Promise<Schemas.GetQualityIssueApiResponse> {
-    if (row.conversationContentPurgedAt !== null) {
+    if (row.conversationId === null || row.conversationContentPurgedAt !== null) {
       return {
         isSuccess: true,
         message: "Quality issue fetched successfully",
         qualityIssue: this.toDetail(row, []),
       };
     }
-    const listed = await this.messagesDal.listRecentChatMessages(tx, {
-      companyId,
-      conversationId: row.conversationId,
-      upToMessageId: row.ratedMessageId,
-      limit: QualityIssuesProvider.MESSAGES_READ_LIMIT,
-    });
+    const listed = await this.readIssueChat(tx, companyId, row, row.conversationId);
     if (!listed.isSuccess) return { isSuccess: false, message: listed.message };
     return {
       isSuccess: true,

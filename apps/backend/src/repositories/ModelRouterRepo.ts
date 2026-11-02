@@ -13,7 +13,7 @@ import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import ModelCallsRepo from "@/repositories/ModelCallsRepo";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The model router (M2-3), the only way to a chat model (pattern rule 3.10). getModel:
+// DEV_NOTE: The model router (M2-3), the only way to a chat model. getModel:
 //   1. tier (or the routing's defaultTier) → provider + model from the chatbot's config spec routing.
 //   2. the model must be in MODEL_PRICES, so every call can be costed; else ModelNotPriced.
 //   3. the company's active key for that provider, decrypted in withTenant; no active key → the key-failure step,

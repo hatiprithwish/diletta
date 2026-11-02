@@ -3,6 +3,7 @@ import type {
   Conversation,
   ConversationListTabEnum,
   ConversationOutcomeFilterEnum,
+  ConversationOutcomeIntEnum,
   ConversationSortColumn,
 } from "./ConversationsCommon";
 
@@ -70,4 +71,46 @@ export type GetDashboardConversationsDALRequest = ConversationsFilterDALRequest 
 // IDX_conversations_company_id_created_at
 export type GetChatbotConversationCountsDALRequest = Pick<Conversation, "companyId"> & {
   since: Date;
+};
+
+// DEV_NOTE: One company's conversations (M6-1) past lastActivityBefore with content not yet purged, at most limit, not
+// yet tried at now (one run tries a chat once)
+export type GetConversationsPastRetentionDALRequest = Pick<Conversation, "companyId"> & {
+  lastActivityBefore: Date;
+  now: Date;
+  limit: number;
+};
+
+export type GetUserConversationsToPurgeDALRequest = Pick<
+  Conversation,
+  "companyId" | "chatbotUserId"
+> & {
+  afterId: string | null;
+  limit: number;
+};
+
+export type GetErasedUsersConversationsToPurgeDALRequest = Pick<Conversation, "companyId"> & {
+  now: Date;
+  limit: number;
+};
+
+export type MarkConversationsPurgeAttemptedDALRequest = Pick<Conversation, "companyId"> & {
+  ids: string[];
+  now: Date;
+};
+
+export type GetOldestConversationPastRetentionDALRequest = Pick<Conversation, "companyId"> & {
+  lastActivityBefore: Date;
+};
+
+// DEV_NOTE: Closes an Open conversation only while its last activity is still before the cut-off (M6-1), keeping an
+// outcome it already has, else this one. isNotFound = a new message moved it, or it is no longer Open.
+export type CloseConversationPastRetentionDALRequest = Pick<
+  Conversation,
+  "companyId" | "publicId"
+> & { lastActivityBefore: Date | null; outcome: ConversationOutcomeIntEnum };
+
+// DEV_NOTE: The steps of one chat's purge (M6-1), every table: by conversation, in the Repo's one transaction
+export type ClearConversationContentDALRequest = Pick<Conversation, "companyId"> & {
+  conversationId: string;
 };

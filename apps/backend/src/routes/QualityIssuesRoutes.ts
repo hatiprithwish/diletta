@@ -14,7 +14,8 @@ import * as Schemas from "@app/schemas";
 const QualityIssuesRoutes = new Hono<AppContext>();
 
 // DEV_NOTE: A write's answer: the event relayed after the commit (the outbox id never reaches the client), and its
-// status: 200 with the issue as it stands, 404 unknown, 409 a refusal (failure: no longer Open, or no chatbot)
+// status: 200 with the issue as it stands, 404 unknown, 409 a refusal (failure: no longer Open, no chatbot, or a
+// convert of an issue with no conversation)
 function answerWrite(
   env: Env,
   ctx: Pick<ExecutionContext, "waitUntil">,
@@ -148,11 +149,13 @@ QualityIssuesRoutes.post(
   async (c) => {
     const repo = new QualityIssuesRepo(c.env);
     const companyId = c.get("companyId");
+    const { confirmedTerms, ...draft } = c.req.valid("json");
     const result = await repo.convertQualityIssue({
       companyId,
       adminId: c.get("admin").adminId,
       publicId: c.req.param("publicId"),
-      draft: c.req.valid("json"),
+      draft,
+      confirmedTerms: confirmedTerms ?? [],
     });
     const { response, status } = answerWrite(c.env, c.executionCtx, companyId, result);
     return c.json(response, status);

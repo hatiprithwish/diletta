@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne, or } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyEncryptionKeys } from "@/db/tables";
@@ -124,7 +124,9 @@ export default class CompanyEncryptionKeysDAL {
     return response;
   }
 
-  // DEV_NOTE: The key every new encrypted_* value is written with (UNQ_company_encryption_keys_company_id_active)
+  // DEV_NOTE: The key every new encrypted_* value is written with (UNQ_company_encryption_keys_company_id_active).
+  // isForShare: a read that waited on a rotation's lock re-checks the old row, now Retiring, and finds nothing; the
+  // statement's snapshot can't see the key the rotation created, so it reads once more, as a new statement that does.
   async getActiveCompanyEncryptionKey(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetActiveCompanyEncryptionKeyDALRequest,
@@ -136,11 +138,19 @@ export default class CompanyEncryptionKeysDAL {
         eq(companyEncryptionKeys.companyId, params.companyId),
         eq(companyEncryptionKeys.status, Schemas.CompanyEncryptionKeyStatusIntEnum.Active),
       ];
-      const [companyEncryptionKey] = await tx
-        .select()
-        .from(companyEncryptionKeys)
-        .where(and(...conditions))
-        .limit(1);
+      const readActiveKey = async () => {
+        const query = tx
+          .select()
+          .from(companyEncryptionKeys)
+          .where(and(...conditions))
+          .limit(1);
+        const [row] = params.isForShare ? await query.for("share") : await query;
+        return row;
+      };
+      let companyEncryptionKey = await readActiveKey();
+      if (!companyEncryptionKey && params.isForShare) {
+        companyEncryptionKey = await readActiveKey();
+      }
 
       if (!companyEncryptionKey) {
         const message = "Active encryption key not found";
@@ -249,6 +259,158 @@ export default class CompanyEncryptionKeysDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.MarkCompanyEncryptionKeyRetiring,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Platform read (withPlatform) for the rotation job (M6-3): every company with a Retiring key or a live key
+  // wrapped by an older master key. Destroyed keys have nothing left to re-wrap, so they never count.
+  async getCompanyIdsWithKeyWork(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompanyIdsWithKeyWorkDALRequest,
+  ) {
+    const response: Schemas.CompanyIdsDALResponse = { isSuccess: false };
+
+    try {
+      const liveOnOldMasterKey = [
+        ne(companyEncryptionKeys.status, Schemas.CompanyEncryptionKeyStatusIntEnum.Destroyed),
+        lt(companyEncryptionKeys.masterKeyVersion, params.masterKeyVersion),
+      ];
+      const conditions = [
+        or(
+          eq(companyEncryptionKeys.status, Schemas.CompanyEncryptionKeyStatusIntEnum.Retiring),
+          and(...liveOnOldMasterKey),
+        ),
+      ];
+      if (params.companyIds) {
+        conditions.push(inArray(companyEncryptionKeys.companyId, params.companyIds));
+      }
+      const rows = await tx
+        .selectDistinct({ companyId: companyEncryptionKeys.companyId })
+        .from(companyEncryptionKeys)
+        .where(and(...conditions))
+        .orderBy(asc(companyEncryptionKeys.companyId));
+
+      response.isSuccess = true;
+      response.message = "Companies with key work fetched successfully";
+      response.companyIds = rows.map((row) => row.companyId);
+    } catch (error) {
+      const message = "Unknown error in listing companies with key work";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetCompanyIdsWithKeyWork,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Compare-and-set on master_key_version: a key re-wrapped or destroyed since the read matches nothing, which
+  // answers isNotFound (nothing written, not an error to retry)
+  async rewrapCompanyEncryptionKey(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.RewrapCompanyEncryptionKeyDALRequest,
+  ) {
+    const response: Schemas.CompanyEncryptionKeyDALResponse = { isSuccess: false };
+    const { encryptedKey: _encryptedKey, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(companyEncryptionKeys.version, params.version),
+        eq(companyEncryptionKeys.companyId, params.companyId),
+        eq(companyEncryptionKeys.masterKeyVersion, params.fromMasterKeyVersion),
+        ne(companyEncryptionKeys.status, Schemas.CompanyEncryptionKeyStatusIntEnum.Destroyed),
+      ];
+      const [companyEncryptionKeyResponse] = await tx
+        .update(companyEncryptionKeys)
+        .set({
+          encryptedKey: Buffer.from(params.encryptedKey),
+          masterKeyVersion: params.masterKeyVersion,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!companyEncryptionKeyResponse) {
+        response.isNotFound = true;
+        response.message = "Encryption key already re-wrapped or destroyed";
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Encryption key re-wrapped successfully";
+      response.companyEncryptionKey = companyEncryptionKeyResponse;
+    } catch (error) {
+      const message = "Unknown error in re-wrapping encryption key";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.RewrapCompanyEncryptionKey,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The crypto-shred. Only a Retiring key matches; the row stays (its version is never reused).
+  async destroyCompanyEncryptionKey(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.DestroyCompanyEncryptionKeyDALRequest,
+  ) {
+    const response: Schemas.CompanyEncryptionKeyDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companyEncryptionKeys.version, params.version),
+        eq(companyEncryptionKeys.companyId, params.companyId),
+        eq(companyEncryptionKeys.status, Schemas.CompanyEncryptionKeyStatusIntEnum.Retiring),
+      ];
+      const now = new Date();
+      const [companyEncryptionKeyResponse] = await tx
+        .update(companyEncryptionKeys)
+        .set({
+          status: Schemas.CompanyEncryptionKeyStatusIntEnum.Destroyed,
+          encryptedKey: null,
+          destroyedAt: now,
+          updatedAt: now,
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!companyEncryptionKeyResponse) {
+        const message = "Retiring encryption key not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.DestroyCompanyEncryptionKey,
+          message,
+          metadata: params,
+        });
+        response.isNotFound = true;
+        response.message = message;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Encryption key destroyed successfully";
+      response.companyEncryptionKey = companyEncryptionKeyResponse;
+    } catch (error) {
+      const message = "Unknown error in destroying encryption key";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.DestroyCompanyEncryptionKey,
         message,
         error,
         metadata: params,

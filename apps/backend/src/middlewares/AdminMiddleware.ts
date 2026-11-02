@@ -89,8 +89,7 @@ export function authorizePlatform(action: Schemas.AuthzActionEnum) {
 }
 
 // DEV_NOTE: For /operator/companies/:companyPublicId/* routes, after authorizePlatform: resolves the company the path
-// names and sets companyId (the withTenant key), so the handler acts on that one company in withTenant (pattern rule
-// 3.15). An unknown company answers 404. Mounted behind authorizePlatform, so a company admin is refused (403) before
+// names and sets companyId (the withTenant key), so the handler acts on that one company in withTenant. An unknown company answers 404. Mounted behind authorizePlatform, so a company admin is refused (403) before
 // any lookup.
 export function resolveOperatorCompany() {
   return createMiddleware<CompanyContextEnv>(async (c, next) => {

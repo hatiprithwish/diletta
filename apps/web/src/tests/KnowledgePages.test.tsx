@@ -61,6 +61,7 @@ const UPLOADS: Schemas.KnowledgeSourceListItem = {
 
 const OPEN_CLUSTER: Schemas.DocGapClusterListItem = {
   publicId: "gap_1",
+  chatbotName: "eRegister Assistant",
   label: "Uploading contractor insurance certificates",
   questionCount: 14,
   docGapClusterStatus: Schemas.DocGapClusterStatusIntEnum.Open,
@@ -316,6 +317,26 @@ describe("Questions it couldn't answer", () => {
 
     await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(calls(fetchMock, "POST", "/gap_1/dismiss")).toHaveLength(1));
+  });
+
+  it("names each group's chatbot only when the company has several", async () => {
+    mockApi((url, init) =>
+      url.includes("/dashboard/doc-gap-clusters")
+        ? {
+            status: 200,
+            body: {
+              isSuccess: true,
+              docGapClusters: [OPEN_CLUSTER],
+              totalRecords: 1,
+              tabCounts: { open: 1, answered: 0, dismissed: 0 },
+              chatbotCount: 2,
+            },
+          }
+        : defaultApi(url, init),
+    );
+    renderPage("/knowledge");
+    const row = (await screen.findByText(OPEN_CLUSTER.label)).closest("li")!;
+    expect(within(row).getByText(/eRegister Assistant: 14 questions/)).toBeInTheDocument();
   });
 
   it("links an answered group to the document that closed it", async () => {

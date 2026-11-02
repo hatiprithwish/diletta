@@ -31,6 +31,6 @@ ADR 0001 also assumed the widget could read the HTTP status of a refused upgrade
 ## Consequences
 
 - An idle page view costs one authenticated read and leaves no rows.
-- A second endpoint takes the companion JWT. Its token handling matches `/ws` exactly (pattern rule 3.22), so it adds no new oracle.
+- A second endpoint takes the companion JWT. Its token handling matches `/ws` exactly, so it adds no new oracle.
 - A host's origin can read a 401/403/404 status cross-origin. The body is generic, as it is for `/ws`.
 - The widget can't tell 401 from 404 on a refused upgrade, so a resume the server refuses costs two failed connects before the widget falls back to a new chat.

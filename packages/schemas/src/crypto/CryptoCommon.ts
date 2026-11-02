@@ -61,3 +61,16 @@ export type CompanyEncryptValueResponse =
       encryptionKeyVersion: number;
     }
   | { isSuccess: false; message?: string };
+
+// DEV_NOTE: One value of a batch re-encrypted under the active key (M6-3); a value that failed has no encryptedValue
+export type ReEncryptedValue = {
+  id: string;
+  isSuccess: boolean;
+  encryptedValue?: EncryptedValue;
+};
+
+// DEV_NOTE: isSuccess false = a key couldn't be read (no value tried); else results in input order, each its own
+export interface ReEncryptValuesResponse extends ApiResponse {
+  encryptionKeyVersion?: number;
+  results?: ReEncryptedValue[];
+}

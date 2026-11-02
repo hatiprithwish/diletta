@@ -108,6 +108,94 @@ export default class ActivityLogDAL {
 
   // DEV_NOTE: The log rows of one entity, oldest first (IDX_activity_log_entity_id), at most params.limit: an entity
   // gathers a handful of events (an issue: opened, a provider added per failing key, triage)
+  // DEV_NOTE: Whether the quality issue has an event naming this day (M5-5, the health check's rerun): looked up directly,
+  // since a long-open issue can have more events than a capped read returns
+  async hasChatbotHealthDay(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.HasChatbotHealthDayDALRequest,
+  ) {
+    const response: Schemas.ChatbotHealthDayDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.companyId, params.companyId),
+        eq(activityLog.entityType, Schemas.QUALITY_ISSUE_ENTITY_TYPE),
+        eq(activityLog.entityId, params.qualityIssueId),
+        sql`${activityLog.detail}->>'day' = ${params.day}`,
+      ];
+      const [found] = await tx
+        .select({ id: activityLog.id })
+        .from(activityLog)
+        .where(and(...conditions))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = "Health drop day looked up successfully";
+      response.hasDay = found !== undefined;
+    } catch (error) {
+      const message = "Unknown error in looking up a health drop day";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.HasChatbotHealthDay,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One row by id, for a queue consumer holding the event's activityLogId. isNotFound when it is gone.
+  async getActivityLog(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActivityLogDALRequest,
+  ) {
+    const response: Schemas.ActivityLogDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(activityLog.id, params.id),
+        eq(activityLog.companyId, params.companyId),
+      ];
+      const [row] = await tx
+        .select()
+        .from(activityLog)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!row) {
+        const message = "Activity log not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetActivityLog,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Activity log fetched successfully";
+      response.activityLog = row;
+    } catch (error) {
+      const message = "Unknown error in fetching activity log";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActivityLog,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getActivityLogsByEntity(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetActivityLogsByEntityDALRequest,

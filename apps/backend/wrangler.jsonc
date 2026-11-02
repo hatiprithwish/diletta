@@ -16,6 +16,9 @@
     "DASHBOARD_URL": "http://localhost:3000",
     "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
     "AI_GATEWAY_NAME": "diletta-staging",
+    // DEV_NOTE: The nightly platform suite's company (M5-5, our test company's public id): the daily cron alerts when it
+    // has no Nightly run that finished lately. Empty = nothing to check (local and production).
+    "NIGHTLY_SUITE_COMPANY_ID": "",
   },
   "observability": {
     "logs": {
@@ -73,14 +76,14 @@
       "class_name": "KnowledgeSyncWorkflow",
     },
   ],
-  // DEV_NOTE: One cron trigger per Worker, every minute: the account's Workers Free plan allows 5 cron triggers in total
+  // DEV_NOTE: One cron trigger per Worker, every 15 minutes: the account's Workers Free plan allows 5 cron triggers in total
   // (production + staging share them). scheduled() checks it equals Constants.CRON_TRIGGER (change both together) and
-  // CronScheduleProvider picks the jobs due at that minute (UTC): every minute the outbox sweep (pending rows the
+  // CronScheduleProvider picks the jobs due at that minute (UTC): every tick the outbox sweep (pending rows the
   // after-commit relay missed) + purge of published rows and the model_calls usage backfill from AI Gateway logs
   // (M2-3); hourly the knowledge re-sync of due web sources (M2-5); daily 03:00 the activity_log partition maintenance
   // (M1-9). Never add a trigger for a new job: add it to CronScheduleProvider. triggers is inherited by every env.
   "triggers": {
-    "crons": ["* * * * *"],
+    "crons": ["*/15 * * * *"],
   },
   "env": {
     "staging": {
@@ -147,6 +150,8 @@
         "DASHBOARD_URL": "https://diletta-web-staging.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-staging",
+        // DEV_NOTE: Diletta Test Company (docs/runbooks/nightly-suite.md)
+        "NIGHTLY_SUITE_COMPANY_ID": "Ufli6o4w4WCEg5BOOEiOY",
       },
       "observability": {
         "logs": {
@@ -219,6 +224,7 @@
         "DASHBOARD_URL": "https://diletta-web.hatiprithwish.workers.dev",
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-production",
+        "NIGHTLY_SUITE_COMPANY_ID": "",
       },
       "observability": {
         "logs": {

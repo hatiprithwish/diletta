@@ -17,6 +17,12 @@ export interface CompanyIdResponse extends ApiResponse {
 }
 
 // DEV_NOTE: Server-side only: internal ids of every company in some statuses, for a sweep across companies (withPlatform)
+export type CompanyRetentionRow = Pick<Company, "id" | "publicId" | "contentRetentionDays">;
+
+export interface CompaniesRetentionDALResponse extends ApiResponse {
+  companies?: CompanyRetentionRow[];
+}
+
 export interface CompanyIdsDALResponse extends ApiResponse {
   companyIds?: string[];
 }

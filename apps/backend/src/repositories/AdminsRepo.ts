@@ -11,8 +11,7 @@ import * as Schemas from "@app/schemas";
 const NO_ACCESS_MESSAGE = "No dashboard access";
 const CHURNED_MESSAGE = "Company has churned";
 
-// DEV_NOTE: Dashboard identity. The Clerk admin → company lookup runs in withPlatform (no company is known yet,
-// pattern rule 3.15) and reads only the admins row; anything about the admin's company runs in withTenant on it.
+// DEV_NOTE: Dashboard identity. The Clerk admin → company lookup runs in withPlatform (no company is known yet) and reads only the admins row; anything about the admin's company runs in withTenant on it.
 // Role is derived from admins.company_id in toContext only: NULL = operator, set = company admin. Operators are
 // never created here (runbook: docs/runbooks/operators.md); a company admin is created on first sign-in from the
 // Clerk invite, which is then consumed. A churned company's admins have no access; operators are unaffected.

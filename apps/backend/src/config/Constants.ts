@@ -1,4 +1,5 @@
 export default class Constants {
+  static readonly DAY_MS = 24 * 60 * 60 * 1000;
   // DEV_NOTE: display_name is chatbot-user PII (erased on request), so it never reaches a log
   static readonly APP_REDACT_FIELDS = [
     /clerkId/i,
@@ -32,15 +33,26 @@ export default class Constants {
   // have a partition. The SQL function caps creation at 12 months ahead.
   static readonly ACTIVITY_LOG_PARTITION_MONTHS_AHEAD = 3;
 
-  // DEV_NOTE: The Worker's one cron trigger (wrangler.jsonc triggers.crons, equal exactly): every minute. The account's
+  // DEV_NOTE: The Worker's one cron trigger (wrangler.jsonc triggers.crons, equal exactly): every 15 minutes (minutes 0, 15, 30, 45). The account's
   // Workers Free plan allows 5 cron triggers in total, so jobs that run less often are picked by time in
   // CronScheduleProvider, never added as triggers. Times are UTC, from the trigger's scheduled time:
-  //   every minute: outbox sweep + model_calls usage backfill + change request values purge
+  //   every tick: outbox sweep + model_calls usage backfill + change request values purge
   //   every hour at CRON_HOURLY_MINUTE: knowledge re-sync + activity rollups (today and yesterday) + eval transcript sweep
+  //   every hour at CRON_HOURLY_MINUTE: also the platform suite's case sync (M5-5)
   //   daily at ACTIVITY_LOG_PARTITIONS_UTC_HOUR:CRON_HOURLY_MINUTE: activity_log partition maintenance
-  static readonly CRON_TRIGGER = "* * * * *";
+  //   daily at NIGHTLY_SUITE_CHECK_UTC_HOUR:CRON_HOURLY_MINUTE: the nightly platform suite's missed-run check (M5-5)
+  //   daily at CHATBOT_HEALTH_CHECK_UTC_HOUR:CRON_HOURLY_MINUTE: production health per chatbot (M5-5), after the hourly
+  //     rollups have rebuilt yesterday a few times
+  static readonly CRON_TRIGGER = "*/15 * * * *";
   static readonly CRON_HOURLY_MINUTE = 0;
   static readonly ACTIVITY_LOG_PARTITIONS_UTC_HOUR = 3;
+  static readonly NIGHTLY_SUITE_CHECK_UTC_HOUR = 6;
+  static readonly CHATBOT_HEALTH_CHECK_UTC_HOUR = 4;
+
+  // DEV_NOTE: The nightly platform suite (M5-5, .github/workflows/nightly-evals.yml, 02:00 UTC) alerts when the test
+  // company (NIGHTLY_SUITE_COMPANY_ID) has no Nightly run that reached Done within this long of the check: a day plus
+  // the run's own time, so one missed night alerts on the next morning's check.
+  static readonly NIGHTLY_SUITE_MAX_AGE_MS = 26 * 60 * 60_000;
 
   // DEV_NOTE: Widget auth (M2-1, ADR 0001). The companion JWT rides in Sec-WebSocket-Protocol on the upgrade. A token
   // lives at most WIDGET_JWT_MAX_LIFETIME_SECONDS (exp - iat), and exp / iat get WIDGET_JWT_CLOCK_SKEW_SECONDS of
@@ -61,7 +73,7 @@ export default class Constants {
   static readonly JWKS_MAX_BYTES = 64 * 1024;
 
   // DEV_NOTE: Model call usage backfill (M2-3). A model_calls row whose call ended without usage (stream cut or
-  // cancelled, connection lost) is Pending; the per-minute Cron reads its AI Gateway log once the row is older than the
+  // cancelled, connection lost) is Pending; the Cron reads its AI Gateway log once the row is older than the
   // min age (the log is written after the call), and gives up (Unknown + error log) once it is older than the max age.
   static readonly MODEL_CALL_BACKFILL_MIN_AGE_MS = 60_000;
   static readonly MODEL_CALL_BACKFILL_MAX_AGE_MS = 60 * 60_000;
@@ -145,10 +157,27 @@ export default class Constants {
   // its host gives none) is handed to a person; the grace covers a page reload.
   static readonly HOST_TOKEN_WAIT_MS = 15_000;
   static readonly HOST_TOKEN_GRACE_MS = 5 * 60_000;
-  // DEV_NOTE: The change request values purge (M3-7), every minute: at most CHANGE_REQUEST_PURGE_BATCH_SIZE rows per
+  // DEV_NOTE: The change request values purge (M3-7), every cron tick: at most CHANGE_REQUEST_PURGE_BATCH_SIZE rows per
   // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
   static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;
   static readonly CHANGE_REQUEST_PURGE_MAX_BATCHES = 10;
+  // DEV_NOTE: The retention purge (M6-1), hourly: one chat at a time (a DO call, R2, up to three transactions), each
+  // company taking CONTENT_PURGE_BATCH_SIZE chats in turn until none is due or CONTENT_PURGE_TIME_BUDGET_MS is used up
+  // (a Cron Trigger gets 15 minutes); a backlog finishes on later runs. A chat still due this long past its cut-off
+  // after a run alerts, the Security page's "usually within a day".
+  static readonly CONTENT_PURGE_BATCH_SIZE = 50;
+  static readonly CONTENT_PURGE_TIME_BUDGET_MS = 5 * 60_000;
+  static readonly CONTENT_PURGE_OVERDUE_ALERT_MS = 24 * 60 * 60_000;
+  // DEV_NOTE: The pass right after an erasure runs in waitUntil, which allows 30 seconds (M6-2); the hourly run finishes it
+  static readonly USER_ERASE_PURGE_TIME_BUDGET_MS = 20_000;
+  // DEV_NOTE: The key rotation job (M6-3), every cron tick: KEY_ROTATION_BATCH_SIZE values per transaction, until no
+  // company has work or KEY_ROTATION_TIME_BUDGET_MS is used up (ticks are 15 minutes apart); a backlog finishes on later
+  // ticks. The pass right after a rotation runs in waitUntil (30 seconds). A key still Retiring this long after its
+  // rotation alerts: a value that won't decrypt holds it there, and no next rotation can start.
+  static readonly KEY_ROTATION_BATCH_SIZE = 200;
+  static readonly KEY_ROTATION_TIME_BUDGET_MS = 5 * 60_000;
+  static readonly KEY_ROTATION_KICK_TIME_BUDGET_MS = 20_000;
+  static readonly KEY_ROTATION_OVERDUE_ALERT_MS = 24 * 60 * 60_000;
 
   // DEV_NOTE: Eval transcripts (M5-3). getEvalTranscript waits up to EVAL_TRANSCRIPT_IDLE_WAIT_MS (checking every
   // EVAL_TRANSCRIPT_IDLE_POLL_MS) for the attempt's DO to finish a commit or verify still running, then answers; an

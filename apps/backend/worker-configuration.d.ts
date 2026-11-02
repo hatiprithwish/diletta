@@ -19,6 +19,7 @@ interface __BaseEnv_Env {
     | "http://localhost:3000";
   AI_GATEWAY_ACCOUNT_ID: "6faf96669e14e06076115359a41497a0";
   AI_GATEWAY_NAME: "diletta-staging" | "diletta-production";
+  NIGHTLY_SUITE_COMPANY_ID: "Ufli6o4w4WCEg5BOOEiOY" | "";
   CLERK_PUBLISHABLE_KEY: string;
   CLERK_SECRET_KEY: string;
   EVAL_JWT_PUBLIC_JWKS: string;
@@ -47,6 +48,7 @@ declare namespace Cloudflare {
     DASHBOARD_URL: "https://diletta-web-staging.hatiprithwish.workers.dev";
     AI_GATEWAY_ACCOUNT_ID: "6faf96669e14e06076115359a41497a0";
     AI_GATEWAY_NAME: "diletta-staging";
+    NIGHTLY_SUITE_COMPANY_ID: "Ufli6o4w4WCEg5BOOEiOY";
     CLERK_PUBLISHABLE_KEY: string;
     CLERK_SECRET_KEY: string;
     EVAL_JWT_PUBLIC_JWKS: string;
@@ -72,6 +74,7 @@ declare namespace Cloudflare {
     DASHBOARD_URL: "https://diletta-web.hatiprithwish.workers.dev";
     AI_GATEWAY_ACCOUNT_ID: "6faf96669e14e06076115359a41497a0";
     AI_GATEWAY_NAME: "diletta-production";
+    NIGHTLY_SUITE_COMPANY_ID: "";
     CLERK_PUBLISHABLE_KEY: string;
     CLERK_SECRET_KEY: string;
     EVAL_JWT_PUBLIC_JWKS: string;
@@ -99,6 +102,7 @@ declare namespace NodeJS {
       | "DASHBOARD_URL"
       | "AI_GATEWAY_ACCOUNT_ID"
       | "AI_GATEWAY_NAME"
+      | "NIGHTLY_SUITE_COMPANY_ID"
       | "CLERK_PUBLISHABLE_KEY"
       | "CLERK_SECRET_KEY"
       | "EVAL_JWT_PUBLIC_JWKS"

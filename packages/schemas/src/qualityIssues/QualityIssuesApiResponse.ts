@@ -13,10 +13,13 @@ import type {
   QualityTestDraft,
   QualityTestDraftFailureEnum,
 } from "./QualityIssuesCommon";
+import type { QualityTestFlaggedTerm } from "./QualityTestPersonalDetails";
 
 // DEV_NOTE: One row of the Quality list (M4-6). Status Enum Pattern for source, status and type (issueType null = not
 // triaged yet). ratedReply = the start of the reply a user rated down (user issues; null for the others and once the
-// chat is purged). conversation.title null = purged or none.
+// chat is purged). conversation null = a chatbot-wide system issue (a health drop, M5-5); its title null = purged or
+// none. isChatbotWide says which it is, so a client never reads it from a missing conversation. chatbotName = the chatbot
+// the issue is about (null once it is removed).
 export interface QualityIssueListItem {
   publicId: string;
   source: QualityIssueSourceIntEnum;
@@ -27,10 +30,14 @@ export interface QualityIssueListItem {
   issueTypeLabel: QualityIssueTypeLabelEnum | null;
   note: string | null;
   ratedReply: string | null;
+  chatbotName: string | null;
+  isChatbotWide: boolean;
+  // DEV_NOTE: Set on the item a growing group of unanswered questions opened (M5-6), so the page names it
+  docGapCluster: { label: string } | null;
   conversation: {
     publicId: string;
     title: string | null;
-  };
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -52,9 +59,8 @@ export interface QualityIssueDetail extends Omit<QualityIssueListItem, "conversa
   conversation: {
     publicId: string;
     title: string | null;
-    chatbotName: string | null;
     userName: string | null;
-  };
+  } | null;
   changeRequestPublicId: string | null;
   evalCase: { publicId: string; name: string } | null;
 }
@@ -79,11 +85,15 @@ export interface GetQualityIssuesOpenCountApiResponse extends ApiResponse {
 export interface UpdateQualityIssueApiResponse extends ApiResponse {
   qualityIssue?: QualityIssueDetail;
   failure?: QualityIssueUpdateFailureEnum;
+  // DEV_NOTE: failure PersonalDetailsFound: what still has to go or be confirmed
+  flaggedTerms?: QualityTestFlaggedTerm[];
 }
 
 // DEV_NOTE: POST …/:publicId/test-draft: the rewritten chat to review, saved nowhere. failure says why there is none
 // (QUALITY_TEST_DRAFT_FAILURE_HTTP_STATUS_MAP).
 export interface DraftQualityTestApiResponse extends ApiResponse {
   draft?: QualityTestDraft;
+  flaggedTerms?: QualityTestFlaggedTerm[];
+  wasVerified?: boolean;
   failure?: QualityTestDraftFailureEnum;
 }

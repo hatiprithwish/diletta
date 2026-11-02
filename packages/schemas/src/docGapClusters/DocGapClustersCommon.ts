@@ -24,10 +24,12 @@ export const DOC_GAP_CLUSTER_STATUS_LABEL_MAP: Record<
 // Whole Doc Gap Cluster Body — DB shape (enums stored as integers)
 // DEV_NOTE: id, companyId and answeredByDocumentId are internal bigint ids — used by DAL/Repo only, NEVER sent to a
 // client. The centroid (halfvec) is the clustering's own (M5-6) and is never read by the dashboard, so it isn't here.
+// A group belongs to one chatbot (M5-6): chatbots can list different sources, so a gap in one isn't a gap in another.
 export const ZDocGapCluster = z.object({
   id: z.string(),
   publicId: z.string(),
   companyId: z.string(),
+  chatbotId: z.string(),
   label: z.string(),
   questionCount: z.number().int(),
   status: z.enum(DocGapClusterStatusIntEnum),

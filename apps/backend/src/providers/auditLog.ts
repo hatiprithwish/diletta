@@ -55,9 +55,11 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
   },
   [Schemas.AuditEntityTypeEnum.CompanyEncryptionKey]: {
     [Schemas.AuditEntityActionEnum.Rotated]: "Rotated encryption key",
+    [Schemas.AuditEntityActionEnum.Retired]: "Retired encryption key",
   },
   [Schemas.AuditEntityTypeEnum.Company]: {
     [Schemas.AuditEntityActionEnum.RetentionChanged]: "Changed chat retention",
+    [Schemas.AuditEntityActionEnum.UserErased]: "Erased a user",
     [Schemas.AuditEntityActionEnum.TurnedOn]: "Turned on read-only mode",
     [Schemas.AuditEntityActionEnum.TurnedOff]: "Turned off read-only mode",
     [Schemas.AuditEntityActionEnum.BudgetChanged]: "Changed spending budget",

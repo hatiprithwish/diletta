@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, gt, isNotNull } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { changeRequests, conversations, toolCalls, toolDefinitions } from "@/db/tables";
@@ -8,7 +8,7 @@ import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). tool_calls holds every host tool call of a
-// turn (M3-4); its args arrive encrypted, and only ids reach a log (rule 3.19: no ciphertext or iv in metadata).
+// turn (M3-4); its args arrive encrypted, and only ids reach a log (no ciphertext or iv in metadata).
 export default class ToolCallsDAL {
   async createToolCall(
     tx: NodePgTransaction<EmptyRelations>,
@@ -172,6 +172,165 @@ export default class ToolCallsDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Retention purge (M6-1): status, latency and error code stay
+  async clearConversationArgs(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolCalls.conversationId, params.conversationId),
+        eq(toolCalls.companyId, params.companyId),
+      ];
+      await tx
+        .update(toolCalls)
+        .set({ encryptedArgs: null, iv: null, encryptionKeyVersion: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation content cleared";
+    } catch (error) {
+      const message = "Unknown error in clearing conversation content";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): a batch still on encryptionKeyVersion, by id after afterId. A purged value (NULL) is never read. Ciphertext and
+  // iv go back to the Repo only, never into log metadata.
+  async getToolCallArgsOnKeyVersion(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetValuesOnKeyVersionDALRequest,
+  ) {
+    const response: Schemas.ValuesOnKeyVersionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolCalls.companyId, params.companyId),
+        eq(toolCalls.encryptionKeyVersion, params.encryptionKeyVersion),
+        isNotNull(toolCalls.encryptedArgs),
+      ];
+      if (params.afterId) conditions.push(gt(toolCalls.id, params.afterId));
+      const rows = await tx
+        .select({ id: toolCalls.id, ciphertext: toolCalls.encryptedArgs, iv: toolCalls.iv })
+        .from(toolCalls)
+        .where(and(...conditions))
+        .orderBy(asc(toolCalls.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Values on key version fetched successfully";
+      response.values = rows.flatMap((row) =>
+        row.ciphertext && row.iv
+          ? [{ id: row.id, encryptedValue: { ciphertext: row.ciphertext, iv: row.iv } }]
+          : [],
+      );
+    } catch (error) {
+      const message = "Unknown error in fetching values on key version";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetValuesOnKeyVersion,
+        message,
+        error,
+        metadata: { ...params, column: Schemas.EncryptedColumnEnum.ToolCallArgs },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): compare-and-set on the version and iv read, so args rewritten since then keep
+  // their new value (isUpdated false)
+  async updateReEncryptedToolCallArgs(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateReEncryptedValueDALRequest,
+  ) {
+    const response: Schemas.UpdateReEncryptedValueDALResponse = { isSuccess: false };
+    const { encryptedValue: _encryptedValue, fromIv: _fromIv, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(toolCalls.id, params.id),
+        eq(toolCalls.companyId, params.companyId),
+        eq(toolCalls.encryptionKeyVersion, params.fromEncryptionKeyVersion),
+        eq(toolCalls.iv, Buffer.from(params.fromIv)),
+      ];
+      const updated = await tx
+        .update(toolCalls)
+        .set({
+          encryptedArgs: Buffer.from(params.encryptedValue.ciphertext),
+          iv: Buffer.from(params.encryptedValue.iv),
+          encryptionKeyVersion: params.encryptionKeyVersion,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning({ id: toolCalls.id });
+
+      response.isSuccess = true;
+      response.message = "Re-encrypted value saved";
+      response.isUpdated = updated.length > 0;
+    } catch (error) {
+      const message = "Unknown error in saving re-encrypted value";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateReEncryptedValue,
+        message,
+        error,
+        metadata: { ...metadata, column: Schemas.EncryptedColumnEnum.ToolCallArgs },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): what is left on a key version; 0 lets the job destroy it
+  async getToolCallArgsOnKeyVersionCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountValuesOnKeyVersionDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolCalls.companyId, params.companyId),
+        eq(toolCalls.encryptionKeyVersion, params.encryptionKeyVersion),
+        isNotNull(toolCalls.encryptedArgs),
+      ];
+      const [result] = await tx
+        .select({ totalRecords: count() })
+        .from(toolCalls)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Values on key version counted successfully";
+      response.totalRecords = result?.totalRecords ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting values on key version";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountValuesOnKeyVersion,
+        message,
+        error,
+        metadata: { ...params, column: Schemas.EncryptedColumnEnum.ToolCallArgs },
       });
       response.message = message;
     }

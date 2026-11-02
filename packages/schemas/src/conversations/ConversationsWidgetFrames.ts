@@ -3,7 +3,12 @@ import type { BudgetRefusalEnum } from "../budget";
 import type { ConfigSpec } from "../configSpec";
 import { ZConversationSession } from "./ConversationsCommon";
 import type { TurnMessage } from "../messages";
-import type { KnowledgeCitation, SearchHelpDocsExcerpt } from "../knowledgeSearch";
+import type {
+  KnowledgeCitation,
+  SearchHelpDocsExcerpt,
+  SearchHelpDocsStatusEnum,
+} from "../knowledgeSearch";
+import type { DocGapSignalIntEnum } from "../docGaps";
 import { ZWidgetFeedbackRating } from "../feedback";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import {
@@ -201,6 +206,9 @@ export interface TranscriptEntry {
   role: "user" | "assistant" | "other";
   text: string;
   searchCitations: KnowledgeCitation[];
+  searchStatuses: SearchHelpDocsStatusEnum[];
+  hasWithheldSearch: boolean;
+  hasUnfinishedTool: boolean;
 }
 
 // DEV_NOTE: Server-side only — the next slice of the transcript to write to the read model: one turn (a user message
@@ -214,6 +222,9 @@ export interface TranscriptTurn {
   messages: TurnMessage[];
   title: string | null;
   lastEntryId: string;
+  // DEV_NOTE: Set when the turn may have gone unanswered (M5-6, Schemas.docGapCandidateSignal); null otherwise, and on a
+  // slice with no user message
+  docGapSignal: DocGapSignalIntEnum | null;
 }
 
 // DEV_NOTE: Server-side only — the turns to write, or isPositionLost when the last synced message isn't in the
@@ -327,8 +338,9 @@ export type ConversationRolesGrant = z.infer<typeof ZConversationRolesGrant>;
 // JWT's exp; after it the user has no roles until a fresh connect); changeRequests holds this conversation's open
 // change requests by Think tool call id until they end. Undo (M3-7): undoWindows holds the Verified ones the user can
 // still undo, by Think tool call id; userUndos the summaries (no values) of those the user undid in this conversation,
-// by public id, told to every later turn (the transcript still says they were made). Internal ids only; never the
-// host bearer token.
+// by public id, told to every later turn (the transcript still says they were made). Prompt injection (M6-4):
+// injectionDetectedAt (epoch ms) once a turn found one; from then on the conversation makes no changes. Internal ids
+// only; never the host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
@@ -345,5 +357,6 @@ export const ZConversationRuntimeState = z.object({
   changeRequests: z.record(z.string(), ZConversationChangeRequestEntry).default({}),
   undoWindows: z.record(z.string(), ZConversationUndoWindow).default({}),
   userUndos: z.record(z.string(), z.string()).default({}),
+  injectionDetectedAt: z.number().int().nullable().default(null),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;

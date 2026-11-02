@@ -3,6 +3,7 @@ import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgre
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotUsersDAL from "@/data-access-layer/ChatbotUsersDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
+import DocGapsDAL from "@/data-access-layer/DocGapsDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
@@ -37,6 +38,7 @@ export default class ConversationsRepo {
   private conversationsDal: ConversationsDAL;
   private chatbotConfigsDal: ChatbotConfigsDAL;
   private messagesDal: MessagesDAL;
+  private docGapsDal: DocGapsDAL;
 
   constructor(env: Env) {
     this.db = getDbClient(env);
@@ -44,6 +46,7 @@ export default class ConversationsRepo {
     this.conversationsDal = new ConversationsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.messagesDal = new MessagesDAL();
+    this.docGapsDal = new DocGapsDAL();
   }
 
   // DEV_NOTE: The verified user's chatbot_users row (created on first visit, display name kept current), then either
@@ -291,13 +294,16 @@ export default class ConversationsRepo {
   }
 
   // DEV_NOTE: One turn into the read model, in one transaction: its messages (already-stored ones skipped, so a retry
-  // is safe), last_activity_at, and the title while it is unset
+  // is safe), last_activity_at, the title while it is unset, and (M5-6) a live turn's doc gap candidate: the critical
+  // event the queue consumer turns into a gap (DocGapsRepo), recorded only when this call stored its user message. An
+  // eval attempt's turn is never one: eval conversations stay off the dashboard. The caller relays outboxIds.
   async recordTurn(params: {
     session: Schemas.ConversationSession;
     turnId: string;
     messages: Schemas.TurnMessage[];
     title: string | null;
-  }): Promise<Schemas.ApiResponse> {
+    docGapSignal: Schemas.DocGapSignalIntEnum | null;
+  }): Promise<Schemas.WithOutboxIds<Schemas.ApiResponse>> {
     const { session } = params;
     return await withTenant(this.db, session.companyId, async (tx) => {
       const created = await this.messagesDal.createMessages(tx, {
@@ -319,23 +325,62 @@ export default class ConversationsRepo {
         throw new TenantRollbackError(touched.message);
       }
 
-      return { isSuccess: true, message: "Turn recorded" };
+      const question = created.messages?.find(
+        (message) => message.role === Schemas.MessageRoleIntEnum.User,
+      );
+      if (params.docGapSignal === null || session.eval !== null || !question) {
+        return { isSuccess: true, message: "Turn recorded" };
+      }
+      const detail: Schemas.DocGapCandidateDetail = {
+        messageId: question.id,
+        conversationId: session.conversationId,
+        chatbotId: session.chatbotId,
+        signal: params.docGapSignal,
+      };
+      const event = await CriticalEventProvider.record(tx, {
+        companyId: session.companyId,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+        actorId: null,
+        entityType: Schemas.DOC_GAP_CANDIDATE_ENTITY_TYPE,
+        entityId: question.id,
+        entityAction: Schemas.DOC_GAP_CANDIDATE_ENTITY_ACTION,
+        entityVersion: null,
+        parentLogId: null,
+        rootLogId: null,
+        detail,
+        eventType: Schemas.DOC_GAP_CANDIDATE_EVENT_TYPE,
+        dedupeKey: Schemas.docGapCandidateDedupeKey(question.publicId),
+      });
+      if (!event.isSuccess || !event.outboxId) {
+        throw new TenantRollbackError(event.message ?? "Doc gap candidate not recorded");
+      }
+      return { isSuccess: true, message: "Turn recorded", outboxIds: [event.outboxId] };
     });
   }
 
   // DEV_NOTE: The auto-close, and the widget route closing a conversation it created whose DO upgrade then failed. A
-  // conversation already closed stays as it is (isNotFound).
+  // conversation already closed stays as it is (isNotFound). An answered conversation whose last question became a doc
+  // gap (M5-6) closes as Couldn't answer: the chatbot replied, but not with an answer.
   async closeConversation(params: {
     session: Schemas.ConversationSession;
     outcome: Schemas.ConversationOutcomeIntEnum;
   }): Promise<Schemas.ApiResponse> {
     const { session } = params;
     return await withTenant(this.db, session.companyId, async (tx) => {
+      let outcome = params.outcome;
+      if (outcome === Schemas.ConversationOutcomeIntEnum.Answered) {
+        const gap = await this.docGapsDal.hasDocGapOnLastUserMessage(tx, {
+          companyId: session.companyId,
+          conversationId: session.conversationId,
+        });
+        if (!gap.isSuccess) return { isSuccess: false, message: gap.message };
+        if (gap.hasDocGap) outcome = Schemas.ConversationOutcomeIntEnum.Idk;
+      }
       const { conversation: _conversation, ...result } =
         await this.conversationsDal.closeConversation(tx, {
           companyId: session.companyId,
           publicId: session.conversationPublicId,
-          outcome: params.outcome,
+          outcome,
         });
       return result;
     });

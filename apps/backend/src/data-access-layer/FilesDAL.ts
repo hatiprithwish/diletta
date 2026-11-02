@@ -300,4 +300,47 @@ export default class FilesDAL {
 
     return response;
   }
+
+  // DEV_NOTE: The transcript files of one eval attempt's results (M6-1), for the retention purge
+  async getEvalAttemptTranscriptFiles(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetEvalAttemptTranscriptFilesDALRequest,
+  ) {
+    const response: Schemas.FilesDALResponse = { isSuccess: false };
+
+    try {
+      const joinConditions = [
+        eq(evalResults.transcriptFileId, files.id),
+        eq(evalResults.companyId, files.companyId),
+      ];
+      const conditions = [
+        eq(files.companyId, params.companyId),
+        eq(files.ownerType, Schemas.FileOwnerTypeEnum.EvalResult),
+        eq(evalResults.evalRunId, params.evalRunId),
+        eq(evalResults.evalCaseId, params.evalCaseId),
+        eq(evalResults.attempt, params.attempt),
+      ];
+      const selected = await tx
+        .select({ file: files })
+        .from(files)
+        .innerJoin(evalResults, and(...joinConditions))
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Transcript files fetched successfully";
+      response.files = selected.map((row) => row.file);
+    } catch (error) {
+      const message = "Unknown error in fetching transcript files";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

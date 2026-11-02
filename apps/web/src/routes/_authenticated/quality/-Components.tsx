@@ -20,6 +20,8 @@ import { Skeleton } from "@app/ui/components/skeleton";
 import { Textarea } from "@app/ui/components/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@app/ui/components/toggle-group";
 import { cn } from "@app/ui/lib/utils";
+import { Alert, AlertDescription, AlertTitle } from "@app/ui/components/alert";
+import { Checkbox } from "@app/ui/components/checkbox";
 import { EvalCaseForm } from "@/components/eval-case-form";
 import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
@@ -28,6 +30,7 @@ import { ApiError } from "@/providers/apiClient";
 import Utilities from "@/utils";
 import {
   useCloseQualityIssue,
+  isPersonalDetailsRefusal,
   useConvertQualityIssue,
   useDraftQualityTest,
   useQualityIssue,
@@ -37,6 +40,18 @@ import {
 
 const UNTITLED = "Untitled conversation";
 const NOT_TRIAGED = "Not triaged";
+
+// DEV_NOTE: An issue's title: its conversation's, for a growing group of unanswered questions (M5-6) the group's, or for
+// a check on the whole chatbot (a health drop, M5-5, no conversation) the chatbot it is about
+function issueTitle(qualityIssue: Schemas.QualityIssueListItem): string {
+  if (qualityIssue.docGapCluster) {
+    return `Unanswered questions: ${qualityIssue.docGapCluster.label}`;
+  }
+  if (qualityIssue.isChatbotWide) {
+    return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
+  }
+  return qualityIssue.conversation?.title ?? UNTITLED;
+}
 
 const TABS: { value: Schemas.QualityIssueListTabEnum; label: string }[] = [
   { value: Schemas.QualityIssueListTabEnum.Open, label: "Open" },
@@ -60,7 +75,7 @@ const SOURCE_ICON: Record<Schemas.QualityIssueSourceIntEnum, ComponentType<IconP
 
 const EMPTY_TEXT: Record<Schemas.QualityIssueListTabEnum, string> = {
   [Schemas.QualityIssueListTabEnum.Open]:
-    "Nothing to triage. Issues show up here when a user rates a reply down, an admin flags a conversation or a check fails.",
+    "Nothing to triage. Issues show up here when a user rates a reply down, an admin flags a conversation, a check fails or a chatbot's day goes worse than usual.",
   [Schemas.QualityIssueListTabEnum.Converted]: "No issue has become a test yet.",
   [Schemas.QualityIssueListTabEnum.Fixed]: "No issue was marked fixed yet.",
   [Schemas.QualityIssueListTabEnum.Dismissed]: "No issue was dismissed yet.",
@@ -264,7 +279,7 @@ function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQuali
             className="text-body font-medium break-words text-foreground after:absolute after:inset-0"
             aria-current={isSelected ? "true" : undefined}
           >
-            {qualityIssue.conversation.title ?? UNTITLED}
+            {issueTitle(qualityIssue)}
           </Link>
           <TypeChip issueTypeLabel={qualityIssue.issueTypeLabel} />
         </div>
@@ -319,20 +334,31 @@ function QualityDetailCard({ publicId, search }: Schemas.DashboardQualityDetailC
 }
 
 // DEV_NOTE: One issue: where it came from, the question and reply it is about, its triage and, while Open, Create test,
-// Mark fixed and Dismiss
+// Mark fixed and Dismiss. A chatbot-wide check (a health drop, M5-5) has no conversation: no excerpt, no Create test, no
+// Open conversation; its note says what dropped.
 export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailProps) {
   const { conversation } = qualityIssue;
   const isOpen = qualityIssue.qualityIssueStatus === Schemas.QualityIssueStatusIntEnum.Open;
   const close = useCloseQualityIssue(qualityIssue.publicId);
   const draftTest = useDraftQualityTest(qualityIssue.publicId);
-  const [draft, setDraft] = useState<Schemas.QualityTestDraft | null>(null);
+  const [review, setReview] = useState<Schemas.QualityTestReview | null>(null);
   const isBusy = close.isPending || draftTest.isPending;
-  const speaker = conversation.userName?.split(" ")[0] || "User";
+  const speaker = conversation?.userName?.split(" ")[0] || "User";
 
   const createTest = () => {
     draftTest
       .mutateAsync()
-      .then((response) => setDraft(response.draft ?? null))
+      .then((response) =>
+        setReview(
+          response.draft
+            ? {
+                draft: response.draft,
+                flaggedTerms: response.flaggedTerms ?? [],
+                wasVerified: response.wasVerified ?? false,
+              }
+            : null,
+        ),
+      )
       .catch(() => undefined);
   };
 
@@ -342,9 +368,7 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
         <p className="text-caption text-muted-foreground">
           {SOURCE_TEXT[qualityIssue.source]}, {Utilities.formatWhenWithTime(qualityIssue.createdAt)}
         </p>
-        <h2 className="text-section break-words text-foreground">
-          {conversation.title ?? UNTITLED}
-        </h2>
+        <h2 className="text-section break-words text-foreground">{issueTitle(qualityIssue)}</h2>
         {!isOpen && (
           <StatusChip
             label={qualityIssue.qualityIssueStatusLabel}
@@ -356,7 +380,13 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
       <div className="mx-[22px] mb-4 flex flex-col gap-2.5 rounded-lg bg-surface-subtle px-3.5 py-3">
         {qualityIssue.excerpt.length === 0 && (
           <p className="text-body text-muted-foreground">
-            {qualityIssue.isContentPurged ? "The chat's content was deleted." : "No messages yet."}
+            {qualityIssue.docGapCluster
+              ? "Several people asked this and the help docs had no answer. Use Add a document on this group in Knowledge; that closes this item too."
+              : qualityIssue.isChatbotWide
+                ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
+                : qualityIssue.isContentPurged
+                  ? "The chat's content was deleted."
+                  : "No messages yet."}
           </p>
         )}
         {qualityIssue.excerpt.map((message) => (
@@ -404,15 +434,24 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
 
       {isOpen && (
         <div className="flex flex-col gap-3 border-t px-[22px] py-4">
-          <p className="text-caption text-muted-foreground">
-            Creating a test rewrites this chat without personal details. You review it before it's
-            saved.
-          </p>
+          {!qualityIssue.isChatbotWide && (
+            <p className="text-caption text-muted-foreground">
+              Creating a test rewrites this chat without personal details. You review it before it's
+              saved.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button disabled={isBusy} onClick={createTest}>
-              <Plus aria-hidden />
-              {draftTest.isPending ? "Rewriting…" : "Create test"}
-            </Button>
+            {qualityIssue.docGapCluster && (
+              <Button asChild>
+                <Link to="/knowledge">Open Knowledge</Link>
+              </Button>
+            )}
+            {!qualityIssue.isChatbotWide && (
+              <Button disabled={isBusy} onClick={createTest}>
+                <Plus aria-hidden />
+                {draftTest.isPending ? "Rewriting…" : "Create test"}
+              </Button>
+            )}
             <Button
               variant="outline"
               disabled={isBusy}
@@ -433,25 +472,29 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 border-t px-[22px] py-4">
-        <Button variant="outline" asChild>
-          <Link to="/conversations/$id" params={{ id: conversation.publicId }}>
-            Open conversation
-          </Link>
-        </Button>
-        {qualityIssue.changeRequestPublicId && (
-          <Button variant="outline" asChild>
-            <Link to="/changes/$id" params={{ id: qualityIssue.changeRequestPublicId }}>
-              Open change
-            </Link>
-          </Button>
-        )}
-      </div>
+      {(conversation || qualityIssue.changeRequestPublicId) && (
+        <div className="flex flex-wrap gap-2 border-t px-[22px] py-4">
+          {conversation && (
+            <Button variant="outline" asChild>
+              <Link to="/conversations/$id" params={{ id: conversation.publicId }}>
+                Open conversation
+              </Link>
+            </Button>
+          )}
+          {qualityIssue.changeRequestPublicId && (
+            <Button variant="outline" asChild>
+              <Link to="/changes/$id" params={{ id: qualityIssue.changeRequestPublicId }}>
+                Open change
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
 
       <QualityTestDialog
         publicId={qualityIssue.publicId}
-        draft={draft}
-        onClose={() => setDraft(null)}
+        review={review}
+        onClose={() => setReview(null)}
       />
     </>
   );
@@ -550,28 +593,100 @@ function QualityTriage({ qualityIssue }: Schemas.DashboardQualityDetailProps) {
 }
 
 // DEV_NOTE: Create test's review. The admin edits the rewrite (name, each message, rubric) and saves it as it is: the
-// server keeps nothing from the draft but what comes back here.
-function QualityTestDialog({ publicId, draft, onClose }: Schemas.DashboardQualityTestDialogProps) {
+// server keeps nothing from the draft but what comes back here, and checks it again (M5-7).
+function QualityTestDialog({ publicId, review, onClose }: Schemas.DashboardQualityTestDialogProps) {
   return (
-    <Dialog open={draft !== null} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={review !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-        {draft && <QualityTestForm publicId={publicId} draft={draft} onClose={onClose} />}
+        {review && <QualityTestForm publicId={publicId} review={review} onClose={onClose} />}
       </DialogContent>
     </Dialog>
   );
 }
 
+// DEV_NOTE: What the check flagged. A term that can only be edited out says so; any other can be ticked as not personal.
+function FlaggedTermsNotice({
+  flaggedTerms,
+  confirmedTerms,
+  remainingTerms,
+  wasVerified,
+  onToggle,
+}: Schemas.DashboardQualityFlaggedTermsProps) {
+  if (flaggedTerms.length === 0 && wasVerified) return null;
+  return (
+    <Alert>
+      <AlertTitle>
+        {flaggedTerms.length === 0 ? "Read this test closely" : "These may be personal details"}
+      </AlertTitle>
+      <AlertDescription>
+        {!wasVerified && <p>The extra check for names didn't run, so one may have been missed.</p>}
+        {flaggedTerms.length > 0 && (
+          <ul className="mt-1 flex w-full flex-col gap-1.5">
+            {flaggedTerms.map(({ term, canConfirm }) => (
+              <li key={term} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-medium break-all text-foreground">{term}</span>
+                {canConfirm ? (
+                  <label className="flex items-center gap-1.5">
+                    <Checkbox
+                      aria-label={`${term} is not personal`}
+                      checked={confirmedTerms.includes(term)}
+                      onCheckedChange={() => onToggle(term)}
+                    />
+                    Not personal
+                  </label>
+                ) : (
+                  <span>Remove this from the test</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {remainingTerms.length > 0 && (
+          <p className="text-destructive">
+            Still to deal with: {remainingTerms.join(", ")}. Edit them out, or mark them not
+            personal where you can.
+          </p>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 function QualityTestForm({
   publicId,
-  draft,
+  review,
   onClose,
-}: Schemas.DashboardQualityTestDialogProps & { draft: Schemas.QualityTestDraft }) {
+}: Schemas.DashboardQualityTestDialogProps & { review: Schemas.QualityTestReview }) {
   const convert = useConvertQualityIssue(publicId);
+  const [flaggedTerms, setFlaggedTerms] = useState(review.flaggedTerms);
+  const [confirmedTerms, setConfirmedTerms] = useState<string[]>([]);
+  const [hasTriedSave, setHasTriedSave] = useState(false);
+
+  // DEV_NOTE: Only what the test still holds; a term edited out drops off the list as it goes
+  const presentTerms = (value: Schemas.QualityTestDraft) =>
+    flaggedTerms.filter(({ term }) => Schemas.qualityTestDraftHasTerm(value, term));
+  const remainingTerms = (value: Schemas.QualityTestDraft) =>
+    Schemas.unconfirmedQualityTestTerms(presentTerms(value), confirmedTerms).map(
+      ({ term }) => term,
+    );
+
   const save = async (value: Schemas.QualityTestDraft) => {
+    setHasTriedSave(true);
+    // DEV_NOTE: The model's names aren't known to the server at save, so they are held here
+    if (remainingTerms(value).length > 0) return;
     try {
-      await convert.mutateAsync(value);
+      await convert.mutateAsync({ ...value, confirmedTerms });
     } catch (error) {
-      // DEV_NOTE: A 409 (closed meanwhile, or the chatbot is gone) can't succeed on a retry: the review closes
+      if (isPersonalDetailsRefusal(error)) {
+        const refused = (error.body as Schemas.UpdateQualityIssueApiResponse).flaggedTerms ?? [];
+        const known = new Set(flaggedTerms.map(({ term }) => term.toLowerCase()));
+        setFlaggedTerms([
+          ...flaggedTerms,
+          ...refused.filter(({ term }) => !known.has(term.toLowerCase())),
+        ]);
+        return;
+      }
+      // DEV_NOTE: Any other 409 (closed meanwhile, or the chatbot is gone) can't succeed on a retry: the review closes
       if (error instanceof ApiError && error.status === 409) onClose();
       throw error;
     }
@@ -580,11 +695,24 @@ function QualityTestForm({
 
   return (
     <EvalCaseForm
-      defaultValues={draft}
+      defaultValues={review.draft}
       canEditMessages={false}
       title="Review the test"
       description="The chat was rewritten without personal details. Check that nothing personal is left, then save. The test is saved as you see it."
       submitLabel="Save test"
+      notice={(value) => (
+        <FlaggedTermsNotice
+          flaggedTerms={presentTerms(value)}
+          confirmedTerms={confirmedTerms}
+          remainingTerms={hasTriedSave ? remainingTerms(value) : []}
+          wasVerified={review.wasVerified}
+          onToggle={(term) =>
+            setConfirmedTerms((terms) =>
+              terms.includes(term) ? terms.filter((item) => item !== term) : [...terms, term],
+            )
+          }
+        />
+      )}
       onSubmit={save}
       onCancel={onClose}
     />

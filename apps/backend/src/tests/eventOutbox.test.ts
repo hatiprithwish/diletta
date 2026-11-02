@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, createExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -623,7 +623,7 @@ describe("EventsConsumer", () => {
     });
     const invalid = message({ outboxId: 1 });
 
-    await consumeEvents(batchOf([valid, invalid]));
+    await consumeEvents(batchOf([valid, invalid]), env, createExecutionContext());
 
     expect(valid.ack).toHaveBeenCalledOnce();
     expect(valid.retry).not.toHaveBeenCalled();

@@ -6,10 +6,10 @@ import withPlatform from "@/db/withPlatform";
 import type * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The purge of change request values after their undo window (M3-7): encrypted_changes, iv and
-// encryption_key_version go null once undo_until has passed (every company: withPlatform, pattern rule 3.15), so a
+// encryption_key_version go null once undo_until has passed (every company: withPlatform), so a
 // change request keeps only its status, summary, counts and timeline. NeedsHuman ones have no undo_until and stay
 // until a person resolves them; a Verified one whose user undo is under way is skipped (the DAL). One transaction per
-// batch, so a long backlog never holds one; a run that stops early (a failed batch) leaves the rest to the next minute.
+// batch, so a long backlog never holds one; a run that stops early (a failed batch) leaves the rest to the next tick.
 export default class ChangeRequestPurgeRepo {
   private db: NodePgDatabase;
   private dal: ChangeRequestsDAL;

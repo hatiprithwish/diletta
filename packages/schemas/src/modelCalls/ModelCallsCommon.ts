@@ -31,9 +31,14 @@ export enum ModelTaskTypeEnum {
   EvalJudge = "eval.judge",
   // DEV_NOTE: Create test on the Quality page (M4-6): a quality issue's chat rewritten without personal details
   QualityTestRewrite = "quality.test_rewrite",
+  QualityTestCheck = "quality.test_check",
   KnowledgeEmbed = "knowledge.embed",
   SearchEmbed = "search.embed",
   SearchRerank = "search.rerank",
+  // DEV_NOTE: Doc gaps (M5-6): the verdict + PII-stripped rewrite on the company's key, the question's embedding on
+  // Workers AI. Background jobs: no conversation on the row.
+  DocGapRewrite = "doc_gap.rewrite",
+  DocGapEmbed = "doc_gap.embed",
 }
 
 // DEV_NOTE: Providers the platform pays for itself (model_calls.provider). Never a company model key provider: a
@@ -53,7 +58,7 @@ export type ModelCallProvider = z.infer<typeof ZModelCallProvider>;
 //   Reported: the provider's own usage (the stream's finish part or the generate result), or a call the provider
 //     answered with an error status, which it doesn't bill.
 //   Pending: the call reached the provider but ended without usage (stream cut or cancelled, connection lost). The
-//     per-minute Cron fills it from the AI Gateway log (gateway_log_id).
+//     Cron fills it from the AI Gateway log (gateway_log_id).
 //   Backfilled: filled from the gateway log. Its tokens_in has no cache split, so it's priced at the dearer of the
 //     input and cache-write prices (an overcount, never an under).
 //   Unknown: no usage could be found (no log id, or none in the log within the backfill window). Cost stays 0 and an

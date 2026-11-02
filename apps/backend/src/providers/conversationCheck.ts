@@ -6,8 +6,8 @@ import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The status re-check every turn (ConversationsRepo.loadTurnConfig) and every change request step
-// (ActionEngineRepo) starts with, in the caller's transaction (pattern rule 1.1: one step several Repos share; it never
-// opens a transaction and never throws): the conversation open, its company and chatbot active (rule 3.23: never only
+// (ActionEngineRepo) starts with, in the caller's transaction (one step several Repos share; it never
+// opens a transaction and never throws): the conversation open, its company and chatbot active (never only
 // at connect). The DALs log their own failures; each failure names its own cause.
 export default class ConversationCheckProvider {
   private static conversationsDal = new ConversationsDAL();

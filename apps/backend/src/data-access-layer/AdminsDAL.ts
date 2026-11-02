@@ -7,7 +7,7 @@ import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. getAdminByClerkUserId is the Clerk admin → company lookup: the Repo
-// runs it in withPlatform before any company is known, so it filters on clerk_user_id alone (pattern rule 3.15).
+// runs it in withPlatform before any company is known, so it filters on clerk_user_id alone.
 // createAdmin runs in withTenant on the admin's company and sets companyId from params. An unknown Clerk user is
 // not an error worth logging (any signed-in Clerk user can ask), so the not-found path doesn't log.
 export default class AdminsDAL {

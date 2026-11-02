@@ -89,3 +89,12 @@ export interface GetEvalRunCasesApiResponse extends ApiResponse {
   cases?: EvalRunCaseItem[];
   totalRecords?: number;
 }
+
+// DEV_NOTE: The nightly platform suite's missed-run check (M5-5). isChecked false = this env has no suite company
+// (NIGHTLY_SUITE_COMPANY_ID unset). isOverdue = no Nightly run of that company reached Done within
+// NIGHTLY_SUITE_MAX_AGE_MS; lastFinishedAt = the newest one's finish, null when it has none.
+export interface CheckNightlySuiteResponse extends ApiResponse {
+  isChecked?: boolean;
+  isOverdue?: boolean;
+  lastFinishedAt?: Date | null;
+}

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ApiResponse } from "../common";
 import type { ConfigSpec } from "../configSpec";
 import type { Company } from "../companies/CompaniesCommon";
@@ -54,3 +55,19 @@ export interface LoadTurnConfigResponse extends ApiResponse {
   isReadOnly?: boolean;
   failure?: TurnConfigFailureEnum;
 }
+
+// DEV_NOTE: The retention purge's run (M6-1): chats cleared, and chats left for the next run (a turn running, a new
+// message since the read, a step that failed), and companies with a chat overdue after it (alerted)
+export interface PurgeConversationContentResponse extends ApiResponse {
+  purgedCount?: number;
+  skippedCount?: number;
+  overdueCompanyCount?: number;
+}
+
+// DEV_NOTE: ConversationDO.purgeContent's answer over DO RPC. isBusy = a turn, decision or close is running; nothing wiped.
+export const ZConversationContentWipeResponse = z.object({
+  isSuccess: z.boolean(),
+  message: z.string(),
+  isBusy: z.boolean(),
+});
+export type ConversationContentWipeResponse = z.infer<typeof ZConversationContentWipeResponse>;

@@ -929,6 +929,7 @@ function DocGapClusters({
               <ClusterRow
                 key={cluster.publicId}
                 cluster={cluster}
+                hasSeveralChatbots={(data?.chatbotCount ?? 0) > 1}
                 isDismissing={dismiss.isPending && dismiss.variables === cluster.publicId}
                 onAddDocument={setAnswering}
                 onDismiss={(row) => dismiss.mutate(row.publicId)}
@@ -959,6 +960,7 @@ function DocGapClusters({
 // Open "Add a document" and Dismiss; an Answered one links to the document that closed it
 function ClusterRow({
   cluster,
+  hasSeveralChatbots,
   isDismissing,
   onAddDocument,
   onDismiss,
@@ -989,6 +991,7 @@ function ClusterRow({
           <div className="flex min-w-0 flex-col gap-0.5">
             <p className="text-body font-medium break-words text-foreground">{cluster.label}</p>
             <p className="text-caption text-muted-foreground">
+              {hasSeveralChatbots && `${cluster.chatbotName ?? "A removed chatbot"}: `}
               {Utilities.plural(cluster.questionCount, "question")}
               {latest && `, ${latest}`}
             </p>

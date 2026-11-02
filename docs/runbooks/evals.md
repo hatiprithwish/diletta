@@ -9,7 +9,7 @@ A case's rubric is graded by a pinned LLM judge on the company's key (M5-3), and
 ## How a run works
 
 1. **Sign in to the host.** The harness gets the host test user's bearer token from the host's own login (the test host: an admin-minted token in a fresh workspace). It sends that token with every call that reaches the host. The backend keeps it in memory only.
-2. **Start the run.** `POST /eval/runs` with the config's public id and `k`. The backend creates the run (Running) and answers its cases, already upgraded to the current shapes. If any active case can't be read, nothing is created (400 `Invalid`): the gate never passes on a case it skipped. The run keeps the cases it handed out (its case set) and the staging connection the token named. Every later step must use a token for that connection (another one is 404), and only cases of the set can be run or recorded (a case added or turned off after the start is 404).
+2. **Start the run.** `POST /eval/runs` with the config's public id (or a chatbot's, for its published config) and `k`. The backend creates the run (Running) and answers its cases, already upgraded to the current shapes. If any active case can't be read, nothing is created (400 `Invalid`): the gate never passes on a case it skipped. The run keeps the cases it handed out (its case set) and the staging connection the token named. Every later step must use a token for that connection (another one is 404), and only cases of the set can be run or recorded (a case added or turned off after the start is 404).
 3. **Run each attempt.** For every case and attempt, the harness fills `{case.tag}` with a new token and calls `POST /eval/runs/:runId/attempts`. The backend starts a new conversation pinned to the run's config and runs it in one turn:
    - every tool the config pins runs against the token's staging connection, whatever connection the tool version names;
    - a write the approval rules say needs a user's approval is approved by the eval on the user's behalf, then committed and verified in the turn (a Blocked rule still blocks). Each tool call says whether it needed approval (`wasApprovalRequired`), so a case can check the policy too;
@@ -20,7 +20,7 @@ A case's rubric is graded by a pinned LLM judge on the company's key (M5-3), and
 6. **Finish.** `POST /eval/runs/:runId/finish`. Done when every case of the set has all `k` results (and the reset worked), else Failed ("Didn't finish" on the Tests page). Asking for Done while a case of the set is short is 409 `Incomplete`. The run passes (`Schemas.evalRunGateDecision`, M5-4) when it is Done, at least `EVAL_GATE_PASS_PERCENT` (95%) of the set passed all `k` attempts, and every safety case of the set passed all `k` (one that never ran counts as failed): one failed safety case fails the run, however many others passed. The answer says how many safety cases failed (`failedSafetyCaseCount`), and the CLI prints it.
 7. **The gate (M5-4).** A run with `--trigger gate` is the publish gate of a version an admin sent to testing (Settings › Bots, `docs/runbooks/bots.md`); a Gate run of any other version is 409 `NotTesting`, and one with `--k` below `EVAL_GATE_MIN_K` (3) is 400 `Invalid` (the CLI exits 2 on either). Its finish moves the version in the same transaction: passed → Ready (`approved_by_run_id`), else back to Draft. A version taken back to draft (or sent again) after the run started isn't moved by it. Manual and Nightly runs never move a version.
 
-**Cost.** `cost_usd` grows as the run's model calls are recorded. A call cut off before the provider reported its usage is Pending until the per-minute backfill reads its AI Gateway log, and then adds its real cost. So the cost shown at the finish can still rise for a few minutes.
+**Cost.** `cost_usd` grows as the run's model calls are recorded. A call cut off before the provider reported its usage is Pending until the Cron's backfill reads its AI Gateway log, and then adds its real cost. So the cost shown at the finish can still rise for a few minutes.
 
 **Trust.** The harness is platform code that holds the platform key. The backend doesn't compare an attempt's messages with the stored case (the harness fills `{case.tag}` in them), and the grading is the harness's own. What the backend does enforce is the run's case set, its connection, `k`, and that a passing result has no grader error.
 
@@ -126,7 +126,8 @@ Settings come from the environment:
 pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project evals --env-file evals/.env python -m diletta_evals run
 ```
 
-- `--trigger manual|gate|nightly` (default `manual`). `gate` runs the publish gate of a version sent to testing, and its finish moves the version (step 7); the nightly suite (M5-5) starts runs the same way.
+- `--trigger manual|gate|nightly` (default `manual`). `gate` runs the publish gate of a version sent to testing, and its finish moves the version (step 7).
+- `--chatbot <publicId>` instead of `--config`: runs the chatbot's published config at the start (409 `NoPublishedConfig` when it has none). Never with `--trigger gate`. The nightly platform suite runs this way (`docs/runbooks/nightly-suite.md`).
 - Exit code: 0 the run passed, 1 it failed, 2 it couldn't run (a setting, the backend or the host).
 - It prints each attempt (PASS / FAIL and why) and the run's result and cost. The details are on the Tests page.
 
@@ -142,7 +143,7 @@ The request and answer shapes are Zod schemas in `packages/schemas/src/evalHarne
 pnpm --filter @app/schemas schema:export && pnpm evals:types && pnpm evals:check
 ```
 
-and commit the output with the change (pattern rule 3.50).
+and commit the output with the change.
 
 ## Troubleshooting
 

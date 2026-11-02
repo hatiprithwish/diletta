@@ -164,9 +164,12 @@ export const INSIGHTS_TASK_TYPE_USE_MAP: Record<ModelTaskTypeEnum, InsightsUsage
   [ModelTaskTypeEnum.RouteIntent]: InsightsUsageUseEnum.Routing,
   [ModelTaskTypeEnum.EvalJudge]: InsightsUsageUseEnum.TestRuns,
   [ModelTaskTypeEnum.QualityTestRewrite]: InsightsUsageUseEnum.TestRuns,
+  [ModelTaskTypeEnum.QualityTestCheck]: InsightsUsageUseEnum.TestRuns,
   [ModelTaskTypeEnum.KnowledgeEmbed]: InsightsUsageUseEnum.Search,
   [ModelTaskTypeEnum.SearchEmbed]: InsightsUsageUseEnum.Search,
   [ModelTaskTypeEnum.SearchRerank]: InsightsUsageUseEnum.Search,
+  [ModelTaskTypeEnum.DocGapRewrite]: InsightsUsageUseEnum.Search,
+  [ModelTaskTypeEnum.DocGapEmbed]: InsightsUsageUseEnum.Search,
 };
 
 // DEV_NOTE: Calls the platform pays for (Workers AI embeddings and rerank): shown as "Included", never in a spend

@@ -18,6 +18,7 @@ const base: Schemas.WidgetPanelView = {
   canStop: false,
   notice: null,
   draft: "",
+  linkOrigins: [],
 };
 
 function renderPanel(view: Partial<Schemas.WidgetPanelView>) {
@@ -167,6 +168,35 @@ describe("Panel", () => {
     expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(screen.getByRole("button", { name: "Not helpful" }));
     expect(actions.onRate).toHaveBeenCalledWith("a1", Schemas.FeedbackRatingIntEnum.Down);
+  });
+
+  it("links a reply only to the host app and its cited sources; any other link is plain text", () => {
+    renderPanel({
+      linkOrigins: ["https://app.example.com"],
+      messages: [
+        reply({
+          text: "See [your record](https://app.example.com/records/1), [the guide](https://help.example.com/fields) [1] and [Saved](https://collect.example.net/log?c=chat).",
+          citations: [
+            {
+              n: 1,
+              documentPublicId: "d1",
+              title: "Add and manage custom fields",
+              sourceUrl: "https://help.example.com/fields",
+            },
+          ],
+        }),
+      ],
+    });
+    expect(screen.getByRole("link", { name: "your record" })).toHaveAttribute(
+      "href",
+      "https://app.example.com/records/1",
+    );
+    expect(screen.getByRole("link", { name: "the guide" })).toHaveAttribute(
+      "href",
+      "https://help.example.com/fields",
+    );
+    expect(screen.queryByRole("link", { name: "Saved" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Saved/)).toBeInTheDocument();
   });
 
   it("shows the unavailable card with a retry and disables the composer", async () => {

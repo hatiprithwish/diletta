@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, eq, gt, isNull } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotUserSecrets, chatbotUsers, companyConnections } from "@/db/tables";
@@ -206,6 +206,37 @@ export default class ChatbotUserSecretsDAL {
     return response;
   }
 
+  // DEV_NOTE: The erasure (M6-2): every credential of the user, on every connection. Gone, not disabled.
+  async deleteChatbotUserSecrets(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ChatbotUserContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotUserSecrets.chatbotUserId, params.chatbotUserId),
+        eq(chatbotUserSecrets.companyId, params.companyId),
+      ];
+      await tx.delete(chatbotUserSecrets).where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Chatbot user secrets deleted successfully";
+    } catch (error) {
+      const message = "Unknown error in deleting chatbot user secrets";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async updateChatbotUserSecret(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpdateChatbotUserSecretDALRequest,
@@ -256,6 +287,133 @@ export default class ChatbotUserSecretsDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): a batch still on encryptionKeyVersion, by id after afterId. Ciphertext and
+  // iv go back to the Repo only, never into log metadata.
+  async getChatbotUserSecretsOnKeyVersion(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetValuesOnKeyVersionDALRequest,
+  ) {
+    const response: Schemas.ValuesOnKeyVersionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotUserSecrets.companyId, params.companyId),
+        eq(chatbotUserSecrets.encryptionKeyVersion, params.encryptionKeyVersion),
+      ];
+      if (params.afterId) conditions.push(gt(chatbotUserSecrets.id, params.afterId));
+      const rows = await tx
+        .select({
+          id: chatbotUserSecrets.id,
+          ciphertext: chatbotUserSecrets.encryptedSecret,
+          iv: chatbotUserSecrets.iv,
+        })
+        .from(chatbotUserSecrets)
+        .where(and(...conditions))
+        .orderBy(asc(chatbotUserSecrets.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Values on key version fetched successfully";
+      response.values = rows.flatMap((row) =>
+        row.ciphertext && row.iv
+          ? [{ id: row.id, encryptedValue: { ciphertext: row.ciphertext, iv: row.iv } }]
+          : [],
+      );
+    } catch (error) {
+      const message = "Unknown error in fetching values on key version";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetValuesOnKeyVersion,
+        message,
+        error,
+        metadata: { ...params, column: Schemas.EncryptedColumnEnum.ChatbotUserSecret },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): compare-and-set on the version and iv read, so secrets rewritten since then keep
+  // their new value (isUpdated false)
+  async updateReEncryptedChatbotUserSecret(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateReEncryptedValueDALRequest,
+  ) {
+    const response: Schemas.UpdateReEncryptedValueDALResponse = { isSuccess: false };
+    const { encryptedValue: _encryptedValue, fromIv: _fromIv, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(chatbotUserSecrets.id, params.id),
+        eq(chatbotUserSecrets.companyId, params.companyId),
+        eq(chatbotUserSecrets.encryptionKeyVersion, params.fromEncryptionKeyVersion),
+        eq(chatbotUserSecrets.iv, Buffer.from(params.fromIv)),
+      ];
+      const updated = await tx
+        .update(chatbotUserSecrets)
+        .set({
+          encryptedSecret: Buffer.from(params.encryptedValue.ciphertext),
+          iv: Buffer.from(params.encryptedValue.iv),
+          encryptionKeyVersion: params.encryptionKeyVersion,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning({ id: chatbotUserSecrets.id });
+
+      response.isSuccess = true;
+      response.message = "Re-encrypted value saved";
+      response.isUpdated = updated.length > 0;
+    } catch (error) {
+      const message = "Unknown error in saving re-encrypted value";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateReEncryptedValue,
+        message,
+        error,
+        metadata: { ...metadata, column: Schemas.EncryptedColumnEnum.ChatbotUserSecret },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): what is left on a key version; 0 lets the job destroy it
+  async getChatbotUserSecretsOnKeyVersionCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountValuesOnKeyVersionDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotUserSecrets.companyId, params.companyId),
+        eq(chatbotUserSecrets.encryptionKeyVersion, params.encryptionKeyVersion),
+      ];
+      const [result] = await tx
+        .select({ totalRecords: count() })
+        .from(chatbotUserSecrets)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Values on key version counted successfully";
+      response.totalRecords = result?.totalRecords ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting values on key version";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountValuesOnKeyVersion,
+        message,
+        error,
+        metadata: { ...params, column: Schemas.EncryptedColumnEnum.ChatbotUserSecret },
       });
       response.message = message;
     }

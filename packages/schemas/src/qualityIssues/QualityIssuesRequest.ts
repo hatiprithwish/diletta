@@ -42,6 +42,7 @@ export type CloseQualityIssueRequest = QualityIssueActionRequest & {
 
 export type ConvertQualityIssueRequest = QualityIssueActionRequest & {
   draft: QualityTestDraft;
+  confirmedTerms: string[];
 };
 
 // DEV_NOTE: Server-side only — what the rewrite model is shown (QualityTestRewriteProvider): the conversation up to the

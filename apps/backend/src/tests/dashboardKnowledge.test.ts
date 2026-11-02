@@ -74,6 +74,8 @@ const START = Date.now() - 3 * 60 * 60 * 1000;
 const at = (minutes: number) => new Date(START + minutes * 60 * 1000);
 const { Open, Answered, Dismissed } = Schemas.DocGapClusterStatusIntEnum;
 const Tab = Schemas.DocGapClusterListTabEnum;
+// DEV_NOTE: No DB foreign keys; these groups are read, never clustered, so no chatbot row is needed
+const FAKE_CHATBOT_ID = "999999999";
 const vector = () => Array.from({ length: 1024 }, () => 0.5);
 
 let companyA = "";
@@ -309,6 +311,7 @@ beforeAll(async () => {
     ) => ({
       publicId: Utility.generatePublicId(),
       companyId,
+      chatbotId: FAKE_CHATBOT_ID,
       label,
       centroid: vector(),
       questionCount,
@@ -337,6 +340,7 @@ beforeAll(async () => {
       ...BIG_QUESTIONS.map((questionGeneric, index) => ({
         publicId: Utility.generatePublicId(),
         companyId: companyA,
+        chatbotId: FAKE_CHATBOT_ID,
         questionGeneric,
         signal: Schemas.DocGapSignalIntEnum.Idk,
         clusterId: groups[1]!.id,
@@ -345,6 +349,7 @@ beforeAll(async () => {
       {
         publicId: Utility.generatePublicId(),
         companyId: companyB,
+        chatbotId: FAKE_CHATBOT_ID,
         questionGeneric: "Other company question?",
         signal: Schemas.DocGapSignalIntEnum.LowRetrieval,
         clusterId: groups[5]!.id,
@@ -596,6 +601,7 @@ describe("/dashboard/doc-gap-clusters", () => {
         .values({
           publicId: Utility.generatePublicId(),
           companyId: companyA,
+          chatbotId: FAKE_CHATBOT_ID,
           label: "Race group",
           centroid: vector(),
           questionCount: 1,

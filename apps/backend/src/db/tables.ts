@@ -268,6 +268,11 @@ export const chatbotUsers = table(
     t
       .uniqueIndex("UNQ_chatbot_users_company_id_host_user_id")
       .on(table.companyId, table.hostUserId),
+    // DEV_NOTE: The purge starts from a company's erased users (M6-2), a small share of its users
+    t
+      .index("IDX_chatbot_users_company_id_erased")
+      .on(table.companyId)
+      .where(sql`${table.erasedAt} IS NOT NULL`),
   ],
 );
 
@@ -478,7 +483,8 @@ export const evalRuns = table(
 );
 
 // DEV_NOTE: company_id NULL = platform case (own RLS policy, M1-3); customer cases always name a chatbot.
-// Platform safety cases can't be deactivated.
+// Platform safety cases can't be deactivated. platform_key = the platform suite's name for a platform case it syncs
+// from code (M5-5, Schemas.PLATFORM_EVAL_CASES), unique; never set on a company's case.
 export const evalCases = table(
   "eval_cases",
   {
@@ -486,6 +492,7 @@ export const evalCases = table(
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }), // → companies.id, null = platform
     chatbotId: t.bigint("chatbot_id", { mode: "string" }), // → chatbots.id, null = platform
+    platformKey: t.text("platform_key"),
     name: t.text().notNull(),
     input: t.jsonb().notNull(),
     expectations: t.jsonb().notNull(),
@@ -496,6 +503,11 @@ export const evalCases = table(
   },
   (table) => [
     t.uniqueIndex("UNQ_eval_cases_public_id").on(table.publicId),
+    t.uniqueIndex("UNQ_eval_cases_platform_key").on(table.platformKey),
+    t.check(
+      "CHK_eval_cases_platform_key",
+      sql`${table.platformKey} IS NULL OR ${table.companyId} IS NULL`,
+    ),
     t.check(
       "CHK_eval_cases_platform_chatbot_id",
       sql`(${table.companyId} IS NULL) = (${table.chatbotId} IS NULL)`,
@@ -535,13 +547,17 @@ export const evalResults = table(
 );
 
 // DEV_NOTE: Triage inbox. source ties to feedback_id (user) or created_by (admin); converted ties to eval_case_id.
+// chatbot_id = the conversation's chatbot, or the chatbot a chatbot-wide system issue is about (no conversation: a
+// health drop, M5-5); only a system issue may have no conversation. Every write sets chatbot_id; null only on an issue
+// older than M5-5 whose conversation row is gone (the backfill had no chatbot to give it).
 export const qualityIssues = table(
   "quality_issues",
   {
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
-    conversationId: t.bigint("conversation_id", { mode: "string" }).notNull(), // → conversations.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }), // → chatbots.id
+    conversationId: t.bigint("conversation_id", { mode: "string" }), // → conversations.id, null = chatbot-wide
     changeRequestId: t.bigint("change_request_id", { mode: "string" }), // → change_requests.id
     feedbackId: t.bigint("feedback_id", { mode: "string" }), // → feedback.id, source = user only
     source: t.smallint().$type<Schemas.QualityIssueSourceIntEnum>().notNull(),
@@ -553,6 +569,7 @@ export const qualityIssues = table(
     issueType: t.smallint("issue_type").$type<Schemas.QualityIssueTypeIntEnum>(), // null until triage
     note: t.text(),
     evalCaseId: t.bigint("eval_case_id", { mode: "string" }), // → eval_cases.id (became a test)
+    docGapClusterId: t.bigint("doc_gap_cluster_id", { mode: "string" }), // → doc_gap_clusters.id (M5-6)
     createdBy: t.bigint("created_by", { mode: "string" }), // → admins.id, source = admin only
     updatedBy: t.bigint("updated_by", { mode: "string" }), // → admins.id (triage)
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -562,6 +579,11 @@ export const qualityIssues = table(
     t.uniqueIndex("UNQ_quality_issues_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_quality_issues_feedback_id").on(table.feedbackId),
     t.uniqueIndex("UNQ_quality_issues_eval_case_id").on(table.evalCaseId),
+    t.uniqueIndex("UNQ_quality_issues_doc_gap_cluster_id").on(table.docGapClusterId),
+    t.check(
+      "CHK_quality_issues_doc_gap_cluster_id",
+      sql`${table.docGapClusterId} IS NULL OR (${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.System)} AND ${table.conversationId} IS NULL)`,
+    ),
     t.check(
       "CHK_quality_issues_user_feedback_id",
       sql`(${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.User)}) = (${table.feedbackId} IS NOT NULL)`,
@@ -571,10 +593,15 @@ export const qualityIssues = table(
       sql`(${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.Admin)}) = (${table.createdBy} IS NOT NULL)`,
     ),
     t.check(
+      "CHK_quality_issues_system_conversation_id",
+      sql`${table.conversationId} IS NOT NULL OR (${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.System)} AND ${table.chatbotId} IS NOT NULL)`,
+    ),
+    t.check(
       "CHK_quality_issues_converted_eval_case_id",
       sql`(${table.status} = ${lit(Schemas.QualityIssueStatusIntEnum.Converted)}) = (${table.evalCaseId} IS NOT NULL)`,
     ),
     t.index("IDX_quality_issues_company_id").on(table.companyId),
+    t.index("IDX_quality_issues_chatbot_id").on(table.chatbotId),
     t.index("IDX_quality_issues_conversation_id").on(table.conversationId),
     t.index("IDX_quality_issues_change_request_id").on(table.changeRequestId),
     t.index("IDX_quality_issues_created_by").on(table.createdBy),
@@ -610,6 +637,9 @@ export const conversations = table(
     lastActivityAt: t.timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
     rootLogId: t.bigint("root_log_id", { mode: "string" }), // → activity_log.id (tree root)
     contentPurgedAt: t.timestamp("content_purged_at", { withTimezone: true }),
+    // DEV_NOTE: The retention purge's last try (M6-1): the chats tried longest ago go first, so failing ones can't hold
+    // back the rest
+    contentPurgeAttemptedAt: t.timestamp("content_purge_attempted_at", { withTimezone: true }),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -619,6 +649,11 @@ export const conversations = table(
     // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
     t.index("IDX_conversations_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_conversations_chatbot_user_id").on(table.chatbotUserId),
+    // DEV_NOTE: The retention purge reads one company's chats not yet purged, past its cut-off (M6-1)
+    t
+      .index("IDX_conversations_company_id_last_activity_at_unpurged")
+      .on(table.companyId, table.lastActivityAt)
+      .where(sql`${table.contentPurgedAt} IS NULL`),
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),
     t.index("IDX_conversations_eval_run_id").on(table.evalRunId),
@@ -718,7 +753,7 @@ export const modelCalls = table(
     wasEscalated: t.boolean("was_escalated").notNull().default(false),
     errorCode: t.text("error_code"),
     // DEV_NOTE: Where tokens and cost came from (ModelCallUsageStatusIntEnum). Pending rows are filled from the AI
-    // Gateway log by the per-minute Cron; Unknown means cost 0 is not a real price.
+    // Gateway log by the Cron; Unknown means cost 0 is not a real price.
     usageStatus: t
       .smallint("usage_status")
       .$type<Schemas.ModelCallUsageStatusIntEnum>()
@@ -963,6 +998,7 @@ export const docGapClusters = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     label: t.text().notNull(),
     centroid: t.halfvec("centroid", { dimensions: 1024 }).notNull(),
     questionCount: t.integer("question_count").notNull().default(0),
@@ -978,6 +1014,7 @@ export const docGapClusters = table(
   (table) => [
     t.uniqueIndex("UNQ_doc_gap_clusters_public_id").on(table.publicId),
     t.index("IDX_doc_gap_clusters_company_id").on(table.companyId),
+    t.index("IDX_doc_gap_clusters_chatbot_id").on(table.chatbotId),
     t.index("IDX_doc_gap_clusters_answered_by_document_id").on(table.answeredByDocumentId),
   ],
 );
@@ -989,6 +1026,7 @@ export const docGaps = table(
     id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
     publicId: t.text("public_id").notNull(),
     companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
     conversationId: t.bigint("conversation_id", { mode: "string" }), // → conversations.id
     messageId: t.bigint("message_id", { mode: "string" }), // → messages.id
     questionGeneric: t.text("question_generic").notNull(),
@@ -1002,6 +1040,7 @@ export const docGaps = table(
     t.uniqueIndex("UNQ_doc_gaps_public_id").on(table.publicId),
     t.uniqueIndex("UNQ_doc_gaps_message_id").on(table.messageId),
     t.index("IDX_doc_gaps_company_id").on(table.companyId),
+    t.index("IDX_doc_gaps_chatbot_id").on(table.chatbotId),
     t.index("IDX_doc_gaps_conversation_id").on(table.conversationId),
     t.index("IDX_doc_gaps_cluster_id").on(table.clusterId),
   ],

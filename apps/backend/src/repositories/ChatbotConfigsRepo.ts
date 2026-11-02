@@ -845,10 +845,15 @@ export default class ChatbotConfigsRepo {
     if (!safety.isSuccess || !safety.evalCases)
       return { isSuccess: false, message: safety.message };
     const ranCaseIds = new Set(run.evalCaseIds ?? []);
-    if (safety.evalCases.some((evalCase) => !ranCaseIds.has(evalCase.id))) {
+    // DEV_NOTE: An edit keeps the case's id, so its updated_at tells a rubric changed after this run started
+    if (
+      safety.evalCases.some(
+        (evalCase) => !ranCaseIds.has(evalCase.id) || evalCase.updatedAt > run.createdAt,
+      )
+    ) {
       return this.refuse(
         Schemas.ChatbotConfigFailureEnum.GateOutdated,
-        "A safety case was added since this version was tested. Move it back to draft and send it to testing again",
+        "A safety case was added or changed since this version was tested. Move it back to draft and send it to testing again",
       );
     }
     return null;

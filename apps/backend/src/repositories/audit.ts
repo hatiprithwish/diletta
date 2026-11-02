@@ -4,7 +4,7 @@ import { TenantRollbackError } from "@/db/withTenant";
 import AuditEventProvider from "@/providers/auditEvent";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The Repo side of an audit row (M4-9, pattern rule 3.45), shared by every Repo that writes one: the row in
+// DEV_NOTE: The Repo side of an audit row (M4-9), shared by every Repo that writes one: the row in
 // the write's own transaction, and a TenantRollbackError when it fails, so a write never commits without it (the
 // provider never throws, so the rollback lives here). Returns the outboxId the route relays after the commit. The
 // action must be one its entity type records (Schemas.AUDIT_ENTITY_ACTIONS), so it always has its words in the log.

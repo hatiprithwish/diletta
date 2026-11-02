@@ -7,7 +7,7 @@ import pytest
 
 from diletta_evals import __main__ as cli
 from diletta_evals.client import EvalApiError
-from diletta_evals.runner import RunSummary
+from diletta_evals.runner import ChatbotTarget, RunSummary
 
 
 @pytest.fixture
@@ -54,5 +54,32 @@ def test_anything_that_stops_the_run_is_2_never_a_regression(argv: pytest.Monkey
 
 def test_k_is_bounded_by_the_contract(argv: pytest.MonkeyPatch) -> None:
     argv.setattr(sys, "argv", ["diletta_evals", "run", "--config", "cfg_1", "--k", str(cli.MAX_K + 1)])
+    with pytest.raises(SystemExit):
+        cli.main()
+
+
+def test_runs_a_chatbot_by_its_published_config_but_never_a_gate(argv: pytest.MonkeyPatch) -> None:
+    targets: list[object] = []
+
+    class Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, **kwargs: object) -> RunSummary:
+            targets.append(kwargs["target"])
+            return RunSummary(run_id="run_1", has_passed=True)
+
+    argv.setattr(cli, "EvalRunner", Runner)
+    argv.setattr(sys, "argv", ["diletta_evals", "run", "--chatbot", "bot_1", "--trigger", "nightly"])
+    assert cli.main() == cli.EXIT_PASSED
+    assert targets == [ChatbotTarget(chatbot_id="bot_1")]
+
+    argv.setattr(sys, "argv", ["diletta_evals", "run", "--chatbot", "bot_1", "--trigger", "gate"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    argv.setattr(sys, "argv", ["diletta_evals", "run", "--chatbot", "bot_1", "--config", "cfg_1"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    argv.setattr(sys, "argv", ["diletta_evals", "run"])
     with pytest.raises(SystemExit):
         cli.main()

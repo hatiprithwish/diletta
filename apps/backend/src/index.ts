@@ -29,10 +29,15 @@ import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runContentRetentionPurge from "@/crons/ContentRetentionPurgeCron";
+import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
+import runKeyRotationSweep from "@/crons/KeyRotationSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
+import runNightlySuiteCheck from "@/crons/NightlySuiteCheckCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
+import runPlatformEvalCaseSync from "@/crons/PlatformEvalCaseSyncCron";
 import CronScheduleProvider from "@/providers/cronSchedule";
 import consumeEvents from "@/queues/EventsConsumer";
 
@@ -47,10 +52,15 @@ const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.OutboxSweep]: runOutboxSweep,
   [Schemas.CronJobEnum.ModelCallUsageBackfill]: runModelCallUsageBackfill,
   [Schemas.CronJobEnum.ChangeRequestPurge]: runChangeRequestPurge,
+  [Schemas.CronJobEnum.KeyRotationSweep]: runKeyRotationSweep,
   [Schemas.CronJobEnum.KnowledgeResync]: runKnowledgeResync,
   [Schemas.CronJobEnum.ActivityRollups]: runActivityRollups,
   [Schemas.CronJobEnum.EvalTranscriptSweep]: runEvalTranscriptSweep,
+  [Schemas.CronJobEnum.PlatformEvalCaseSync]: runPlatformEvalCaseSync,
+  [Schemas.CronJobEnum.ContentRetentionPurge]: runContentRetentionPurge,
   [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
+  [Schemas.CronJobEnum.NightlySuiteCheck]: runNightlySuiteCheck,
+  [Schemas.CronJobEnum.ChatbotHealthCheck]: runChatbotHealthCheck,
 };
 
 // DEV_NOTE: Configure logger at the top level to ensure it's ready before handling any requests
@@ -116,7 +126,7 @@ export default {
     return app.fetch(req, env, ctx);
   },
 
-  // DEV_NOTE: One cron trigger (Constants.CRON_TRIGGER, every minute); CronScheduleProvider picks the jobs due at its
+  // DEV_NOTE: One cron trigger (Constants.CRON_TRIGGER, every 15 minutes); CronScheduleProvider picks the jobs due at its
   // scheduled time. Jobs are independent: one failing never skips another (each logs its own failures).
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron !== Constants.CRON_TRIGGER) {
@@ -135,8 +145,8 @@ export default {
   },
 
   // DEV_NOTE: EVENTS_QUEUE consumer (the only queue this worker consumes)
-  async queue(batch: MessageBatch<unknown>, _env: Env, ctx: ExecutionContext) {
-    await consumeEvents(batch);
+  async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext) {
+    await consumeEvents(batch, env, ctx);
     ctx.waitUntil(disposeLogger());
   },
 } satisfies ExportedHandler<Env>;

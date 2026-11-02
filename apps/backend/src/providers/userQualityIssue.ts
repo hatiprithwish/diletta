@@ -4,7 +4,7 @@ import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The thumbs-down step (M2-8), in the caller's transaction (pattern rule 1.1: a provider may hold a
+// DEV_NOTE: The thumbs-down step (M2-8), in the caller's transaction (a provider may hold a
 // self-contained multi-DAL step a Repo runs inside its own tx; it never opens one). It never throws; a failure comes back
 // as isSuccess false and FeedbackRepo rolls the rating back with it (TenantRollbackError).
 //   1. The rating's user issue: one per feedback row (Open, untriaged, no note), or the one it already has, as it is.

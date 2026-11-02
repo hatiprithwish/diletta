@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, max, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, max, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotConfigs, chatbots, evalCases, evalResults, evalRuns } from "@/db/tables";
@@ -8,8 +8,9 @@ import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). M4-6 creates customer cases from quality
-// issues; M4-8 lists, reads and edits them on the Tests page. Platform cases (company_id null) are written by the eval
-// harness's own seed (M5), never here: the Tests page reads them (RLS lets every tenant read them) and never edits one.
+// issues; M4-8 lists, reads and edits them on the Tests page. Platform cases (company_id null) are written only by the
+// platform suite's sync (M5-5, the *PlatformEvalCase* methods, in withPlatform: they filter on company_id IS NULL
+// instead); the Tests page reads them (RLS lets every tenant read them) and never edits one.
 export default class EvalCasesDAL {
   async createEvalCase(
     tx: NodePgTransaction<EmptyRelations>,
@@ -87,6 +88,7 @@ export default class EvalCasesDAL {
         publicId: evalCases.publicId,
         companyId: evalCases.companyId,
         chatbotId: evalCases.chatbotId,
+        platformKey: evalCases.platformKey,
         name: evalCases.name,
         input: evalCases.input,
         expectations: evalCases.expectations,
@@ -453,6 +455,209 @@ export default class EvalCasesDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Transaction-scoped advisory lock, held until the sync's transaction ends: overlapping syncs take turns
+  // instead of racing on UNQ_eval_cases_platform_key
+  async lockPlatformEvalCases(tx: NodePgTransaction<EmptyRelations>) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${"platform_eval_cases:sync"}, 0))`,
+      );
+      response.isSuccess = true;
+      response.message = "Platform eval cases locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking platform eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockPlatformEvalCases,
+        message,
+        error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Every platform case the sync owns (a platform_key set), on or off, in withPlatform. Case text stays out of
+  // the log.
+  async getPlatformEvalCases(tx: NodePgTransaction<EmptyRelations>) {
+    const response: Schemas.EvalCasesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [isNull(evalCases.companyId), isNotNull(evalCases.platformKey)];
+      const selected = await tx
+        .select()
+        .from(evalCases)
+        .where(and(...conditions))
+        .orderBy(asc(evalCases.id));
+
+      response.isSuccess = true;
+      response.message = "Platform eval cases fetched successfully";
+      response.evalCases = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching platform eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetPlatformEvalCases,
+        message,
+        error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A new platform case (company and chatbot null), active
+  async createPlatformEvalCase(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreatePlatformEvalCaseDALRequest,
+  ) {
+    const response: Schemas.EvalCaseDALResponse = { isSuccess: false };
+    const metadata = { platformKey: params.platformKey };
+
+    try {
+      const [evalCase] = await tx
+        .insert(evalCases)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: null,
+          chatbotId: null,
+          platformKey: params.platformKey,
+          name: params.name,
+          input: params.input,
+          expectations: params.expectations,
+          isSafety: params.isSafety,
+          isActive: true,
+        })
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Platform eval case created successfully";
+      response.evalCase = evalCase;
+    } catch (error) {
+      const message = "Unknown error in creating platform eval case";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreatePlatformEvalCase,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A keyed platform case rewritten to the case in code and turned on again. updated_at = clock_timestamp():
+  // publish compares it with the approved gate run's created_at (same clock), so an edited safety case outdates the gate.
+  async updatePlatformEvalCase(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdatePlatformEvalCaseDALRequest,
+  ) {
+    const response: Schemas.EvalCaseDALResponse = { isSuccess: false };
+    const metadata = { id: params.id, platformKey: params.platformKey };
+
+    try {
+      const conditions = [
+        eq(evalCases.id, params.id),
+        isNull(evalCases.companyId),
+        eq(evalCases.platformKey, params.platformKey),
+      ];
+      const [updated] = await tx
+        .update(evalCases)
+        .set({
+          name: params.name,
+          input: params.input,
+          expectations: params.expectations,
+          isSafety: params.isSafety,
+          isActive: true,
+          updatedAt: sql`clock_timestamp()`,
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!updated) {
+        const message = "Platform eval case not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.UpdatePlatformEvalCase,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Platform eval case updated successfully";
+      response.evalCase = updated;
+    } catch (error) {
+      const message = "Unknown error in updating platform eval case";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdatePlatformEvalCase,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Turns off keyed platform cases that are on and aren't safety cases (a platform safety case stays active,
+  // CHK_eval_cases_platform_safety_active)
+  async deactivatePlatformEvalCases(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.DeactivatePlatformEvalCasesDALRequest,
+  ) {
+    const response: Schemas.PlatformEvalCasesWriteDALResponse = { isSuccess: false };
+
+    if (params.ids.length === 0) {
+      response.isSuccess = true;
+      response.message = "No platform eval cases to turn off";
+      response.changedCount = 0;
+      return response;
+    }
+
+    try {
+      const conditions = [
+        inArray(evalCases.id, params.ids),
+        isNull(evalCases.companyId),
+        isNotNull(evalCases.platformKey),
+        eq(evalCases.isSafety, false),
+        eq(evalCases.isActive, true),
+      ];
+      const updated = await tx
+        .update(evalCases)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning({ id: evalCases.id });
+
+      response.isSuccess = true;
+      response.message = "Platform eval cases turned off successfully";
+      response.changedCount = updated.length;
+    } catch (error) {
+      const message = "Unknown error in turning off platform eval cases";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.DeactivatePlatformEvalCases,
+        message,
+        error,
+        metadata: { count: params.ids.length },
       });
       response.message = message;
     }

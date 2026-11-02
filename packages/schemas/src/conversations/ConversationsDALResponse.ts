@@ -26,3 +26,37 @@ export interface ConversationTabCountsDALResponse extends TotalRecordsResponse {
 export interface ChatbotConversationCountsDALResponse extends ApiResponse {
   counts?: { chatbotId: string; conversationCount: number }[];
 }
+
+// DEV_NOTE: A chat the retention purge (M6-1) has to clear
+export type ConversationPastRetentionRow = Pick<
+  Conversation,
+  | "id"
+  | "publicId"
+  | "companyId"
+  | "chatbotUserId"
+  | "status"
+  | "evalRunId"
+  | "evalCaseId"
+  | "evalAttempt"
+> & {
+  // DEV_NOTE: Set = its user was erased (M6-2): due whatever its age
+  erasedAt: Date | null;
+};
+
+export interface ConversationsPastRetentionDALResponse extends ApiResponse {
+  conversations?: ConversationPastRetentionRow[];
+}
+
+// DEV_NOTE: The overdue alert's read of one company: past the cut-off, and since the erasure (M6-2)
+export interface OverduePurgeDALResponse extends ApiResponse {
+  lastActivityAt?: Date | null;
+  erasedAt?: Date | null;
+}
+
+export interface OldestErasedUserPendingDALResponse extends ApiResponse {
+  erasedAt?: Date | null;
+}
+
+export interface OldestConversationPastRetentionDALResponse extends ApiResponse {
+  lastActivityAt?: Date | null;
+}

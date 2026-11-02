@@ -2,11 +2,10 @@ import { generateText, Output } from "ai";
 import type { LanguageModel } from "ai";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
+import { fenceDefuser } from "@/providers/promptFence";
 import { ModelUnavailableError } from "@/providers/modelCallRecording";
 
-// DEV_NOTE: The fence tags of the rewrite prompt. A message or note can't close its fence early: any of these tags
-// inside a text is defused.
-const FENCE_TAG = /<(\s*\/?\s*(?:conversation|message|reply|triage)\b)/gi;
+const defuse = fenceDefuser(["conversation", "message", "reply", "triage"]);
 
 // DEV_NOTE: Create test's rewrite (M4-6): a quality issue's chat turned into a test case with no personal details,
 // which the admin reviews before it is saved. The model comes from the model router (the company's key, budget held);
@@ -30,7 +29,6 @@ export default class QualityTestRewriteProvider {
   ].join("\n");
 
   static prompt(source: Schemas.QualityTestRewriteSource): string {
-    const defuse = QualityTestRewriteProvider.defuse;
     const parts = [
       "<conversation>",
       ...source.messages.map(
@@ -107,9 +105,5 @@ export default class QualityTestRewriteProvider {
       return { isSuccess: false, failure: Schemas.QualityTestDraftFailureEnum.RewriteFailed };
     }
     return { isSuccess: true, draft };
-  }
-
-  private static defuse(text: string): string {
-    return text.replace(FENCE_TAG, "&lt;$1");
   }
 }

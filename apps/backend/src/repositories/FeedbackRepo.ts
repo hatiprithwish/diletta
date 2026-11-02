@@ -32,7 +32,7 @@ export default class FeedbackRepo {
   }
 
   // DEV_NOTE: The reply (an assistant message of the session's conversation, by Think message id) gets the rating, the
-  // user's earlier one on it replaced. Statuses are re-checked on every rating, never only at connect (rule 3.23): the
+  // user's earlier one on it replaced. Statuses are re-checked on every rating, never only at connect: the
   // conversation must still be open, the company and chatbot active. failure says why nothing was stored. A Down opens
   // the rating's user issue (status Open, untriaged) and its quality_issue.opened event, or rolls the rating back with
   // them; the issue stays when the visitor later switches to Up, and a second Down opens nothing new (M2-8). outboxId

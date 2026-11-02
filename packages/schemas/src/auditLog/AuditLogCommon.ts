@@ -3,7 +3,7 @@ import { ActivityLogActorTypeIntEnum } from "../activityLog/ActivityLogCommon";
 
 // DEV_NOTE: The audit log (M4-9) is not a table: it is the company's activity_log rows written by a person, an admin
 // (actor Admin) or an operator (actor Operator). Every dashboard and operator write records one through
-// AuditEventProvider, in the write's own transaction (a critical event: activity_log + event_outbox, pattern rule 3.5).
+// AuditEventProvider, in the write's own transaction (a critical event: activity_log + event_outbox).
 // The writes that already had their own event (a flag, Mark resolved, the Quality page's triage / fix / dismiss /
 // convert) show up as they are. The entity types and actions here are the ones only the audit writes.
 export enum AuditEntityTypeEnum {
@@ -47,6 +47,7 @@ export enum AuditEntityActionEnum {
   OriginsChanged = "origins_changed",
   Rotated = "rotated",
   RetentionChanged = "retention_changed",
+  UserErased = "user_erased",
   MadeDefault = "made_default",
   Discarded = "discarded",
   Published = "published",
@@ -57,6 +58,8 @@ export enum AuditEntityActionEnum {
   BudgetChanged = "budget_changed",
   Revoked = "revoked",
   Removed = "removed",
+  // DEV_NOTE: System only (M6-3): the rotation job moved every value off a Retiring key and destroyed it
+  Retired = "retired",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -102,9 +105,13 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Deleted,
   ],
   [AuditEntityTypeEnum.CompanyConnection]: [AuditEntityActionEnum.OriginsChanged],
-  [AuditEntityTypeEnum.CompanyEncryptionKey]: [AuditEntityActionEnum.Rotated],
+  [AuditEntityTypeEnum.CompanyEncryptionKey]: [
+    AuditEntityActionEnum.Rotated,
+    AuditEntityActionEnum.Retired,
+  ],
   [AuditEntityTypeEnum.Company]: [
     AuditEntityActionEnum.RetentionChanged,
+    AuditEntityActionEnum.UserErased,
     AuditEntityActionEnum.TurnedOn,
     AuditEntityActionEnum.TurnedOff,
     AuditEntityActionEnum.BudgetChanged,
@@ -147,8 +154,12 @@ export type AuditActor =
   | { actorType: ActivityLogActorTypeIntEnum.System; actorId: null };
 
 // DEV_NOTE: The entity types whose System rows are audit rows (the audit log reads them, the partial index
-// IDX_activity_log_company_id_created_at_audit covers them); every other System row is a runtime event, never shown
-export const AUDIT_SYSTEM_ENTITY_TYPES = [AuditEntityTypeEnum.ChatbotConfig] as const;
+// IDX_activity_log_company_id_created_at_audit covers them); every other System row is a runtime event, never shown.
+// M6-3: the key rotation job retiring a company key.
+export const AUDIT_SYSTEM_ENTITY_TYPES = [
+  AuditEntityTypeEnum.ChatbotConfig,
+  AuditEntityTypeEnum.CompanyEncryptionKey,
+] as const;
 
 // DEV_NOTE: What the log shows in its On column, stored at write time so a renamed or deleted entity still reads:
 // the chatbot's, source's, case's or tool's name, the document's title, the group's label, the ROI task. Names the

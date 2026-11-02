@@ -3,8 +3,11 @@ import { zValidator } from "@hono/zod-validator";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import CompanyEncryptionKeysRepo from "@/repositories/CompanyEncryptionKeysRepo";
+import ContentRetentionRepo from "@/repositories/ContentRetentionRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
+import KeyRotationRepo from "@/repositories/KeyRotationRepo";
 import QualityIssuesRepo from "@/repositories/QualityIssuesRepo";
+import UserErasureRepo from "@/repositories/UserErasureRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
@@ -14,7 +17,7 @@ import * as Schemas from "@app/schemas";
 // checkAuth → authorizeCompany(action) → zValidator → handler. For the admin's company (c.get("companyId")); a connection
 // is addressed by publicId. Reads: SecurityRead. Writes (each with its audit row, relayed after the commit; outbox ids
 // never reach the client): allowed origins (ConnectionOriginsUpdate), Rotate key (EncryptionKeyRotate, 409 while a
-// rotation is in progress), retention (RetentionUpdate).
+// rotation is in progress), retention (RetentionUpdate), Erase a user (ChatbotUserErase, 404 for an id with no user).
 const SecurityRoutes = new Hono<AppContext>();
 
 SecurityRoutes.get(
@@ -74,7 +77,10 @@ SecurityRoutes.post(
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
-    if (response.isSuccess) return c.json(response, 200);
+    if (response.isSuccess) {
+      KeyRotationRepo.sweepCompanyInBackground(c.env, c.executionCtx, { companyId });
+      return c.json(response, 200);
+    }
     if (response.failure) {
       return c.json(
         response,
@@ -111,6 +117,36 @@ SecurityRoutes.put(
       adminId: c.get("admin").adminId,
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
+  },
+);
+
+SecurityRoutes.post(
+  "/erase-user",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotUserErase),
+  zValidator("json", Schemas.ZEraseChatbotUserApiRequest),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new UserErasureRepo(c.env);
+    const erased = await repo.eraseUser({
+      ...c.req.valid("json"),
+      companyId,
+      adminId: c.get("admin").adminId,
+    });
+    const { isSuccess, message, isNotFound, conversationCount, chatbotUserId, outboxIds } = erased;
+    const response: Schemas.EraseChatbotUserApiResponse = {
+      isSuccess,
+      message,
+      isNotFound,
+      conversationCount,
+    };
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+    ContentRetentionRepo.purgeErasedUserInBackground(c.env, c.executionCtx, {
+      companyId,
+      chatbotUserId,
+    });
 
     return c.json(response, response.isSuccess ? 200 : response.isNotFound ? 404 : 500);
   },

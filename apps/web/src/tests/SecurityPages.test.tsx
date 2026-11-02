@@ -312,12 +312,11 @@ describe("Security page", () => {
     const fetchMock = mockApi();
     renderPage();
 
-    const section = await screen.findByRole("region", { name: "Retention" });
+    const section = await screen.findByRole("region", { name: "Retention and erasure" });
     const select = await within(section).findByRole("combobox", { name: "Keep chat content for" });
     expect(select).toHaveTextContent("30 days");
     expect(within(section).getByText(/This is the default until you choose\./)).toBeInTheDocument();
     expect(within(section).getByRole("button", { name: "Save retention" })).toBeDisabled();
-    expect(within(section).queryByText(/Erase/)).toBeNull();
 
     await userEvent.click(select);
     await userEvent.click(await screen.findByRole("option", { name: "90 days" }));
@@ -327,6 +326,46 @@ describe("Security page", () => {
     const [, init] = calls(fetchMock, "PUT", "/security/retention")[0]!;
     expect(JSON.parse(String(init?.body))).toEqual({ contentRetentionDays: 90 });
     expect(toast.success).toHaveBeenCalledWith("Retention saved.");
+  });
+
+  it("erases a user only after confirming, and says when the id matches no one", async () => {
+    const fetchMock = mockApi((url, init) =>
+      url.endsWith("/security/erase-user")
+        ? String(init?.body).includes("unknown")
+          ? { status: 404, body: { isSuccess: false, message: "Chatbot user not found" } }
+          : { status: 200, body: { isSuccess: true, conversationCount: 2 } }
+        : null,
+    );
+    renderPage();
+
+    const section = await screen.findByRole("region", { name: "Retention and erasure" });
+    const input = within(section).getByLabelText("Erase a user");
+    const button = within(section).getByRole("button", { name: "Erase user" });
+    expect(button).toBeDisabled();
+
+    await userEvent.type(input, " user-42 ");
+    await userEvent.click(button);
+    expect(calls(fetchMock, "POST", "/security/erase-user")).toHaveLength(0);
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erase user" }));
+
+    await waitFor(() => expect(calls(fetchMock, "POST", "/security/erase-user")).toHaveLength(1));
+    const [, init] = calls(fetchMock, "POST", "/security/erase-user")[0]!;
+    expect(JSON.parse(String(init?.body))).toEqual({ hostUserId: "user-42" });
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(toast.success).toHaveBeenCalledWith(
+      "User erased. Any chat still running is deleted within the hour.",
+    );
+
+    await userEvent.type(input, "unknown");
+    await userEvent.click(button);
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase user" }),
+    );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("No user with that ID. They may already be erased."),
+    );
+    expect(input).toHaveValue("unknown");
   });
 
   it("lists prompt-injection events linked to their issue and conversation", async () => {

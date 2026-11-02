@@ -193,7 +193,7 @@ export default class MessagesDAL {
   }
 
   // DEV_NOTE: A quality issue's messages (M4-6): the newest params.limit user and assistant messages of one
-  // conversation, up to and including upToMessageId (null = the whole conversation), text only (content->>'text'),
+  // conversation, up to and including upToMessageId and upToCreatedAt (null = the whole conversation), text only (content->>'text'),
   // returned oldest first. Read newest first on IDX_messages_conversation_id, so the cost stays flat as a chat grows.
   async listRecentChatMessages(
     tx: NodePgTransaction<EmptyRelations>,
@@ -211,6 +211,7 @@ export default class MessagesDAL {
         ]),
       ];
       if (params.upToMessageId !== null) conditions.push(lte(messages.id, params.upToMessageId));
+      if (params.upToCreatedAt) conditions.push(lte(messages.createdAt, params.upToCreatedAt));
       const rows = await tx
         .select({
           id: messages.id,
@@ -230,6 +231,146 @@ export default class MessagesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.ListRecentChatMessages,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: A doc gap candidate's question and its turn's replies, with what decides whether it may be read: the
+  // conversation's purge and eval marks. Empty when the message is gone. Text never reaches a log.
+  async getDocGapCandidateMessages(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetDocGapCandidateMessagesDALRequest,
+  ) {
+    const response: Schemas.DocGapCandidateMessagesDALResponse = { isSuccess: false };
+
+    try {
+      const questionConditions = [
+        eq(messages.id, params.messageId),
+        eq(messages.companyId, params.companyId),
+      ];
+      const [question] = await tx
+        .select({ conversationId: messages.conversationId, turnId: messages.turnId })
+        .from(messages)
+        .where(and(...questionConditions))
+        .limit(1);
+      if (!question) {
+        response.isSuccess = true;
+        response.message = "Doc gap candidate message is gone";
+        response.messages = [];
+        return response;
+      }
+
+      const conditions = [
+        eq(messages.companyId, params.companyId),
+        eq(messages.conversationId, question.conversationId),
+        eq(messages.turnId, question.turnId),
+        inArray(messages.role, [
+          Schemas.MessageRoleIntEnum.User,
+          Schemas.MessageRoleIntEnum.Assistant,
+        ]),
+      ];
+      const joinConditions = [
+        eq(conversations.id, messages.conversationId),
+        eq(conversations.companyId, messages.companyId),
+      ];
+      const rows = await tx
+        .select({
+          role: messages.role,
+          text: sql<string | null>`${messages.content}->>'text'`,
+          contentPurgedAt: conversations.contentPurgedAt,
+          evalRunId: conversations.evalRunId,
+        })
+        .from(messages)
+        .innerJoin(conversations, and(...joinConditions))
+        .where(and(...conditions))
+        .orderBy(asc(messages.id));
+
+      response.isSuccess = true;
+      response.message = "Doc gap candidate messages fetched successfully";
+      response.messages = rows;
+    } catch (error) {
+      const message = "Unknown error in fetching doc gap candidate messages";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetDocGapCandidateMessages,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Retention purge (M6-1): did the chat get a reply? The read model's stand-in for the DO's hasAnswer
+  async hasAssistantReply(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.HasAssistantReplyDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(messages.conversationId, params.conversationId),
+        eq(messages.companyId, params.companyId),
+        eq(messages.role, Schemas.MessageRoleIntEnum.Assistant),
+        sql`${messages.content}->>'text' <> ''`,
+      ];
+      const [reply] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(...conditions))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = "Assistant reply checked";
+      response.hasReply = reply !== undefined;
+    } catch (error) {
+      const message = "Unknown error in checking for an assistant reply";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Retention purge (M6-1): the rows stay as counts, the text goes
+  async clearConversationContent(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(messages.conversationId, params.conversationId),
+        eq(messages.companyId, params.companyId),
+      ];
+      await tx
+        .update(messages)
+        .set({ content: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation content cleared";
+    } catch (error) {
+      const message = "Unknown error in clearing conversation content";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
         message,
         error,
         metadata: params,

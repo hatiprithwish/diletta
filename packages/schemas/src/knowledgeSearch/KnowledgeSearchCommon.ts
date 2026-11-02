@@ -43,10 +43,12 @@ export type KnowledgeCitation = z.infer<typeof ZKnowledgeCitation>;
 
 // DEV_NOTE: The tool's output: how the search ended and the citations of its results. Stored in the Think transcript
 // and streamed to the widget (its search step and Sources list), so it never carries excerpt text: that stays in the
-// Conversation DO's memory for the turn (SearchHelpDocsExcerpt) and reaches only the model.
+// Conversation DO's memory for the turn (SearchHelpDocsExcerpt) and reaches only the model. withheldCount (M6-4): the
+// results left out because they held a prompt injection (never cited, never shown).
 export const ZSearchHelpDocsOutput = z.object({
   status: z.enum(SearchHelpDocsStatusEnum),
   results: z.array(ZKnowledgeCitation),
+  withheldCount: z.number().int().min(1).optional(),
 });
 export type SearchHelpDocsOutput = z.infer<typeof ZSearchHelpDocsOutput>;
 

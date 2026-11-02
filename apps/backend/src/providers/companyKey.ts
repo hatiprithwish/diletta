@@ -8,7 +8,7 @@ import AppLogger from "@/providers/logger";
 import MasterKeyProvider from "@/providers/masterKey";
 
 // DEV_NOTE: The one place a company key is created or decrypted, and the only path from a Repo to @app/crypto for
-// encrypted_* values. It calls CompanyEncryptionKeysDAL directly with the caller's tx (pattern rule 1.1: a provider
+// encrypted_* values. It calls CompanyEncryptionKeysDAL directly with the caller's tx (a provider
 // may call a DAL inside the Repo's transaction, never opening one itself), so the secrets Repos encrypt and write in
 // one withTenant. Keys stay non-extractable CryptoKeys in memory for one call; plaintext never reaches a log.
 export default class CompanyKeyProvider {
@@ -52,13 +52,18 @@ export default class CompanyKeyProvider {
     });
   }
 
-  // DEV_NOTE: The key new values are encrypted with; version goes into the row's encryption_key_version
+  // DEV_NOTE: The key new values are encrypted with; version goes into the row's encryption_key_version. Read FOR SHARE
+  // (M6-3): the caller's transaction holds the key Active until it commits, so a rotation waits for its write and the
+  // rotation job never counts a key empty while a value is still being written under it.
   static async getActiveCompanyKey(
     env: Env,
     tx: NodePgTransaction<EmptyRelations>,
     params: { companyId: string },
   ): Promise<Schemas.VersionedCompanyKeyResponse> {
-    const result = await CompanyKeyProvider.dal.getActiveCompanyEncryptionKey(tx, params);
+    const result = await CompanyKeyProvider.dal.getActiveCompanyEncryptionKey(tx, {
+      companyId: params.companyId,
+      isForShare: true,
+    });
     if (!result.isSuccess || !result.companyEncryptionKey) {
       return { isSuccess: false, message: result.message };
     }
@@ -208,6 +213,123 @@ export default class CompanyKeyProvider {
       );
     }
     return results;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): a batch of one company's values in one column, moved from fromVersion to the
+  // active key. Both keys are read and unwrapped once; each value is decrypted and encrypted again with a fresh iv
+  // (EnvelopeCrypto.reEncryptValue), so plaintext never leaves this call. A value that fails is a failed entry (logged
+  // by id), the rest still re-encrypt.
+  static async reEncryptValues(
+    env: Env,
+    tx: NodePgTransaction<EmptyRelations>,
+    params: {
+      companyId: string;
+      column: Schemas.EncryptedColumnEnum;
+      fromVersion: number;
+      values: Schemas.ValueOnKeyVersion[];
+    },
+  ): Promise<Schemas.ReEncryptValuesResponse> {
+    const oldKey = await CompanyKeyProvider.getCompanyKey(env, tx, {
+      companyId: params.companyId,
+      version: params.fromVersion,
+    });
+    if (!oldKey.isSuccess || !oldKey.companyKey) {
+      return { isSuccess: false, message: oldKey.message };
+    }
+    const activeKey = await CompanyKeyProvider.getActiveCompanyKey(env, tx, {
+      companyId: params.companyId,
+    });
+    if (!activeKey.isSuccess || !activeKey.companyKey || activeKey.version === undefined) {
+      return { isSuccess: false, message: activeKey.message };
+    }
+
+    const aad = CryptoContext.value(params.column, params.companyId);
+    const results: Schemas.ReEncryptedValue[] = [];
+    for (const value of params.values) {
+      const reEncrypted = await EnvelopeCrypto.reEncryptValue(
+        oldKey.companyKey,
+        activeKey.companyKey,
+        value.encryptedValue,
+        aad,
+      );
+      if (!reEncrypted.isSuccess || !reEncrypted.encryptedValue) {
+        AppLogger.error({
+          category: Schemas.LogCategory.Crypto,
+          action: Schemas.LogAction.ReEncryptValue,
+          message: reEncrypted.message ?? "Value could not be re-encrypted",
+          metadata: {
+            companyId: params.companyId,
+            column: params.column,
+            id: value.id,
+            fromVersion: params.fromVersion,
+            encryptionKeyVersion: activeKey.version,
+          },
+        });
+        results.push({ id: value.id, isSuccess: false });
+        continue;
+      }
+      results.push({ id: value.id, isSuccess: true, encryptedValue: reEncrypted.encryptedValue });
+    }
+
+    return {
+      isSuccess: true,
+      message: "Values re-encrypted",
+      encryptionKeyVersion: activeKey.version,
+      results,
+    };
+  }
+
+  // DEV_NOTE: Master key rotation (M6-3, docs/runbooks/master-key.md): the same company key, wrapped again under
+  // masterKeyVersion. The company key doesn't change, so no encrypted_* value moves. The DAL writes only while the row is
+  // still on the master key it was read with (isNotFound otherwise: re-wrapped or destroyed since).
+  static async rewrapCompanyKey(
+    env: Env,
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyEncryptionKey: Schemas.CompanyEncryptionKey; masterKeyVersion: number },
+  ): Promise<Schemas.CompanyEncryptionKeyDALResponse> {
+    const key = params.companyEncryptionKey;
+    const metadata = {
+      companyId: key.companyId,
+      version: key.version,
+      fromMasterKeyVersion: key.masterKeyVersion,
+      masterKeyVersion: params.masterKeyVersion,
+    };
+    if (key.encryptedKey === null) {
+      return { isSuccess: false, isNotFound: true, message: "Encryption key destroyed" };
+    }
+
+    const oldMasterKey = await MasterKeyProvider.getMasterKey(env, key.masterKeyVersion);
+    if (!oldMasterKey.masterKey) {
+      return { isSuccess: false, message: oldMasterKey.message };
+    }
+    const newMasterKey = await MasterKeyProvider.getMasterKey(env, params.masterKeyVersion);
+    if (!newMasterKey.masterKey) {
+      return { isSuccess: false, message: newMasterKey.message };
+    }
+
+    const rewrapped = await EnvelopeCrypto.rewrapCompanyKey(
+      oldMasterKey.masterKey,
+      newMasterKey.masterKey,
+      key.encryptedKey,
+      CryptoContext.companyKey(key.companyId, key.version),
+    );
+    if (!rewrapped.isSuccess || !rewrapped.encryptedKey) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Crypto,
+        action: Schemas.LogAction.RewrapCompanyKey,
+        message: rewrapped.message ?? "Company key could not be re-wrapped",
+        metadata,
+      });
+      return { isSuccess: false, message: rewrapped.message };
+    }
+
+    return await CompanyKeyProvider.dal.rewrapCompanyEncryptionKey(tx, {
+      companyId: key.companyId,
+      version: key.version,
+      fromMasterKeyVersion: key.masterKeyVersion,
+      masterKeyVersion: params.masterKeyVersion,
+      encryptedKey: rewrapped.encryptedKey,
+    });
   }
 
   // DEV_NOTE: The one way to read a company_secrets value (CompanySecretsRepo, the model router): decrypts the row's

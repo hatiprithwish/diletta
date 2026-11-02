@@ -30,7 +30,7 @@ Publish makes a **Ready** version the live version in one transaction, and every
 
 - the version isn't Ready (409 `NotReady`): send it to testing first;
 - its approving run isn't its own finished, passed Gate run with at least 3 attempts per case (409 `NotApproved`): move it back to draft and send it to testing again;
-- an active safety case (the chatbot's own or the platform's) wasn't in that run, i.e. one was added or turned on since (409 `GateOutdated`): move it back to draft and send it to testing again;
+- an active safety case (the chatbot's own or the platform's) wasn't in that run, or was edited after it started, i.e. one was added, turned on or changed since (409 `GateOutdated`): move it back to draft and send it to testing again;
 - a provider the routing uses has no **Active** model key (409 `ModelKeyMissing`; an Invalid or Revoked key counts as none). Add or fix the key on Settings › Model keys;
 - a tier's model isn't in `MODEL_PRICES` (409 `ModelNotPriced`): the router would refuse every call;
 - a pinned tool version isn't Active (409 `ToolNotActive`): ask an operator to activate it, or pick another version.

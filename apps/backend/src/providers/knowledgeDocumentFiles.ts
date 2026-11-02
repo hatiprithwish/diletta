@@ -5,6 +5,7 @@ import DocGapClustersDAL from "@/data-access-layer/DocGapClustersDAL";
 import FilesDAL from "@/data-access-layer/FilesDAL";
 import KnowledgeChunksDAL from "@/data-access-layer/KnowledgeChunksDAL";
 import KnowledgeDocumentsDAL from "@/data-access-layer/KnowledgeDocumentsDAL";
+import DocGapQualityProvider from "@/providers/docGapQuality";
 
 // DEV_NOTE: A file row is created before its document because knowledge_documents.file_id is NOT NULL, then pointed at
 // the document in the same transaction. No DB foreign keys, so nothing outside the transaction ever sees this.
@@ -206,6 +207,13 @@ export default class KnowledgeDocumentFilesProvider {
       });
     if (!reopened.isSuccess) {
       return { isSuccess: false, message: reopened.message };
+    }
+    const reopenedItems = await DocGapQualityProvider.reopenForClusters(tx, {
+      companyId: params.companyId,
+      docGapClusterIds: reopened.reopenedIds ?? [],
+    });
+    if (!reopenedItems.isSuccess) {
+      return { isSuccess: false, message: reopenedItems.message };
     }
 
     const files = await KnowledgeDocumentFilesProvider.filesDal.deleteFiles(tx, {

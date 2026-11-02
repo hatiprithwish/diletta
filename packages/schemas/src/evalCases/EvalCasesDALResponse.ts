@@ -46,3 +46,8 @@ export interface ActiveEvalCaseCountsDALResponse extends ApiResponse {
 export interface EvalCasesDALResponse extends ApiResponse {
   evalCases?: EvalCase[];
 }
+
+// DEV_NOTE: How many keyed platform cases a sync step changed
+export interface PlatformEvalCasesWriteDALResponse extends ApiResponse {
+  changedCount?: number;
+}

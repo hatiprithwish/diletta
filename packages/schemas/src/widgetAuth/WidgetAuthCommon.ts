@@ -119,10 +119,12 @@ export interface DecodedWidgetJwt {
 
 // DEV_NOTE: Server-side only — the verified widget caller. Carries internal ids (companyId, connectionId,
 // chatbotId), so it never goes to the widget; the widget route turns it into the conversation session (M2-2).
+// allowedOrigins = the connection's (the widget's link allow-list, M6-4).
 export interface WidgetIdentity {
   companyId: string;
   connectionId: string;
   connectionEnvironment: CompanyConnectionEnvironmentIntEnum;
+  allowedOrigins: string[];
   chatbotId: string;
   chatbotPublicId: string;
   chatbotName: string;

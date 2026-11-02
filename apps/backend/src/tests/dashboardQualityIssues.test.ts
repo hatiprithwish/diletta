@@ -21,6 +21,7 @@ import {
   qualityIssues,
 } from "@/db/tables";
 import worker from "@/index";
+import { setQualityIssueChatbots } from "@/tests/helpers/qualityIssues";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -426,6 +427,7 @@ beforeAll(async () => {
         }),
       ])
       .returning({ id: qualityIssues.id, publicId: qualityIssues.publicId });
+    await setQualityIssueChatbots(ownerDb, [companyA, companyB]);
     [
       fixedIssue,
       dismissedIssue,
@@ -494,7 +496,7 @@ describe("GET /dashboard/quality-issues", () => {
       ratedReply: null,
     });
     // DEV_NOTE: A purged chat keeps its issue, not its title
-    expect(byId.get(purgedIssue)?.conversation.title).toBeNull();
+    expect(byId.get(purgedIssue)?.conversation?.title).toBeNull();
   });
 
   it("filters by tab and by chatbot, keeping the counts under the chatbot filter", async () => {
@@ -558,6 +560,8 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
     expect(status).toBe(200);
     expect(body.qualityIssue).toMatchObject({
       publicId: userIssue,
+      isChatbotWide: false,
+      chatbotName: "Support",
       rating: Schemas.FeedbackRatingIntEnum.Down,
       excerpt: [
         { role: Schemas.MessageRoleIntEnum.User, text: QUESTION },
@@ -565,7 +569,6 @@ describe("GET /dashboard/quality-issues/:publicId", () => {
       ],
       conversation: {
         title: "Fire drill frequency",
-        chatbotName: "Support",
         userName: "Priya Shah",
       },
       changeRequestPublicId: null,
@@ -671,6 +674,48 @@ describe("POST /dashboard/quality-issues/:publicId/test-draft", () => {
     expect(mocks.getModel).not.toHaveBeenCalled();
   });
 
+  it("flags what the rules and the name check find, and says when the check didn't run", async () => {
+    const leaky = {
+      ...DRAFT,
+      messages: [
+        { role: Schemas.EvalCaseMessageRoleEnum.User, text: "Can Priya and john run drills?" },
+      ],
+    };
+    const answers = [JSON.stringify(leaky), JSON.stringify({ names: ["john", "Nobody"] })];
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text" as const, text: answers.shift() ?? "" }],
+        finishReason: { unified: "stop" as const, raw: "stop" },
+        usage: {
+          inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 10, text: 10, reasoning: undefined },
+        },
+        warnings: [],
+      }),
+    });
+    mocks.getModel.mockResolvedValue({ isSuccess: true, model });
+    const checked = await draftFor(userIssue);
+    expect(checked.status).toBe(200);
+    expect(checked.body.wasVerified).toBe(true);
+    expect(checked.body.flaggedTerms).toEqual([
+      { term: "Priya", canConfirm: false },
+      { term: "john", canConfirm: true },
+    ]);
+    expect(mocks.getModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskType: Schemas.ModelTaskTypeEnum.QualityTestCheck,
+        tier: Schemas.ModelTierEnum.Small,
+        conversationId: null,
+      }),
+    );
+
+    // DEV_NOTE: The check's answer isn't usable: the draft still comes back, marked unverified
+    mockModel(JSON.stringify(DRAFT));
+    const unverified = await draftFor(userIssue);
+    expect(unverified.status).toBe(200);
+    expect(unverified.body.wasVerified).toBe(false);
+  });
+
   it("answers 503 when the router refuses and 502 when the answer isn't a usable draft", async () => {
     mocks.getModel.mockResolvedValue({
       isSuccess: false,
@@ -713,6 +758,23 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
       ],
     });
     expect(status).toBe(400);
+  });
+
+  // DEV_NOTE: M5-7 "Done when": the saved case has no names from the chat. Priya Shah is the chat user's display name.
+  it("refuses a test holding the chat user's name, even when confirmed, writing nothing", async () => {
+    const leaky = {
+      ...DRAFT,
+      messages: [
+        { role: Schemas.EvalCaseMessageRoleEnum.User, text: "Can priya run fire drills?" },
+      ],
+      confirmedTerms: ["Priya"],
+    };
+    const { status, body } = await write(`${userIssue}/convert`, leaky);
+    expect(status).toBe(409);
+    expect(body.failure).toBe(Schemas.QualityIssueUpdateFailureEnum.PersonalDetailsFound);
+    expect(body.flaggedTerms).toEqual([{ term: "Priya", canConfirm: false }]);
+    expect((await issueRow(userIssue))?.status).toBe(Open);
+    expect((await issueRow(userIssue))?.evalCaseId).toBeNull();
   });
 
   it("saves the reviewed draft as the chatbot's test and converts the issue, with its event", async () => {
@@ -779,6 +841,7 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
           createdBy: adminAId,
         })
         .returning({ publicId: qualityIssues.publicId });
+      await setQualityIssueChatbots(ownerDb, [companyA]);
       await ownerDb.delete(chatbots).where(eq(chatbots.id, bot!.id));
       return issue!.publicId;
     });
@@ -799,6 +862,64 @@ describe("POST /dashboard/quality-issues/:publicId/convert", () => {
         await ownerDb.select().from(evalCases).where(eq(evalCases.companyId, companyA)),
     );
     expect(cases).toHaveLength(1);
+  });
+
+  it("refuses a name-like word of the chat until it is edited out or confirmed, and logs only the count", async () => {
+    const [issue] = await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb
+          .insert(qualityIssues)
+          .values({
+            publicId: Utility.generatePublicId(),
+            companyId: companyA,
+            conversationId: userConversationId,
+            chatbotId: supportId,
+            source: Admin,
+            createdBy: adminAId,
+          })
+          .returning({ id: qualityIssues.id, publicId: qualityIssues.publicId }),
+    );
+    const withWord = {
+      ...DRAFT,
+      messages: [{ role: Schemas.EvalCaseMessageRoleEnum.User, text: "Is elm street covered?" }],
+    };
+    // DEV_NOTE: A message sent after the flag doesn't move the chat the check compares: this one would un-flag "Elm"
+    await withOwnerDb(
+      async (ownerDb) =>
+        await ownerDb.insert(messages).values({
+          publicId: Utility.generatePublicId(),
+          companyId: companyA,
+          conversationId: userConversationId,
+          sessionMessageId: crypto.randomUUID(),
+          turnId: Utility.generateUlid(),
+          role: Schemas.MessageRoleIntEnum.User,
+          content: { text: "is elm street open?" },
+          createdAt: new Date(Date.now() + 60_000),
+        }),
+    );
+    const refused = await write(`${issue!.publicId}/convert`, withWord);
+    expect(refused.status).toBe(409);
+    expect(refused.body.flaggedTerms).toEqual(
+      expect.arrayContaining([{ term: "Elm", canConfirm: true }]),
+    );
+
+    // DEV_NOTE: Only what cleared a flag counts, not whatever the client sent
+    const confirmedTerms = [
+      ...(refused.body.flaggedTerms ?? []).map(({ term }) => term),
+      "never flagged",
+    ];
+    const saved = await write(`${issue!.publicId}/convert`, { ...withWord, confirmedTerms });
+    expect(saved.status).toBe(200);
+    const row = await issueRow(issue!.publicId);
+    expect(row?.status).toBe(Converted);
+    const events = await issueEvents(issue!.id);
+    const converted = events.find(
+      (event) => event.entityAction === Schemas.QualityIssueEntityActionEnum.Converted,
+    );
+    expect(converted?.detail).toMatchObject({
+      confirmedTermCount: confirmedTerms.length - 1,
+    });
+    expect(JSON.stringify(converted?.detail)).not.toContain("Elm");
   });
 });
 

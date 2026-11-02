@@ -29,3 +29,7 @@ export interface ChatMessageTextsDALResponse extends ApiResponse {
 export interface TranscriptMessagesDALResponse extends ApiResponse {
   messages?: TranscriptMessageRow[];
 }
+
+export interface HasAssistantReplyDALResponse extends ApiResponse {
+  hasReply?: boolean;
+}

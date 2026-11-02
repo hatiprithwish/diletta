@@ -178,6 +178,7 @@ const base: Schemas.WidgetPanelView = {
   canStop: false,
   notice: null,
   draft: "",
+  linkOrigins: [],
 };
 
 const STATES: Schemas.WidgetGalleryState[] = [

@@ -251,7 +251,13 @@ const FIXTURES: Fixture[] = [
     insert: (client, companyId) =>
       client
         .insert(docGapClusters)
-        .values({ publicId: pid(), companyId, label: "RLS test", centroid: vector() })
+        .values({
+          publicId: pid(),
+          companyId,
+          chatbotId: fakeId(),
+          label: "RLS test",
+          centroid: vector(),
+        })
         .returning({ id: docGapClusters.id }),
   },
   {
@@ -262,6 +268,7 @@ const FIXTURES: Fixture[] = [
         .values({
           publicId: pid(),
           companyId,
+          chatbotId: fakeId(),
           questionGeneric: "RLS test?",
           signal: Schemas.DocGapSignalIntEnum.Idk,
         })

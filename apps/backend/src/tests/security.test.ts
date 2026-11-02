@@ -395,15 +395,37 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
       rotated.body.encryptionKeys?.[0]?.createdAt,
     );
 
+    // DEV_NOTE: The rotation job ran right after the commit (waitUntil, awaited by call): with no values on v1 it
+    // retired it at once, so the rotation is over and the next one may start (M6-3)
+    const after = await call("GET", "/dashboard/security/encryption-keys", { as: adminA });
+    expect(after.body.isRotationInProgress).toBe(false);
+    expect(after.body.encryptionKeys?.map((key) => [key.version, key.statusLabel])).toEqual([
+      [2, Schemas.CompanyEncryptionKeyStatusLabelEnum.Active],
+      [1, Schemas.CompanyEncryptionKeyStatusLabelEnum.Destroyed],
+    ]);
     const again = await call("POST", "/dashboard/security/encryption-keys/rotate", { as: adminA });
-    expect(again.status).toBe(409);
-    expect(again.body.failure).toBe(Schemas.EncryptionKeyRotateFailureEnum.RotationInProgress);
-    expect(again.body.encryptionKeys).toHaveLength(2);
+    expect(again.status).toBe(200);
+    expect(again.body.encryptionKeys?.[0]?.version).toBe(3);
 
     expect(await auditEvents(companyA, Schemas.AuditEntityTypeEnum.CompanyEncryptionKey)).toEqual([
       {
         actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
         entityAction: Schemas.AuditEntityActionEnum.Rotated,
+        detail: { label: "v2" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+        entityAction: Schemas.AuditEntityActionEnum.Retired,
+        detail: { label: "v1" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+        entityAction: Schemas.AuditEntityActionEnum.Rotated,
+        detail: { label: "v3" },
+      },
+      {
+        actorType: Schemas.ActivityLogActorTypeIntEnum.System,
+        entityAction: Schemas.AuditEntityActionEnum.Retired,
         detail: { label: "v2" },
       },
     ]);
@@ -459,6 +481,27 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
     expect(other.body.retention?.isDefault).toBe(true);
   });
 
+  it("erases a user for an admin only, and never answers with an internal id", async () => {
+    const hostUserId = `erase-${crypto.randomUUID()}`;
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.insert(chatbotUsers).values({ companyId: companyA, hostUserId });
+    });
+    const path = "/dashboard/security/erase-user";
+
+    expect((await call("POST", path, { as: operator, body: { hostUserId } })).status).toBe(403);
+    expect((await call("POST", path, { as: adminB, body: { hostUserId } })).status).toBe(404);
+    expect((await call("POST", path, { as: adminA, body: { hostUserId: " " } })).status).toBe(400);
+
+    const erased = await call("POST", path, { as: adminA, body: { hostUserId } });
+    expect(erased.status).toBe(200);
+    expect(erased.body).toEqual({
+      isSuccess: true,
+      message: "User erased",
+      conversationCount: 0,
+    });
+    expect((await call("POST", path, { as: adminA, body: { hostUserId } })).status).toBe(404);
+  });
+
   it("lists the issues typed Prompt injection newest first, never another company's", async () => {
     const { status, body } = await call("GET", "/dashboard/security/injection-events", {
       as: adminA,
@@ -500,7 +543,11 @@ describe("Security page API (M4-9)", { timeout: 60_000 }, () => {
   it("shows this page's writes in the audit log, in words", async () => {
     const { body } = await call("GET", "/dashboard/audit-log", { as: adminA });
     expect(body.auditLog?.map((entry) => [entry.actorName, entry.action, entry.on])).toEqual([
+      ["Ana Ruiz", "Erased a user", "0 chats"],
       ["Ana Ruiz", "Changed chat retention", "90 days"],
+      [null, "Retired encryption key", "v2"],
+      ["Ana Ruiz", "Rotated encryption key", "v3"],
+      [null, "Retired encryption key", "v1"],
       ["Ana Ruiz", "Rotated encryption key", "v2"],
       ["Ana Ruiz", "Changed allowed origins", "Production"],
     ]);

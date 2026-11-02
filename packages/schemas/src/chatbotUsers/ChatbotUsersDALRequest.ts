@@ -7,6 +7,14 @@ export type CreateChatbotUserDALRequest = ChatbotUserBase & Pick<ChatbotUser, "c
 // Params to find a chatbot user by its host user ID within one company
 export type FindChatbotUserDALRequest = Pick<ChatbotUser, "hostUserId" | "companyId">;
 
+// DEV_NOTE: The erasure's steps (M6-2) address the user by chatbot_users.id, except the first, which finds it
+export type EraseChatbotUserDALRequest = FindChatbotUserDALRequest;
+
+export interface ChatbotUserContentDALRequest {
+  companyId: string;
+  chatbotUserId: string;
+}
+
 export type GetChatbotUsersCountDALRequest = Pick<ChatbotUser, "companyId">;
 
 export type GetChatbotUsersDALRequest = GetChatbotUsersCountDALRequest &

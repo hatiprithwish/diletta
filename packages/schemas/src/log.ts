@@ -20,6 +20,7 @@ export enum LogCategory {
   Feedback = "Feedback",
   Action = "Action",
   Rollup = "Rollup",
+  Health = "Health",
   Insights = "Insights",
   // DEV_NOTE: The eval harness's /eval/* API (M5-2)
   Eval = "Eval",
@@ -57,6 +58,7 @@ export enum LogAction {
   ListChatbotUsers = "ListChatbotUsers",
   CountChatbotUsers = "CountChatbotUsers",
   UpdateChatbotUser = "UpdateChatbotUser",
+  EraseChatbotUser = "EraseChatbotUser",
 
   // Company connections
   CreateCompanyConnection = "CreateCompanyConnection",
@@ -88,6 +90,8 @@ export enum LogAction {
   UnwrapCompanyKey = "UnwrapCompanyKey",
   EncryptValue = "EncryptValue",
   DecryptValue = "DecryptValue",
+  ReEncryptValue = "ReEncryptValue",
+  RewrapCompanyKey = "RewrapCompanyKey",
 
   // Company encryption keys
   CreateCompanyEncryptionKey = "CreateCompanyEncryptionKey",
@@ -95,6 +99,14 @@ export enum LogAction {
   GetActiveCompanyEncryptionKey = "GetActiveCompanyEncryptionKey",
   ListCompanyEncryptionKeys = "ListCompanyEncryptionKeys",
   MarkCompanyEncryptionKeyRetiring = "MarkCompanyEncryptionKeyRetiring",
+  GetCompanyIdsWithKeyWork = "GetCompanyIdsWithKeyWork",
+  RewrapCompanyEncryptionKey = "RewrapCompanyEncryptionKey",
+  DestroyCompanyEncryptionKey = "DestroyCompanyEncryptionKey",
+  // DEV_NOTE: The rotation job's reads and writes on the encrypted_* tables; metadata.column says which (M6-3)
+  GetValuesOnKeyVersion = "GetValuesOnKeyVersion",
+  UpdateReEncryptedValue = "UpdateReEncryptedValue",
+  CountValuesOnKeyVersion = "CountValuesOnKeyVersion",
+  SweepKeyRotation = "SweepKeyRotation",
 
   // Company secrets
   CreateCompanySecret = "CreateCompanySecret",
@@ -177,6 +189,7 @@ export enum LogAction {
   RequestHostToken = "RequestHostToken",
   HandOverChangeRequest = "HandOverChangeRequest",
   PurgeChangeRequestValues = "PurgeChangeRequestValues",
+  PurgeConversationContent = "PurgeConversationContent",
   EditChangeRequest = "EditChangeRequest",
   UpdateChangeRequestPayload = "UpdateChangeRequestPayload",
   ReceiveHostToken = "ReceiveHostToken",
@@ -391,6 +404,22 @@ export enum LogAction {
   AnswerDocGapCluster = "AnswerDocGapCluster",
   DismissDocGapCluster = "DismissDocGapCluster",
   ReopenDocGapClusters = "ReopenDocGapClusters",
+  LockDocGapClustering = "LockDocGapClustering",
+  FindNearestDocGapCluster = "FindNearestDocGapCluster",
+  CreateDocGapCluster = "CreateDocGapCluster",
+  GrowDocGapCluster = "GrowDocGapCluster",
+  CreateDocGap = "CreateDocGap",
+  GetDocGapByMessage = "GetDocGapByMessage",
+  CountDocGapUsers = "CountDocGapUsers",
+  AttachDocGapToCluster = "AttachDocGapToCluster",
+  MarkClosedConversationUnanswered = "MarkClosedConversationUnanswered",
+  ReopenDocGapQualityIssues = "ReopenDocGapQualityIssues",
+  HasDocGapOnLastUserMessage = "HasDocGapOnLastUserMessage",
+  ProcessDocGapCandidate = "ProcessDocGapCandidate",
+  RewriteDocGapQuestion = "RewriteDocGapQuestion",
+  GetDocGapCandidateMessages = "GetDocGapCandidateMessages",
+  GetActivityLog = "GetActivityLog",
+  GetQualityIssueByDocGapCluster = "GetQualityIssueByDocGapCluster",
 
   // Tests page (M4-8)
   GetDashboardEvalRuns = "GetDashboardEvalRuns",
@@ -454,4 +483,24 @@ export enum LogAction {
   HasEvalResult = "HasEvalResult",
   GetPendingOwnerFiles = "GetPendingOwnerFiles",
   SweepEvalTranscripts = "SweepEvalTranscripts",
+  // Nightly platform suite (M5-5)
+  LockPlatformEvalCases = "LockPlatformEvalCases",
+  GetPlatformEvalCases = "GetPlatformEvalCases",
+  CreatePlatformEvalCase = "CreatePlatformEvalCase",
+  UpdatePlatformEvalCase = "UpdatePlatformEvalCase",
+  DeactivatePlatformEvalCases = "DeactivatePlatformEvalCases",
+  SyncPlatformEvalCases = "SyncPlatformEvalCases",
+  GetLatestNightlyEvalRun = "GetLatestNightlyEvalRun",
+  CheckNightlySuite = "CheckNightlySuite",
+  ReportNightlyEvalRun = "ReportNightlyEvalRun",
+  // Production health per chatbot (M5-5)
+  GetChatbotHealthRollups = "GetChatbotHealthRollups",
+  HasChatbotHealthDay = "HasChatbotHealthDay",
+  LockOpenChatbotWideQualityIssue = "LockOpenChatbotWideQualityIssue",
+  GetOpenChatbotWideQualityIssue = "GetOpenChatbotWideQualityIssue",
+  CheckChatbotHealth = "CheckChatbotHealth",
+  RecordChatbotHealthDrop = "RecordChatbotHealthDrop",
+  // Prompt injection (M6-4)
+  DetectPromptInjection = "DetectPromptInjection",
+  RecordPromptInjection = "RecordPromptInjection",
 }

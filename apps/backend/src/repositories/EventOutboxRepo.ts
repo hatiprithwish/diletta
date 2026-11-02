@@ -9,15 +9,13 @@ import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 // DEV_NOTE: Outbox relay. Writers record a critical event with CriticalEventProvider inside their own withTenant
 // (or recordCriticalEvent here, when the event is the only write); after the commit they relay its outboxId with
 // relayEvents in waitUntil. The Cron sweep publishes whatever that relay missed (a killed isolate, a Queue outage),
 // and purges published rows. Each publish locks its rows FOR UPDATE SKIP LOCKED, sends them, and marks them
 // published in one transaction, so a row is handed to the Queue by one relay at a time. A relay that dies between
 // the send and the commit leaves the row pending and it is sent again: delivery is at-least-once, and consumers
-// dedupe on outboxId. The sweep and the purge span companies, so they run in withPlatform (pattern rule 3.15).
+// dedupe on outboxId. The sweep and the purge span companies, so they run in withPlatform.
 export default class EventOutboxRepo {
   private db: NodePgDatabase;
   private dal: EventOutboxDAL;
@@ -81,7 +79,7 @@ export default class EventOutboxRepo {
   }
 
   // DEV_NOTE: Cron sweep across companies: pending rows older than OUTBOX_SWEEP_MIN_AGE_MS, oldest first, one
-  // transaction per batch. Stops when the Queue is unavailable (or the DB fails) and resumes next minute. companyIds
+  // transaction per batch. Stops when the Queue is unavailable (or the DB fails) and resumes next tick. companyIds
   // limits it to some companies (tests on the shared staging branch); the Cron passes null.
   async sweepPendingEvents(params: {
     companyIds: string[] | null;
@@ -124,7 +122,7 @@ export default class EventOutboxRepo {
     companyIds: string[] | null;
   }): Promise<Schemas.PurgePublishedEventsResponse> {
     const publishedBefore = new Date(
-      Date.now() - Constants.OUTBOX_PUBLISHED_RETENTION_DAYS * DAY_MS,
+      Date.now() - Constants.OUTBOX_PUBLISHED_RETENTION_DAYS * Constants.DAY_MS,
     );
 
     return await withPlatform(this.db, async (tx) => {
@@ -182,7 +180,7 @@ export default class EventOutboxRepo {
 
   // DEV_NOTE: A failed sendBatch doesn't say which message it choked on, so each row is retried on its own.
   // - None sent: the Queue itself is failing (an outage). Rows stay pending with lastError and no attempt counted, so
-  //   an outage of any length never turns events into Failed; the sweep stops and retries next minute.
+  //   an outage of any length never turns events into Failed; the sweep stops and retries next tick.
   // - Some sent: the rest were rejected for themselves (e.g. too large). Healthy rows publish; each rejected row
   //   counts an attempt and moves to Failed at OUTBOX_MAX_ATTEMPTS, so it can't hold the batch back for long.
   private async sendOneByOne(

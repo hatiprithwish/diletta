@@ -17,7 +17,7 @@ import * as Schemas from "@app/schemas";
 // fresh ones; any failure rolls the day back to its previous rows. So a rebuild is safe to repeat for any company and
 // day, and leaves no metric behind that the sources no longer hold. The hourly run (ActivityRollupsCron) rebuilds
 // today and yesterday (UTC) for every company that isn't churned, listing them in withPlatform (a sweep across
-// companies, pattern rule 3.15); an operator rebuilds any range by hand (ActivityRollupsRoutes).
+// companies); an operator rebuilds any range by hand (ActivityRollupsRoutes).
 export default class ActivityRollupsRepo {
   private db: NodePgDatabase;
   private dal: ActivityRollupsDAL;
