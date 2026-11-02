@@ -17,7 +17,7 @@ Each listed row carries three correlated subqueries, all on indexed reference co
 
 ## A turn's cost
 
-A turn is one `turn_id`. Its cost is `SUM(model_calls.cost_usd)` over that `turn_id` with `provider <> 'workers_ai'`: the company key's spend, the same rule as the Usage page. Workers AI calls (the search's embed and rerank) are platform-paid and left out. Pending rows count at their cost as it stands (0 until the per-minute backfill fills them) and the turn says "some cost is still coming in"; Unknown rows stay at 0 and the turn says "some cost is unknown". To check a turn by hand, as the owner role:
+A turn is one `turn_id`. Its cost is `SUM(model_calls.cost_usd)` over that `turn_id` with `provider <> 'workers_ai'`: the company key's spend, the same rule as the Usage page. Workers AI calls (the search's embed and rerank) are platform-paid and left out. Pending rows count at their cost as it stands (0 until the Cron backfill fills them) and the turn says "some cost is still coming in"; Unknown rows stay at 0 and the turn says "some cost is unknown". To check a turn by hand, as the owner role:
 
 ```sql
 SELECT turn_id, sum(cost_usd), count(*) FILTER (WHERE usage_status = 2) AS pending

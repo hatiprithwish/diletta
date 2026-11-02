@@ -157,7 +157,7 @@ export enum ConversationSortColumn {
 
 export const ZConversationSortColumn = z.enum(ConversationSortColumn);
 
-// DEV_NOTE: Why a cost may still change or isn't the full price: a model call still Pending (the per-minute backfill
+// DEV_NOTE: Why a cost may still change or isn't the full price: a model call still Pending (the Cron's backfill
 // fills it from the gateway log) or Unknown (no usage found, its cost stays 0). Unknown wins when both apply.
 export enum ConversationCostNoteEnum {
   Pending = "pending",

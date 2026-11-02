@@ -2,7 +2,7 @@
 // trigger's scheduled time). One trigger per Worker: the account's Workers Free plan allows 5 cron triggers in total,
 // so a job's schedule lives in code, never as another wrangler.jsonc trigger.
 export enum CronJobEnum {
-  // Every minute
+  // Every cron tick (every 15 minutes)
   OutboxSweep = "OutboxSweep",
   ModelCallUsageBackfill = "ModelCallUsageBackfill",
   ChangeRequestPurge = "ChangeRequestPurge",

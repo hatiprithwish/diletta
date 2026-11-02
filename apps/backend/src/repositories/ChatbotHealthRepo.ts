@@ -15,7 +15,7 @@ import * as Schemas from "@app/schemas";
 // are read in its own withTenant, and each dropped chatbot is written in its own withTenant through
 // ChatbotHealthProvider.record (a failure rolls that chatbot back alone). A newly recorded drop also logs an error for
 // our team (→ Sentry, M6-6); a rerun on the same day finds the day covered and writes and logs nothing. The events are
-// left to the per-minute outbox sweep (a cron has no request to relay them from). One company's failure is logged and
+// left to the periodic outbox sweep (a cron has no request to relay them from). One company's failure is logged and
 // the sweep goes on; a missed day is judged by nobody (the next run judges its own yesterday), which is safe: the
 // issue stays open until an admin closes it.
 export default class ChatbotHealthRepo {
