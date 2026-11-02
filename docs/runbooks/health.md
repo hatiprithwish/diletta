@@ -20,7 +20,7 @@ Conversations close as "couldn't answer" only since M5-6 (the last question beca
 
 - **Quality page.** The chatbot gets one open issue, source Automatic check, type Health drop, titled "Daily health check: <chatbot>". Its note says what dropped, e.g. "Oct 30: Replies rated down 70% (usually 10%)." It has no conversation, so it has no excerpt, no Create test and no Open conversation; the admin marks it fixed or dismisses it.
 - **Another bad day** while that issue is open adds a sentence to its note instead of opening a second issue, even if an admin retyped it. A rerun of the same day adds nothing (the days an issue covers are read from its events, not its note). The note stays within what an admin can save: the oldest lines give way to "…and N earlier lines (see the activity log)".
-- **Our team.** Each newly recorded drop logs an error (`Health` / `RecordChatbotHealthDrop`, with the company, chatbot, day and signals), which reaches Sentry with M6-6.
+- **Our team.** Each newly recorded drop logs an error (`Health` / `RecordChatbotHealthDrop`, with the company, chatbot, day and signals), which reaches Sentry and #diletta-alerts (`docs/runbooks/observability.md`).
 - Once the issue is closed, the next drop opens a new one.
 
 **Couldn't-answer lag.** A conversation's outcome is counted on the day it started, and at 04:00 UTC some of yesterday's conversations may not have closed yet, while the baseline days are complete. Yesterday's share can read low, so this signal can miss a regression but won't raise a false alarm.

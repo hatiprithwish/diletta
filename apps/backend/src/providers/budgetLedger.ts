@@ -146,4 +146,16 @@ export default class BudgetLedgerProvider {
           : user,
     };
   }
+
+  // DEV_NOTE: The alert thresholds (M6-6) the period's settled spend has reached, lowest first. Judged on the state,
+  // not on a crossing, so a seeded spend, a lowered budget or a DO that lost its memory still alerts; BudgetDO records
+  // which ones it already sent. A budget of 0 reaches none: every call is refused, which alerts on its own.
+  static reachedAlertThresholds(
+    ledger: Pick<Schemas.BudgetLedger, "spentMicros" | "budgetMicros">,
+  ): Schemas.BudgetAlertThresholdPercent[] {
+    if (ledger.budgetMicros <= 0) return [];
+    return Schemas.BUDGET_ALERT_THRESHOLD_PERCENTS.filter(
+      (percent) => ledger.spentMicros * 100 >= ledger.budgetMicros * percent,
+    );
+  }
 }

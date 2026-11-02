@@ -393,6 +393,7 @@ describe("EventOutboxRepo relay", () => {
         activityLogId: recorded.activityLogId,
         eventType: event.eventType,
         dedupeKey: event.dedupeKey,
+        createdAtMs: (await getOutboxRow(outboxId))?.createdAt.getTime(),
       },
     ]);
 
@@ -596,6 +597,87 @@ describe("EventOutboxRepo relay", () => {
   });
 });
 
+describe("EventOutboxRepo health check", () => {
+  // DEV_NOTE: A company of its own per test, so rows the relay tests left pending or failed don't count here
+  async function healthScope() {
+    const companyId = await withOwnerDb(createCompany);
+    return { companyId, scope: { companyIds: [companyId] } };
+  }
+  const healthAlerts = () =>
+    vi
+      .mocked(AppLogger.error)
+      .mock.calls.map(([entry]) => entry)
+      .filter((entry) => entry.action === Schemas.LogAction.CheckEventOutboxHealth);
+
+  it("is quiet with nothing pending, and with a row the sweep can still pick up", async () => {
+    const { companyId, scope } = await healthScope();
+    const repo = new EventOutboxRepo(repoEnv());
+
+    const empty = await repo.checkEventOutboxHealth(scope);
+    expect(empty).toMatchObject({
+      isSuccess: true,
+      oldestPendingAgeMs: null,
+      pendingCount: 0,
+      failedCount: 0,
+      isAlerting: false,
+    });
+
+    const recorded = await repo.recordCriticalEvent(criticalEvent(companyId));
+    await backdateOutboxRow(recorded.outboxId ?? "", Constants.OUTBOX_LAG_ALERT_MS - 60_000);
+    const recent = await repo.checkEventOutboxHealth(scope);
+    expect(recent).toMatchObject({ isSuccess: true, pendingCount: 1, isAlerting: false });
+    expect(recent.oldestPendingAgeMs).toBeLessThan(Constants.OUTBOX_LAG_ALERT_MS);
+    expect(healthAlerts()).toEqual([]);
+  });
+
+  it("alerts on a pending row older than the lag limit", async () => {
+    const { companyId, scope } = await healthScope();
+    const repo = new EventOutboxRepo(repoEnv());
+    const recorded = await repo.recordCriticalEvent(criticalEvent(companyId));
+    await backdateOutboxRow(recorded.outboxId ?? "", Constants.OUTBOX_LAG_ALERT_MS + 60_000);
+
+    const checked = await repo.checkEventOutboxHealth(scope);
+    expect(checked).toMatchObject({ isSuccess: true, pendingCount: 1, isAlerting: true });
+    expect(checked.oldestPendingAgeMs).toBeGreaterThan(Constants.OUTBOX_LAG_ALERT_MS);
+    expect(healthAlerts()).toEqual([
+      expect.objectContaining({
+        category: Schemas.LogCategory.Relay,
+        message: "Outbox events waiting too long to publish",
+        metadata: expect.objectContaining({ pendingCount: 1 }),
+      }),
+    ]);
+  });
+
+  it("alerts on a Failed row, and not on a published one", async () => {
+    const { companyId, scope } = await healthScope();
+    const repo = new EventOutboxRepo(repoEnv());
+    const failed = await repo.recordCriticalEvent(criticalEvent(companyId));
+    const published = await repo.recordCriticalEvent(criticalEvent(companyId));
+    await repo.relayEvents({ companyId, outboxIds: [published.outboxId ?? ""] });
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb
+        .update(eventOutbox)
+        .set({ status: Schemas.EventOutboxStatusIntEnum.Failed })
+        .where(eq(eventOutbox.id, failed.outboxId ?? ""));
+    });
+
+    const checked = await repo.checkEventOutboxHealth(scope);
+    expect(checked).toMatchObject({
+      isSuccess: true,
+      oldestPendingAgeMs: null,
+      pendingCount: 0,
+      failedCount: 1,
+      isAlerting: true,
+    });
+    expect(healthAlerts()).toEqual([
+      expect.objectContaining({
+        message: "Outbox events failed and need a manual retry",
+        metadata: { failedCount: 1 },
+      }),
+    ]);
+  });
+});
+
 describe("EventsConsumer", () => {
   const message = (body: unknown) => ({
     id: crypto.randomUUID(),
@@ -633,6 +715,7 @@ describe("EventsConsumer", () => {
       expect.objectContaining({
         action: Schemas.LogAction.ConsumeEvent,
         message: "Event received",
+        metadata: expect.objectContaining({ lagMs: null }),
       }),
     );
     expect(AppLogger.error).toHaveBeenCalledWith(
@@ -641,5 +724,24 @@ describe("EventsConsumer", () => {
         message: "Invalid event message",
       }),
     );
+  });
+
+  it("logs how long the event waited between its outbox row and the consumer", async () => {
+    const event = message({
+      outboxId: "1",
+      companyId: companyA,
+      activityLogId: "2",
+      eventType: "change_request.verified",
+      dedupeKey: "test:consumer-lag",
+      createdAtMs: Date.now() - 5_000,
+    });
+
+    await consumeEvents(batchOf([event]), env, createExecutionContext());
+
+    const received = vi
+      .mocked(AppLogger.info)
+      .mock.calls.map(([entry]) => entry)
+      .find((entry) => entry.message === "Event received");
+    expect((received?.metadata as { lagMs: number }).lagMs).toBeGreaterThanOrEqual(5_000);
   });
 });

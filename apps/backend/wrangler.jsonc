@@ -24,6 +24,9 @@
     // with LOAD_STUB_MODEL_KEY_PREFIX (ADR 0005). Empty = off (local and production).
     "LOAD_TEST_COMPANY_ID": "",
     "MODEL_BASE_URL_OVERRIDE": "",
+    // DEV_NOTE: Sentry's environment tag (M6-6, docs/runbooks/observability.md). SENTRY_DSN is a secret per env
+    // (wrangler secret put); empty or unset = Sentry off, as locally and in tests.
+    "SENTRY_ENVIRONMENT": "",
   },
   "observability": {
     "logs": {
@@ -161,6 +164,7 @@
         // MODEL_BASE_URL_OVERRIDE = Schemas.TEST_HOST_STAGING_ISSUER + Schemas.TEST_HOST_MODEL_STUB_PATH
         "LOAD_TEST_COMPANY_ID": "",
         "MODEL_BASE_URL_OVERRIDE": "https://diletta-test-host-staging.hatiprithwish.workers.dev/model-stub/anthropic/v1",
+        "SENTRY_ENVIRONMENT": "staging",
       },
       "observability": {
         "logs": {
@@ -236,6 +240,7 @@
         "NIGHTLY_SUITE_COMPANY_ID": "",
         "LOAD_TEST_COMPANY_ID": "",
         "MODEL_BASE_URL_OVERRIDE": "",
+        "SENTRY_ENVIRONMENT": "production",
       },
       "observability": {
         "logs": {

@@ -54,12 +54,13 @@ All budget logs use the `Budget` category (`LogCategory.Budget`):
 - The same with `refusal: Unavailable` is an **error**: BudgetDO couldn't read Neon (`GetBudgetSeed` error alongside), was asked for another company, or got a request that doesn't parse ("Invalid budget request"). Calls fail closed until it can, so the chatbot is unavailable: check Hyperdrive and Neon.
 - `SettleBudget` error: a settle didn't reach BudgetDO. The hold expires into spend after 20 minutes; nothing to fix by hand.
 - `ExpireBudgetReservation` warning: a hold expired unsettled. Frequent ones mean turns are being evicted mid-call.
+- `ReachBudgetThreshold` error "Company budget 50% / 80% / 100% used" and `ExhaustCompanyBudget` error "Company budget used up; model calls refused" (M6-6): alerts to our team (Sentry → Slack), once per company per billing period each. They are remembered in BudgetDO's storage (`alerted:<period>:<50|80|100|exhausted>`) and dropped when the next period opens. The thresholds are `BUDGET_ALERT_THRESHOLD_PERCENTS`, measured on settled spend (holds in flight don't count). What to do: `docs/runbooks/observability.md`.
 
 ## Known gaps (after M2-4)
 
 Not built yet, each tracked in the dev plan's open questions:
 
-- **Budget alerts at 50% / 80% / 100%** (the Cron in the architecture). Nothing tells an admin the budget is running out; at 100% the chatbot just shows "Temporarily unavailable". No task owns it yet (suggested: with M6-6). Settings › Budget draws the 50% and 80% ticks on its bar but doesn't promise alerts.
+- **Admin budget notifications.** The 50% / 80% / 100% alerts (M6-6) reach our team only. Admins get no notification (notifications aren't in v1), so at 100% their chatbot just shows "Temporarily unavailable". Settings › Budget draws the 50% and 80% ticks on its bar but doesn't promise alerts.
 - **Loop guard** (same tool + same args twice in a turn → stop). There are no tools until M3 (`activeTools: []`), so there is nothing to guard. Add it with the first tool calls (M3-1 / M3-4), next to `stopWhen` in `ConversationDO.beforeTurn`.
 - **Sub-agents sharing the parent turn's budget** (architecture cost box). None exist yet.
 

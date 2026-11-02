@@ -29,7 +29,12 @@ export default async function consumeEvents(
       category: Schemas.LogCategory.Queue,
       action: Schemas.LogAction.ConsumeEvent,
       message: "Event received",
-      metadata: { ...parsed.data, attempts: message.attempts },
+      // DEV_NOTE: lagMs = outbox row written → consumed (M6-6), null for a message sent without createdAtMs
+      metadata: {
+        ...parsed.data,
+        attempts: message.attempts,
+        lagMs: parsed.data.createdAtMs === undefined ? null : Date.now() - parsed.data.createdAtMs,
+      },
     });
 
     if (parsed.data.eventType === Schemas.DOC_GAP_CANDIDATE_EVENT_TYPE) {

@@ -45,6 +45,12 @@ export type MarkEventOutboxAttemptFailedDALRequest = {
 
 // DEV_NOTE: Cross-company purge (withPlatform): published rows older than publishedBefore, optionally limited to
 // companyIds (tests only; the Cron passes null)
+// DEV_NOTE: Cross-company health read (withPlatform, M6-6): the oldest Pending row and the Failed count, optionally
+// limited to companyIds (tests only; the Cron passes null)
+export type GetEventOutboxHealthDALRequest = {
+  companyIds: string[] | null;
+};
+
 export type DeletePublishedEventOutboxesDALRequest = {
   publishedBefore: Date;
   companyIds: string[] | null;

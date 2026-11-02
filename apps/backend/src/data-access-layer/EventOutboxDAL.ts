@@ -360,6 +360,58 @@ export default class EventOutboxDAL {
     return response;
   }
 
+  // DEV_NOTE: Outbox health across companies (M6-6, withPlatform): the oldest Pending row's created_at and the Pending
+  // and Failed counts, in one read
+  async getEventOutboxHealth(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetEventOutboxHealthDALRequest,
+  ) {
+    const response: Schemas.EventOutboxHealthDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        inArray(eventOutbox.status, [
+          Schemas.EventOutboxStatusIntEnum.Pending,
+          Schemas.EventOutboxStatusIntEnum.Failed,
+        ]),
+      ];
+      if (params.companyIds !== null)
+        conditions.push(inArray(eventOutbox.companyId, params.companyIds));
+      const isPending = sql`${eventOutbox.status} = ${Schemas.EventOutboxStatusIntEnum.Pending}`;
+      const [row] = await tx
+        .select({
+          oldestPendingCreatedAt: sql<
+            Date | string | null
+          >`min(${eventOutbox.createdAt}) filter (where ${isPending})`,
+          pendingCount: sql<string>`count(*) filter (where ${isPending})`,
+          failedCount: sql<string>`count(*) filter (where ${eventOutbox.status} = ${Schemas.EventOutboxStatusIntEnum.Failed})`,
+        })
+        .from(eventOutbox)
+        .where(and(...conditions));
+
+      const oldest = row?.oldestPendingCreatedAt ?? null;
+      response.isSuccess = true;
+      response.message = "Event outbox health fetched successfully";
+      response.health = {
+        oldestPendingCreatedAt: oldest === null ? null : new Date(oldest),
+        pendingCount: Number(row?.pendingCount ?? 0),
+        failedCount: Number(row?.failedCount ?? 0),
+      };
+    } catch (error) {
+      const message = "Unknown error in fetching event outbox health";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetEventOutboxHealth,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async deletePublishedEventOutboxes(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.DeletePublishedEventOutboxesDALRequest,

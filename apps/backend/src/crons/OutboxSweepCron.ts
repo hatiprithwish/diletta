@@ -3,8 +3,8 @@ import AppLogger from "@/providers/logger";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 
 // DEV_NOTE: Every cron tick (wrangler.jsonc triggers): publish the pending outbox rows the after-commit relay missed,
-// then purge published rows past retention. Goes through EventOutboxRepo, never a DAL. Failures
-// are logged by the Repo and DAL; the next run retries.
+// then check the outbox for lag and Failed rows (M6-6), then purge published rows past retention. Goes through
+// EventOutboxRepo, never a DAL. Failures are logged by the Repo and DAL; the next run retries.
 export default async function runOutboxSweep(env: Env): Promise<void> {
   const repo = new EventOutboxRepo(env);
 
@@ -17,6 +17,9 @@ export default async function runOutboxSweep(env: Env): Promise<void> {
       metadata: { publishedCount: swept.publishedCount, failedCount: swept.failedCount },
     });
   }
+
+  // DEV_NOTE: After the sweep, so a row it just published doesn't count as lag (M6-6). Alerts are logged by the Repo.
+  await repo.checkEventOutboxHealth({ companyIds: null });
 
   const purged = await repo.purgePublishedEvents({ companyIds: null });
   if (purged.deletedCount) {

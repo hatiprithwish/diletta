@@ -156,6 +156,9 @@ export enum LogAction {
   ReserveBudget = "ReserveBudget",
   SettleBudget = "SettleBudget",
   ExpireBudgetReservation = "ExpireBudgetReservation",
+  // Budget alerts (M6-6)
+  ReachBudgetThreshold = "ReachBudgetThreshold",
+  ExhaustCompanyBudget = "ExhaustCompanyBudget",
 
   // Tool definitions
   CreateToolDefinition = "CreateToolDefinition",
@@ -332,6 +335,9 @@ export enum LogAction {
   SweepPendingEvents = "SweepPendingEvents",
   PurgePublishedEvents = "PurgePublishedEvents",
   ConsumeEvent = "ConsumeEvent",
+  // Outbox health (M6-6)
+  GetEventOutboxHealth = "GetEventOutboxHealth",
+  CheckEventOutboxHealth = "CheckEventOutboxHealth",
 
   // Activity log partitions
   CreateActivityLogPartition = "CreateActivityLogPartition",
@@ -458,6 +464,9 @@ export enum LogAction {
 
   // Cron
   DispatchCron = "DispatchCron",
+
+  // Observability (M6-6): an error no handler caught (Hono onError)
+  HandleUncaughtError = "HandleUncaughtError",
 
   // Eval harness (M5-2)
   GetRunnableEvalCases = "GetRunnableEvalCases",
