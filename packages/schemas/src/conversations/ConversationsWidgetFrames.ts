@@ -207,6 +207,7 @@ export interface TranscriptEntry {
   text: string;
   searchCitations: KnowledgeCitation[];
   searchStatuses: SearchHelpDocsStatusEnum[];
+  hasWithheldSearch: boolean;
   hasUnfinishedTool: boolean;
 }
 

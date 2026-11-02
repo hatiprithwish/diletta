@@ -6,13 +6,15 @@ import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: A prompt injection the Conversation DO found (M6-4), recorded in the caller's transaction (a self-contained
 // multi-DAL step a Repo runs inside its own tx; it never opens one, never throws: a failure comes back as isSuccess
-// false and the Repo rolls back). One issue per conversation, keyed by what an admin can't change:
-//   1. The conversation's prompt_injection.detected critical event (actor System; ids, where and which rule, never the
-//      text). Its dedupe key is the conversation's, so only its first detection writes one: a repeat (a later turn, a
-//      concurrent one waiting on the key's lock) comes back wasDuplicate and nothing more is written.
+// false and the Repo rolls back). One issue per help doc, else per conversation and location, keyed by what an admin
+// can't change:
+//   1. The prompt_injection.detected critical event on the conversation (actor System; ids, where, which rule and the
+//      doc or the tool and field, never the text). Its dedupe key (Schemas.promptInjectionDedupeKey) makes a repeat (a
+//      later turn, another chat hitting the same doc, a concurrent one waiting on the key's lock) come back
+//      wasDuplicate, and nothing more is written.
 //   2. With the first: a System issue typed Prompt injection on the conversation (its chatbot's), its note where it was
-//      found and what it tried (Schemas.promptInjectionNote), with its quality_issue.opened critical event. The Security
-//      page lists it with the issues admins typed.
+//      found, what it tried and what the chatbot did (Schemas.promptInjectionNote), with its quality_issue.opened
+//      critical event. The Security page lists it with the issues admins typed.
 export default class PromptInjectionProvider {
   private static qualityIssuesDal = new QualityIssuesDAL();
 
@@ -21,10 +23,18 @@ export default class PromptInjectionProvider {
     request: Schemas.RecordPromptInjectionRequest,
   ): Promise<Schemas.RecordPromptInjectionResponse> {
     const issueType = Schemas.QualityIssueTypeIntEnum.Injection;
+    const { source } = request;
+    // DEV_NOTE: A doc's title goes in the note (company content), never in the event
     const detail: Schemas.PromptInjectionDetail = {
       location: request.location,
       ruleId: request.ruleId,
       rulesVersion: Schemas.PROMPT_INJECTION_RULES_VERSION,
+      ...(source && "documentPublicId" in source
+        ? { documentPublicId: source.documentPublicId }
+        : {}),
+      ...(source && "toolName" in source
+        ? { toolName: source.toolName, fieldPath: source.fieldPath }
+        : {}),
     };
 
     const detected = await CriticalEventProvider.record(tx, {
@@ -39,7 +49,7 @@ export default class PromptInjectionProvider {
       rootLogId: null,
       detail,
       eventType: Schemas.PROMPT_INJECTION_EVENT_TYPE,
-      dedupeKey: Schemas.promptInjectionDedupeKey(request.conversationPublicId),
+      dedupeKey: Schemas.promptInjectionDedupeKey(request),
     });
     if (!detected.isSuccess || !detected.outboxId) {
       return { isSuccess: false, message: detected.message };
@@ -47,7 +57,7 @@ export default class PromptInjectionProvider {
     if (detected.wasDuplicate) {
       return {
         isSuccess: true,
-        message: "The conversation's prompt injection is already recorded",
+        message: "This prompt injection is already recorded",
         isOpened: false,
         outboxIds: [],
       };
@@ -57,7 +67,7 @@ export default class PromptInjectionProvider {
       companyId: request.companyId,
       conversationId: request.conversationId,
       issueType,
-      note: Schemas.promptInjectionNote(request.location, request.ruleId),
+      note: Schemas.promptInjectionNote(request.location, request.ruleId, request.source),
     });
     if (!created.isSuccess || !created.qualityIssue) {
       return { isSuccess: false, message: created.message };

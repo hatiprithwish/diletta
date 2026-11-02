@@ -171,12 +171,15 @@ interface DecidedChangeRequest {
 // requests live in the runtime state by Think tool call id.
 //
 // Prompt injection (M6-4): the user's message (each turn's, and an eval case's), every search's hits and every host
-// read are checked with Schemas.detectPromptInjection. A flagged hit or read is withheld from the model
-// (SearchHelpDocsProvider.screen, HostToolsProvider.readOutput); any detection turns the conversation's changes off for
-// good (injectionDetectedAt): later turns get read tools only and a note saying so, and a write the model still calls
-// in the running turn is Blocked. Open proposals stay as they are (the user approves them from the real diff). Each
-// detection is logged (ids, where, which rule; never the text), and a widget conversation's first one opens its System
-// Prompt injection issue (PromptInjectionRepo, after the block, in the background).
+// read are checked with Schemas.detectPromptInjection. A flagged search hit or host field is withheld from the model
+// on its own (SearchHelpDocsProvider.screen, HostToolsProvider.readOutput): the model never reads it, so the
+// conversation goes on as before (every write after untrusted content already needs the user's approval), and one
+// poisoned record or doc can't switch writes off for everyone who reads it. The user's own message can't be withheld:
+// once its turn is admitted (a refused turn flags nothing), the conversation's changes are off for good
+// (injectionDetectedAt): that turn and every later one get read tools only and a note saying so, and a write still
+// called in a running turn is Blocked; open proposals stay (the user approves them from the real diff). Each detection
+// is logged (ids, where, which rule; never the text), and a widget conversation's is recorded in the background
+// (PromptInjectionRepo: one System Prompt injection issue per help doc, else per conversation and location).
 //
 // Read model: after every turn and on every wake, the transcript past the synced position is written to messages
 // (TranscriptProvider), so a failed write or a turn cut by an eviction is caught up on later.
@@ -725,18 +728,22 @@ export class ConversationDO extends Think<Env> {
     this.patchRuntimeState({ turnIds: { [userMessageId]: turnId } });
     // DEV_NOTE: The case's user messages are what a widget user would have sent; its seeded assistant lines are taken
     // as the chatbot's own
-    for (const caseMessage of messages.data) {
-      if (caseMessage.role !== Schemas.EvalCaseMessageRoleEnum.User) continue;
-      this.checkForInjection(Schemas.PromptInjectionLocationEnum.UserMessage, caseMessage.text);
-    }
+    const flagged = ConversationDO.firstInjection(
+      messages.data
+        .filter((caseMessage) => caseMessage.role === Schemas.EvalCaseMessageRoleEnum.User)
+        .map((caseMessage) => caseMessage.text),
+    );
 
-    const prepared = await this.prepareTurn(session, turnId);
+    const prepared = await this.prepareTurn(session, turnId, flagged !== null);
     if (!prepared.isSuccess) {
       this.activeTurn = null;
       this.patchRuntimeState({ turnIds: {} });
       return prepared.refusal
         ? fail(Schemas.EvalAttemptFailureEnum.BudgetRefused, "A budget refused the turn")
         : fail(Schemas.EvalAttemptFailureEnum.ChatbotUnavailable, "The chatbot can't answer");
+    }
+    if (flagged !== null) {
+      this.flagInjection(Schemas.PromptInjectionLocationEnum.UserMessage, flagged, null);
     }
     this.activeTurn = this.preparedTurn(ConversationDO.newTurn(turn), prepared);
 
@@ -797,9 +804,10 @@ export class ConversationDO extends Think<Env> {
 
   // DEV_NOTE: Admits a new user turn: refused while the conversation is closed or closing or another turn runs. The
   // turn's ULID and the activity time are stored first (so the read model and the auto-close see this turn even if the
-  // DO is evicted), and the message checked for a prompt injection (M6-4: before the tools are loaded, so a flagged
-  // message's own turn already gets read tools only), then the config and the model are prepared. false = refused; the
-  // widget was told why.
+  // DO is evicted), then the config and the model are prepared. The message is checked for a prompt injection first
+  // (M6-4), so a flagged message's own turn is prepared with read tools only, but it is flagged (changes off, logged,
+  // recorded) only once the turn is admitted: a refused turn never reached the model. false = refused; the widget was
+  // told why.
   private async startTurn(
     ws: WebSocket,
     requestId: string,
@@ -826,9 +834,9 @@ export class ConversationDO extends Think<Env> {
       lastActivityAt: Date.now(),
       turnIds: { ...state.turnIds, [userMessageId]: turnId },
     });
-    this.checkForInjection(Schemas.PromptInjectionLocationEnum.UserMessage, message.text);
+    const flagged = ConversationDO.firstInjection([message.text]);
 
-    const prepared = await this.prepareTurn(state.session, turnId);
+    const prepared = await this.prepareTurn(state.session, turnId, flagged !== null);
     if (!prepared.isSuccess) {
       this.activeTurn = null;
       const { [userMessageId]: _dropped, ...turnIds } = this.getRuntimeState()?.turnIds ?? {};
@@ -843,6 +851,9 @@ export class ConversationDO extends Think<Env> {
       return false;
     }
 
+    if (flagged !== null) {
+      this.flagInjection(Schemas.PromptInjectionLocationEnum.UserMessage, flagged, null);
+    }
     this.activeTurn = this.preparedTurn(
       ConversationDO.newTurn({ requestId, turnId, userMessageId }),
       prepared,
@@ -1009,12 +1020,15 @@ export class ConversationDO extends Think<Env> {
   // DEV_NOTE: The turn's config (re-checking conversation, chatbot and company), its pinned tools, the routed model and
   // its budget admission. The conversation's own caps are checked before routing (no I/O, nothing counted);
   // BudgetDO.admitTurn and the turn-rate slot only once the model is routed, so a turn that can't run (no key, Neon
-  // down) never uses up the user's message rate. A read-only company's turn gets its read tools only. isClosed when the
+  // down) never uses up the user's message rate. A read-only company's turn gets its read tools only, and so does a
+  // conversation whose changes a prompt injection turned off, or a turn whose message holds one (isInjectionFlagged,
+  // M6-4). isClosed when the
   // conversation was closed elsewhere; refusal when a budget or rate limit said no; otherwise a failure means the
   // chatbot can't answer (logged by the Repos; the router opens the system issue for a key failure).
   private async prepareTurn(
     session: Schemas.ConversationSession,
     turnId: string,
+    isInjectionFlagged = false,
   ): Promise<Schemas.PreparedTurn<LanguageModel, TurnBudget>> {
     const config = await this.conversationsRepo().loadTurnConfig({ session });
     if (!config.isSuccess || !config.spec) {
@@ -1027,7 +1041,7 @@ export class ConversationDO extends Think<Env> {
     const loadedTools = await this.actionEngineRepo().loadTurnTools({
       session,
       pins: config.spec.tools,
-      isReadOnly: (config.isReadOnly ?? false) || this.isInjectionLocked(),
+      isReadOnly: (config.isReadOnly ?? false) || isInjectionFlagged || this.isInjectionLocked(),
     });
     if (!loadedTools.isSuccess || !loadedTools.tools) {
       return { isSuccess: false, isClosed: false, refusal: null };
@@ -1220,6 +1234,7 @@ export class ConversationDO extends Think<Env> {
       lastSyncedTurnId: state.lastSyncedTurnId,
       mintTurnId: () => Utility.generateUlid(),
       titleMaxChars: Constants.CONVERSATION_TITLE_MAX_CHARS,
+      isInjectionFlagged: state.injectionDetectedAt !== null,
     });
     if (unsynced.isPositionLost) {
       AppLogger.warn({
@@ -1411,29 +1426,45 @@ export class ConversationDO extends Think<Env> {
     this.patchRuntimeState({ undoWindows });
   }
 
-  // DEV_NOTE: Whether a prompt injection turned this conversation's changes off (M6-4)
+  // DEV_NOTE: Whether a prompt injection in the user's message turned this conversation's changes off (M6-4)
   private isInjectionLocked(): boolean {
     return (this.getRuntimeState()?.injectionDetectedAt ?? null) !== null;
   }
 
-  private checkForInjection(location: Schemas.PromptInjectionLocationEnum, text: string): void {
-    const detection = Schemas.detectPromptInjection(text);
-    if (detection.isDetected) this.flagInjection(location, detection.ruleId);
+  // DEV_NOTE: The first rule any of the texts breaks, or null
+  private static firstInjection(texts: string[]): Schemas.PromptInjectionRuleEnum | null {
+    for (const text of texts) {
+      const detection = Schemas.detectPromptInjection(text);
+      if (detection.isDetected) return detection.ruleId;
+    }
+    return null;
   }
 
-  // DEV_NOTE: A prompt injection found (M6-4): changes off for good, in the runtime state first (no await, so nothing
-  // after this in the turn can write), then logged (ids, where, which rule; never the text), then, for a widget
-  // conversation, recorded and relayed in the background. An eval conversation never reaches the dashboard: logged only.
+  // DEV_NOTE: A prompt injection found (M6-4). In the user's message: changes off for good, in the runtime state first
+  // (no await, so nothing after this in the turn can write). Anywhere else the caller already withheld it. Then logged
+  // (ids, where, which rule and the doc or tool and field; never the text) and, for a widget conversation, recorded
+  // and relayed in the background. An eval conversation never reaches the dashboard: logged only.
   private flagInjection(
     location: Schemas.PromptInjectionLocationEnum,
     ruleId: Schemas.PromptInjectionRuleEnum,
+    source: Schemas.PromptInjectionSource,
   ): void {
     const state = this.getRuntimeState();
     if (!state) return;
-    if (state.injectionDetectedAt === null) {
+    if (
+      location === Schemas.PromptInjectionLocationEnum.UserMessage &&
+      state.injectionDetectedAt === null
+    ) {
       this.patchRuntimeState({ injectionDetectedAt: Date.now() });
     }
     const { session } = state;
+    // DEV_NOTE: The doc by its id only in the log (its title is in the issue's note)
+    const where =
+      source === null
+        ? {}
+        : "documentPublicId" in source
+          ? { documentPublicId: source.documentPublicId }
+          : source;
     AppLogger.warn({
       category: Schemas.LogCategory.Conversation,
       action: Schemas.LogAction.DetectPromptInjection,
@@ -1444,6 +1475,7 @@ export class ConversationDO extends Think<Env> {
         location,
         ruleId,
         rulesVersion: Schemas.PROMPT_INJECTION_RULES_VERSION,
+        ...where,
         isEval: session.eval !== null,
       },
     });
@@ -1456,6 +1488,7 @@ export class ConversationDO extends Think<Env> {
           conversationPublicId: session.conversationPublicId,
           location,
           ruleId,
+          source,
         });
         this.relayEvents(recorded.outboxIds);
       })(),
@@ -1501,8 +1534,8 @@ export class ConversationDO extends Think<Env> {
       return SearchHelpDocsProvider.unavailableOutput;
     }
     const screened = SearchHelpDocsProvider.screen(searched.hits);
-    if (screened.ruleId !== null) {
-      this.flagInjection(Schemas.PromptInjectionLocationEnum.HelpDoc, screened.ruleId);
+    for (const { ruleId, ...document } of screened.withheldDocuments) {
+      this.flagInjection(Schemas.PromptInjectionLocationEnum.HelpDoc, ruleId, document);
     }
     return this.recordSearch(turn.turnId, toolCallId, screened.hits, screened.withheldCount);
   }
@@ -1626,8 +1659,13 @@ export class ConversationDO extends Think<Env> {
         latencyMs,
       });
       const read = HostToolsProvider.readOutput(called.body);
-      if (read.ruleId !== null) {
-        this.flagInjection(Schemas.PromptInjectionLocationEnum.HostData, read.ruleId);
+      // DEV_NOTE: One record per read, on its first withheld field: the note sends the admin to the record
+      const [first] = read.withheld;
+      if (first) {
+        this.flagInjection(Schemas.PromptInjectionLocationEnum.HostData, first.ruleId, {
+          toolName: hostTool.name,
+          fieldPath: first.fieldPath,
+        });
       }
       return read.output;
     }
@@ -1681,7 +1719,8 @@ export class ConversationDO extends Think<Env> {
       return false;
     }
     const { turn, hostTool, args, state } = admitted;
-    // DEV_NOTE: A prompt injection found earlier in this turn (M6-4): its tools were loaded before it
+    // DEV_NOTE: Changes turned off by a prompt injection in the user's message (M6-4): the running turn's own tools may
+    // have been loaded before it (a continuation after an answer)
     if (this.isInjectionLocked()) {
       this.recordToolCall(turn, state, hostTool, args, {
         status: Schemas.ToolCallStatusIntEnum.Blocked,

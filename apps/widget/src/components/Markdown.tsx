@@ -5,8 +5,9 @@ import type * as Schemas from "@app/schemas";
 import { isAllowedLink, parseMarkdown } from "@/lib/markdown";
 
 // DEV_NOTE: A reply's text, from the widget's own safe markdown parser (lib/markdown.ts): every node becomes a React
-// element or escaped text, never HTML. Links open in a new tab with no referrer, and only to linkOrigins (or mailto):
-// any other link shows as its text (M6-4). [n] markers are citation chips matching the Sources list. While the reply streams, a caret follows its last block.
+// element or escaped text, never HTML. Links open in a new tab with no referrer, and only to linkOrigins (or a plain
+// mailto): any other link shows as its text (M6-4). [n] markers are citation chips matching the Sources list. While
+// the reply streams, a caret follows its last block.
 const CARET = "inline-block h-3.75 w-1.75 rounded-widget-caret bg-brand-text align-[-2px]";
 const CARET_AFTER_LAST =
   "[&>:last-child]:after:ml-0.5 [&>:last-child]:after:inline-block [&>:last-child]:after:h-3.75 [&>:last-child]:after:w-1.75 [&>:last-child]:after:rounded-widget-caret [&>:last-child]:after:bg-brand-text [&>:last-child]:after:align-[-2px] [&>:last-child]:after:content-['']";

@@ -32,10 +32,11 @@ export function originOf(url: string | null): string | null {
 }
 
 // DEV_NOTE: The link allow-list (M6-4): a reply's link renders only to one of origins (the host app's and the reply's
-// cited sources') or as mailto (the user sees the address before sending anything). Anything else, such as a link a
-// prompt injection made to carry the chat to another site, is shown as its text.
+// cited sources') or as a plain mailto (an address, no ?subject= or ?body=, so a link can't open a mail already holding
+// the chat). Anything else, such as a link a prompt injection made to carry the chat to another site, is shown as its
+// text.
 export function isAllowedLink(href: string, origins: readonly string[]): boolean {
-  if (MAILTO.test(href)) return true;
+  if (MAILTO.test(href)) return !href.includes("?");
   const origin = originOf(href);
   return origin !== null && origins.includes(origin);
 }

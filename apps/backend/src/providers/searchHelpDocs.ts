@@ -18,7 +18,8 @@ import * as Schemas from "@app/schemas";
 // parses; it reads as "no longer shown", never as a failed search.
 //
 // Prompt injection (M6-4): a hit whose title, headings or text breaks a Schemas.detectPromptInjection rule is withheld
-// before numbering: the model never reads it, and it is never cited. The model is told how many were left out.
+// before numbering: the model never reads it, and it is never cited. The model is told how many were left out, and a
+// turn with a withheld hit is never a doc gap candidate (withheldCount on the output: the doc exists).
 //
 // Citations: each result carries a number n, counted across the turn's searches (a second search goes on from the
 // first one's last number). The model cites with [n]; Schemas.citedBy keeps the results the reply text actually cites.
@@ -56,26 +57,45 @@ export default class SearchHelpDocsProvider {
     results: [],
   };
 
-  // DEV_NOTE: The hits the model may read, and how many were withheld for holding a prompt injection, with the first
-  // one's rule (null when none was)
+  // DEV_NOTE: The hits the model may read, how many were withheld for holding a prompt injection, and the documents
+  // they came from (one entry per document, its first rule), for the caller to record
   static screen(hits: Schemas.KnowledgeSearchHit[]): {
     hits: Schemas.KnowledgeSearchHit[];
     withheldCount: number;
-    ruleId: Schemas.PromptInjectionRuleEnum | null;
+    withheldDocuments: {
+      documentPublicId: string;
+      documentTitle: string | null;
+      ruleId: Schemas.PromptInjectionRuleEnum;
+    }[];
   } {
     const kept: Schemas.KnowledgeSearchHit[] = [];
-    let ruleId: Schemas.PromptInjectionRuleEnum | null = null;
+    const withheldDocuments = new Map<
+      string,
+      {
+        documentPublicId: string;
+        documentTitle: string | null;
+        ruleId: Schemas.PromptInjectionRuleEnum;
+      }
+    >();
     for (const hit of hits) {
       const detection = Schemas.detectPromptInjection(
         [hit.title, hit.headingPath, hit.text].filter(Boolean).join("\n"),
       );
-      if (detection.isDetected) {
-        ruleId ??= detection.ruleId;
-      } else {
+      if (!detection.isDetected) {
         kept.push(hit);
+      } else if (!withheldDocuments.has(hit.documentPublicId)) {
+        withheldDocuments.set(hit.documentPublicId, {
+          documentPublicId: hit.documentPublicId,
+          documentTitle: hit.title,
+          ruleId: detection.ruleId,
+        });
       }
     }
-    return { hits: kept, withheldCount: hits.length - kept.length, ruleId };
+    return {
+      hits: kept,
+      withheldCount: hits.length - kept.length,
+      withheldDocuments: [...withheldDocuments.values()],
+    };
   }
 
   // DEV_NOTE: Numbers the hits from firstNumber on, best first

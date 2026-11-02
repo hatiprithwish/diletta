@@ -91,15 +91,22 @@ export interface DocGapRewriteSource {
 // DEV_NOTE: A candidate is a finished turn that searched and whose reply cites nothing. A search that was unavailable
 // says nothing about the docs, so a turn with one is no candidate. Neither is a turn paused on a tool (hasUnfinishedTool:
 // waiting for an approval): its text so far isn't its reply, and the reply that follows is about the action. Every search empty = LowRetrieval; a search found
-// something the reply didn't use = Idk. null = no candidate.
+// something the reply didn't use = Idk. null = no candidate. M6-4: neither is a turn whose search withheld a hit for
+// holding a prompt injection (hasWithheldSearch: the doc exists, it was kept from the model), nor a turn of a
+// conversation a prompt injection in the user's message flagged (isInjectionFlagged): its text never goes on to the
+// doc gap rewrite model.
 export function docGapCandidateSignal(params: {
   searchStatuses: SearchHelpDocsStatusEnum[];
   hasReply: boolean;
   hasCitations: boolean;
   hasUnfinishedTool: boolean;
+  hasWithheldSearch: boolean;
+  isInjectionFlagged: boolean;
 }): DocGapSignalIntEnum | null {
   const { searchStatuses } = params;
-  if (params.hasUnfinishedTool) return null;
+  if (params.hasUnfinishedTool || params.hasWithheldSearch || params.isInjectionFlagged) {
+    return null;
+  }
   if (!params.hasReply || params.hasCitations || searchStatuses.length === 0) return null;
   if (searchStatuses.includes(SearchHelpDocsStatusEnum.Unavailable)) return null;
   return searchStatuses.every((status) => status === SearchHelpDocsStatusEnum.NoResults)

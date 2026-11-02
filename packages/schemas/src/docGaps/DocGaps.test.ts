@@ -11,7 +11,14 @@ import {
 
 const { Found, NoResults, Unavailable } = SearchHelpDocsStatusEnum;
 const candidate = (searchStatuses: SearchHelpDocsStatusEnum[], hasCitations = false) =>
-  docGapCandidateSignal({ searchStatuses, hasReply: true, hasCitations, hasUnfinishedTool: false });
+  docGapCandidateSignal({
+    searchStatuses,
+    hasReply: true,
+    hasCitations,
+    hasUnfinishedTool: false,
+    hasWithheldSearch: false,
+    isInjectionFlagged: false,
+  });
 
 describe("docGapCandidateSignal", () => {
   it("is LowRetrieval when every search was empty, Idk when one found something the reply didn't cite", () => {
@@ -32,6 +39,8 @@ describe("docGapCandidateSignal", () => {
         hasReply: false,
         hasCitations: false,
         hasUnfinishedTool: false,
+        hasWithheldSearch: false,
+        isInjectionFlagged: false,
       }),
     ).toBeNull();
     expect(
@@ -40,8 +49,25 @@ describe("docGapCandidateSignal", () => {
         hasReply: true,
         hasCitations: false,
         hasUnfinishedTool: true,
+        hasWithheldSearch: false,
+        isInjectionFlagged: false,
       }),
     ).toBeNull();
+    // DEV_NOTE: M6-4: a withheld hit means the doc exists; a flagged conversation's text stays away from the rewrite
+    for (const flags of [
+      { hasWithheldSearch: true, isInjectionFlagged: false },
+      { hasWithheldSearch: false, isInjectionFlagged: true },
+    ]) {
+      expect(
+        docGapCandidateSignal({
+          searchStatuses: [NoResults],
+          hasReply: true,
+          hasCitations: false,
+          hasUnfinishedTool: false,
+          ...flags,
+        }),
+      ).toBeNull();
+    }
   });
 });
 

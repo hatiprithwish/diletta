@@ -23,6 +23,9 @@ export default class TranscriptProvider {
         .trim(),
       searchCitations: message.parts.flatMap((part) => TranscriptProvider.searchCitationsOf(part)),
       searchStatuses: message.parts.flatMap((part) => TranscriptProvider.searchStatusOf(part)),
+      hasWithheldSearch: message.parts.some(
+        (part) => (TranscriptProvider.searchOutputOf(part)?.withheldCount ?? 0) > 0,
+      ),
       hasUnfinishedTool: message.parts.some((part) => TranscriptProvider.isUnfinishedTool(part)),
     }));
   }
@@ -77,6 +80,7 @@ export default class TranscriptProvider {
     lastSyncedTurnId: string | null;
     mintTurnId: () => string;
     titleMaxChars: number;
+    isInjectionFlagged: boolean;
   }): Schemas.UnsyncedTranscript {
     let start = 0;
     if (params.lastSyncedMessageId !== null) {
@@ -94,6 +98,7 @@ export default class TranscriptProvider {
     let turnHasCitations = false;
     let turnHasReply = false;
     let turnHasUnfinishedTool = false;
+    let turnHasWithheldSearch = false;
     for (const entry of params.entries.slice(start)) {
       if (entry.role === "user" || !current) {
         const isUser = entry.role === "user";
@@ -113,12 +118,14 @@ export default class TranscriptProvider {
         turnHasCitations = false;
         turnHasReply = false;
         turnHasUnfinishedTool = false;
+        turnHasWithheldSearch = false;
       }
 
       current.lastEntryId = entry.id;
       turnSearchCitations = [...turnSearchCitations, ...entry.searchCitations];
       turnSearchStatuses = [...turnSearchStatuses, ...entry.searchStatuses];
       turnHasUnfinishedTool ||= entry.hasUnfinishedTool;
+      turnHasWithheldSearch ||= entry.hasWithheldSearch;
       if (entry.role !== "other" && entry.text.length > 0) {
         const citations =
           entry.role === "assistant" ? Schemas.citedBy(entry.text, turnSearchCitations) : [];
@@ -142,6 +149,8 @@ export default class TranscriptProvider {
           hasReply: turnHasReply,
           hasCitations: turnHasCitations,
           hasUnfinishedTool: turnHasUnfinishedTool,
+          hasWithheldSearch: turnHasWithheldSearch,
+          isInjectionFlagged: params.isInjectionFlagged,
         });
       }
     }

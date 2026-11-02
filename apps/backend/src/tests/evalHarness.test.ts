@@ -1069,10 +1069,10 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
 // DEV_NOTE: Each gate run records EVAL_GATE_MIN_K results for every case of its set over HTTP (three runs in one test)
 const GATE_TIMEOUT_MS = 600_000;
 
-// DEV_NOTE: M6-4 — the test host's seeded injection (rec_delta) in an eval attempt: withheld and blocked like a widget
-// chat's, logged only (an eval chat never reaches the dashboard, so no issue)
+// DEV_NOTE: M6-4 — the test host's seeded injection (rec_delta) in an eval attempt: withheld like a widget chat's,
+// logged only (an eval chat never reaches the dashboard, so no issue)
 describe("Eval run: prompt injection (M6-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
-  it("withholds the seeded injection, blocks the write after it, and opens no issue", async () => {
+  it("withholds the seeded injection's field, keeps the rest of the record, and opens no issue", async () => {
     const tenant = await createTenant();
     const started = await startRun(tenant);
     scriptModel([
@@ -1084,8 +1084,7 @@ describe("Eval run: prompt injection (M6-4)", { timeout: END_TO_END_TIMEOUT_MS }
             input: { recordId: Schemas.TEST_HOST_INJECTED_RECORD_ID },
           },
         ]),
-      updateAlpha(1),
-      reply("I can't show that record here."),
+      reply("That record's amount is 10."),
     ]);
     routeTestHostFetch();
     const response = await call(`/runs/${started.run.publicId}/attempts`, {
@@ -1106,11 +1105,10 @@ describe("Eval run: prompt injection (M6-4)", { timeout: END_TO_END_TIMEOUT_MS }
     const attempt = Schemas.ZRunEvalAttemptApiResponse.parse(await response.json());
     expect(attempt.toolCalls?.map((toolCall) => [toolCall.toolName, toolCall.status])).toEqual([
       ["get_record", Schemas.HostToolStatusEnum.Ok],
-      ["update_record", Schemas.HostToolStatusEnum.Blocked],
     ]);
-    expect(JSON.stringify(gatewayRequests()[1]?.body?.messages)).not.toContain(
-      "Ignore all previous instructions",
-    );
+    const afterRead = JSON.stringify(gatewayRequests()[1]?.body?.messages);
+    expect(afterRead).not.toContain("Ignore all previous instructions");
+    expect(afterRead).toContain("team@delta.example");
     expect((await readAlpha(tenant.hostToken))?.amount).toBe(120);
     const issues = await withOwnerDb((ownerDb) =>
       ownerDb.select().from(qualityIssues).where(eq(qualityIssues.companyId, tenant.companyId)),

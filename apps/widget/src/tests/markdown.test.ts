@@ -70,10 +70,11 @@ describe("parseInline", () => {
 describe("isAllowedLink", () => {
   const origins = ["https://app.example.com", "https://help.example.com"];
 
-  it("allows the listed origins and mailto, nothing else", () => {
+  it("allows the listed origins and a plain mailto, nothing else", () => {
     expect(isAllowedLink("https://app.example.com/records/1", origins)).toBe(true);
     expect(isAllowedLink("https://help.example.com/fields?x=1", origins)).toBe(true);
     expect(isAllowedLink("mailto:help@example.com", origins)).toBe(true);
+    expect(isAllowedLink("mailto:help@example.com?body=the%20whole%20chat", origins)).toBe(false);
     expect(isAllowedLink("https://collect.example.net/log?c=secret", origins)).toBe(false);
     expect(isAllowedLink("https://app.example.com.evil.net/", origins)).toBe(false);
     expect(isAllowedLink("http://app.example.com/", origins)).toBe(false);
