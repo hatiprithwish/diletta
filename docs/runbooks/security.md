@@ -30,7 +30,18 @@ Every version of the company key, newest first, with its status, when it was cre
 - **Order and retries:** close, wipe the DO, delete R2 objects, then one transaction clears the tables and sets `content_purged_at`. A failure or a running turn leaves the chat due for next hour. `destroy()` aborts the DO, so the first run can log "Conversation DO not wiped this run"; the next finds nothing left and finishes. Chats tried longest ago go first (`content_purge_attempted_at`), so failing chats can't hold back the rest.
 - **Stuck purge:** the error "Chat content is overdue for deletion" (Sentry) names a company with a chat more than `CONTENT_PURGE_OVERDUE_ALERT_MS` past its cut-off after a run: a step keeps failing or the backlog is outrunning the budget. Search the logs for `PurgeConversationContent`. `skippedCount` rising every hour means a step keeps failing; a high `purgedCount` with no skips means a backlog still draining.
 - Model gateway logs are kept 7 days (AI Gateway setting, not this page).
-- **Erase a user** is not on the page yet: user erasure end to end (chats, files, saved credentials) is M6-2.
+
+## Erase a user
+
+An admin enters the user's ID in their app under **Retention and erasure** and confirms. It can't be undone.
+
+- **At once, in one transaction:** the user's ID and name are replaced (`host_user_id` = `erased:<random>`, `erased_at` set), their saved credentials are deleted, admin notes on quality issues in their chats are cleared, and an audit row records **Erased a user** with a chat count and never the ID. Keep your own record of who was erased: the log can't say.
+- **Right after:** each chat goes through the retention purge's steps, whatever its age. Whatever that doesn't reach (a turn running, a failure, more chats than the first pass fits) is due in the next hourly `ContentRetentionPurge`, which alerts ("Chat content is overdue for deletion") when an erased user's chat is still there a day later.
+- **Stays, anonymous:** message, tool call and feedback rows without content, costs, outcomes, rollups, the audit trail of the user's own actions, budget counters, doc gap text (personal details already removed), and tests made from their issues (they passed the personal details check and name no user).
+- **Files:** the widget has no uploads, so a user's files are eval attempt transcripts. Knowledge files belong to the company.
+- **Comes back:** the same ID from the host means a new, empty user. Their old chats can't be resumed. To keep someone out, the host stops signing tokens for them.
+- **Unknown or already erased ID:** 404 and nothing changes.
+- **Out of reach:** model gateway logs clear within 7 days (ADR 0003). An error log line from before the erasure may hold the host ID until the log store expires it. Writes already made in the host app stay there.
 
 ## Prompt-injection events
 

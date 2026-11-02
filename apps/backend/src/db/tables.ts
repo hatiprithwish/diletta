@@ -268,6 +268,11 @@ export const chatbotUsers = table(
     t
       .uniqueIndex("UNQ_chatbot_users_company_id_host_user_id")
       .on(table.companyId, table.hostUserId),
+    // DEV_NOTE: The purge starts from a company's erased users (M6-2), a small share of its users
+    t
+      .index("IDX_chatbot_users_company_id_erased")
+      .on(table.companyId)
+      .where(sql`${table.erasedAt} IS NOT NULL`),
   ],
 );
 

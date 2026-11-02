@@ -11,6 +11,7 @@ import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
 import { ConversationsQueries } from "../conversations/-data";
 import { OverviewQueries } from "../overview/-data";
+import { QUERY_KEY_ROOTS } from "../-invalidation";
 
 const REQUESTERS_STALE_MS = 5 * 60_000;
 
@@ -28,7 +29,7 @@ function filterParams(search: Schemas.ChangesPageSearch): URLSearchParams {
 // the lists' rows and counts, and the count (both invalidated).
 export class ChangesQueries {
   static keys = {
-    all: () => ["changes"] as const,
+    all: () => QUERY_KEY_ROOTS.changes,
     lists: () => [...ChangesQueries.keys.all(), "list"] as const,
     list: (search: Schemas.ChangesPageSearch) => [...ChangesQueries.keys.lists(), search] as const,
     details: () => [...ChangesQueries.keys.all(), "detail"] as const,

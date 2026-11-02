@@ -11,7 +11,11 @@ import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
 import Utilities from "@/utils";
-import { QUERY_KEY_ROOTS, SECURITY_KEY_SEGMENTS } from "../-invalidation";
+import {
+  QUERY_KEY_ROOTS,
+  SECURITY_KEY_SEGMENTS,
+  invalidateErasedUserViews,
+} from "../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -233,6 +237,30 @@ export function useUpdateContentRetention() {
     },
     onError: () => {
       toast.error("Retention wasn't saved. Nothing changed, try again.");
+    },
+  });
+}
+
+export function useEraseChatbotUser() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.EraseChatbotUserApiRequest) =>
+      apiClient<Schemas.EraseChatbotUserApiResponse>("/dashboard/security/erase-user", getToken, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      refreshAuditLog(queryClient);
+      invalidateErasedUserViews(queryClient);
+      toast.success("User erased. Any chat still running is deleted within the hour.");
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 404) {
+        toast.error("No user with that ID. They may already be erased.");
+        return;
+      }
+      toast.error("The user wasn't erased. Nothing changed, try again.");
     },
   });
 }

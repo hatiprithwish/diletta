@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotUsers, companies } from "@/db/tables";
@@ -184,6 +184,57 @@ export default class ChatbotUsersDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The erasure (M6-2): the row stays so anonymous counts keep their user, but it no longer says who that was,
+  // so a return with the same id is a new user. Not found = unknown or already erased, an admin's typo rather than a
+  // failure, so it isn't logged. The host id stays out of the log.
+  async eraseChatbotUser(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.EraseChatbotUserDALRequest,
+  ) {
+    const response: Schemas.ChatbotUserDALResponse = { isSuccess: false };
+
+    try {
+      const now = new Date();
+      const conditions = [
+        eq(chatbotUsers.hostUserId, params.hostUserId),
+        eq(chatbotUsers.companyId, params.companyId),
+        isNull(chatbotUsers.erasedAt),
+      ];
+      const [chatbotUserResponse] = await tx
+        .update(chatbotUsers)
+        .set({
+          hostUserId: `erased:${Utility.generatePublicId()}`,
+          displayName: null,
+          erasedAt: now,
+          updatedAt: now,
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!chatbotUserResponse) {
+        response.message = "Chatbot user not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Chatbot user erased successfully";
+      response.chatbotUser = chatbotUserResponse;
+    } catch (error) {
+      const message = "Unknown error in erasing chatbot user";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
       });
       response.message = message;
     }

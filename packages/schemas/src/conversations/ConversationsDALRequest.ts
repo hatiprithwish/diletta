@@ -81,6 +81,19 @@ export type GetConversationsPastRetentionDALRequest = Pick<Conversation, "compan
   limit: number;
 };
 
+export type GetUserConversationsToPurgeDALRequest = Pick<
+  Conversation,
+  "companyId" | "chatbotUserId"
+> & {
+  afterId: string | null;
+  limit: number;
+};
+
+export type GetErasedUsersConversationsToPurgeDALRequest = Pick<Conversation, "companyId"> & {
+  now: Date;
+  limit: number;
+};
+
 export type MarkConversationsPurgeAttemptedDALRequest = Pick<Conversation, "companyId"> & {
   ids: string[];
   now: Date;
@@ -95,7 +108,7 @@ export type GetOldestConversationPastRetentionDALRequest = Pick<Conversation, "c
 export type CloseConversationPastRetentionDALRequest = Pick<
   Conversation,
   "companyId" | "publicId"
-> & { lastActivityBefore: Date; outcome: ConversationOutcomeIntEnum };
+> & { lastActivityBefore: Date | null; outcome: ConversationOutcomeIntEnum };
 
 // DEV_NOTE: The steps of one chat's purge (M6-1), every table: by conversation, in the Repo's one transaction
 export type ClearConversationContentDALRequest = Pick<Conversation, "companyId"> & {

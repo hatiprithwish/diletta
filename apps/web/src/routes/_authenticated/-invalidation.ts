@@ -7,6 +7,7 @@ export const QUERY_KEY_ROOTS = {
   overview: ["insights", "overview"],
   conversations: ["conversations"],
   quality: ["quality"],
+  changes: ["changes"],
   tests: ["tests"],
   security: ["security"],
   bots: ["bots"],
@@ -41,6 +42,20 @@ export function invalidateOpenIssueViews(queryClient: QueryClient) {
       queryKey: root,
       predicate: (query) => query.queryKey[root.length] !== DETAIL_KEY_SEGMENT,
     });
+  }
+}
+
+// DEV_NOTE: A user was erased (Security, M6-2): every view that may hold their name or the notes on their chats refetches,
+// details too, since this page set none of them
+export function invalidateErasedUserViews(queryClient: QueryClient) {
+  const roots = [
+    QUERY_KEY_ROOTS.overview,
+    QUERY_KEY_ROOTS.conversations,
+    QUERY_KEY_ROOTS.quality,
+    QUERY_KEY_ROOTS.changes,
+  ];
+  for (const root of roots) {
+    void queryClient.invalidateQueries({ queryKey: root });
   }
 }
 
