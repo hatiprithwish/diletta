@@ -48,6 +48,8 @@ Workers Logs (dashboard › Workers › `diletta-worker` › Logs) filters by `c
 | "Cron job threw" (`Cron` / `DispatchCron`)                                                                                           | A cron job threw instead of logging its own failure                                                                                   | A bug. The other jobs in the tick still ran, and the job runs again on its next schedule                                                                                                                                                                            |
 | Nightly suite, chatbot health, partitions, platform eval cases, key rotation, retention purge                                        | See their runbooks: `nightly-suite.md`, `health.md`, `activity-log-partitions.md`, `nightly-suite.md` › Platform cases, `security.md` |                                                                                                                                                                                                                                                                     |
 
+Step-by-step playbooks for a key failure, a change that needs a person, relay failures and a config rollback: `docs/runbooks/incidents.md`.
+
 Any other error log also opens a Sentry issue and posts once. The `category` and `action` tags name the code path.
 
 Per-user and rate refusals (`UserDailyCost`, `UserMessageRate`, conversation and turn caps) are limits doing their job. They are warnings, never alerts.
