@@ -34,8 +34,9 @@ vi.mock("@/providers/logger", () => ({
 
 // DEV_NOTE: Tests hit the Neon staging branch with the real staging master key (MASTER_KEY_V1 from .dev.vars).
 // Each test creates its own companies through CompaniesRepo, so each starts with exactly one active key (v1).
-// The Repos run as diletta_app (HYPERDRIVE), so RLS applies; the owner connection resolves internal ids, plays
-// the rotation job's destroy step, and deletes every secret, key and company this suite created.
+// The Repos run as diletta_app (HYPERDRIVE), so RLS applies; the owner connection resolves internal ids, destroys a key
+// without the re-encrypt first (to show the shred; the rotation job never does that, keyRotation.test.ts), and deletes
+// every secret, key and company this suite created.
 const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 const createdCompanyIds: string[] = [];
@@ -207,7 +208,8 @@ describe("CompanyEncryptionKeysRepo", () => {
     await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
     const kept = await createModelKey(companyId, Schemas.ModelProviderEnum.OpenAI, "o-v2");
 
-    // DEV_NOTE: The rotation job's destroy step (M6-3), played by the owner connection
+    // DEV_NOTE: A destroy with a value still on the key, played by the owner connection: the rotation job (M6-3)
+    // re-encrypts first, so this only shows what the shred does to a value left behind
     await withOwnerDb(async (ownerDb) => {
       const conditions = [
         eq(companyEncryptionKeys.companyId, companyId),

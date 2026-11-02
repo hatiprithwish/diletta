@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, gt } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections, companySecrets } from "@/db/tables";
@@ -406,6 +406,133 @@ export default class CompanySecretsDAL {
         message,
         error,
         metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): a batch still on encryptionKeyVersion, by id after afterId. Ciphertext and
+  // iv go back to the Repo only, never into log metadata.
+  async getCompanySecretsOnKeyVersion(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetValuesOnKeyVersionDALRequest,
+  ) {
+    const response: Schemas.ValuesOnKeyVersionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.encryptionKeyVersion, params.encryptionKeyVersion),
+      ];
+      if (params.afterId) conditions.push(gt(companySecrets.id, params.afterId));
+      const rows = await tx
+        .select({
+          id: companySecrets.id,
+          ciphertext: companySecrets.encryptedSecret,
+          iv: companySecrets.iv,
+        })
+        .from(companySecrets)
+        .where(and(...conditions))
+        .orderBy(asc(companySecrets.id))
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Values on key version fetched successfully";
+      response.values = rows.flatMap((row) =>
+        row.ciphertext && row.iv
+          ? [{ id: row.id, encryptedValue: { ciphertext: row.ciphertext, iv: row.iv } }]
+          : [],
+      );
+    } catch (error) {
+      const message = "Unknown error in fetching values on key version";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetValuesOnKeyVersion,
+        message,
+        error,
+        metadata: { ...params, column: Schemas.EncryptedColumnEnum.CompanySecret },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): compare-and-set on the version and iv read, so secrets rewritten since then keep
+  // their new value (isUpdated false)
+  async updateReEncryptedCompanySecret(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateReEncryptedValueDALRequest,
+  ) {
+    const response: Schemas.UpdateReEncryptedValueDALResponse = { isSuccess: false };
+    const { encryptedValue: _encryptedValue, fromIv: _fromIv, ...metadata } = params;
+
+    try {
+      const conditions = [
+        eq(companySecrets.id, params.id),
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.encryptionKeyVersion, params.fromEncryptionKeyVersion),
+        eq(companySecrets.iv, Buffer.from(params.fromIv)),
+      ];
+      const updated = await tx
+        .update(companySecrets)
+        .set({
+          encryptedSecret: Buffer.from(params.encryptedValue.ciphertext),
+          iv: Buffer.from(params.encryptedValue.iv),
+          encryptionKeyVersion: params.encryptionKeyVersion,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning({ id: companySecrets.id });
+
+      response.isSuccess = true;
+      response.message = "Re-encrypted value saved";
+      response.isUpdated = updated.length > 0;
+    } catch (error) {
+      const message = "Unknown error in saving re-encrypted value";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateReEncryptedValue,
+        message,
+        error,
+        metadata: { ...metadata, column: Schemas.EncryptedColumnEnum.CompanySecret },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Key rotation job (M6-3): what is left on a key version; 0 lets the job destroy it
+  async getCompanySecretsOnKeyVersionCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CountValuesOnKeyVersionDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.encryptionKeyVersion, params.encryptionKeyVersion),
+      ];
+      const [result] = await tx
+        .select({ totalRecords: count() })
+        .from(companySecrets)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Values on key version counted successfully";
+      response.totalRecords = result?.totalRecords ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting values on key version";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountValuesOnKeyVersion,
+        message,
+        error,
+        metadata: { ...params, column: Schemas.EncryptedColumnEnum.CompanySecret },
       });
       response.message = message;
     }

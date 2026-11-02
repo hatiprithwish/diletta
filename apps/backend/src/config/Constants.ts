@@ -170,6 +170,14 @@ export default class Constants {
   static readonly CONTENT_PURGE_OVERDUE_ALERT_MS = 24 * 60 * 60_000;
   // DEV_NOTE: The pass right after an erasure runs in waitUntil, which allows 30 seconds (M6-2); the hourly run finishes it
   static readonly USER_ERASE_PURGE_TIME_BUDGET_MS = 20_000;
+  // DEV_NOTE: The key rotation job (M6-3), every cron tick: KEY_ROTATION_BATCH_SIZE values per transaction, until no
+  // company has work or KEY_ROTATION_TIME_BUDGET_MS is used up (ticks are 15 minutes apart); a backlog finishes on later
+  // ticks. The pass right after a rotation runs in waitUntil (30 seconds). A key still Retiring this long after its
+  // rotation alerts: a value that won't decrypt holds it there, and no next rotation can start.
+  static readonly KEY_ROTATION_BATCH_SIZE = 200;
+  static readonly KEY_ROTATION_TIME_BUDGET_MS = 5 * 60_000;
+  static readonly KEY_ROTATION_KICK_TIME_BUDGET_MS = 20_000;
+  static readonly KEY_ROTATION_OVERDUE_ALERT_MS = 24 * 60 * 60_000;
 
   // DEV_NOTE: Eval transcripts (M5-3). getEvalTranscript waits up to EVAL_TRANSCRIPT_IDLE_WAIT_MS (checking every
   // EVAL_TRANSCRIPT_IDLE_POLL_MS) for the attempt's DO to finish a commit or verify still running, then answers; an

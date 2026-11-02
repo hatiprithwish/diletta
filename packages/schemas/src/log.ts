@@ -90,6 +90,8 @@ export enum LogAction {
   UnwrapCompanyKey = "UnwrapCompanyKey",
   EncryptValue = "EncryptValue",
   DecryptValue = "DecryptValue",
+  ReEncryptValue = "ReEncryptValue",
+  RewrapCompanyKey = "RewrapCompanyKey",
 
   // Company encryption keys
   CreateCompanyEncryptionKey = "CreateCompanyEncryptionKey",
@@ -97,6 +99,14 @@ export enum LogAction {
   GetActiveCompanyEncryptionKey = "GetActiveCompanyEncryptionKey",
   ListCompanyEncryptionKeys = "ListCompanyEncryptionKeys",
   MarkCompanyEncryptionKeyRetiring = "MarkCompanyEncryptionKeyRetiring",
+  GetCompanyIdsWithKeyWork = "GetCompanyIdsWithKeyWork",
+  RewrapCompanyEncryptionKey = "RewrapCompanyEncryptionKey",
+  DestroyCompanyEncryptionKey = "DestroyCompanyEncryptionKey",
+  // DEV_NOTE: The rotation job's reads and writes on the encrypted_* tables; metadata.column says which (M6-3)
+  GetValuesOnKeyVersion = "GetValuesOnKeyVersion",
+  UpdateReEncryptedValue = "UpdateReEncryptedValue",
+  CountValuesOnKeyVersion = "CountValuesOnKeyVersion",
+  SweepKeyRotation = "SweepKeyRotation",
 
   // Company secrets
   CreateCompanySecret = "CreateCompanySecret",
