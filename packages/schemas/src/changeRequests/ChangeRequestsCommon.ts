@@ -259,7 +259,7 @@ export type ChangeRequestRow = ChangeRequest & {
 // point the change at another record. Only scalar types: an object or array arg, or a property with no single scalar
 // type, isn't editable. enumValues: the allowed values (a select); format: the JSON Schema format (date → a date
 // input). isRequired: the input_schema requires it (the widget can't clear it). The server re-checks every edit
-// against input_schema whatever the widget allowed (rule 3.34).
+// against input_schema whatever the widget allowed.
 export enum ChangeRequestFieldTypeEnum {
   String = "string",
   Number = "number",
@@ -340,7 +340,7 @@ export enum ChangeRequestDecisionEnum {
 //   PastDeadline: an edit after the approval deadline (the expiry ends it).
 //   InvalidEdit: an edit names a field that isn't editable, or its values don't fit the input_schema (M3-5).
 //   NoChange: the edited values are what the record already holds, so there is nothing to approve.
-//   ConversationClosed / ChatbotUnavailable: re-checked on every step (rule 3.23).
+//   ConversationClosed / ChatbotUnavailable: re-checked on every step.
 //   ReadOnly: the company is read-only (is_read_only): the agent may only read, so nothing commits.
 //   ToolUnavailable: the tool version or its connection is no longer Active, or its ops no longer load.
 //   NotUndoable: the user asked to undo one whose tool has no inverse_op (M3-7).

@@ -34,7 +34,7 @@ Every change request that ends gets `undo_until` = its end + `CHANGE_REQUEST_UND
 
 ## Edits (M3-5)
 
-The widget's `change_request_edits` frame sends new values for Proposed change requests. Nothing is approved by an edit. Each one is re-checked like a new proposal (pattern rule 3.34):
+The widget's `change_request_edits` frame sends new values for Proposed change requests. Nothing is approved by an edit. Each one is re-checked like a new proposal:
 
 1. `ActionEngineRepo.getEditPlan`: still Proposed and before its deadline, the conversation, chatbot and company re-checked (and not read-only), and the tool version still loading.
 2. Only editable fields (`Schemas.getEditableFields`): args `call_op` sends in its query or body that have one scalar type in the input schema. The path args that pick the record can never be edited, and a delete has no editable fields.

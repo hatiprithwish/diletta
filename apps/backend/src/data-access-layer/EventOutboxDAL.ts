@@ -10,7 +10,7 @@ const DEDUPE_KEY_CONSTRAINT = "UNQ_event_outbox_company_id_dedupe_key";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by the Repo. Writers and the
 // after-commit relay run in withTenant and filter on companyId; the relay sweep and the purge run in withPlatform
-// across companies, where companyId is null (pattern rule 3.15: cross-company Cron sweeps only).
+// across companies, where companyId is null (cross-company Cron sweeps only).
 export default class EventOutboxDAL {
   async createEventOutbox(
     tx: NodePgTransaction<EmptyRelations>,

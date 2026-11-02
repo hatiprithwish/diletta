@@ -102,7 +102,7 @@ export interface EvalIdentity {
 
 // DEV_NOTE: The host bearer token travels in this header on every /eval/* call that reaches the host (an attempt, a
 // readback, the reset): the harness gets it from the host's own login. It goes to the Conversation DO's memory or
-// straight to the adapter, never to storage or a log (pattern rule 3.11).
+// straight to the adapter, never to storage or a log.
 export const EVAL_HOST_TOKEN_HEADER = "X-Host-Token";
 export const EVAL_HOST_TOKEN_MAX_LENGTH = 8192;
 

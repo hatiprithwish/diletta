@@ -5,8 +5,8 @@ import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The one writer of audit rows (M4-9, pattern rule 3.45): an admin's or operator's write on a company records
-// what it did, by whom and on what, as a critical event (activity_log + event_outbox, pattern rule 3.5) in the Repo's
+// DEV_NOTE: The one writer of audit rows (M4-9): an admin's or operator's write on a company records
+// what it did, by whom and on what, as a critical event (activity_log + event_outbox) in the Repo's
 // own withTenant, next to the write. Repos call it only through recordAuditOrRollback (repositories/audit.ts), which
 // throws TenantRollbackError when it fails, so a write never commits without its row; it returns the outboxId, which
 // the route relays after the commit. The dedupe key's ULID is fresh per call (auditEventDedupeKey: unique, never a

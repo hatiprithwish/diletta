@@ -5,7 +5,7 @@ import { ZToolOpsV1 } from "./ToolOpsV1";
 // inverse_op, as one unit). New rows are always written at the registry's currentVersion; older rows are upgraded on
 // read (loadToolOps), never rewritten in place: a version is immutable once active. The version, the current schema
 // and the upgraders are one unit, so a bump can't leave one behind.
-// Bumping the version (pattern rule 3.12): add ZToolOpsV<n+1>, set currentVersion / currentSchema below, register
+// Bumping the version: add ZToolOpsV<n+1>, set currentVersion / currentSchema below, register
 // defineToolOpsUpgrader(ZToolOpsV<n>, …) under key n, and add an upgrade test.
 export interface ToolOpsRegistry<TCurrent extends z.ZodType = z.ZodType> {
   currentVersion: number;

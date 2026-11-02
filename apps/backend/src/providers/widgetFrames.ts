@@ -2,7 +2,7 @@ import * as Schemas from "@app/schemas";
 import Constants from "@/config/Constants";
 import Utility from "@/utils/Utility";
 
-// DEV_NOTE: The Conversation DO's inbound frame allowlist (pattern rule 3.23), pure so it is unit-tested on its own.
+// DEV_NOTE: The Conversation DO's inbound frame allowlist, pure so it is unit-tested on its own.
 // Think would otherwise let a client clear or rewrite the transcript, push tools or set state. Admitted:
 //   - a chat request, rebuilt to carry only its newest message: a user text message with a new id (Think overwrites
 //     the stored message of an id it already has), ≤ WIDGET_MESSAGE_MAX_CHARS, and nothing else from the body (no

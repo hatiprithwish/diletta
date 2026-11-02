@@ -7,7 +7,7 @@ import Utility from "@/utils/Utility";
 // DEV_NOTE: Verifies the companion JWT a host backend signs for its widget user. Three steps, which WidgetAuthRepo
 // runs with the connection lookup in between: decode (parse only, nothing trusted), verifySignature (the issuer's
 // JWKS) and checkClaims (aud, exp, iat, lifetime). WebCrypto here verifies a host's public signature, not company
-// data, so it stays out of @app/crypto (pattern rule 3.19). The token itself is never logged. Never throws.
+// data, so it stays out of @app/crypto. The token itself is never logged. Never throws.
 export default class WidgetJwtProvider {
   static decode(token: string): Schemas.DecodeWidgetJwtResponse {
     const response: Schemas.DecodeWidgetJwtResponse = { isSuccess: false };

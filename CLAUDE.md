@@ -8,7 +8,6 @@
 - `docs/architecture/companion-architecture-v0_15.excalidraw` — schema source of truth.
 - `docs/architecture/feature-rules.md` — per-feature invariants (widget, conversation DO, action engine, knowledge, dashboard pages, rollups…). Read the section for any feature you touch, plus its runbook in `docs/runbooks/`.
 - UI tasks: `docs/design/README.md` maps design files to tasks.
-- `.github/pattern-rules.md` — what the Pattern Enforcer flags on every PR.
 
 ## Principles
 
@@ -99,7 +98,7 @@ Before using any third-party API: check the installed version in `package.json`,
 **From M0-5 (tenant pattern):**
 
 - Tenant queries only inside `withTenant(db, companyId, tx => ...)` (`companyId` = internal `companies.id`, resolved server-side), which sets `set_config('app.company_id', …, true)` per transaction. Never set RLS context per session. DAL methods take `tx`; Repo opens the transaction.
-- Only exception: a backend test may set `app.company_id` per session (`set_config(…, false)`) as a leak-detection control, on a direct single-connection pool (never `NEON_POOLER_URL`), with `RESET app.company_id` in a `finally`. See pattern rule 3.2 and `withTenant.test.ts`.
+- Only exception: a backend test may set `app.company_id` per session (`set_config(…, false)`) as a leak-detection control, on a direct single-connection pool (never `NEON_POOLER_URL`), with `RESET app.company_id` in a `finally`. See `withTenant.test.ts`.
 - Transactional flows (outbox, action engine) throw `TenantRollbackError(dalResponse.message)` to roll back; `withTenant` turns it into `{ isSuccess: false, message }`. Plain CRUD keeps the `{ isSuccess }` response pattern. See `ChatbotsRepo.setDefaultChatbot`.
 - Critical events: `activity_log` + `event_outbox` row in the same transaction, only through `CriticalEventProvider.record(tx, …)` inside the Repo's `withTenant` (`EventOutboxRepo.recordCriticalEvent` when the event is the only write). The caller derives a `dedupeKey`; a repeat, concurrent or not, is a no-op success (the provider holds a transaction-scoped lock on the key, so a concurrent repeat waits for the first commit). After commit, relay with `ctx.waitUntil(EventOutboxRepo.relayEvents({ companyId, outboxIds }))`; the per-minute Cron sweep publishes what that misses. Delivery is at-least-once: Queue consumers dedupe on `outboxId`, ack per message, go through a Repo. See `providers/criticalEvent.ts` / `EventOutboxRepo.ts`.
 - Cross-company work (operator routes, Cron/Queue sweeps across companies, and the Clerk admin → company, JWT issuer → connection and eval JWT company lookups) runs in `withPlatform(db, tx => ...)`, which sets `app.is_platform` per transaction and passes every policy. Anything scoped to one company uses `withTenant`, even for an operator.
@@ -141,7 +140,6 @@ Before using any third-party API: check the installed version in `package.json`,
 
 - The task's "Done when" from the dev plan is shown in the PR.
 - A new tenant table ships with its grants, RLS policies and RLS tests (`rls.test.ts` `FIXTURES` entry).
-- A new CLAUDE.md rule or hard ban gets a matching rule in `.github/pattern-rules.md` in the same PR.
 - Schema change = architecture diagram updated in the same PR.
 - Locked decision changed = ADR in `docs/adr/` first.
 

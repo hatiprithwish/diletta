@@ -7,7 +7,7 @@ import Constants from "@/config/Constants";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The model router's key-failure step, in the caller's transaction (pattern rule 1.1: a provider may hold a
+// DEV_NOTE: The model router's key-failure step, in the caller's transaction (a provider may hold a
 // self-contained multi-DAL step a Repo runs inside its own tx; it never opens one). It never throws; a failure comes back as isSuccess false and the Repo
 // rolls back.
 //   1. The key used (if any) is marked Invalid, only while the row still holds that exact value and is Active: a key

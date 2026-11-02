@@ -20,7 +20,7 @@ const MAGIC_BYTES: Readonly<Record<string, number[]>> = {
 };
 
 // DEV_NOTE: A document's bytes → markdown text (M2-5). Workers AI toMarkdown (HTML, PDF, DOCX) is the only env.AI
-// call besides embeddings (pattern rule 3.10): it runs no model on these formats (images would, so none is sent).
+// call besides embeddings: it runs no model on these formats (images would, so none is sent).
 // Returns { isSuccess, message } and never throws.
 export default class KnowledgeExtractProvider {
   static isSupportedMime(mime: string): boolean {

@@ -12,7 +12,7 @@ import * as Schemas from "@app/schemas";
 // created while it's there, so both a month still missing after the run and any row in the default partition alert
 // (error log → Sentry, M6-6). A failed month leaves the window short; the next day's run retries it, with weeks to
 // spare before the month starts. The partition set spans every company, so each step runs in withPlatform
-// (pattern rule 3.15): one transaction per month, so a failed create rolls back alone and holds its lock on
+//: one transaction per month, so a failed create rolls back alone and holds its lock on
 // activity_log only for its own statement.
 export default class ActivityLogPartitionsRepo {
   private db: NodePgDatabase;

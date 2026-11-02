@@ -11,7 +11,7 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: Daily production health per chatbot (M5-5), run by the ChatbotHealthCron. It judges yesterday (UTC), whose
 // rollups the hourly run has rebuilt since midnight, against the Schemas.CHATBOT_HEALTH_BASELINE_DAYS before it, for
 // every chatbot of every Active company with rollups in that span (live traffic only: eval conversations are never in
-// them). The companies are listed in withPlatform (a sweep across companies, pattern rule 3.15); each company's rows
+// them). The companies are listed in withPlatform (a sweep across companies); each company's rows
 // are read in its own withTenant, and each dropped chatbot is written in its own withTenant through
 // ChatbotHealthProvider.record (a failure rolls that chatbot back alone). A newly recorded drop also logs an error for
 // our team (→ Sentry, M6-6); a rerun on the same day finds the day covered and writes and logs nothing. The events are

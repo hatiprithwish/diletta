@@ -4,7 +4,7 @@ import { ZConfigSpecV1 } from "./ConfigSpecV1";
 // DEV_NOTE: chatbot_configs.schema_version says which spec parses a row's body. New rows are always written at
 // the registry's currentVersion; older rows are upgraded on read (loadConfigSpec), never rewritten in place.
 // The version, the current schema and the upgraders are one unit, so a bump can't leave one behind.
-// Bumping the version (pattern rule 3.12): add ZConfigSpecV<n+1>, set currentVersion / currentSchema below,
+// Bumping the version: add ZConfigSpecV<n+1>, set currentVersion / currentSchema below,
 // register defineConfigSpecUpgrader(ZConfigSpecV<n>, …) under key n, add an upgrade test, update
 // ConfigSpecDefaults.ts for any new defaulted field, run `pnpm --filter @app/schemas schema:export`.
 export interface ConfigSpecRegistry<TCurrent extends z.ZodType = z.ZodType> {
