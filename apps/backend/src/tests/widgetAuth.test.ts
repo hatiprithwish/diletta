@@ -770,8 +770,10 @@ describe("GET /widget/bootstrap", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(response.headers.get("Access-Control-Allow-Credentials")).toBeNull();
     const body = Schemas.ZWidgetBootstrapApiResponse.parse(await response.json());
+    // DEV_NOTE: linkOrigins = the connection's allowed origins, the widget's link allow-list (M6-4)
     expect(body.bootstrap).toEqual({
       chatbot: defaultChatbotA,
+      linkOrigins: [ORIGIN],
       widget: {
         greeting: "Hi, what do you need?",
         suggestions: ["Which inspections are overdue?", "How do I add a custom field?"],

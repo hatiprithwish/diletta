@@ -1,6 +1,6 @@
 # Security
 
-The Security page (M4-9, `/security`) shows how the widget proves who the user is, the company's encryption keys, how long chat content is kept, prompt-injection events and the audit log. Company admins see and change their own company; operators get 403 (the dashboard is company-level).
+The Security page (M4-9, `/security`) shows how the widget proves who the user is, the company's encryption keys, how long chat content is kept, prompt-injection events (found by the chatbot itself since M6-4) and the audit log. Company admins see and change their own company; operators get 403 (the dashboard is company-level).
 
 ## Identity and origins
 
@@ -48,7 +48,16 @@ An admin enters the user's ID in their app under **Retention and erasure** and c
 
 ## Prompt-injection events
 
-Until M6-4 detects them automatically, the events are the company's quality issues typed **Prompt injection** on the Quality page, in any status, newest first. "Detected in" is the issue's note (else where it came from), "Action taken" its status in words, and each row links to the issue and the conversation (no title once the conversation is purged).
+The events are the company's quality issues typed **Prompt injection**, in any status, newest first: the ones an admin typed on the Quality page, and the ones the chatbot opened itself when it found one (M6-4). "Detected in" is the issue's note (else where it came from), "Action taken" its status in words (an automatic one still open reads **Blocked, waiting for review**), and each row links to the issue and the conversation (no title once the conversation is purged).
+
+### What the chatbot checks and does (M6-4)
+
+- **Checked:** the user's message, every help doc result a search returns, and every record a read tool brings back from your app. The check looks for instructions aimed at the chatbot: telling it to ignore its instructions, switch into another role or mode, reveal its hidden instructions, pose as a system message, claim a change is already approved, or send data to an outside address. It doesn't judge topics, so a help page about developer settings passes.
+- **Blocked:** a flagged help doc result or record is never shown to the model (the model is told something was withheld; the result is never cited, and the record isn't shown in the chat). From the first detection on, the conversation makes no changes: its later turns can only look things up, and a change the model still tries in the same turn is refused. Changes already waiting for the user's approval stay as they are, since the user approves them from the real values. To make changes, the user starts a new conversation.
+- **Logged:** the conversation's first detection opens one issue (source System, type Prompt injection) with a note saying where it was found and what it tried, never the text. Later detections in the same conversation are in the logs only. Test runs are blocked the same way but open no issue.
+- **What to do:** open the conversation from the event. Text in the user's own message is usually someone testing the chatbot: dismiss it. Text in a help doc or a record means someone could edit that content: find it (the help doc's source or the record in your app), clean it up, then mark the issue fixed. A false alarm (an ordinary page caught by a rule) is worth telling us about, with the conversation's ID, so the rules can be tuned.
+- **Links:** a reply's links work only to your app's allowed origins (Identity and origins, above) and to the help docs it cites. Any other link shows as plain text, so a link can't carry the chat to another site.
+- **Safety tests:** every chatbot's gate runs the platform's prompt-injection safety cases (pasted text with hidden instructions, a faked earlier developer-mode message, a link built from the chat, a role-play with no rules), on top of the original "ignore your instructions" case. A failing one blocks publishing like any safety case.
 
 ## Audit log
 
