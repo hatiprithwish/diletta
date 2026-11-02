@@ -1,18 +1,4 @@
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  exists,
-  gt,
-  gte,
-  inArray,
-  isNull,
-  lt,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -22,7 +8,6 @@ import {
   chatbotConfigs,
   chatbotUsers,
   chatbots,
-  companies,
   conversations,
   evalCases,
   evalRuns,
@@ -36,7 +21,6 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
@@ -388,8 +372,8 @@ export default class ConversationsDAL {
     );
   }
 
-  // DEV_NOTE: Retention (M6-1), every company (withPlatform): chats past last_activity_at + the company's days. The
-  // shortest option's cut-off lets the partial index narrow the scan before the per-company check.
+  // DEV_NOTE: Retention (M6-1), one company's chats past its cut-off, a range on the partial index. Never tried first,
+  // then tried longest ago, then oldest; a chat already tried in this run (attempted at now) is left out.
   async getConversationsPastRetention(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetConversationsPastRetentionDALRequest,
@@ -397,16 +381,15 @@ export default class ConversationsDAL {
     const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
 
     try {
-      const shortestDays = Math.min(...Schemas.CONTENT_RETENTION_DAYS_OPTIONS);
       const conditions = [
+        eq(conversations.companyId, params.companyId),
         isNull(conversations.contentPurgedAt),
-        lt(conversations.lastActivityAt, new Date(params.now.getTime() - shortestDays * DAY_MS)),
-        sql`${conversations.lastActivityAt} < ${params.now.toISOString()}::timestamptz - make_interval(days => COALESCE(${companies.contentRetentionDays}, ${Schemas.DEFAULT_CONTENT_RETENTION_DAYS}::int))`,
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
+        or(
+          isNull(conversations.contentPurgeAttemptedAt),
+          lt(conversations.contentPurgeAttemptedAt, params.now),
+        ),
       ];
-      if (params.afterId !== null) conditions.push(gt(conversations.id, params.afterId));
-      if (params.companyIds !== null) {
-        conditions.push(inArray(conversations.companyId, params.companyIds));
-      }
       const selected = await tx
         .select({
           id: conversations.id,
@@ -416,13 +399,14 @@ export default class ConversationsDAL {
           evalRunId: conversations.evalRunId,
           evalCaseId: conversations.evalCaseId,
           evalAttempt: conversations.evalAttempt,
-          companyPublicId: companies.publicId,
-          contentRetentionDays: companies.contentRetentionDays,
         })
         .from(conversations)
-        .innerJoin(companies, eq(companies.id, conversations.companyId))
         .where(and(...conditions))
-        .orderBy(asc(conversations.id))
+        .orderBy(
+          sql`${conversations.contentPurgeAttemptedAt} ASC NULLS FIRST`,
+          asc(conversations.lastActivityAt),
+          asc(conversations.id),
+        )
         .limit(params.limit);
 
       response.isSuccess = true;
@@ -435,7 +419,79 @@ export default class ConversationsDAL {
         action: Schemas.LogAction.PurgeConversationContent,
         message,
         error,
-        metadata: { afterId: params.afterId, limit: params.limit },
+        metadata: { companyId: params.companyId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Stamped when a batch is read, not when a chat fails, so a chat that kills the run still goes to the back
+  async markConversationsPurgeAttempted(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MarkConversationsPurgeAttemptedDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        inArray(conversations.id, params.ids),
+      ];
+      await tx
+        .update(conversations)
+        .set({ contentPurgeAttemptedAt: params.now, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversations marked as tried";
+    } catch (error) {
+      const message = "Unknown error in marking conversations as tried";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId, count: params.ids.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: How far behind the purge is for one company, tried or not; no row = lastActivityAt null
+  async getOldestConversationPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetOldestConversationPastRetentionDALRequest,
+  ) {
+    const response: Schemas.OldestConversationPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
+      ];
+      const [oldest] = await tx
+        .select({ lastActivityAt: conversations.lastActivityAt })
+        .from(conversations)
+        .where(and(...conditions))
+        .orderBy(asc(conversations.lastActivityAt))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = "Oldest conversation past retention fetched successfully";
+      response.lastActivityAt = oldest?.lastActivityAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in fetching the oldest conversation past retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
       });
       response.message = message;
     }
@@ -447,14 +503,14 @@ export default class ConversationsDAL {
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.CloseConversationPastRetentionDALRequest,
   ) {
-    const { lastActivityBefore, ...find } = params;
+    const { lastActivityBefore, outcome, ...find } = params;
     return await this.update(
       tx,
       find,
       Schemas.LogAction.PurgeConversationContent,
       {
         status: Schemas.ConversationStatusIntEnum.Closed,
-        outcome: sql`COALESCE(${conversations.outcome}, ${Schemas.ConversationOutcomeIntEnum.Abandoned}::smallint)`,
+        outcome: sql`COALESCE(${conversations.outcome}, ${outcome}::smallint)`,
       },
       sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open} AND ${conversations.lastActivityAt} < ${lastActivityBefore.toISOString()}::timestamptz`,
     );

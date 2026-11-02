@@ -1,6 +1,7 @@
-import { env } from "cloudflare:test";
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { eq, inArray } from "drizzle-orm";
+import { env, runInDurableObject } from "cloudflare:test";
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
+import { getAgentByName } from "agents";
+import { and, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -23,7 +24,12 @@ import {
   qualityIssues,
   toolCalls,
 } from "@/db/tables";
+import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
+import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
+import AppLogger from "@/providers/logger";
+import FileStorageProvider from "@/providers/fileStorage";
 import ContentRetentionRepo from "@/repositories/ContentRetentionRepo";
+import ConversationsRepo from "@/repositories/ConversationsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
@@ -60,6 +66,10 @@ let pastDefault = ""; // default, 40 days idle
 let evalChat = ""; // short, 8 days idle, an eval attempt with a transcript
 let transcriptFilePublicId = "";
 let evalRunId = "";
+let evalCaseId = "";
+let shortChat = { companyId: "", chatbotId: "", chatbotUserId: "" };
+let shortHostUserId = "";
+const transcriptFileIds: string[] = [];
 const conversationIds: Record<string, string> = {};
 
 async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Promise<T> {
@@ -203,6 +213,38 @@ async function seedChat(
   return publicId;
 }
 
+// DEV_NOTE: An eval attempt's transcript: its files row, result and R2 object
+async function seedTranscript(ownerDb: NodePgDatabase, attempt: number): Promise<string> {
+  const filePublicId = Utility.generatePublicId();
+  const [file] = await ownerDb
+    .insert(files)
+    .values({
+      publicId: filePublicId,
+      companyId: shortCompany,
+      ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
+      ownerId: Schemas.FILE_PENDING_OWNER_ID,
+      mime: Schemas.EVAL_TRANSCRIPT_MIME,
+      sizeBytes: 2,
+      sha256: "test",
+    })
+    .returning({ id: files.id });
+  const [result] = await ownerDb
+    .insert(evalResults)
+    .values({
+      companyId: shortCompany,
+      evalRunId,
+      evalCaseId,
+      attempt,
+      hasPassed: true,
+      transcriptFileId: file!.id,
+    })
+    .returning({ id: evalResults.id });
+  await ownerDb.update(files).set({ ownerId: result!.id }).where(eq(files.id, file!.id));
+  await env.FILES_BUCKET.put(Schemas.fileR2Key(companyPublicId, filePublicId), "{}");
+  transcriptFileIds.push(filePublicId);
+  return filePublicId;
+}
+
 beforeAll(async () => {
   await withOwnerDb(async (ownerDb) => {
     const created = await ownerDb
@@ -232,14 +274,16 @@ beforeAll(async () => {
         { publicId: Utility.generatePublicId(), companyId: defaultCompany, name: "Default" },
       ])
       .returning({ id: chatbots.id });
+    shortHostUserId = `u-${crypto.randomUUID()}`;
     const users = await ownerDb
       .insert(chatbotUsers)
       .values([
-        { companyId: shortCompany, hostUserId: `u-${crypto.randomUUID()}` },
+        { companyId: shortCompany, hostUserId: shortHostUserId },
         { companyId: defaultCompany, hostUserId: `u-${crypto.randomUUID()}` },
       ])
       .returning({ id: chatbotUsers.id });
     const short = { companyId: shortCompany, chatbotId: bots[0]!.id, chatbotUserId: users[0]!.id };
+    shortChat = short;
     const byDefault = {
       companyId: defaultCompany,
       chatbotId: bots[1]!.id,
@@ -274,42 +318,22 @@ beforeAll(async () => {
         expectations: {},
       })
       .returning({ id: evalCases.id });
+    evalCaseId = evalCase!.id;
     evalChat = await seedChat(ownerDb, {
       ...short,
       idleDays: 8,
-      eval: { evalRunId, evalCaseId: evalCase!.id, evalAttempt: 1 },
+      eval: { evalRunId, evalCaseId, evalAttempt: 1 },
     });
-    transcriptFilePublicId = Utility.generatePublicId();
-    const [file] = await ownerDb
-      .insert(files)
-      .values({
-        publicId: transcriptFilePublicId,
-        companyId: shortCompany,
-        ownerType: Schemas.FileOwnerTypeEnum.EvalResult,
-        ownerId: Schemas.FILE_PENDING_OWNER_ID,
-        mime: Schemas.EVAL_TRANSCRIPT_MIME,
-        sizeBytes: 2,
-        sha256: "test",
-      })
-      .returning({ id: files.id });
-    const [result] = await ownerDb
-      .insert(evalResults)
-      .values({
-        companyId: shortCompany,
-        evalRunId,
-        evalCaseId: evalCase!.id,
-        attempt: 1,
-        hasPassed: true,
-        transcriptFileId: file!.id,
-      })
-      .returning({ id: evalResults.id });
-    await ownerDb.update(files).set({ ownerId: result!.id }).where(eq(files.id, file!.id));
-    await env.FILES_BUCKET.put(Schemas.fileR2Key(companyPublicId, transcriptFilePublicId), "{}");
+    transcriptFilePublicId = await seedTranscript(ownerDb, 1);
   });
 });
 
 afterAll(async () => {
-  await env.FILES_BUCKET.delete(Schemas.fileR2Key(companyPublicId, transcriptFilePublicId));
+  await Promise.all(
+    transcriptFileIds.map((publicId) =>
+      env.FILES_BUCKET.delete(Schemas.fileR2Key(companyPublicId, publicId)),
+    ),
+  );
   await withOwnerDb(async (ownerDb) => {
     const companyIds = [shortCompany, defaultCompany];
     await ownerDb.delete(qualityIssues).where(inArray(qualityIssues.companyId, companyIds));
@@ -353,7 +377,8 @@ describe("Retention purge (M6-1)", () => {
     const conversation = await row(expired);
     expect(conversation.title).toBeNull();
     expect(conversation.status).toBe(Schemas.ConversationStatusIntEnum.Closed);
-    expect(conversation.outcome).toBe(Schemas.ConversationOutcomeIntEnum.Abandoned);
+    // DEV_NOTE: It has a reply, and a doc gap on its last question
+    expect(conversation.outcome).toBe(Schemas.ConversationOutcomeIntEnum.Idk);
     const conversationId = conversation.id;
 
     await withOwnerDb(async (ownerDb) => {
@@ -459,5 +484,275 @@ describe("Retention purge (M6-1)", () => {
     expect(purged.isSuccess).toBe(true);
     expect((await row(fresh)).contentPurgedAt).not.toBeNull();
     expect((await row(underDefault)).contentPurgedAt).toBeNull();
+  });
+});
+
+// DEV_NOTE: The paths the order of the steps exists for. Each test seeds its own chats on the short company and leaves
+// nothing due. A step made to fail is a spy on that step; the DO answering busy is a real DO with its flag set.
+describe("Retention purge retries (M6-1)", () => {
+  const purge = (extra: { batchSize?: number; timeBudgetMs?: number; now?: number } = {}) =>
+    new ContentRetentionRepo(env).purgeExpiredContent({ companyIds: [shortCompany], ...extra });
+  const seed = (idleDays = 8) =>
+    withOwnerDb((ownerDb) => seedChat(ownerDb, { ...shortChat, idleDays }));
+  const contents = (publicId: string) =>
+    withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ content: messages.content })
+        .from(messages)
+        .where(eq(messages.conversationId, conversationIds[publicId]!)),
+    );
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(AppLogger.error).mockClear();
+  });
+
+  it("leaves a chat that got a new message after the read: still Open, nothing cleared", async () => {
+    const chat = await seed();
+    const close = ConversationsDAL.prototype.closeConversationPastRetention;
+    vi.spyOn(ConversationsDAL.prototype, "closeConversationPastRetention").mockImplementation(
+      async function (this: ConversationsDAL, tx, params) {
+        await withOwnerDb((ownerDb) =>
+          ownerDb
+            .update(conversations)
+            .set({ lastActivityAt: new Date() })
+            .where(eq(conversations.publicId, chat)),
+        );
+        return await close.call(this, tx, params);
+      },
+    );
+
+    expect(await purge()).toMatchObject({ purgedCount: 0, skippedCount: 1 });
+    const conversation = await row(chat);
+    expect(conversation.contentPurgedAt).toBeNull();
+    expect(conversation.status).toBe(Schemas.ConversationStatusIntEnum.Open);
+    expect(conversation.title).not.toBeNull();
+
+    // DEV_NOTE: No longer due: nothing to retry until it goes quiet again
+    vi.restoreAllMocks();
+    expect(await purge()).toMatchObject({ purgedCount: 0, skippedCount: 0 });
+    await withOwnerDb((ownerDb) =>
+      ownerDb
+        .update(conversations)
+        .set({ lastActivityAt: daysAgo(8) })
+        .where(eq(conversations.publicId, chat)),
+    );
+    expect(await purge()).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+  });
+
+  it.each(["isDeciding", "isClosing"])("leaves a chat whose DO is busy (%s)", async (flag) => {
+    const chat = await seed();
+    const stub = await getAgentByName(env.CONVERSATION_DO, chat);
+    const setFlag = (value: boolean) =>
+      runInDurableObject(stub, (instance) => {
+        (instance as unknown as Record<string, boolean>)[flag] = value;
+      });
+    await setFlag(true);
+
+    expect(await purge()).toMatchObject({ purgedCount: 0, skippedCount: 1 });
+    expect((await row(chat)).contentPurgedAt).toBeNull();
+    expect((await contents(chat)).every((message) => message.content !== null)).toBe(true);
+
+    await setFlag(false);
+    expect(await purge()).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+  });
+
+  it("wipes a DO whose state no longer parses, instead of reporting a wipe it didn't do", async () => {
+    const chat = await seed();
+    const stub = await getAgentByName(env.CONVERSATION_DO, chat);
+    await runInDurableObject(stub, async (instance) => {
+      await instance.__unsafe_ensureInitialized();
+      instance.configure({ notTheShape: true } as never);
+    });
+
+    // DEV_NOTE: destroy() aborts the isolate, which may reach the Repo as an error; the next run then finishes
+    let purgedCount = 0;
+    for (let run = 0; run < 5 && purgedCount === 0; run += 1) {
+      purgedCount = (await purge()).purgedCount ?? 0;
+    }
+    expect(purgedCount).toBe(1);
+    const fresh = await getAgentByName(env.CONVERSATION_DO, chat);
+    const isStateGone = await runInDurableObject(fresh, (instance) => {
+      try {
+        return instance.getConfig() === null;
+      } catch {
+        return true;
+      }
+    });
+    expect(isStateGone).toBe(true);
+  });
+
+  it("leaves no storage behind in a DO that never had a chat, and answers the same when asked again", async () => {
+    const chat = await seed();
+    const stub = await getAgentByName(env.CONVERSATION_DO, chat);
+    const isBusyFree = Schemas.ZConversationContentWipeResponse.parse(
+      JSON.parse(await stub.purgeContent()),
+    );
+    expect(isBusyFree).toMatchObject({ isSuccess: true, isBusy: false });
+    const tables = await runInDurableObject(
+      stub,
+      (_instance, state) =>
+        state.storage.sql
+          .exec(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite%'",
+          )
+          .toArray().length,
+    );
+    expect(tables).toBe(0);
+    expect(JSON.parse(await stub.purgeContent())).toMatchObject({ isSuccess: true });
+    expect(await purge()).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+  });
+
+  it("keeps the transcript rows and every table when R2 fails, and finishes next run", async () => {
+    let chat = "";
+    let filePublicId = "";
+    await withOwnerDb(async (ownerDb) => {
+      chat = await seedChat(ownerDb, {
+        ...shortChat,
+        idleDays: 8,
+        eval: { evalRunId, evalCaseId, evalAttempt: 2 },
+      });
+      filePublicId = await seedTranscript(ownerDb, 2);
+    });
+    vi.spyOn(FileStorageProvider, "deleteObjects").mockResolvedValueOnce({
+      isSuccess: false,
+      message: "R2 down",
+    });
+
+    expect(await purge()).toMatchObject({ purgedCount: 0, skippedCount: 1 });
+    expect((await row(chat)).contentPurgedAt).toBeNull();
+    expect((await contents(chat)).every((message) => message.content !== null)).toBe(true);
+    await withOwnerDb(async (ownerDb) => {
+      expect(
+        await ownerDb.select().from(files).where(eq(files.publicId, filePublicId)),
+      ).toHaveLength(1);
+    });
+
+    expect(await purge()).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+    expect(
+      await env.FILES_BUCKET.head(Schemas.fileR2Key(companyPublicId, filePublicId)),
+    ).toBeNull();
+  });
+
+  it("rolls every table back when a clear step fails, and finishes next run", async () => {
+    const chat = await seed();
+    vi.spyOn(FeedbackDAL.prototype, "clearConversationComments").mockResolvedValueOnce({
+      isSuccess: false,
+      message: "Clear failed",
+    });
+
+    expect(await purge()).toMatchObject({ purgedCount: 0, skippedCount: 1 });
+    const conversation = await row(chat);
+    expect(conversation.contentPurgedAt).toBeNull();
+    expect(conversation.title).not.toBeNull();
+    // DEV_NOTE: Messages clear before the step that failed, so this is the rollback
+    expect((await contents(chat)).every((message) => message.content !== null)).toBe(true);
+
+    expect(await purge()).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+    expect((await contents(chat)).every((message) => message.content === null)).toBe(true);
+  });
+
+  it("doesn't let failing chats use up the run: the next run reaches the chat after them", async () => {
+    const stuck = await seed(12);
+    const next = await seed(9);
+    const close = ConversationsDAL.prototype.closeConversationPastRetention;
+    vi.spyOn(ConversationsDAL.prototype, "closeConversationPastRetention").mockImplementation(
+      async function (this: ConversationsDAL, tx, params) {
+        if (params.publicId === stuck) return { isSuccess: false, message: "Keeps failing" };
+        return await close.call(this, tx, params);
+      },
+    );
+    const oneChat = { batchSize: 1, timeBudgetMs: 0 };
+
+    expect(await purge(oneChat)).toMatchObject({ purgedCount: 0, skippedCount: 1 });
+    expect((await row(next)).contentPurgedAt).toBeNull();
+    expect(await purge(oneChat)).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+    expect((await row(next)).contentPurgedAt).not.toBeNull();
+    expect((await row(stuck)).contentPurgedAt).toBeNull();
+
+    vi.restoreAllMocks();
+    expect(await purge(oneChat)).toMatchObject({ purgedCount: 1, skippedCount: 0 });
+  });
+
+  it("tries a chat once per run and keeps going past a full batch", async () => {
+    await seed();
+    await seed();
+    await seed();
+    expect(await purge({ batchSize: 2 })).toMatchObject({ purgedCount: 3, skippedCount: 0 });
+  });
+
+  it("alerts when a chat left due is over a day past its cut-off, not before", async () => {
+    const recent = await seed(7.5);
+    vi.spyOn(ConversationsDAL.prototype, "closeConversationPastRetention").mockResolvedValue({
+      isSuccess: false,
+      message: "Keeps failing",
+    });
+    expect(await purge()).toMatchObject({ skippedCount: 1, overdueCompanyCount: 0 });
+    expect(AppLogger.error).not.toHaveBeenCalled();
+
+    const overdue = await seed(10);
+    expect(await purge()).toMatchObject({ skippedCount: 2, overdueCompanyCount: 1 });
+    expect(AppLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Chat content is overdue for deletion",
+        metadata: expect.objectContaining({ companyId: shortCompany, overdueHours: 72 }),
+      }),
+    );
+
+    vi.restoreAllMocks();
+    expect(await purge()).toMatchObject({ purgedCount: 2 });
+    expect((await row(recent)).contentPurgedAt).not.toBeNull();
+    expect((await row(overdue)).contentPurgedAt).not.toBeNull();
+  });
+
+  it("closes an Open chat with the outcome its messages show", async () => {
+    const answered = await seed();
+    const abandoned = await seed();
+    await withOwnerDb(async (ownerDb) => {
+      await ownerDb.delete(docGaps).where(eq(docGaps.conversationId, conversationIds[answered]!));
+      const replies = await ownerDb
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.conversationId, conversationIds[abandoned]!));
+      await ownerDb.delete(feedback).where(
+        inArray(
+          feedback.messageId,
+          replies.map((reply) => reply.id),
+        ),
+      );
+      const conditions = [
+        eq(messages.sessionMessageId, "m2"),
+        eq(messages.conversationId, conversationIds[abandoned]!),
+      ];
+      await ownerDb.delete(messages).where(and(...conditions));
+    });
+
+    expect(await purge()).toMatchObject({ purgedCount: 2 });
+    expect((await row(answered)).outcome).toBe(Schemas.ConversationOutcomeIntEnum.Answered);
+    expect((await row(abandoned)).outcome).toBe(Schemas.ConversationOutcomeIntEnum.Abandoned);
+  });
+
+  it("refuses to resume a purged chat", async () => {
+    const chat = await seed();
+    expect(await purge()).toMatchObject({ purgedCount: 1 });
+    const resumed = await new ConversationsRepo(env).startOrResume({
+      identity: {
+        companyId: shortCompany,
+        connectionId: "1",
+        connectionEnvironment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+        chatbotId: shortChat.chatbotId,
+        chatbotPublicId: "unused",
+        chatbotName: "Short",
+        hostUserId: shortHostUserId,
+        displayName: null,
+        roles: [],
+        tokenExpiresAt: new Date(Date.now() + 60_000),
+      },
+      conversationPublicId: chat,
+    });
+    expect(resumed).toMatchObject({
+      isSuccess: false,
+      failure: Schemas.ConversationStartFailureEnum.NotFound,
+    });
   });
 });

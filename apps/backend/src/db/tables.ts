@@ -632,6 +632,9 @@ export const conversations = table(
     lastActivityAt: t.timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
     rootLogId: t.bigint("root_log_id", { mode: "string" }), // → activity_log.id (tree root)
     contentPurgedAt: t.timestamp("content_purged_at", { withTimezone: true }),
+    // DEV_NOTE: The retention purge's last try (M6-1): the chats tried longest ago go first, so failing ones can't hold
+    // back the rest
+    contentPurgeAttemptedAt: t.timestamp("content_purge_attempted_at", { withTimezone: true }),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -641,10 +644,10 @@ export const conversations = table(
     // DEV_NOTE: (company, created_at) serves company lookups and the day reads of the activity rollup (M4-2)
     t.index("IDX_conversations_company_id_created_at").on(table.companyId, table.createdAt),
     t.index("IDX_conversations_chatbot_user_id").on(table.chatbotUserId),
-    // DEV_NOTE: The retention purge reads only chats not yet purged (M6-1)
+    // DEV_NOTE: The retention purge reads one company's chats not yet purged, past its cut-off (M6-1)
     t
-      .index("IDX_conversations_last_activity_at_unpurged")
-      .on(table.lastActivityAt)
+      .index("IDX_conversations_company_id_last_activity_at_unpurged")
+      .on(table.companyId, table.lastActivityAt)
       .where(sql`${table.contentPurgedAt} IS NULL`),
     t.index("IDX_conversations_chatbot_id").on(table.chatbotId),
     t.index("IDX_conversations_chatbot_config_id").on(table.chatbotConfigId),

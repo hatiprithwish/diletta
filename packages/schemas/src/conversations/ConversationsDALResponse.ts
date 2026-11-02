@@ -27,15 +27,16 @@ export interface ChatbotConversationCountsDALResponse extends ApiResponse {
   counts?: { chatbotId: string; conversationCount: number }[];
 }
 
-// DEV_NOTE: A chat the retention purge (M6-1) has to clear; the company's public id is the other half of an R2 key
+// DEV_NOTE: A chat the retention purge (M6-1) has to clear
 export type ConversationPastRetentionRow = Pick<
   Conversation,
   "id" | "publicId" | "companyId" | "status" | "evalRunId" | "evalCaseId" | "evalAttempt"
-> & {
-  companyPublicId: string;
-  contentRetentionDays: number | null;
-};
+>;
 
 export interface ConversationsPastRetentionDALResponse extends ApiResponse {
   conversations?: ConversationPastRetentionRow[];
+}
+
+export interface OldestConversationPastRetentionDALResponse extends ApiResponse {
+  lastActivityAt?: Date | null;
 }

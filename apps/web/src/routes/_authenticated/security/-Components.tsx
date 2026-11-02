@@ -368,9 +368,9 @@ function RetentionForm({ retention }: Schemas.DashboardSecurityRetentionFormProp
       </form.Field>
       <p className="text-caption text-muted-foreground">
         Model gateway logs are kept {Schemas.GATEWAY_LOG_RETENTION_DAYS} days at most. Messages,
-        tool inputs and saved changes past this period are deleted within a few hours, including
-        after you shorten it. Outcomes, costs and unanswered questions with personal details removed
-        stay.
+        tool inputs and saved changes past this period are deleted automatically, usually within a
+        day, including after you shorten it. Outcomes, costs and unanswered questions with personal
+        details removed stay.
       </p>
       <form.Subscribe
         selector={(state) =>

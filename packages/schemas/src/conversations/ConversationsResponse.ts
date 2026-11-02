@@ -57,13 +57,14 @@ export interface LoadTurnConfigResponse extends ApiResponse {
 }
 
 // DEV_NOTE: The retention purge's run (M6-1): chats cleared, and chats left for the next run (a turn running, a new
-// message since the read, a step that failed)
+// message since the read, a step that failed), and companies with a chat overdue after it (alerted)
 export interface PurgeConversationContentResponse extends ApiResponse {
   purgedCount?: number;
   skippedCount?: number;
+  overdueCompanyCount?: number;
 }
 
-// DEV_NOTE: ConversationDO.purgeContent's answer over DO RPC. isBusy = a turn or decision is running; nothing wiped.
+// DEV_NOTE: ConversationDO.purgeContent's answer over DO RPC. isBusy = a turn, decision or close is running; nothing wiped.
 export const ZConversationContentWipeResponse = z.object({
   isSuccess: z.boolean(),
   message: z.string(),

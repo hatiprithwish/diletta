@@ -221,6 +221,43 @@ export default class CompaniesDAL {
     return response;
   }
 
+  // DEV_NOTE: Every company's retention setting (withPlatform, M6-1), churned ones too: their chats still expire.
+  // companyIds null = every company; a list limits it (tests on the shared staging branch)
+  async getCompaniesRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompaniesRetentionDALRequest,
+  ) {
+    const response: Schemas.CompaniesRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const query = tx
+        .select({
+          id: companies.id,
+          publicId: companies.publicId,
+          contentRetentionDays: companies.contentRetentionDays,
+        })
+        .from(companies)
+        .orderBy(asc(companies.id));
+      response.companies =
+        params.companyIds === null
+          ? await query
+          : await query.where(inArray(companies.id, params.companyIds));
+      response.isSuccess = true;
+      response.message = "Company retention settings fetched successfully";
+    } catch (error) {
+      const message = "Unknown error in listing company retention settings";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async updateCompany(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpdateCompanyDALRequest,
