@@ -8,6 +8,9 @@ import * as Schemas from "@app/schemas";
 const LEDGER_KEY = "ledger";
 const RESERVATION_PREFIX = "reservation:";
 const USER_PREFIX = "user:";
+// DEV_NOTE: The budget alerts already sent this period (M6-6): `alerted:<periodKey>:<50|80|100|exhausted>`
+const ALERT_PREFIX = "alerted:";
+const EXHAUSTED_ALERT = "exhausted";
 
 // DEV_NOTE: BudgetDO (M2-4): one per company, named by companies.id (internal; reached only from the worker and the
 // Conversation DO through BudgetDO.forCompany, never routed publicly). The live counters behind every model call:
@@ -28,6 +31,11 @@ const USER_PREFIX = "user:";
 // BUDGET_TIMING_MAX_SAMPLES of each are kept in memory (getTimings, resetTimings; lost when the DO is evicted, which
 // getTimings shows as a later timingsSince). Workers' clock moves only at I/O, so a call that never waits (a ledger
 // already loaded) counts 0 ms and one that waits for Neon counts the wait: the time that varies under load.
+//
+// Alerts (M6-6, our team only): each ledger write checks which of BUDGET_ALERT_THRESHOLD_PERCENTS the period's settled
+// spend has reached, and a company-budget refusal counts as used up; each logs one error per company per period
+// (→ Sentry → the team channel), remembered in kv so an evicted DO doesn't send it again. A new period's ledger
+// drops the old period's marks.
 export class BudgetDO extends DurableObject<Env> {
   private loading: Promise<void> | null = null;
   private lastFailedLoadAt = 0;
@@ -323,6 +331,7 @@ export class BudgetDO extends DurableObject<Env> {
         spentMicros: Schemas.usdToMicros(seed.spentUsd),
       });
       this.pruneUsers(opened.dayKey);
+      this.pruneAlerts(opened.periodKey);
       this.putLedger(opened);
       return;
     }
@@ -428,6 +437,20 @@ export class BudgetDO extends DurableObject<Env> {
     } else {
       AppLogger.warn(entry);
     }
+    if (refusal === Schemas.BudgetRefusalEnum.CompanyBudget) {
+      const ledger = this.getLedger();
+      this.alertOnce(ledger?.periodKey ?? Schemas.budgetPeriodKey(Date.now()), EXHAUSTED_ALERT, {
+        category: Schemas.LogCategory.Budget,
+        action: Schemas.LogAction.ExhaustCompanyBudget,
+        message: "Company budget used up; model calls refused",
+        metadata: {
+          companyId: request.companyId,
+          periodKey: ledger?.periodKey ?? null,
+          spentUsd: ledger ? Schemas.microsToUsd(ledger.spentMicros) : null,
+          budgetUsd: ledger ? Schemas.microsToUsd(ledger.budgetMicros) : null,
+        },
+      });
+    }
     return { isSuccess: false, message: "Budget refused", refusal };
   }
 
@@ -438,6 +461,45 @@ export class BudgetDO extends DurableObject<Env> {
 
   private putLedger(ledger: Schemas.BudgetLedger): void {
     this.ctx.storage.kv.put(LEDGER_KEY, ledger);
+    this.alertReachedThresholds(ledger);
+  }
+
+  private alertReachedThresholds(ledger: Schemas.BudgetLedger): void {
+    for (const percent of BudgetLedgerProvider.reachedAlertThresholds(ledger)) {
+      this.alertOnce(ledger.periodKey, String(percent), {
+        category: Schemas.LogCategory.Budget,
+        action: Schemas.LogAction.ReachBudgetThreshold,
+        message: `Company budget ${percent}% used`,
+        metadata: {
+          companyId: ledger.companyId,
+          periodKey: ledger.periodKey,
+          thresholdPercent: percent,
+          spentUsd: Schemas.microsToUsd(ledger.spentMicros),
+          budgetUsd: Schemas.microsToUsd(ledger.budgetMicros),
+        },
+      });
+    }
+  }
+
+  // DEV_NOTE: Logs the alert unless this period already has it. Marked before logging, with no await between, so two
+  // calls in flight can't both send it.
+  private alertOnce(
+    periodKey: string,
+    alert: string,
+    entry: Parameters<typeof AppLogger.error>[0],
+  ): void {
+    const key = `${ALERT_PREFIX}${periodKey}:${alert}`;
+    if (this.ctx.storage.kv.get(key) !== undefined) return;
+    this.ctx.storage.kv.put(key, Date.now());
+    AppLogger.error(entry);
+  }
+
+  private pruneAlerts(periodKey: string): void {
+    for (const [key] of this.ctx.storage.kv.list({ prefix: ALERT_PREFIX })) {
+      if (!key.startsWith(`${ALERT_PREFIX}${periodKey}:`)) {
+        this.ctx.storage.kv.delete(key);
+      }
+    }
   }
 
   private getUser(chatbotUserId: string): Schemas.BudgetUserCounters | undefined {

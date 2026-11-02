@@ -29,6 +29,7 @@
     "@logtape/hono": "^2.3.2",
     "@logtape/logtape": "^2.3.2",
     "@logtape/redaction": "^2.3.2",
+    "@sentry/cloudflare": "10.76.2",
     "agents": "0.24.0",
     "ai": "7.0.126",
     "drizzle-orm": "1.0.0-rc.4",

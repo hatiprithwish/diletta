@@ -16,6 +16,7 @@ import {
   modelCalls,
 } from "@/db/tables";
 import TurnBudget from "@/budget/TurnBudget";
+import AppLogger from "@/providers/logger";
 import { BudgetDO } from "@/durable-objects/BudgetDO";
 import BudgetRepo from "@/repositories/BudgetRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
@@ -482,6 +483,97 @@ describe("BudgetDO", () => {
       state.storage.kv.get("user:stale"),
     );
     expect(staleUser).toBeUndefined();
+  });
+
+  it("alerts our team once per period at 50%, 80% and 100% of the budget, and when it is used up", async () => {
+    const fixture = await createFixture("1");
+    await insertSpend(fixture.companyId, "0.600000", new Date());
+    const periodKey = Schemas.budgetPeriodKey(Date.now());
+    const alerts = () =>
+      vi
+        .mocked(AppLogger.error)
+        .mock.calls.map(([entry]) => entry)
+        .filter(
+          (entry) =>
+            (entry.action === Schemas.LogAction.ReachBudgetThreshold ||
+              entry.action === Schemas.LogAction.ExhaustCompanyBudget) &&
+            (entry.metadata as { companyId?: string }).companyId === fixture.companyId,
+        );
+    const settle = (reservationId: string | undefined, costMicros: number) =>
+      budgetDo(fixture.companyId).settle({
+        companyId: fixture.companyId,
+        reservationId: reservationId ?? "",
+        costMicros,
+      });
+    vi.mocked(AppLogger.error).mockClear();
+
+    // DEV_NOTE: The seed alone is past 50%
+    const first = await reserve(fixture, 300_000);
+    expect(alerts().map((entry) => entry.message)).toEqual(["Company budget 50% used"]);
+
+    await settle(first.reservationId, 300_000);
+    const second = await reserve(fixture, 100_000);
+    await settle(second.reservationId, 100_000);
+    expect(alerts().map((entry) => entry.message)).toEqual([
+      "Company budget 50% used",
+      "Company budget 80% used",
+      "Company budget 100% used",
+    ]);
+    expect(alerts()[2]?.metadata).toMatchObject({
+      periodKey,
+      thresholdPercent: 100,
+      spentUsd: "1.000000",
+      budgetUsd: "1.000000",
+    });
+
+    expect(await reserve(fixture, 1)).toMatchObject({
+      refusal: Schemas.BudgetRefusalEnum.CompanyBudget,
+    });
+    expect(await reserve(fixture, 1)).toMatchObject({
+      refusal: Schemas.BudgetRefusalEnum.CompanyBudget,
+    });
+    expect(alerts().map((entry) => entry.action)).toEqual([
+      Schemas.LogAction.ReachBudgetThreshold,
+      Schemas.LogAction.ReachBudgetThreshold,
+      Schemas.LogAction.ReachBudgetThreshold,
+      Schemas.LogAction.ExhaustCompanyBudget,
+    ]);
+
+    // DEV_NOTE: A refresh rewrites the ledger; nothing is sent twice in the same period
+    await patchLedger(fixture.companyId, { budgetLoadedAt: 0 });
+    await reserve(fixture, 1);
+    expect(alerts()).toHaveLength(4);
+    const marks = await runInDurableObject(budgetDo(fixture.companyId), (_instance, state) =>
+      [...state.storage.kv.list({ prefix: "alerted:" })].map(([key]) => key).sort(),
+    );
+    expect(marks).toEqual(
+      ["100", "50", "80", "exhausted"].map((alert) => `alerted:${periodKey}:${alert}`),
+    );
+  });
+
+  it("drops an earlier period's alert marks when a new period opens, so it can alert again", async () => {
+    const fixture = await createFixture("1");
+    await insertSpend(fixture.companyId, "0.600000", new Date());
+    expect((await reserve(fixture, 1)).isSuccess).toBe(true);
+    await patchLedger(fixture.companyId, { periodKey: "2000-01" });
+    await runInDurableObject(budgetDo(fixture.companyId), (_instance, state) => {
+      for (const [key] of state.storage.kv.list({ prefix: "alerted:" }))
+        state.storage.kv.delete(key);
+      state.storage.kv.put("alerted:2000-01:50", 1);
+    });
+    vi.mocked(AppLogger.error).mockClear();
+
+    expect((await reserve(fixture, 1)).isSuccess).toBe(true);
+    const marks = await runInDurableObject(budgetDo(fixture.companyId), (_instance, state) =>
+      [...state.storage.kv.list({ prefix: "alerted:" })].map(([key]) => key),
+    );
+    expect(marks).toEqual([`alerted:${Schemas.budgetPeriodKey(Date.now())}:50`]);
+    expect(AppLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: Schemas.LogAction.ReachBudgetThreshold,
+        message: "Company budget 50% used",
+      }),
+    );
   });
 
   it("refuses a request for another company (fail closed)", async () => {

@@ -218,6 +218,24 @@ describe("BudgetLedgerProvider", () => {
   it("keeps the expiry longer than the longest allowed turn", () => {
     expect(Constants.BUDGET_RESERVATION_TTL_MS).toBeGreaterThan(900 * 1000);
   });
+
+  it("lists the alert thresholds the settled spend has reached, each from its exact boundary", () => {
+    const reached = (spentMicros: number) =>
+      BudgetLedgerProvider.reachedAlertThresholds(ledger({ spentMicros }));
+    expect(reached(0)).toEqual([]);
+    expect(reached(499_999)).toEqual([]);
+    expect(reached(500_000)).toEqual([50]);
+    expect(reached(799_999)).toEqual([50]);
+    expect(reached(800_000)).toEqual([50, 80]);
+    expect(reached(1_000_000)).toEqual([50, 80, 100]);
+    expect(reached(5_000_000)).toEqual([50, 80, 100]);
+  });
+
+  it("reaches no alert threshold on a budget of 0", () => {
+    expect(
+      BudgetLedgerProvider.reachedAlertThresholds(ledger({ budgetMicros: 0, spentMicros: 10 })),
+    ).toEqual([]);
+  });
 });
 
 describe("TurnBudget", () => {

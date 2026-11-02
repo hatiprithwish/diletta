@@ -1,8 +1,10 @@
 import { honoLogger } from "@logtape/hono";
+import * as Sentry from "@sentry/cloudflare";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
 import AppLogger, { configureLogger, disposeLogger, withRequestContext } from "@/providers/logger";
+import SentryProvider from "@/providers/sentry";
 import AuthRoutes from "@/routes/AuthRoutes";
 import AdminsRoutes from "@/routes/AdminsRoutes";
 import ActivityRollupsRoutes from "@/routes/ActivityRollupsRoutes";
@@ -99,6 +101,20 @@ app.use(
   }),
 );
 
+// DEV_NOTE: A handler that threw (M6-6): logged as an error (→ Sentry → the team channel) with the error reduced by
+// toLoggableError, and answered with the shared 500 shape. Without it Hono prints the raw error to the console, where
+// a query error's bound values would land.
+app.onError((error, c) => {
+  AppLogger.error({
+    category: Schemas.LogCategory.Middleware,
+    action: Schemas.LogAction.HandleUncaughtError,
+    message: "Unhandled error in a route",
+    error,
+    metadata: { method: c.req.method, path: c.req.routePath },
+  });
+  return c.json({ isSuccess: false, message: "Something went wrong" }, 500);
+});
+
 app.route("/auth", AuthRoutes);
 app.route("/dashboard", AdminsRoutes);
 app.route("/dashboard/chatbots", ChatbotsRoutes);
@@ -122,7 +138,9 @@ app.route("/widget", WidgetRoutes);
 app.route("/eval", EvalHarnessRoutes);
 app.route("/eval/load", EvalLoadRoutes);
 
-export default {
+// DEV_NOTE: withSentry (M6-6) sends what escapes these handlers (not routes: onError above logs those) to Sentry,
+// scrubbed by scrubSentryEvent. Off when SENTRY_DSN is empty. See providers/sentry.ts.
+export default Sentry.withSentry((env: Env) => SentryProvider.workerOptions(env), {
   fetch(req: Request, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(disposeLogger());
     return app.fetch(req, env, ctx);
@@ -139,9 +157,19 @@ export default {
         metadata: { cron: controller.cron },
       });
     } else {
-      await Promise.allSettled(
-        CronScheduleProvider.getDueJobs(controller.scheduledTime).map((job) => CRON_JOBS[job](env)),
-      );
+      const jobs = CronScheduleProvider.getDueJobs(controller.scheduledTime);
+      const results = await Promise.allSettled(jobs.map((job) => CRON_JOBS[job](env)));
+      // DEV_NOTE: A job that threw (instead of logging its own failure) would otherwise vanish in allSettled
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") return;
+        AppLogger.error({
+          category: Schemas.LogCategory.Cron,
+          action: Schemas.LogAction.DispatchCron,
+          message: "Cron job threw",
+          error: result.reason,
+          metadata: { job: jobs[index] },
+        });
+      });
     }
     ctx.waitUntil(disposeLogger());
   },
@@ -151,4 +179,4 @@ export default {
     await consumeEvents(batch, env, ctx);
     ctx.waitUntil(disposeLogger());
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

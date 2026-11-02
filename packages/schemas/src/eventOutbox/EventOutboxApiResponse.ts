@@ -18,6 +18,14 @@ export interface RelayEventsResponse extends ApiResponse {
   failedCount?: number;
 }
 
+// DEV_NOTE: The Cron's outbox check (M6-6). oldestPendingAgeMs null = nothing pending; isAlerting = it logged an alert.
+export interface CheckEventOutboxHealthResponse extends ApiResponse {
+  oldestPendingAgeMs?: number | null;
+  pendingCount?: number;
+  failedCount?: number;
+  isAlerting?: boolean;
+}
+
 export interface PurgePublishedEventsResponse extends ApiResponse {
   deletedCount?: number;
 }

@@ -1,10 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { DrizzleQueryError } from "drizzle-orm";
 import { APICallError, NoObjectGeneratedError } from "ai";
-import type { LogRecord } from "@logtape/logtape";
+import { reset, type LogRecord } from "@logtape/logtape";
+import type * as Sentry from "@sentry/cloudflare";
 import * as Schemas from "@app/schemas";
 import { ModelUnavailableError } from "@/providers/modelCallRecording";
-import { jsonConsoleFormatter, toLoggableError } from "@/providers/logger";
+import AppLogger, {
+  configureLogger,
+  jsonConsoleFormatter,
+  toLoggableError,
+} from "@/providers/logger";
+import SentryProvider, { scrubSentryEvent, toSentryEvent } from "@/providers/sentry";
 
 describe("toLoggableError", () => {
   it("logs a failed query as its SQL, pg code and names, never the bound values", () => {
@@ -129,5 +135,141 @@ describe("jsonConsoleFormatter", () => {
     const [logged] = jsonConsoleFormatter(record({ error: providerError }));
     expect(JSON.stringify(logged)).not.toContain("PROMPT-MARKER");
     expect(logged).toMatchObject({ error: { name: "AI_APICallError", statusCode: 529 } });
+  });
+});
+
+describe("Sentry (M6-6)", () => {
+  const record = (overrides: Partial<LogRecord> = {}): LogRecord => ({
+    category: ["diletta-worker", "Relay"],
+    level: "error",
+    message: ["Events rejected by the Queue"],
+    rawMessage: "Events rejected by the Queue",
+    timestamp: 1_700_000_000_000,
+    properties: {
+      category: Schemas.LogCategory.Relay,
+      action: Schemas.LogAction.RelayEvents,
+      metadata: { companyId: "42", outboxIds: ["7"] },
+      error: { name: "Error", message: "Batch rejected", stack: "Error: Batch rejected\n    at x" },
+      requestId: "req-1",
+    },
+    ...overrides,
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await reset();
+  });
+
+  it("builds one issue per category, action, message and company, carrying the record's metadata and error", () => {
+    expect(toSentryEvent(record())).toEqual({
+      level: "error",
+      message: "Events rejected by the Queue",
+      logger: "diletta-worker.Relay",
+      timestamp: 1_700_000_000,
+      fingerprint: ["Relay", "RelayEvents", "Events rejected by the Queue", "42"],
+      tags: { category: "Relay", action: "RelayEvents", requestId: "req-1" },
+      contexts: {
+        log: {
+          metadata: { companyId: "42", outboxIds: ["7"] },
+          error: {
+            name: "Error",
+            message: "Batch rejected",
+            stack: "Error: Batch rejected\n    at x",
+          },
+        },
+      },
+    });
+  });
+
+  it("leaves the company out of the fingerprint when the metadata names none", () => {
+    const event = toSentryEvent(
+      record({
+        level: "fatal",
+        properties: {
+          category: Schemas.LogCategory.Cron,
+          action: Schemas.LogAction.DispatchCron,
+          metadata: { job: "OutboxSweep" },
+        },
+      }),
+    );
+    expect(event.level).toBe("fatal");
+    expect(event.fingerprint).toEqual(["Cron", "DispatchCron", "Events rejected by the Queue"]);
+    expect(event.tags).toEqual({ category: "Cron", action: "DispatchCron" });
+  });
+
+  it("sends only error records to Sentry, redacted like the console", async () => {
+    const captured = vi
+      .spyOn(SentryProvider, "captureLogEvent")
+      .mockImplementation(() => undefined);
+    await configureLogger();
+
+    AppLogger.info({
+      category: Schemas.LogCategory.Relay,
+      action: Schemas.LogAction.RelayEvents,
+      message: "Events published",
+    });
+    AppLogger.warn({
+      category: Schemas.LogCategory.Budget,
+      action: Schemas.LogAction.ReserveBudget,
+      message: "Budget refused",
+    });
+    AppLogger.error({
+      category: Schemas.LogCategory.Relay,
+      action: Schemas.LogAction.RelayEvents,
+      message: "Queue unavailable for asha@example.com",
+      error: new APICallError({
+        message: "Overloaded",
+        url: "https://example.com",
+        requestBodyValues: { prompt: "PROMPT-MARKER" },
+        statusCode: 529,
+      }),
+      metadata: { companyId: "42", clerkId: "user_CLERK-MARKER", note: "bob@example.com" },
+    });
+
+    expect(captured).toHaveBeenCalledOnce();
+    const [event] = captured.mock.calls[0] ?? [];
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toMatch(/asha@example\.com|bob@example\.com|CLERK-MARKER|PROMPT-MARKER/);
+    expect(event).toMatchObject({
+      level: "error",
+      tags: { category: "Relay", action: "RelayEvents" },
+      contexts: { log: { error: { name: "AI_APICallError", statusCode: 529 } } },
+    });
+    expect(event?.fingerprint?.[3]).toBe("42");
+  });
+
+  it("scrubs an uncaught error: no request, user or breadcrumbs, a query's values never sent", () => {
+    const queryError = new DrizzleQueryError(
+      'insert into "chatbot_users" ("host_user_id") values ($1)',
+      ["Asha Rao"],
+      new Error("boom"),
+    );
+    const event: Sentry.ErrorEvent = {
+      type: undefined,
+      message: "Failed for asha@example.com",
+      request: { headers: { "sec-websocket-protocol": "jwt.TOKEN-MARKER" } },
+      user: { email: "asha@example.com" },
+      breadcrumbs: [{ message: "fetch https://host.example.com/users/42" }],
+      extra: { body: "BODY-MARKER" },
+      exception: { values: [{ type: "DrizzleQueryError", value: `${queryError.message}` }] },
+    };
+
+    const scrubbed = scrubSentryEvent(event, { originalException: queryError });
+    expect(scrubbed.request).toBeUndefined();
+    expect(scrubbed.user).toBeUndefined();
+    expect(scrubbed.breadcrumbs).toBeUndefined();
+    expect(scrubbed.extra).toBeUndefined();
+    expect(scrubbed.exception?.values?.[0]?.value).toBe(
+      'Failed query: insert into "chatbot_users" ("host_user_id") values ($1)',
+    );
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Asha Rao|asha@example\.com|MARKER/);
+  });
+
+  it("redacts addresses in any other uncaught error's text", () => {
+    const scrubbed = scrubSentryEvent(
+      { type: undefined, exception: { values: [{ type: "Error", value: "No user ana@x.io" }] } },
+      { originalException: new Error("No user ana@x.io") },
+    );
+    expect(scrubbed.exception?.values?.[0]?.value).not.toContain("ana@x.io");
   });
 });

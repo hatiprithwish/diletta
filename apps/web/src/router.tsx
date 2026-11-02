@@ -22,16 +22,18 @@ export function createRouter() {
   });
 
   if (!router.isServer) {
+    // DEV_NOTE: No PII (M6-6, docs/runbooks/observability.md): the dashboard shows chat text, user names and emails,
+    // so nothing identifying is sent and Replay masks every text and blocks every image or video
     Sentry.init({
       dsn: import.meta.env.VITE_SENTRY_DSN,
-      sendDefaultPii: true,
+      sendDefaultPii: false,
       integrations: [
         Sentry.tanstackRouterBrowserTracingIntegration(router),
-        Sentry.replayIntegration(),
+        Sentry.replayIntegration({ maskAllText: true, maskAllInputs: true, blockAllMedia: true }),
         Sentry.feedbackIntegration({ colorScheme: "system" }),
       ],
       enableLogs: true,
-      tracesSampleRate: 1.0,
+      tracesSampleRate: 0.1,
       replaysSessionSampleRate: 0.1,
       replaysOnErrorSampleRate: 1.0,
     });

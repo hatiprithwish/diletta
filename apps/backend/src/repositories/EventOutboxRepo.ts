@@ -116,6 +116,53 @@ export default class EventOutboxRepo {
     };
   }
 
+  // DEV_NOTE: Outbox health (M6-6), run by the Cron right after the sweep: a Pending row older than OUTBOX_LAG_ALERT_MS
+  // (the sweep couldn't send it) or any Failed row (never retried; docs/runbooks/observability.md) logs an error, which
+  // reaches the team channel through Sentry. Every tick re-alerts while it lasts; Sentry groups the repeats into one
+  // issue. companyIds as in sweepPendingEvents.
+  async checkEventOutboxHealth(params: {
+    companyIds: string[] | null;
+  }): Promise<Schemas.CheckEventOutboxHealthResponse> {
+    const read: Schemas.EventOutboxHealthDALResponse = await withPlatform(this.db, async (tx) => {
+      return await this.dal.getEventOutboxHealth(tx, { companyIds: params.companyIds });
+    });
+    if (!read.isSuccess || !read.health) {
+      return { isSuccess: false, message: read.message };
+    }
+
+    const { oldestPendingCreatedAt, pendingCount, failedCount } = read.health;
+    const oldestPendingAgeMs =
+      oldestPendingCreatedAt === null ? null : Date.now() - oldestPendingCreatedAt.getTime();
+    const isLagging =
+      oldestPendingAgeMs !== null && oldestPendingAgeMs > Constants.OUTBOX_LAG_ALERT_MS;
+
+    if (isLagging) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Relay,
+        action: Schemas.LogAction.CheckEventOutboxHealth,
+        message: "Outbox events waiting too long to publish",
+        metadata: { oldestPendingAgeMs, pendingCount, alertAfterMs: Constants.OUTBOX_LAG_ALERT_MS },
+      });
+    }
+    if (failedCount > 0) {
+      AppLogger.error({
+        category: Schemas.LogCategory.Relay,
+        action: Schemas.LogAction.CheckEventOutboxHealth,
+        message: "Outbox events failed and need a manual retry",
+        metadata: { failedCount },
+      });
+    }
+
+    return {
+      isSuccess: true,
+      message: "Event outbox health checked successfully",
+      oldestPendingAgeMs,
+      pendingCount,
+      failedCount,
+      isAlerting: isLagging || failedCount > 0,
+    };
+  }
+
   // DEV_NOTE: Published rows older than the retention window. Pending and Failed rows stay for the sweep and the
   // relay-failure runbook. companyIds as in sweepPendingEvents.
   async purgePublishedEvents(params: {
@@ -175,6 +222,7 @@ export default class EventOutboxRepo {
       activityLogId: row.activityLogId,
       eventType: row.eventType,
       dedupeKey: row.dedupeKey,
+      createdAtMs: row.createdAt.getTime(),
     };
   }
 
