@@ -74,6 +74,7 @@ export default function ChatSession({
     canStop: isTurnRunning,
     notice,
     draft,
+    linkOrigins: ready?.linkOrigins ?? [],
   };
 
   const { retry: retryConversation } = conversation;

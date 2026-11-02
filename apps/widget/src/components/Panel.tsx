@@ -97,6 +97,7 @@ export default function Panel({ view, ...actions }: Schemas.WidgetPanelProps) {
             <AssistantMessage
               key={message.id}
               message={message}
+              linkOrigins={view.linkOrigins}
               canStop={view.canStop}
               onStop={actions.onStop}
               onRate={actions.onRate}

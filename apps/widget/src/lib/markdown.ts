@@ -21,6 +21,26 @@ const INLINE =
 export const isWebUrl = (url: string | null): url is string => url !== null && WEB_URL.test(url);
 const isSafeHref = (href: string) => isWebUrl(href) || MAILTO.test(href);
 
+// DEV_NOTE: An http(s) address's origin, or null for anything else (a missing source URL, mailto, a malformed one)
+export function originOf(url: string | null): string | null {
+  if (!isWebUrl(url)) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+// DEV_NOTE: The link allow-list (M6-4): a reply's link renders only to one of origins (the host app's and the reply's
+// cited sources') or as a plain mailto (an address, no ?subject= or ?body=, so a link can't open a mail already holding
+// the chat). Anything else, such as a link a prompt injection made to carry the chat to another site, is shown as its
+// text.
+export function isAllowedLink(href: string, origins: readonly string[]): boolean {
+  if (MAILTO.test(href)) return !href.includes("?");
+  const origin = originOf(href);
+  return origin !== null && origins.includes(origin);
+}
+
 function parseText(text: string): Schemas.WidgetMarkdownInlineContent[] {
   return Schemas.splitCitationMarkers(text).flatMap(
     (piece): Schemas.WidgetMarkdownInlineContent[] =>

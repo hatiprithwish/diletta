@@ -10,6 +10,7 @@ const user = (id: string, text: string) => ({
   text,
   searchCitations: [],
   searchStatuses: [],
+  hasWithheldSearch: false,
   hasUnfinishedTool: false,
 });
 const assistant = (
@@ -18,7 +19,16 @@ const assistant = (
   searchCitations: Schemas.KnowledgeCitation[] = [],
   searchStatuses: Schemas.SearchHelpDocsStatusEnum[] = [],
   hasUnfinishedTool = false,
-) => ({ id, role: "assistant" as const, text, searchCitations, searchStatuses, hasUnfinishedTool });
+  hasWithheldSearch = false,
+) => ({
+  id,
+  role: "assistant" as const,
+  text,
+  searchCitations,
+  searchStatuses,
+  hasWithheldSearch,
+  hasUnfinishedTool,
+});
 
 const citation = (n: number, documentPublicId: string): Schemas.KnowledgeCitation => ({
   n,
@@ -43,6 +53,7 @@ function unsynced(
     lastSyncedTurnId: options.lastSyncedTurnId ?? null,
     mintTurnId: () => `minted-${++minted}`,
     titleMaxChars: 10,
+    isInjectionFlagged: false,
   });
 }
 
@@ -80,6 +91,7 @@ describe("TranscriptProvider.toEntries", () => {
         text: "Hi",
         searchCitations: [],
         searchStatuses: [],
+        hasWithheldSearch: false,
         hasUnfinishedTool: false,
       },
       {
@@ -88,6 +100,7 @@ describe("TranscriptProvider.toEntries", () => {
         text: "Hello there",
         searchCitations: [],
         searchStatuses: [],
+        hasWithheldSearch: false,
         hasUnfinishedTool: false,
       },
       {
@@ -96,6 +109,7 @@ describe("TranscriptProvider.toEntries", () => {
         text: "sys",
         searchCitations: [],
         searchStatuses: [],
+        hasWithheldSearch: false,
         hasUnfinishedTool: false,
       },
     ]);
@@ -233,6 +247,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
         text: "sys",
         searchCitations: [],
         searchStatuses: [],
+        hasWithheldSearch: false,
         hasUnfinishedTool: false,
       },
     ]);
@@ -271,7 +286,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
 
   describe("docGapSignal (M5-6)", () => {
     const { Found, NoResults, Unavailable } = Schemas.SearchHelpDocsStatusEnum;
-    const signalOf = (entries: Schemas.TranscriptEntry[]) =>
+    const signalOf = (entries: Schemas.TranscriptEntry[], isInjectionFlagged = false) =>
       TranscriptProvider.unsyncedTurns({
         entries,
         lastSyncedMessageId: null,
@@ -279,6 +294,7 @@ describe("TranscriptProvider.unsyncedTurns", () => {
         lastSyncedTurnId: null,
         mintTurnId: () => "turn",
         titleMaxChars: 80,
+        isInjectionFlagged,
       }).turns[0]?.docGapSignal;
     const question: Schemas.TranscriptEntry = {
       id: "u",
@@ -286,8 +302,20 @@ describe("TranscriptProvider.unsyncedTurns", () => {
       text: "How?",
       searchCitations: [],
       searchStatuses: [],
+      hasWithheldSearch: false,
       hasUnfinishedTool: false,
     };
+
+    // DEV_NOTE: M6-4: a hit withheld for holding a prompt injection (the doc exists), or a conversation flagged by one
+    // in the user's message (its text never goes on to the rewrite model)
+    it("marks no turn whose search withheld a hit, nor any turn of a flagged conversation", () => {
+      expect(
+        signalOf([question, assistant("a", "I don't know", [], [NoResults], false, true)]),
+      ).toBeNull();
+      expect(
+        signalOf([question, assistant("a", "I don't know", [], [NoResults])], true),
+      ).toBeNull();
+    });
 
     it("marks an uncited reply after a search, across the turn's messages", () => {
       expect(signalOf([question, assistant("a", "I don't know", [], [NoResults])])).toBe(

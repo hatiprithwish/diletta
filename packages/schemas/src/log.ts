@@ -500,4 +500,7 @@ export enum LogAction {
   GetOpenChatbotWideQualityIssue = "GetOpenChatbotWideQualityIssue",
   CheckChatbotHealth = "CheckChatbotHealth",
   RecordChatbotHealthDrop = "RecordChatbotHealthDrop",
+  // Prompt injection (M6-4)
+  DetectPromptInjection = "DetectPromptInjection",
+  RecordPromptInjection = "RecordPromptInjection",
 }

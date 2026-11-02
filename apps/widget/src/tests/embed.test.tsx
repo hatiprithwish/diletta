@@ -12,6 +12,7 @@ const API_BASE = "https://platform.example.com";
 const TOKEN = `h.${btoa(JSON.stringify({ sub: "host-user-1" })).replace(/=+$/, "")}.s`;
 const BOOTSTRAP: Schemas.WidgetBootstrap = {
   chatbot: { publicId: "bot-1", name: "Registers Assistant" },
+  linkOrigins: [],
   widget: {
     greeting: "Hi, what do you need?",
     suggestions: ["Which inspections are overdue?"],

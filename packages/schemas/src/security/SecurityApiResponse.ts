@@ -94,8 +94,8 @@ export type EraseChatbotUserRepoResponse = WithOutboxIds<
   ApiResponse & { conversationCount?: number; chatbotUserId?: string }
 >;
 
-// DEV_NOTE: A prompt-injection event: for now a quality issue typed Prompt injection. detectedIn = the admin's note,
-// else where the issue came from; the conversation's title is null once purged.
+// DEV_NOTE: A prompt-injection event: a quality issue typed Prompt injection, an admin's or the runtime's (M6-4).
+// detectedIn = its note, else where the issue came from; the conversation's title is null once purged.
 export interface InjectionEvent {
   publicId: string;
   conversationPublicId: string;

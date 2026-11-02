@@ -175,6 +175,7 @@ export default class WidgetAuthRepo {
         companyId: connection.companyId,
         connectionId: connection.id,
         connectionEnvironment: connection.environment,
+        allowedOrigins: connection.allowedOrigins,
         chatbotId: resolved.chatbot.id,
         chatbotPublicId: resolved.chatbot.publicId,
         chatbotName: resolved.chatbot.name,

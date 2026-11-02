@@ -5,9 +5,11 @@ import type { WidgetAuthFailureEnum } from "../widgetAuth";
 // DEV_NOTE: GET /widget/bootstrap (M2-7): what the widget shows before any conversation exists, so opening the panel
 // never creates one. The chatbot's name, and its widget settings from the published config (greeting, up to 3
 // suggestions, the launcher label). widget is null when the chatbot has no loadable published config: the widget
-// shows its unavailable state. Client-facing: publicId and names only.
+// shows its unavailable state. linkOrigins (M6-4): the origins a reply's link may point to besides its cited sources,
+// the connection's allowed origins (the host app's own pages). Client-facing: publicId and names only.
 export const ZWidgetBootstrap = z.object({
   chatbot: z.object({ publicId: z.string(), name: z.string() }),
+  linkOrigins: z.array(z.string()),
   widget: z
     .object({
       greeting: z.string(),

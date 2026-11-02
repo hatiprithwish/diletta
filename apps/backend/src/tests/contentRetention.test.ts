@@ -740,6 +740,7 @@ describe("Retention purge retries (M6-1)", () => {
         companyId: shortCompany,
         connectionId: "1",
         connectionEnvironment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+        allowedOrigins: [],
         chatbotId: shortChat.chatbotId,
         chatbotPublicId: "unused",
         chatbotName: "Short",

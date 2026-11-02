@@ -207,6 +207,7 @@ export interface TranscriptEntry {
   text: string;
   searchCitations: KnowledgeCitation[];
   searchStatuses: SearchHelpDocsStatusEnum[];
+  hasWithheldSearch: boolean;
   hasUnfinishedTool: boolean;
 }
 
@@ -337,8 +338,9 @@ export type ConversationRolesGrant = z.infer<typeof ZConversationRolesGrant>;
 // JWT's exp; after it the user has no roles until a fresh connect); changeRequests holds this conversation's open
 // change requests by Think tool call id until they end. Undo (M3-7): undoWindows holds the Verified ones the user can
 // still undo, by Think tool call id; userUndos the summaries (no values) of those the user undid in this conversation,
-// by public id, told to every later turn (the transcript still says they were made). Internal ids only; never the
-// host bearer token.
+// by public id, told to every later turn (the transcript still says they were made). Prompt injection (M6-4):
+// injectionDetectedAt (epoch ms) once a turn found one; from then on the conversation makes no changes. Internal ids
+// only; never the host bearer token.
 export const ZConversationRuntimeState = z.object({
   session: ZConversationSession,
   lastActivityAt: z.number().int(),
@@ -355,5 +357,6 @@ export const ZConversationRuntimeState = z.object({
   changeRequests: z.record(z.string(), ZConversationChangeRequestEntry).default({}),
   undoWindows: z.record(z.string(), ZConversationUndoWindow).default({}),
   userUndos: z.record(z.string(), z.string()).default({}),
+  injectionDetectedAt: z.number().int().nullable().default(null),
 });
 export type ConversationRuntimeState = z.infer<typeof ZConversationRuntimeState>;

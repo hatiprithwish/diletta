@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { QualityIssueStatusIntEnum } from "../qualityIssues/QualityIssuesCommon";
+import {
+  QualityIssueSourceIntEnum,
+  QualityIssueStatusIntEnum,
+} from "../qualityIssues/QualityIssuesCommon";
 
 // DEV_NOTE: The Security page (M4-9): identity and origins, encryption keys, retention, prompt-injection events and the
 // audit log, all for the signed-in admin's company.
@@ -41,14 +44,26 @@ export const ENCRYPTION_KEY_ROTATE_FAILURE_HTTP_STATUS_MAP: Record<
   [EncryptionKeyRotateFailureEnum.RotationInProgress]: 409,
 };
 
-// DEV_NOTE: A prompt-injection event's "Action taken", from its quality issue's status (until M6-4 detects them, the
-// events are the issues an admin typed as Prompt injection)
+// DEV_NOTE: A prompt-injection event's "Action taken", from its quality issue's status: the issues an admin typed as
+// Prompt injection, and the ones the runtime opened when it found one (M6-4)
 export const INJECTION_EVENT_ACTION_LABEL_MAP: Record<QualityIssueStatusIntEnum, string> = {
   [QualityIssueStatusIntEnum.Open]: "Waiting for review",
   [QualityIssueStatusIntEnum.Fixed]: "Fixed",
   [QualityIssueStatusIntEnum.Dismissed]: "Dismissed",
   [QualityIssueStatusIntEnum.Converted]: "Turned into a test",
 };
+
+// DEV_NOTE: An automatic detection (source System) was blocked when it was found: the content was kept from the model
+// and the conversation's changes turned off. While open it says so; once an admin worked it, its status speaks.
+export function injectionEventActionLabel(
+  source: QualityIssueSourceIntEnum,
+  status: QualityIssueStatusIntEnum,
+): string {
+  if (source === QualityIssueSourceIntEnum.System && status === QualityIssueStatusIntEnum.Open) {
+    return "Blocked, waiting for review";
+  }
+  return INJECTION_EVENT_ACTION_LABEL_MAP[status];
+}
 
 export enum InjectionEventSortColumn {
   CreatedAt = "createdAt",

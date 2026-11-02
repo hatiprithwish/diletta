@@ -132,6 +132,11 @@ export default class DocGapsRepo {
         if (isUnreadable || question.length === 0 || reply.length === 0) {
           return { isSuccess: true, message: "The chat can't be read" };
         }
+        // DEV_NOTE: M6-4: a question holding a prompt injection never reaches the rewrite model (the transcript sync
+        // already raises no candidate for a flagged conversation; this holds for one raised before the check existed)
+        if (Schemas.detectPromptInjection(question).isDetected) {
+          return { isSuccess: true, message: "The question holds a prompt injection" };
+        }
 
         const published = await this.chatbotConfigsDal.getPublishedChatbotConfig(tx, {
           companyId,

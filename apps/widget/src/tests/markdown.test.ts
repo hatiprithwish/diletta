@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseInline, parseMarkdown } from "@/lib/markdown";
+import { isAllowedLink, originOf, parseInline, parseMarkdown } from "@/lib/markdown";
 
 // DEV_NOTE: The widget's markdown subset: what a reply may format, and what it may never smuggle in
 const kinds = (text: string) => parseMarkdown(text).map((block) => block.kind);
@@ -64,5 +64,27 @@ describe("parseInline", () => {
     expect(parseInline("use field_name_here")).toMatchObject([
       { kind: "text", text: "use field_name_here" },
     ]);
+  });
+});
+
+describe("isAllowedLink", () => {
+  const origins = ["https://app.example.com", "https://help.example.com"];
+
+  it("allows the listed origins and a plain mailto, nothing else", () => {
+    expect(isAllowedLink("https://app.example.com/records/1", origins)).toBe(true);
+    expect(isAllowedLink("https://help.example.com/fields?x=1", origins)).toBe(true);
+    expect(isAllowedLink("mailto:help@example.com", origins)).toBe(true);
+    expect(isAllowedLink("mailto:help@example.com?body=the%20whole%20chat", origins)).toBe(false);
+    expect(isAllowedLink("https://collect.example.net/log?c=secret", origins)).toBe(false);
+    expect(isAllowedLink("https://app.example.com.evil.net/", origins)).toBe(false);
+    expect(isAllowedLink("http://app.example.com/", origins)).toBe(false);
+    expect(isAllowedLink("https://app.example.com/", [])).toBe(false);
+  });
+
+  it("reads an origin only from an http(s) address", () => {
+    expect(originOf("https://help.example.com/a/b")).toBe("https://help.example.com");
+    expect(originOf(null)).toBeNull();
+    expect(originOf("mailto:a@b.co")).toBeNull();
+    expect(originOf("https://")).toBeNull();
   });
 });

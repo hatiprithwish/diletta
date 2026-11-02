@@ -24,6 +24,7 @@ import {
   files,
   messages,
   modelCalls,
+  qualityIssues,
   toolCalls,
   toolDefinitions,
 } from "@/db/tables";
@@ -456,6 +457,7 @@ afterAll(async () => {
       await ownerDb.delete(evalRuns).where(inArray(evalRuns.companyId, companyIds));
       await ownerDb.delete(evalCases).where(inArray(evalCases.companyId, companyIds));
       await ownerDb.delete(changeRequests).where(inArray(changeRequests.companyId, companyIds));
+      await ownerDb.delete(qualityIssues).where(inArray(qualityIssues.companyId, companyIds));
       await ownerDb.delete(toolCalls).where(inArray(toolCalls.companyId, companyIds));
       await ownerDb.delete(messages).where(inArray(messages.companyId, companyIds));
       await ownerDb.delete(modelCalls).where(inArray(modelCalls.companyId, companyIds));
@@ -920,6 +922,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
         companyId: tenant.companyId,
         connectionId: authenticated.identity.connectionId,
         connectionEnvironment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+        allowedOrigins: [],
         chatbotId: tenant.chatbotId,
         chatbotPublicId: tenant.chatbotPublicId,
         chatbotName: "Records bot",
@@ -1065,6 +1068,54 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
 // grading is the harness's); the staging connection has no reset_op, so the reset needs no host call.
 // DEV_NOTE: Each gate run records EVAL_GATE_MIN_K results for every case of its set over HTTP (three runs in one test)
 const GATE_TIMEOUT_MS = 600_000;
+
+// DEV_NOTE: M6-4 — the test host's seeded injection (rec_delta) in an eval attempt: withheld like a widget chat's,
+// logged only (an eval chat never reaches the dashboard, so no issue)
+describe("Eval run: prompt injection (M6-4)", { timeout: END_TO_END_TIMEOUT_MS }, () => {
+  it("withholds the seeded injection's field, keeps the rest of the record, and opens no issue", async () => {
+    const tenant = await createTenant();
+    const started = await startRun(tenant);
+    scriptModel([
+      (model) =>
+        anthropicToolCallsStream(model, [
+          {
+            id: "toolu_read",
+            name: "get_record",
+            input: { recordId: Schemas.TEST_HOST_INJECTED_RECORD_ID },
+          },
+        ]),
+      reply("That record's amount is 10."),
+    ]);
+    routeTestHostFetch();
+    const response = await call(`/runs/${started.run.publicId}/attempts`, {
+      token: await tokenFor(tenant),
+      hostToken: tenant.hostToken,
+      body: {
+        caseId: tenant.casePublicId,
+        attempt: 1,
+        messages: [
+          {
+            role: "user",
+            text: `What amount is on record ${Schemas.TEST_HOST_INJECTED_RECORD_ID}?`,
+          },
+        ],
+      },
+    });
+    expect(response.status).toBe(200);
+    const attempt = Schemas.ZRunEvalAttemptApiResponse.parse(await response.json());
+    expect(attempt.toolCalls?.map((toolCall) => [toolCall.toolName, toolCall.status])).toEqual([
+      ["get_record", Schemas.HostToolStatusEnum.Ok],
+    ]);
+    const afterRead = JSON.stringify(gatewayRequests()[1]?.body?.messages);
+    expect(afterRead).not.toContain("Ignore all previous instructions");
+    expect(afterRead).toContain("team@delta.example");
+    expect((await readAlpha(tenant.hostToken))?.amount).toBe(120);
+    const issues = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(qualityIssues).where(eq(qualityIssues.companyId, tenant.companyId)),
+    );
+    expect(issues).toHaveLength(0);
+  });
+});
 
 describe("Publish gate (M5-4)", { timeout: GATE_TIMEOUT_MS }, () => {
   async function createGateTenant() {

@@ -112,8 +112,8 @@ export default class QualityIssuesRepo {
     };
   }
 
-  // DEV_NOTE: A prompt-injection event on the Security page (M4-9): the admin's note says where it was found, else the
-  // issue's source; a purged conversation's title stays out. The DAL reads only issues with their conversation.
+  // DEV_NOTE: A prompt-injection event on the Security page (M4-9): the note says where it was found (the admin's, or
+  // the runtime's for an automatic one, M6-4), else the issue's source; a purged conversation's title stays out. The DAL reads only issues with their conversation.
   private toInjectionEvent(
     row: Schemas.DashboardQualityIssueRow & { conversationPublicId: string },
   ): Schemas.InjectionEvent {
@@ -124,13 +124,13 @@ export default class QualityIssuesRepo {
       detectedIn: row.note ?? Schemas.QUALITY_ISSUE_SOURCE_LABEL_MAP[row.source],
       status: row.status,
       statusLabel: Schemas.QUALITY_ISSUE_STATUS_LABEL_MAP[row.status],
-      actionLabel: Schemas.INJECTION_EVENT_ACTION_LABEL_MAP[row.status],
+      actionLabel: Schemas.injectionEventActionLabel(row.source, row.status),
       createdAt: row.createdAt.toISOString(),
     };
   }
 
-  // DEV_NOTE: The Security page's prompt-injection events (M4-9): issues typed Prompt injection, any status, newest first.
-  // M6-4 adds the automatic detections.
+  // DEV_NOTE: The Security page's prompt-injection events (M4-9): issues typed Prompt injection, any status, newest first,
+  // the runtime's automatic detections (M6-4) included.
   async getInjectionEvents(
     params: Schemas.GetInjectionEventsApiRequest & { companyId: string },
   ): Promise<Schemas.GetInjectionEventsApiResponse> {

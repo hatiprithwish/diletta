@@ -33,6 +33,7 @@ export enum ToolCallErrorCodeEnum {
   LoopGuard = "loop_guard",
   BlockedByPolicy = "blocked_by_policy",
   PendingLimit = "pending_limit",
+  InjectionLock = "injection_lock",
   TokenNeeded = "token_needed",
   TokenRejected = "token_rejected",
   HostRefused = "host_refused",
@@ -48,6 +49,7 @@ export const TOOL_CALL_ERROR_LABEL_MAP: Record<ToolCallErrorCodeEnum, string> = 
   [ToolCallErrorCodeEnum.LoopGuard]: "Stopped a repeated call",
   [ToolCallErrorCodeEnum.BlockedByPolicy]: "Blocked by an approval rule",
   [ToolCallErrorCodeEnum.PendingLimit]: "Too many changes waiting",
+  [ToolCallErrorCodeEnum.InjectionLock]: "Blocked after a prompt injection",
   [ToolCallErrorCodeEnum.TokenNeeded]: "The user wasn't signed in",
   [ToolCallErrorCodeEnum.TokenRejected]: "Your app refused the sign-in",
   [ToolCallErrorCodeEnum.HostRefused]: "Your app refused it",
@@ -123,7 +125,8 @@ export const HOST_TOOL_OUTPUT_MAX_CHARS = 8_000;
 // Verified / Undone / Failed / NeedsReview end an approved write (M3-6: Verified = made and read back as set; Undone =
 // it didn't read back as set, so it was undone; Committed = made, its read-after still to come); NoChange = the record already holds every value, so nothing
 // was proposed; Proposed is never returned (a proposal parks the turn: Think's paused output). message is safe text
-// for the model: no values, no host text. changeRequestId is the change request's public id.
+// for the model: no values, no host text. changeRequestId is the change request's public id. isWithheld (M6-4): a read
+// whose host data held a prompt injection, so data was left out for the model, the transcript and the widget.
 export enum HostToolStatusEnum {
   Ok = "ok",
   Error = "error",
@@ -141,6 +144,7 @@ export const ZHostToolOutput = z.object({
   message: z.string(),
   data: z.json().optional(),
   isTruncated: z.boolean().optional(),
+  isWithheld: z.boolean().optional(),
   changeRequestId: z.string().optional(),
 });
 export type HostToolOutput = z.infer<typeof ZHostToolOutput>;

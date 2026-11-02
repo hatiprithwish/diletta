@@ -42,6 +42,7 @@ export * from "./activityRollups";
 export * from "./chatbotHealth";
 export * from "./auditLog";
 export * from "./security";
+export * from "./promptInjection";
 export * from "./insights";
 export * from "./roiAssumptions";
 export * from "./eventOutbox";

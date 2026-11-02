@@ -211,7 +211,8 @@ export type WidgetMessageView = WidgetUserMessageView | WidgetAssistantMessageVi
 
 // DEV_NOTE: What the open panel shows. welcome is set for a new chat (no messages yet); isUnavailable shows the
 // unavailable card and disables the composer; notice is a one-line message under the chat (a refused send, a rate
-// limit); canStop shows Stop under the running reply.
+// limit); canStop shows Stop under the running reply. linkOrigins: the bootstrap's (M6-4: where a reply may link besides
+// its cited sources; empty until the bootstrap is read).
 export interface WidgetPanelView {
   chatbotName: string;
   status: WidgetStatusEnum;
@@ -222,6 +223,7 @@ export interface WidgetPanelView {
   canStop: boolean;
   notice: string | null;
   draft: string;
+  linkOrigins: string[];
 }
 
 export type WidgetPanelActions = WidgetChangeCardActions & {
@@ -389,6 +391,7 @@ export interface WidgetUserBubbleProps {
 
 export interface WidgetAssistantMessageProps {
   message: WidgetAssistantMessageView;
+  linkOrigins: string[];
   canStop: boolean;
   onStop: () => void;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
@@ -425,9 +428,11 @@ export interface WidgetComposerProps {
   onSend: (text: string) => void;
 }
 
+// DEV_NOTE: linkOrigins: the origins a link may point to (M6-4); a link anywhere else is shown as its text
 export interface WidgetMarkdownProps {
   text: string;
   isStreaming: boolean;
+  linkOrigins: string[];
 }
 
 // DEV_NOTE: A reply's markdown as the widget renders it: a safe subset parsed by the widget itself (no raw HTML, no
