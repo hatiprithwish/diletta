@@ -52,6 +52,10 @@ Check each environment's gateway once, and at launch (Launch readiness: "gateway
 - A call shows in the gateway's **Logs** with `cf-aig-metadata` entries `companyId`, `chatbotId`, `conversationId` (or `evalRunId`), `turnId`, `taskType`, and a `model_calls` row whose `gateway_log_id` is that log's id.
 - Wrong or missing token: every call fails with the gateway's 401 (`error` is an array). The router records `http_401` in `model_calls.error_code` and leaves every company key alone: only a provider's own rejection marks a key Invalid.
 
+## The stub model (M6-5)
+
+The load test (`docs/runbooks/load.md`) runs on a stub model, not a provider (ADR 0005). In staging only, `MODEL_BASE_URL_OVERRIDE` (a Worker var, `""` elsewhere) is the stub's base URL, and a company key that starts with `diletta-load-stub-` sends its calls and its key check there, with no gateway token. Such a call has no gateway log (no `gateway_log_id`) and its usage comes in the stream. Every other key, in every env, goes to the gateway as above. Production's var is `""`.
+
 ## Usage backfill
 
 A call that reached the provider but ended without usage (stream cut or cancelled, connection lost) was still billed, so its `model_calls` row is written **Pending** (`usage_status = 2`) instead of a silent $0. The Cron, every 15 minutes (`ModelCallUsageBackfillCron` → `ModelCallsRepo.backfillPendingUsage`) reads each Pending row's gateway log by `gateway_log_id` once the row is a minute old:

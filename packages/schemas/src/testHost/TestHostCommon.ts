@@ -16,6 +16,28 @@ import type { Jwk } from "../widgetAuth/WidgetAuthCommon";
 export const TEST_HOST_STAGING_ISSUER =
   "https://diletta-test-host-staging.hatiprithwish.workers.dev";
 
+// DEV_NOTE: The stub model (M6-5, ADR 0005): the Anthropic Messages API for the load test, served by the test host at
+// this path. The backend's staging MODEL_BASE_URL_OVERRIDE is the issuer + this path.
+export const TEST_HOST_MODEL_STUB_PATH = "/model-stub/anthropic/v1";
+
+// DEV_NOTE: What every stub call answers: one fixed reply with fixed usage, so a run's cost is calls × one price. The
+// first token comes after the first-token delay and the rest in chunks, so concurrent chats overlap like real ones.
+export const TEST_HOST_MODEL_STUB_REPLY =
+  "This is a canned reply from the load test stub model. It answers every message the same way, without reading it.";
+export const TEST_HOST_MODEL_STUB_INPUT_TOKENS = 200;
+export const TEST_HOST_MODEL_STUB_OUTPUT_TOKENS = 40;
+export const TEST_HOST_MODEL_STUB_FIRST_TOKEN_DELAY_MS = 150;
+export const TEST_HOST_MODEL_STUB_CHUNK_DELAY_MS = 25;
+export const TEST_HOST_MODEL_STUB_CHUNK_COUNT = 4;
+
+// The stub reads only what it echoes or branches on: the model name and whether to stream. The rest of the request is
+// the provider SDK's and is ignored.
+export const ZTestHostModelStubRequest = z.looseObject({
+  model: z.string().trim().min(1).max(200),
+  stream: z.boolean().optional(),
+});
+export type TestHostModelStubRequest = z.infer<typeof ZTestHostModelStubRequest>;
+
 // DEV_NOTE: The test host's API lives under this path; a connection's base_url is the issuer + it
 export const TEST_HOST_API_PATH = "/v1/";
 export const getTestHostBaseUrl = (issuer: string) =>

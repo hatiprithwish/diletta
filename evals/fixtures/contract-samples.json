@@ -5074,6 +5074,1331 @@
       }
     ]
   },
+  "eval-load.schema.json": {
+    "valid": [
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget refused",
+          "isAdmitted": false,
+          "refusal": "CompanyBudget",
+          "serverMs": 4
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "yesterday",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": ""
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": -1,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 0
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 1000000001
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12,
+          "refusal": "Teapot"
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "not-a-uuid"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Teapot"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 51,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v1",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 1
+        }
+      },
+      {
+        "windowResponse": {
+          "isSuccess": true,
+          "message": "Load window started",
+          "startedAt": "2026-11-02T10:00:00.000Z",
+          "budget": {
+            "spentMicros": 1200000,
+            "budgetMicros": 10000000,
+            "heldMicros": 0,
+            "openReservationCount": 0
+          }
+        },
+        "summaryRequest": {
+          "since": "2026-11-02T10:00:00.000Z"
+        },
+        "summaryResponse": {
+          "isSuccess": true,
+          "message": "Load summary read",
+          "budget": {
+            "spentMicros": 1500000,
+            "budgetMicros": 10000000,
+            "heldMicros": 40000,
+            "openReservationCount": 2
+          },
+          "timings": {
+            "admitTurn": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "reserve": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            },
+            "settle": {
+              "count": 120,
+              "p50Ms": 3,
+              "p95Ms": 41,
+              "maxMs": 90
+            }
+          },
+          "timingsSince": 1793613600000,
+          "modelCalls": {
+            "callCount": 120,
+            "pendingCount": 0,
+            "costMicros": 300000
+          },
+          "outbox": {
+            "eventCount": 30,
+            "publishedCount": 30,
+            "unpublishedCount": 0,
+            "lagP50Ms": 220,
+            "lagP95Ms": 900,
+            "lagMaxMs": 1400
+          }
+        },
+        "reserveRequest": {
+          "amountMicros": 40000
+        },
+        "reserveResponse": {
+          "isSuccess": true,
+          "message": "Budget reserved",
+          "isAdmitted": true,
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11",
+          "serverMs": 12
+        },
+        "releaseRequest": {
+          "reservationId": "6f1c3a52-0d41-4c0e-9f43-0b2f7d7c1a11"
+        },
+        "releaseResponse": {
+          "isSuccess": true,
+          "message": "Budget released",
+          "serverMs": 7
+        },
+        "refusal": {
+          "isSuccess": false,
+          "message": "Forbidden",
+          "failure": "Forbidden"
+        },
+        "constants": {
+          "targetConcurrentChats": 50,
+          "budgetOpP95MaxMs": 250,
+          "outboxLagP95MaxMs": 60000,
+          "stubModelKeyPrefix": "diletta-load-stub-",
+          "contentionMaxAmountMicros": 1000000000,
+          "widgetSubprotocol": "diletta.v0",
+          "widgetChatRequestFrameType": "cf_agent_use_chat_request",
+          "widgetHostTokenFrameType": "host_token",
+          "widgetFeedbackFrameType": "feedback",
+          "feedbackRatingDown": 2
+        }
+      }
+    ]
+  },
   "eval-case-tag.schema.json": {
     "valid": [
       "{case.tag}"

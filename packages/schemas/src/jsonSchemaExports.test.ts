@@ -7,6 +7,7 @@ import evalCaseInputJsonSchema from "../../../evals/schemas/eval-case-input.sche
 import evalCaseTagJsonSchema from "../../../evals/schemas/eval-case-tag.schema.json";
 import evalConstantsJsonSchema from "../../../evals/schemas/eval-constants.schema.json";
 import evalGraderOutputJsonSchema from "../../../evals/schemas/eval-grader-output.schema.json";
+import evalLoadJsonSchema from "../../../evals/schemas/eval-load.schema.json";
 import evalTranscriptJsonSchema from "../../../evals/schemas/eval-transcript.schema.json";
 import { JSON_SCHEMA_CONTRACT_SAMPLES } from "./jsonSchemaContractSamples";
 import { buildJsonSchema, JSON_SCHEMA_EXPORTS } from "./jsonSchemaExports";
@@ -22,6 +23,7 @@ const COMMITTED: Record<string, unknown> = {
   "eval-case-tag.schema.json": evalCaseTagJsonSchema,
   "eval-api.schema.json": evalApiJsonSchema,
   "eval-constants.schema.json": evalConstantsJsonSchema,
+  "eval-load.schema.json": evalLoadJsonSchema,
 };
 
 // DEV_NOTE: A sample as the Python side reads it (JSON: an undefined field is absent)

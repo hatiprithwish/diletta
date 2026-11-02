@@ -94,6 +94,8 @@ export const EVAL_AUTH_FAILURE_HTTP_STATUS_MAP: Record<EvalAuthFailureEnum, 401 
 // host call needs, and its reset_op read as stored) and the host test user
 export interface EvalIdentity {
   companyId: string;
+  // DEV_NOTE: The token's company claim: what an env var that names a company (LOAD_TEST_COMPANY_ID) is compared with
+  companyPublicId: string;
   connectionId: string;
   connection: HostConnection;
   resetOp: unknown;

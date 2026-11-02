@@ -8,6 +8,7 @@ import {
   ZEvalCaseTag,
 } from "./evalCases";
 import { ZEvalApiContract, ZEvalHarnessConstants } from "./evalHarness";
+import { ZEvalLoadApiContract } from "./evalLoad";
 import {
   EVAL_GRADER_OUTPUT_SCHEMA_VERSION,
   EVAL_TRANSCRIPT_SCHEMA_VERSION,
@@ -76,6 +77,13 @@ export const JSON_SCHEMA_EXPORTS: JsonSchemaExport[] = [
     description:
       "The eval harness's /eval/* API (M5-2): every request body and answer, by name; the root object is never sent",
     schema: ZEvalApiContract,
+  },
+  {
+    fileName: "eval-load.schema.json",
+    title: "EvalLoad",
+    description:
+      "The load test's /eval/load/* API (M6-5): every request and answer, by name, and the load test's constants (each a literal, read by the harness); the root object is never sent",
+    schema: ZEvalLoadApiContract,
   },
   {
     fileName: "eval-case-tag.schema.json",

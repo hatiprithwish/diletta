@@ -20,6 +20,10 @@ interface __BaseEnv_Env {
   AI_GATEWAY_ACCOUNT_ID: "6faf96669e14e06076115359a41497a0";
   AI_GATEWAY_NAME: "diletta-staging" | "diletta-production";
   NIGHTLY_SUITE_COMPANY_ID: "Ufli6o4w4WCEg5BOOEiOY" | "";
+  LOAD_TEST_COMPANY_ID: "";
+  MODEL_BASE_URL_OVERRIDE:
+    | "https://diletta-test-host-staging.hatiprithwish.workers.dev/model-stub/anthropic/v1"
+    | "";
   CLERK_PUBLISHABLE_KEY: string;
   CLERK_SECRET_KEY: string;
   EVAL_JWT_PUBLIC_JWKS: string;
@@ -49,6 +53,8 @@ declare namespace Cloudflare {
     AI_GATEWAY_ACCOUNT_ID: "6faf96669e14e06076115359a41497a0";
     AI_GATEWAY_NAME: "diletta-staging";
     NIGHTLY_SUITE_COMPANY_ID: "Ufli6o4w4WCEg5BOOEiOY";
+    LOAD_TEST_COMPANY_ID: "";
+    MODEL_BASE_URL_OVERRIDE: "https://diletta-test-host-staging.hatiprithwish.workers.dev/model-stub/anthropic/v1";
     CLERK_PUBLISHABLE_KEY: string;
     CLERK_SECRET_KEY: string;
     EVAL_JWT_PUBLIC_JWKS: string;
@@ -75,6 +81,8 @@ declare namespace Cloudflare {
     AI_GATEWAY_ACCOUNT_ID: "6faf96669e14e06076115359a41497a0";
     AI_GATEWAY_NAME: "diletta-production";
     NIGHTLY_SUITE_COMPANY_ID: "";
+    LOAD_TEST_COMPANY_ID: "";
+    MODEL_BASE_URL_OVERRIDE: "";
     CLERK_PUBLISHABLE_KEY: string;
     CLERK_SECRET_KEY: string;
     EVAL_JWT_PUBLIC_JWKS: string;
@@ -103,6 +111,8 @@ declare namespace NodeJS {
       | "AI_GATEWAY_ACCOUNT_ID"
       | "AI_GATEWAY_NAME"
       | "NIGHTLY_SUITE_COMPANY_ID"
+      | "LOAD_TEST_COMPANY_ID"
+      | "MODEL_BASE_URL_OVERRIDE"
       | "CLERK_PUBLISHABLE_KEY"
       | "CLERK_SECRET_KEY"
       | "EVAL_JWT_PUBLIC_JWKS"

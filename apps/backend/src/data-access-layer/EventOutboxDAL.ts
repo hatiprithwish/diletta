@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { activityLog, eventOutbox } from "@/db/tables";
@@ -64,6 +64,59 @@ export default class EventOutboxDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateEventOutbox,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The load test's window (M6-5): the company's outbox rows created since `since`, and how long the published
+  // ones waited (published_at − created_at) in milliseconds. A row the retention purge already removed isn't counted:
+  // the purge window is hours, a load run minutes.
+  async getLoadWindowStats(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetLoadWindowStatsDALRequest,
+  ) {
+    const response: Schemas.LoadOutboxStatsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(eventOutbox.companyId, params.companyId),
+        gte(eventOutbox.createdAt, params.since),
+      ];
+      const lagMs = sql`extract(epoch from (${eventOutbox.publishedAt} - ${eventOutbox.createdAt})) * 1000`;
+      const [row] = await tx
+        .select({
+          eventCount: count(),
+          publishedCount: sql<number>`count(${eventOutbox.publishedAt})`,
+          lagP50Ms: sql<string | null>`percentile_disc(0.5) within group (order by ${lagMs})`,
+          lagP95Ms: sql<string | null>`percentile_disc(0.95) within group (order by ${lagMs})`,
+          lagMaxMs: sql<string | null>`max(${lagMs})`,
+        })
+        .from(eventOutbox)
+        .where(and(...conditions));
+
+      const eventCount = Number(row?.eventCount ?? 0);
+      const publishedCount = Number(row?.publishedCount ?? 0);
+      response.isSuccess = true;
+      response.message = "Load window outbox stats fetched successfully";
+      response.stats = {
+        eventCount,
+        publishedCount,
+        unpublishedCount: eventCount - publishedCount,
+        lagP50Ms: Number(row?.lagP50Ms ?? 0),
+        lagP95Ms: Number(row?.lagP95Ms ?? 0),
+        lagMaxMs: Number(row?.lagMaxMs ?? 0),
+      };
+    } catch (error) {
+      const message = "Unknown error in fetching load window outbox stats";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLoadOutboxStats,
         message,
         error,
         metadata: params,

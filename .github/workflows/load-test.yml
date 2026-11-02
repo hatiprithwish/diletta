@@ -1,0 +1,90 @@
+name: Load test (staging)
+
+# DEV_NOTE: The load test (M6-5, docs/runbooks/load.md): N simulated widget users chat at once with the load test company's
+# chatbot on staging (its model is the stub, ADR 0005, so nothing is billed), then many budget holds hit its budget at once.
+# Run by hand before launch and after a change to the conversation, budget or outbox path. The job fails when the target is
+# missed (exit 1) or the run couldn't happen (exit 2). Only the staging environment: /eval/load/* serves the load test
+# company only, and never a production connection.
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: "Concurrent chats (the target is 50; fewer is a smoke run that fails the target by design)"
+        required: false
+        default: "50"
+      turns:
+        description: "Turns per user"
+        required: false
+        default: "4"
+      contention_calls:
+        description: "Budget holds sent at once (even)"
+        required: false
+        default: "200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-test
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: Concurrent chats and budget contention (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+
+    env:
+      DILETTA_API_URL: https://diletta-worker-staging.hatiprithwish.workers.dev
+      TEST_HOST_ISSUER: https://diletta-test-host-staging.hatiprithwish.workers.dev
+      LOAD_COMPANY_ID: ${{ vars.LOAD_COMPANY_ID }}
+      LOAD_CONNECTION_ID: ${{ vars.LOAD_CONNECTION_ID }}
+      LOAD_CHATBOT_ID: ${{ vars.LOAD_CHATBOT_ID }}
+      LOAD_ORIGIN: ${{ vars.LOAD_ORIGIN }}
+      EVAL_JWT_PRIVATE_KEY: ${{ secrets.EVAL_JWT_PRIVATE_KEY }}
+      TEST_HOST_ADMIN_SECRET: ${{ secrets.TEST_HOST_ADMIN_SECRET }}
+      USERS: ${{ inputs.users || '50' }}
+      TURNS: ${{ inputs.turns || '4' }}
+      CONTENTION_CALLS: ${{ inputs.contention_calls || '200' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check settings
+        run: |
+          missing=()
+          for key in EVAL_JWT_PRIVATE_KEY TEST_HOST_ADMIN_SECRET LOAD_COMPANY_ID LOAD_CONNECTION_ID LOAD_ORIGIN; do
+            [[ -z "${!key}" ]] && missing+=("$key")
+          done
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "❌ Missing in the staging environment: ${missing[*]}"
+            exit 2
+          fi
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          working-directory: evals
+
+      - name: Install the harness
+        run: uv sync --project evals --locked
+
+      - name: Run the load test
+        run: |
+          set -o pipefail
+          uv run --project evals python -m diletta_evals load \
+            --users "$USERS" --turns "$TURNS" --contention-calls "$CONTENTION_CALLS" \
+            --report load-report.json 2>&1 | tee load-log.txt
+        # DEV_NOTE: The exit code is the verdict (0 met, 1 missed, 2 couldn't run); the summary below runs either way
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '### Load test (staging)'
+            echo '```'
+            cat load-log.txt 2>/dev/null || echo 'No log: the run did not start.'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

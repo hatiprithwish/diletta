@@ -38,6 +38,10 @@ export const ZSettleBudgetRequest = z.object({
 });
 export type SettleBudgetRequest = z.infer<typeof ZSettleBudgetRequest>;
 
+// DEV_NOTE: The load test's read of the ledger (M6-5, EvalLoadRepo)
+export const ZGetBudgetSnapshotRequest = z.object({ companyId: ZInternalId });
+export type GetBudgetSnapshotRequest = z.infer<typeof ZGetBudgetSnapshotRequest>;
+
 // DEV_NOTE: Server-side only (BudgetDO → BudgetRepo): the company's budget, and when isSpendNeeded (a new period, or
 // the DO's first use) what model_calls already holds for the period since periodStart
 export interface GetBudgetSeedRequest {
