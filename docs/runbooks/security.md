@@ -15,7 +15,10 @@ One card per connection (production first, then staging): the JWT issuer, when i
 Every version of the company key, newest first, with its status, when it was created and when it stopped being the active key (the next version's creation time: a rotation creates it in the same transaction).
 
 - **Rotate key** (after a confirm) makes a new version active at once and moves the old one to Retiring; new writes use the new key and stored values keep decrypting with their own version.
-- **One rotation at a time.** While a key is Retiring, the button is disabled and a direct call answers 409 (`RotationInProgress`). Two rotations at the same moment run one after the other (the key rows are locked), so the second gets the same 409. The job that re-encrypts rows and retires the old key is M6-3; until it lands, a Retiring key stays Retiring and a second rotation isn't possible. There is no manual unblock: re-encrypting the old key's rows by hand would race live writes.
+- **One rotation at a time.** While a key is Retiring, the button is disabled and a direct call answers 409 (`RotationInProgress`). Two rotations at the same moment run one after the other (the key rows are locked), so the second gets the same 409.
+- **The rotation job** (`KeyRotationSweep`, every 15-minute cron tick, and once right after a rotation) moves every stored value off the Retiring key: secrets, chatbot user credentials, tool call arguments and change values are decrypted with the old version and encrypted again under the Active key. When no value is left on the old key it is destroyed (its bytes are deleted; the row stays, Destroyed) and the log gets a System "Retired encryption key" row on that version. A small company finishes in seconds; a large one over a few ticks.
+- **No value can be left behind.** Every write reads the Active key with a share lock, so a rotation waits for writes already under way on the old key; the job counts every column again, under the key rows' lock, before it destroys anything.
+- **Stuck Retiring.** A value that won't decrypt (logged as `ReEncryptValue` with the row id and column, never the value) is skipped and keeps the old key Retiring, and so blocks the next rotation. After 24 h the job alerts ("Encryption key rotation is overdue", `SweepKeyRotation`, with the company id). Find the row (as the owner role, `WHERE company_id = … AND encryption_key_version = <old>` on the four tables), work out why it doesn't decrypt, and fix or delete that row; the next tick finishes. Never re-encrypt rows by hand: live writes would race it.
 
 ## Retention
 
@@ -65,7 +68,7 @@ Every dashboard and operator write records one row, in the write's own transacti
 | Minutes saved (Impact)      | Changed                                                                                                                 | the task                     |
 | Tool definitions (operator) | Added, Edited, Created version, Activated, Disabled, Deleted draft                                                      | the tool's name + version    |
 | Allowed origins             | Changed                                                                                                                 | the environment              |
-| Encryption key              | Rotated                                                                                                                 | the new version              |
+| Encryption key              | Rotated; System: Retired                                                                                                | the version                  |
 | Chat retention              | Changed                                                                                                                 | the days                     |
 | Chatbot versions            | Started, Edited, Discarded, Sent to testing, Moved back to draft, Published; System: Passed its tests, Failed its tests | the chatbot's name + version |
 
@@ -80,7 +83,7 @@ Rules:
 
 ### Reading it
 
-`GET /dashboard/audit-log` (paged, newest first), `/count` and `/export` (at most 5,000 rows, `isTruncated` beyond) for the signed-in admin's company (`AuditLogRead`). A partial index, `IDX_activity_log_company_id_created_at_audit` (company, created_at) where the actor is an admin or operator, (and the System rows of the audit's system entity types, M5-4) serves all three without reading the company's other events.
+`GET /dashboard/audit-log` (paged, newest first), `/count` and `/export` (at most 5,000 rows, `isTruncated` beyond) for the signed-in admin's company (`AuditLogRead`). A partial index, `IDX_activity_log_company_id_created_at_audit` (company, created_at) where the actor is an admin or operator, (and the System rows of the audit's system entity types: chatbot versions, M5-4, and encryption keys, M6-3) serves all three without reading the company's other events.
 
 The migration that adds it (`20261025115726_diletta`) is a plain `CREATE INDEX` on the partitioned parent: it builds the index on every partition while holding a SHARE lock, so `activity_log` inserts (every critical event) wait until it finishes. That is accepted while the table is small. If a deploy ever has to add an index to a large `activity_log`, build it without blocking instead: `CREATE INDEX … ON ONLY activity_log …`, then `CREATE INDEX CONCURRENTLY` on each partition (outside a transaction), then `ALTER INDEX … ATTACH PARTITION` for each.
 
@@ -98,7 +101,6 @@ LIMIT 50;
 
 ### Known gaps
 
-- System actions on security settings (the M6-3 key rotation job) aren't in the log yet: that job adds its rows when it lands.
 - Security page writes show as "Changed allowed origins" (on the environment), "Rotated encryption key" (on the new version) and "Changed chat retention" (on the days).
 - Rows for quality issue and change events (written before the audit log) have no label, so their On column is empty.
 - Creating a company and rebuilding rollups (operator maintenance) record no row.

@@ -9,7 +9,7 @@ import * as Schemas from "@app/schemas";
 // transcript sweep removes next hour what it missed. The platform case sync is idempotent (next hour writes what it
 // missed); a skipped missed-suite check only delays that alert a day, while the suite's own job still fails loudly;
 // a skipped health check leaves that day unjudged, and an open health issue stays open; a skipped retention purge
-// clears next hour what it missed.
+// clears next hour what it missed; a skipped key rotation sweep leaves the key Retiring until the next tick.
 export default class CronScheduleProvider {
   static getDueJobs(scheduledTime: number): Schemas.CronJobEnum[] {
     const time = new Date(scheduledTime);
@@ -17,6 +17,7 @@ export default class CronScheduleProvider {
       Schemas.CronJobEnum.OutboxSweep,
       Schemas.CronJobEnum.ModelCallUsageBackfill,
       Schemas.CronJobEnum.ChangeRequestPurge,
+      Schemas.CronJobEnum.KeyRotationSweep,
     ];
 
     if (time.getUTCMinutes() === Constants.CRON_HOURLY_MINUTE) {

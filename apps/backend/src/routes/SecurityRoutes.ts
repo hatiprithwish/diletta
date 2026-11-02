@@ -5,6 +5,7 @@ import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import CompanyEncryptionKeysRepo from "@/repositories/CompanyEncryptionKeysRepo";
 import ContentRetentionRepo from "@/repositories/ContentRetentionRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
+import KeyRotationRepo from "@/repositories/KeyRotationRepo";
 import QualityIssuesRepo from "@/repositories/QualityIssuesRepo";
 import UserErasureRepo from "@/repositories/UserErasureRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
@@ -76,7 +77,10 @@ SecurityRoutes.post(
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
-    if (response.isSuccess) return c.json(response, 200);
+    if (response.isSuccess) {
+      KeyRotationRepo.sweepCompanyInBackground(c.env, c.executionCtx, { companyId });
+      return c.json(response, 200);
+    }
     if (response.failure) {
       return c.json(
         response,

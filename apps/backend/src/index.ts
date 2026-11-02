@@ -32,6 +32,7 @@ import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
 import runContentRetentionPurge from "@/crons/ContentRetentionPurgeCron";
 import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
+import runKeyRotationSweep from "@/crons/KeyRotationSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runNightlySuiteCheck from "@/crons/NightlySuiteCheckCron";
@@ -51,6 +52,7 @@ const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.OutboxSweep]: runOutboxSweep,
   [Schemas.CronJobEnum.ModelCallUsageBackfill]: runModelCallUsageBackfill,
   [Schemas.CronJobEnum.ChangeRequestPurge]: runChangeRequestPurge,
+  [Schemas.CronJobEnum.KeyRotationSweep]: runKeyRotationSweep,
   [Schemas.CronJobEnum.KnowledgeResync]: runKnowledgeResync,
   [Schemas.CronJobEnum.ActivityRollups]: runActivityRollups,
   [Schemas.CronJobEnum.EvalTranscriptSweep]: runEvalTranscriptSweep,

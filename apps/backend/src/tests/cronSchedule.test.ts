@@ -10,6 +10,7 @@ import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
 import runContentRetentionPurge from "@/crons/ContentRetentionPurgeCron";
 import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
+import runKeyRotationSweep from "@/crons/KeyRotationSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
 import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runNightlySuiteCheck from "@/crons/NightlySuiteCheckCron";
@@ -38,6 +39,9 @@ vi.mock("@/crons/ModelCallUsageBackfillCron", () => ({
 vi.mock("@/crons/ChangeRequestPurgeCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/crons/KeyRotationSweepCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/crons/KnowledgeResyncCron", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/crons/ActivityLogPartitionsCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
@@ -63,6 +67,7 @@ const {
   OutboxSweep,
   ModelCallUsageBackfill,
   ChangeRequestPurge,
+  KeyRotationSweep,
   KnowledgeResync,
   ActivityRollups,
   EvalTranscriptSweep,
@@ -81,6 +86,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
         OutboxSweep,
         ModelCallUsageBackfill,
         ChangeRequestPurge,
+        KeyRotationSweep,
       ]);
     }
   });
@@ -90,6 +96,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
@@ -103,6 +110,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
@@ -123,6 +131,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
@@ -143,6 +152,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
       KnowledgeResync,
       ActivityRollups,
       EvalTranscriptSweep,
@@ -168,6 +178,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       OutboxSweep,
       ModelCallUsageBackfill,
       ChangeRequestPurge,
+      KeyRotationSweep,
     ]);
   });
 });
@@ -189,6 +200,7 @@ describe("scheduled()", () => {
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
     expect(runModelCallUsageBackfill).toHaveBeenCalledTimes(1);
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
+    expect(runKeyRotationSweep).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).toHaveBeenCalledTimes(1);
     expect(runActivityRollups).toHaveBeenCalledTimes(1);
     expect(runEvalTranscriptSweep).toHaveBeenCalledTimes(1);
@@ -202,6 +214,7 @@ describe("scheduled()", () => {
     await run(Constants.CRON_TRIGGER, "2026-10-11T03:15:00Z");
     expect(runOutboxSweep).toHaveBeenCalledTimes(1);
     expect(runChangeRequestPurge).toHaveBeenCalledTimes(1);
+    expect(runKeyRotationSweep).toHaveBeenCalledTimes(1);
     expect(runKnowledgeResync).not.toHaveBeenCalled();
     expect(runActivityRollups).not.toHaveBeenCalled();
     expect(runEvalTranscriptSweep).not.toHaveBeenCalled();

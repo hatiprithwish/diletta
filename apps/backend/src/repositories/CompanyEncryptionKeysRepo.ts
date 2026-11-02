@@ -9,7 +9,7 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
 // companyId is the internal companies.id, resolved server-side; never from the client. The first key is created
 // with the company (CompaniesRepo.createCompany). Rotation here is key-level only: re-encrypting every encrypted_*
-// row to the new version and destroying the retiring key is the rotation job (M6-3).
+// row to the new version and destroying the retiring key is the rotation job (KeyRotationRepo, M6-3).
 export default class CompanyEncryptionKeysRepo {
   private env: Env;
   private db: NodePgDatabase;
@@ -79,7 +79,8 @@ export default class CompanyEncryptionKeysRepo {
   // DEV_NOTE: Transactional flow — the active key becomes retiring, then the next version is created active. Any
   // failed step throws TenantRollbackError, so the old key stays active. One rotation at a time (max 2 live keys):
   // refused while a retiring key is still waiting for the rotation job. Values already stored keep decrypting with
-  // their own encryption_key_version; new writes use the new key. Only an admin rotates (the Security page, M4-9): the
+  // their own encryption_key_version; new writes use the new key. Every write reads the active key FOR SHARE, so the
+  // lock below also waits for writes in flight under the old key: none can commit on it after this one. Only an admin rotates (the Security page, M4-9): the
   // rotation records its audit row in the same transaction; a refusal (failure, 409) writes nothing. The key rows are
   // locked first, so a second rotation at the same moment waits for the first and is refused as RotationInProgress.
   async rotateCompanyEncryptionKey(params: {
@@ -149,8 +150,8 @@ export default class CompanyEncryptionKeysRepo {
 
   // DEV_NOTE: The Security page's keys (M4-9): every version, newest first, never its bytes or master key version.
   // rotatedAt = when it left Active: the next version's created_at (a rotation retires v<n> and creates v<n+1> in one
-  // transaction), never updated_at, which later writes such as the M6-3 destroy move. A Retiring one means a rotation is
-  // still in progress.
+  // transaction), never updated_at, which later writes such as the rotation job's re-wrap and destroy move. A Retiring
+  // one means a rotation is still in progress.
   async getSecurityEncryptionKeys(params: {
     companyId: string;
   }): Promise<Schemas.GetSecurityEncryptionKeysApiResponse> {
