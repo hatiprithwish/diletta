@@ -1,4 +1,5 @@
 export default class Constants {
+  static readonly DAY_MS = 24 * 60 * 60 * 1000;
   // DEV_NOTE: display_name is chatbot-user PII (erased on request), so it never reaches a log
   static readonly APP_REDACT_FIELDS = [
     /clerkId/i,
@@ -160,6 +161,13 @@ export default class Constants {
   // transaction, CHANGE_REQUEST_PURGE_MAX_BATCHES transactions per run; a backlog finishes on later runs.
   static readonly CHANGE_REQUEST_PURGE_BATCH_SIZE = 500;
   static readonly CHANGE_REQUEST_PURGE_MAX_BATCHES = 10;
+  // DEV_NOTE: The retention purge (M6-1), hourly: one chat at a time (a DO call, R2, up to three transactions), each
+  // company taking CONTENT_PURGE_BATCH_SIZE chats in turn until none is due or CONTENT_PURGE_TIME_BUDGET_MS is used up
+  // (a Cron Trigger gets 15 minutes); a backlog finishes on later runs. A chat still due this long past its cut-off
+  // after a run alerts, the Security page's "usually within a day".
+  static readonly CONTENT_PURGE_BATCH_SIZE = 50;
+  static readonly CONTENT_PURGE_TIME_BUDGET_MS = 5 * 60_000;
+  static readonly CONTENT_PURGE_OVERDUE_ALERT_MS = 24 * 60 * 60_000;
 
   // DEV_NOTE: Eval transcripts (M5-3). getEvalTranscript waits up to EVAL_TRANSCRIPT_IDLE_WAIT_MS (checking every
   // EVAL_TRANSCRIPT_IDLE_POLL_MS) for the attempt's DO to finish a commit or verify still running, then answers; an

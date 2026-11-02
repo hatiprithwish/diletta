@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, lt } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotUsers, conversations, feedback, messages } from "@/db/tables";
@@ -161,6 +161,48 @@ export default class FeedbackDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetFeedbackRollupGroups,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Retention purge (M6-1): the rating stays, any free text goes
+  async clearConversationComments(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const messageConditions = [
+        eq(messages.conversationId, params.conversationId),
+        eq(messages.companyId, params.companyId),
+      ];
+      const chatMessages = tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(...messageConditions));
+      const conditions = [
+        inArray(feedback.messageId, chatMessages),
+        eq(feedback.companyId, params.companyId),
+      ];
+      await tx
+        .update(feedback)
+        .set({ comment: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation content cleared";
+    } catch (error) {
+      const message = "Unknown error in clearing conversation content";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
         message,
         error,
         metadata: params,

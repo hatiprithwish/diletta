@@ -9,8 +9,6 @@ import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
 import * as Schemas from "@app/schemas";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 // DEV_NOTE: Outbox relay. Writers record a critical event with CriticalEventProvider inside their own withTenant
 // (or recordCriticalEvent here, when the event is the only write); after the commit they relay its outboxId with
 // relayEvents in waitUntil. The Cron sweep publishes whatever that relay missed (a killed isolate, a Queue outage),
@@ -124,7 +122,7 @@ export default class EventOutboxRepo {
     companyIds: string[] | null;
   }): Promise<Schemas.PurgePublishedEventsResponse> {
     const publishedBefore = new Date(
-      Date.now() - Constants.OUTBOX_PUBLISHED_RETENTION_DAYS * DAY_MS,
+      Date.now() - Constants.OUTBOX_PUBLISHED_RETENTION_DAYS * Constants.DAY_MS,
     );
 
     return await withPlatform(this.db, async (tx) => {

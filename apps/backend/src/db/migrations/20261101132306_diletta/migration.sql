@@ -1,0 +1,1 @@
+CREATE INDEX "IDX_conversations_last_activity_at_unpurged" ON "conversations" ("last_activity_at") WHERE "content_purged_at" IS NULL;

@@ -215,6 +215,7 @@ export class ConversationDO extends Think<Env> {
   // after the busy check, so no turn, answer or expiry starts in between
   private isDeciding = false;
   private isClosing = false;
+  private isContentWiped = false;
   private syncInFlight: Promise<boolean> | null = null;
   private isSyncRequested = false;
   private feedbackQueue: Promise<void> = Promise.resolve();
@@ -567,6 +568,38 @@ export class ConversationDO extends Think<Env> {
     } finally {
       this.isClosing = false;
     }
+  }
+
+  // DEV_NOTE: The retention purge's wipe (M6-1, DO RPC, ContentRetentionRepo): transcript, runtime state, schedules and
+  // all storage go. A read model sync started by this wake finishes first, so it can't write content back after the
+  // Repo clears the tables. A turn, decision or close running answers isBusy and wipes nothing. What to wipe is read from
+  // raw storage, not the parsed state, so a state that stopped parsing still goes. destroy() aborts this isolate right
+  // after, so the caller may see an error instead of this answer and retries on its next run. That run (or a DO that
+  // never had a chat) finds nothing, and only removes the empty tables its own start just made, without an abort: an
+  // abort there could fail the retry every time. The caller closed the conversation first, so no widget brings it back.
+  async purgeContent(): Promise<string> {
+    if (!this.isContentWiped) {
+      await this.__unsafe_ensureInitialized();
+      while (this.syncInFlight) {
+        await this.syncInFlight.catch(() => false);
+      }
+    }
+    const isBusy = this.isBusy() || this.isClosing;
+    if (!isBusy && !this.isContentWiped) {
+      if (this.getConfig() !== null || this.messages.length > 0) {
+        await this.destroy();
+      } else {
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+        this.isContentWiped = true;
+      }
+    }
+    const answer: Schemas.ConversationContentWipeResponse = {
+      isSuccess: !isBusy,
+      message: isBusy ? "A turn is running" : "Conversation content wiped",
+      isBusy,
+    };
+    return JSON.stringify(answer);
   }
 
   // DEV_NOTE: Scheduled at a proposal's expiry (schedule(); public because the scheduler calls it by name). A proposal

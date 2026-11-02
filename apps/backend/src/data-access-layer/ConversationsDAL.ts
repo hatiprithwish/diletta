@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, exists, gte, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -372,6 +372,161 @@ export default class ConversationsDAL {
     );
   }
 
+  // DEV_NOTE: Retention (M6-1), one company's chats past its cut-off, a range on the partial index. Never tried first,
+  // then tried longest ago, then oldest; a chat already tried in this run (attempted at now) is left out.
+  async getConversationsPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetConversationsPastRetentionDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
+        or(
+          isNull(conversations.contentPurgeAttemptedAt),
+          lt(conversations.contentPurgeAttemptedAt, params.now),
+        ),
+      ];
+      const selected = await tx
+        .select({
+          id: conversations.id,
+          publicId: conversations.publicId,
+          companyId: conversations.companyId,
+          status: conversations.status,
+          evalRunId: conversations.evalRunId,
+          evalCaseId: conversations.evalCaseId,
+          evalAttempt: conversations.evalAttempt,
+        })
+        .from(conversations)
+        .where(and(...conditions))
+        .orderBy(
+          sql`${conversations.contentPurgeAttemptedAt} ASC NULLS FIRST`,
+          asc(conversations.lastActivityAt),
+          asc(conversations.id),
+        )
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Conversations past retention fetched successfully";
+      response.conversations = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching conversations past retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Stamped when a batch is read, not when a chat fails, so a chat that kills the run still goes to the back
+  async markConversationsPurgeAttempted(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.MarkConversationsPurgeAttemptedDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        inArray(conversations.id, params.ids),
+      ];
+      await tx
+        .update(conversations)
+        .set({ contentPurgeAttemptedAt: params.now, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversations marked as tried";
+    } catch (error) {
+      const message = "Unknown error in marking conversations as tried";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId, count: params.ids.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: How far behind the purge is for one company, tried or not; no row = lastActivityAt null
+  async getOldestConversationPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetOldestConversationPastRetentionDALRequest,
+  ) {
+    const response: Schemas.OldestConversationPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(conversations.companyId, params.companyId),
+        isNull(conversations.contentPurgedAt),
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
+      ];
+      const [oldest] = await tx
+        .select({ lastActivityAt: conversations.lastActivityAt })
+        .from(conversations)
+        .where(and(...conditions))
+        .orderBy(asc(conversations.lastActivityAt))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = "Oldest conversation past retention fetched successfully";
+      response.lastActivityAt = oldest?.lastActivityAt ?? null;
+    } catch (error) {
+      const message = "Unknown error in fetching the oldest conversation past retention";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async closeConversationPastRetention(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CloseConversationPastRetentionDALRequest,
+  ) {
+    const { lastActivityBefore, outcome, ...find } = params;
+    return await this.update(
+      tx,
+      find,
+      Schemas.LogAction.PurgeConversationContent,
+      {
+        status: Schemas.ConversationStatusIntEnum.Closed,
+        outcome: sql`COALESCE(${conversations.outcome}, ${outcome}::smallint)`,
+      },
+      sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open} AND ${conversations.lastActivityAt} < ${lastActivityBefore.toISOString()}::timestamptz`,
+    );
+  }
+
+  // DEV_NOTE: Last step of a purge (M6-1): the title is the first user message, and content_purged_at ends the job
+  async markConversationContentPurged(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindConversationDALRequest,
+  ) {
+    return await this.update(tx, params, Schemas.LogAction.PurgeConversationContent, {
+      title: null,
+      contentPurgedAt: new Date(),
+    });
+  }
+
   // DEV_NOTE: Doc gaps (M5-6): a conversation that closed Answered before the verdict on its last question came in. Only
   // from Closed + Answered; no such row is a success that changes nothing.
   async markClosedConversationUnanswered(
@@ -447,7 +602,7 @@ export default class ConversationsDAL {
     params: Schemas.FindConversationDALRequest,
     action: Schemas.LogAction,
     values: PgUpdateSetSource<typeof conversations>,
-    extraCondition?: ReturnType<typeof eq>,
+    extraCondition?: SQL,
   ) {
     const response: Schemas.ConversationDALResponse = { isSuccess: false };
     const metadata = { ...params };

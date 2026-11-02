@@ -7,6 +7,7 @@ import CronScheduleProvider from "@/providers/cronSchedule";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runContentRetentionPurge from "@/crons/ContentRetentionPurgeCron";
 import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
@@ -42,6 +43,9 @@ vi.mock("@/crons/ActivityLogPartitionsCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/crons/ActivityRollupsCron", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@/crons/ContentRetentionPurgeCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/crons/EvalTranscriptSweepCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
@@ -63,6 +67,7 @@ const {
   ActivityRollups,
   EvalTranscriptSweep,
   PlatformEvalCaseSync,
+  ContentRetentionPurge,
   ActivityLogPartitions,
   NightlySuiteCheck,
   ChatbotHealthCheck,
@@ -87,6 +92,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       ActivityRollups,
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
+      ContentRetentionPurge,
     ]);
   });
 
@@ -99,6 +105,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       ActivityRollups,
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
+      ContentRetentionPurge,
       ActivityLogPartitions,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:01:00Z"))).not.toContain(
@@ -118,6 +125,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       ActivityRollups,
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
+      ContentRetentionPurge,
       ChatbotHealthCheck,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T04:01:00Z"))).not.toContain(
@@ -137,6 +145,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       ActivityRollups,
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
+      ContentRetentionPurge,
       NightlySuiteCheck,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:01:00Z"))).not.toContain(
@@ -181,6 +190,7 @@ describe("scheduled()", () => {
     expect(runKnowledgeResync).toHaveBeenCalledTimes(1);
     expect(runActivityRollups).toHaveBeenCalledTimes(1);
     expect(runEvalTranscriptSweep).toHaveBeenCalledTimes(1);
+    expect(runContentRetentionPurge).toHaveBeenCalledTimes(1);
     expect(runPlatformEvalCaseSync).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
     expect(runNightlySuiteCheck).not.toHaveBeenCalled();
@@ -193,6 +203,7 @@ describe("scheduled()", () => {
     expect(runKnowledgeResync).not.toHaveBeenCalled();
     expect(runActivityRollups).not.toHaveBeenCalled();
     expect(runEvalTranscriptSweep).not.toHaveBeenCalled();
+    expect(runContentRetentionPurge).not.toHaveBeenCalled();
     expect(runPlatformEvalCaseSync).not.toHaveBeenCalled();
     expect(runActivityLogPartitions).not.toHaveBeenCalled();
   });

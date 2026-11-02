@@ -178,4 +178,38 @@ export default class ToolCallsDAL {
 
     return response;
   }
+
+  // DEV_NOTE: Retention purge (M6-1): status, latency and error code stay
+  async clearConversationArgs(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolCalls.conversationId, params.conversationId),
+        eq(toolCalls.companyId, params.companyId),
+      ];
+      await tx
+        .update(toolCalls)
+        .set({ encryptedArgs: null, iv: null, encryptionKeyVersion: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation content cleared";
+    } catch (error) {
+      const message = "Unknown error in clearing conversation content";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.PurgeConversationContent,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
 }

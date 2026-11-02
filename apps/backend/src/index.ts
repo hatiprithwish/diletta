@@ -29,6 +29,7 @@ import Constants from "@/config/Constants";
 import runActivityLogPartitions from "@/crons/ActivityLogPartitionsCron";
 import runActivityRollups from "@/crons/ActivityRollupsCron";
 import runChangeRequestPurge from "@/crons/ChangeRequestPurgeCron";
+import runContentRetentionPurge from "@/crons/ContentRetentionPurgeCron";
 import runChatbotHealthCheck from "@/crons/ChatbotHealthCron";
 import runEvalTranscriptSweep from "@/crons/EvalTranscriptSweepCron";
 import runKnowledgeResync from "@/crons/KnowledgeResyncCron";
@@ -54,6 +55,7 @@ const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {
   [Schemas.CronJobEnum.ActivityRollups]: runActivityRollups,
   [Schemas.CronJobEnum.EvalTranscriptSweep]: runEvalTranscriptSweep,
   [Schemas.CronJobEnum.PlatformEvalCaseSync]: runPlatformEvalCaseSync,
+  [Schemas.CronJobEnum.ContentRetentionPurge]: runContentRetentionPurge,
   [Schemas.CronJobEnum.ActivityLogPartitions]: runActivityLogPartitions,
   [Schemas.CronJobEnum.NightlySuiteCheck]: runNightlySuiteCheck,
   [Schemas.CronJobEnum.ChatbotHealthCheck]: runChatbotHealthCheck,

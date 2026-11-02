@@ -178,6 +178,7 @@ export enum LogAction {
   RequestHostToken = "RequestHostToken",
   HandOverChangeRequest = "HandOverChangeRequest",
   PurgeChangeRequestValues = "PurgeChangeRequestValues",
+  PurgeConversationContent = "PurgeConversationContent",
   EditChangeRequest = "EditChangeRequest",
   UpdateChangeRequestPayload = "UpdateChangeRequestPayload",
   ReceiveHostToken = "ReceiveHostToken",

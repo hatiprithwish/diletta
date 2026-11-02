@@ -26,3 +26,17 @@ export interface ConversationTabCountsDALResponse extends TotalRecordsResponse {
 export interface ChatbotConversationCountsDALResponse extends ApiResponse {
   counts?: { chatbotId: string; conversationCount: number }[];
 }
+
+// DEV_NOTE: A chat the retention purge (M6-1) has to clear
+export type ConversationPastRetentionRow = Pick<
+  Conversation,
+  "id" | "publicId" | "companyId" | "status" | "evalRunId" | "evalCaseId" | "evalAttempt"
+>;
+
+export interface ConversationsPastRetentionDALResponse extends ApiResponse {
+  conversations?: ConversationPastRetentionRow[];
+}
+
+export interface OldestConversationPastRetentionDALResponse extends ApiResponse {
+  lastActivityAt?: Date | null;
+}
