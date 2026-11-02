@@ -3,7 +3,7 @@ import { ActivityLogActorTypeIntEnum } from "../activityLog/ActivityLogCommon";
 
 // DEV_NOTE: The audit log (M4-9) is not a table: it is the company's activity_log rows written by a person, an admin
 // (actor Admin) or an operator (actor Operator). Every dashboard and operator write records one through
-// AuditEventProvider, in the write's own transaction (a critical event: activity_log + event_outbox, pattern rule 3.5).
+// AuditEventProvider, in the write's own transaction (a critical event: activity_log + event_outbox).
 // The writes that already had their own event (a flag, Mark resolved, the Quality page's triage / fix / dismiss /
 // convert) show up as they are. The entity types and actions here are the ones only the audit writes.
 export enum AuditEntityTypeEnum {

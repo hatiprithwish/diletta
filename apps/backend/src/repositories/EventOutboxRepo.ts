@@ -15,7 +15,7 @@ import * as Schemas from "@app/schemas";
 // and purges published rows. Each publish locks its rows FOR UPDATE SKIP LOCKED, sends them, and marks them
 // published in one transaction, so a row is handed to the Queue by one relay at a time. A relay that dies between
 // the send and the commit leaves the row pending and it is sent again: delivery is at-least-once, and consumers
-// dedupe on outboxId. The sweep and the purge span companies, so they run in withPlatform (pattern rule 3.15).
+// dedupe on outboxId. The sweep and the purge span companies, so they run in withPlatform.
 export default class EventOutboxRepo {
   private db: NodePgDatabase;
   private dal: EventOutboxDAL;

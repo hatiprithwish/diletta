@@ -12,7 +12,7 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: Widget identity (M2-1). Verifies the companion JWT from the widget's first WebSocket message and resolves
 // who is calling, in an order where nothing untrusted is acted on:
 //   1. decode: alg allowlist (RS256 / ES256), kid, no crit, claim shapes. Nothing in the token is trusted yet.
-//   2. iss → company_connections row in withPlatform (no company is known yet, pattern rule 3.15). Only a registered
+//   2. iss → company_connections row in withPlatform (no company is known yet). Only a registered
 //      issuer gets past here, so the JWKS fetch never targets a URL no company registered.
 //   3. signature against the issuer's JWKS (KV-cached), then aud / exp / nbf / iat / lifetime.
 //   4. connection active, and the upgrade's Origin in its allowed_origins.

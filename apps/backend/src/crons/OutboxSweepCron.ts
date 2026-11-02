@@ -3,7 +3,7 @@ import AppLogger from "@/providers/logger";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 
 // DEV_NOTE: Every minute (wrangler.jsonc triggers): publish the pending outbox rows the after-commit relay missed,
-// then purge published rows past retention. Goes through EventOutboxRepo, never a DAL (pattern rule 1.1). Failures
+// then purge published rows past retention. Goes through EventOutboxRepo, never a DAL. Failures
 // are logged by the Repo and DAL; the next run retries.
 export default async function runOutboxSweep(env: Env): Promise<void> {
   const repo = new EventOutboxRepo(env);

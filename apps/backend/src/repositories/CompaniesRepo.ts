@@ -11,7 +11,7 @@ import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenancy-root Repo. Creating and listing companies are operator actions across companies, so they
-// run in withPlatform; reading or editing one company runs in withTenant on that company (pattern rule 3.15).
+// run in withPlatform; reading or editing one company runs in withTenant on that company.
 // companyId is the internal companies.id, resolved server-side; never from the client.
 export default class CompaniesRepo {
   private env: Env;
@@ -112,7 +112,7 @@ export default class CompaniesRepo {
     });
   }
 
-  // DEV_NOTE: Operator only (pause, churn, reactivate). Still withTenant: it changes one known company (rule 3.15).
+  // DEV_NOTE: Operator only (pause, churn, reactivate). Still withTenant: it changes one known company.
   async updateCompanyStatus(
     params: Schemas.UpdateCompanyStatusApiRequest & { companyId: string },
   ): Promise<Schemas.UpdateCompanyStatusApiResponse> {

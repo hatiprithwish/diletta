@@ -52,7 +52,7 @@ const GATEWAY_LOG_ID_HEADER = "cf-aig-log-id";
 // DEV_NOTE: The gateway keeps the first 5 metadata entries and drops the rest silently
 const MAX_METADATA_ENTRIES = 5;
 
-// DEV_NOTE: The only place a provider SDK is built and AI Gateway is called (pattern rule 3.10). No database, no
+// DEV_NOTE: The only place a provider SDK is built and AI Gateway is called. No database, no
 // transaction. The company key arrives decrypted from ModelRouterRepo and goes only into the SDK's own auth header
 // (x-api-key, Authorization or x-goog-api-key) on requests to the gateway; it is never logged or returned. The gateway
 // token is the platform's, from AI_GATEWAY_TOKEN (a Secrets Store binding in staging and production, a .dev.vars

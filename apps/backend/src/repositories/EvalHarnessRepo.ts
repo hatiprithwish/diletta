@@ -47,7 +47,7 @@ type Tx = NodePgTransaction<EmptyRelations>;
 // Trust: the harness is platform code holding the platform key. The messages of an attempt are the harness's (its
 // case's input with {case.tag} filled in), not compared to the stored case; the grading is the harness's too.
 // The host bearer token (the harness's, from the host's own login) only passes through: to the DO's memory or the
-// adapter. It is never stored or logged (pattern rule 3.11). Case text and host data stay out of every log.
+// adapter. It is never stored or logged. Case text and host data stay out of every log.
 export default class EvalHarnessRepo {
   private env: Env;
   private db: NodePgDatabase;

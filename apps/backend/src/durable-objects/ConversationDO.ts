@@ -124,7 +124,7 @@ interface DecidedChangeRequest {
 //
 // Trust: the widget route authenticates the companion JWT and checks the conversation is the user's own before it
 // forwards the upgrade here (ADR 0001), so every socket is verified, and the session arrives in a header only the
-// worker sets. Think is locked down for a public widget (pattern rule 3.23): no workspace, bash or MCP tools, no
+// worker sets. Think is locked down for a public widget: no workspace, bash or MCP tools, no
 // reasoning or identity frames, safe error text only (every model failure is a ModelUnavailableError), and every
 // inbound frame goes through WidgetFrameProvider's allowlist before Think sees it. Its tools are search_help_docs
 // (M2-6), active only for a bot whose config lists knowledge sources, and the host tools the config pins (M3-4).
@@ -186,7 +186,7 @@ interface DecidedChangeRequest {
 // CONVERSATION_CLOSE_RETRY_MS.
 //
 // The host bearer token lives in a plain field, in memory only: never in Think state, configure, SQLite or a log
-// (pattern rule 3.11). An eviction drops it; the widget sends it again.
+//. An eviction drops it; the widget sends it again.
 //
 // Token refresh (M3-8): a host call that finds no token, or whose token the host refused (when nothing may have
 // landed, or the call is a resume, so a second try can't write twice), asks every open socket for a fresh one
@@ -224,7 +224,7 @@ export class ConversationDO extends Think<Env> {
     feedback: false,
     decision: false,
   };
-  // DEV_NOTE: Never logged or persisted (pattern rule 3.11)
+  // DEV_NOTE: Never logged or persisted
   private hostToken: string | null = null;
   // DEV_NOTE: The ask for a fresh host token (M3-8): token_needed (reason refresh) to every open socket, shared by every
   // step that needs one meanwhile, not repeated for HOST_TOKEN_WAIT_MS after one timed out (HostTokenAsk)
@@ -2347,7 +2347,7 @@ export class ConversationDO extends Think<Env> {
     }
   }
 
-  // DEV_NOTE: One edit, re-checked like the proposal it replaces (rule 3.34), never trusting the widget: the change
+  // DEV_NOTE: One edit, re-checked like the proposal it replaces, never trusting the widget: the change
   // request still Proposed before its deadline, its tool still loading (getEditPlan); only editable fields (the args
   // call_op sends, never those that pick the record); the edited args through the input_schema again; the record read
   // again as the user (none for a create); the diff rebuilt from that read and the edited args; and a diff with
@@ -3089,7 +3089,7 @@ export class ConversationDO extends Think<Env> {
   // with the same key, Emulated checking first, None unsent). The same call runs again, so a resume stays a resume.
   // isWaiting: it still failed for want of a token and no fresh one came, so the caller waits for the token rather than
   // ending on it (a fresh token the host refused too ends as the call did). A token the host refused is dropped from
-  // memory (unless a newer one came meanwhile), so the answer, edit and undo gates ask the widget for one (rule 3.37).
+  // memory (unless a newer one came meanwhile), so the answer, edit and undo gates ask the widget for one.
   private async withFreshToken(
     call: () => Promise<Schemas.HostCallResponse>,
     options: { isResume: boolean; signal?: AbortSignal },

@@ -24,7 +24,7 @@ type Tx = NodePgTransaction<EmptyRelations>;
 //     under. tokens_out at the output price.
 //   - no log or no counts yet → stays Pending; past MODEL_CALL_BACKFILL_MAX_AGE_MS → Unknown + an error log.
 //   - a failed lookup (API down, bad token) → stays Pending and is retried next minute, until the max age.
-// The Pending read spans companies (withPlatform, pattern rule 3.15); each row is settled in its own company's
+// The Pending read spans companies (withPlatform); each row is settled in its own company's
 // withTenant, and only while still Pending, so overlapping sweeps never settle a row twice. Lookups run
 // MODEL_CALL_BACKFILL_CONCURRENCY at a time, so a batch of slow ones still finishes well inside a minute. A row that
 // stays Pending is marked as tried, and each sweep takes the least recently tried rows first, so rows whose log is

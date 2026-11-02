@@ -1,7 +1,7 @@
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 
-// DEV_NOTE: The only env.AI.run caller for reranking (pattern rule 3.10): Workers AI bge-reranker-base scores each
+// DEV_NOTE: The only env.AI.run caller for reranking: Workers AI bge-reranker-base scores each
 // search candidate against the query, platform-paid (tier Embed, search.rerank), through the env's AI Gateway for logs.
 // One call per search. The call is counted at one token per character of the query and of each candidate, plus its
 // special tokens per pair: more than the tokenizer ever produces (usage Estimated, an overcount never an under).

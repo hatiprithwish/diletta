@@ -1,7 +1,7 @@
 import { RestAdapter } from "@app/adapter";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: The Conversation DO's host calls (M3-4), the backend's one caller of @app/adapter (pattern rule 3.30):
+// DEV_NOTE: The Conversation DO's host calls (M3-4), the backend's one caller of @app/adapter:
 // every request is rendered by Schemas.renderToolOp from args already checked against the tool's input_schema, and
 // the bearer token is read from the DO's memory per attempt (getHostToken), never stored here. Never throws: a request
 // that can't be rendered or an adapter that can't be built is a Failed outcome with nothing sent. Messages never hold

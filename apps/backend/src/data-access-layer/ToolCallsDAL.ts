@@ -8,7 +8,7 @@ import Utility from "@/utils/Utility";
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). tool_calls holds every host tool call of a
-// turn (M3-4); its args arrive encrypted, and only ids reach a log (rule 3.19: no ciphertext or iv in metadata).
+// turn (M3-4); its args arrive encrypted, and only ids reach a log (no ciphertext or iv in metadata).
 export default class ToolCallsDAL {
   async createToolCall(
     tx: NodePgTransaction<EmptyRelations>,

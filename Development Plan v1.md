@@ -33,14 +33,14 @@ Four lanes, owned by 2–4 engineers; with two people, one owns Platform + Runti
 **Agreements**
 
 - One task = one pull request = one Claude Code session, started from the task's row in this doc.
-- The Pattern Enforcer reviews every PR first, then a human does. Security-critical paths need a second reviewer: RLS, crypto, auth, action engine, budget.
+- A human reviews every PR. Security-critical paths need a second reviewer: RLS, crypto, auth, action engine, budget.
 - The v0.15 diagram is the schema source of truth. A PR that changes a table updates the diagram in the same PR.
 - Changing a locked decision (Architecture baseline) needs a short ADR in `docs/adr/` first.
 - The `staging` branch deploys to staging. `main` deploys to production.
 
 ## Repository and tooling
 
-Companion starts from the team scaffold ([hatiprithwish/diletta](https://github.com/hatiprithwish/scaffold)): a pnpm workspace built with `pnpm -r`, no Turborepo, keeping its folder names, golden files, `llm-context/` docs and Pattern Enforcer. New pieces are marked _new_; the Python eval harness builds with its own toolchain.
+Companion starts from the team scaffold ([hatiprithwish/diletta](https://github.com/hatiprithwish/scaffold)): a pnpm workspace built with `pnpm -r`, no Turborepo, keeping its folder names, golden files, and `llm-context/` docs. New pieces are marked _new_; the Python eval harness builds with its own toolchain.
 
 ```text
 companion/                    (from scaffold)
@@ -63,7 +63,7 @@ companion/                    (from scaffold)
   llm-context/    scaffold docs + new: neon, hyperdrive, durable-objects,
                   think, ai-gateway, queues, pgvector
   docs/           new: architecture/ (v0.15 diagram), adr/, runbooks/
-  .github/        scaffold deploy workflows + Pattern Enforcer
+  .github/        scaffold deploy workflows
   CLAUDE.md
 ```
 
@@ -73,7 +73,7 @@ companion/                    (from scaffold)
 | Staging     | scaffold staging workflows, on push to `staging`  | Neon staging          | our test company, eRegister staging |
 | Production  | scaffold production workflows, on merge to `main` | Neon production       | eRegister live                      |
 
-CI on every PR: lint, typecheck, unit tests, integration and RLS tests against Neon staging, a JSON Schema drift check between `packages/schemas` and `evals/`, and the Pattern Enforcer against `.github/pattern-rules.md`. Merges to `main` also run the platform eval suite against staging.
+CI on every PR: lint, typecheck, unit tests, integration and RLS tests against Neon staging, a JSON Schema drift check between `packages/schemas` and `evals/`. Merges to `main` also run the platform eval suite against staging.
 
 ## Architecture baseline
 
@@ -149,14 +149,14 @@ Each row is one PR for one Claude Code session. Start a session with: "Read CLAU
 
 Exit: the scaffold runs on Neon Postgres with the tenant transaction pattern as a golden file, `staging` deploys to staging and `main` to production. There are two environments only (staging, production) and two Neon branches; local dev uses staging. No dev branch, no per-PR preview Worker or Neon branch.
 
-| ID   | Task                                                                                                                                                                           | Done when                                                  | Lane     |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | -------- |
-| M0-1 | Create the companion repo from the scaffold; rename Workers; keep Notes as the golden example until M0-5 replaces it                                                           | `pnpm dev` runs web + backend                              | Platform |
-| M0-2 | D1 → Neon Postgres via Hyperdrive: Drizzle pg client, `bigint` identity ids, `updated_at NOT NULL default now()`, a raw-SQL migration folder for RLS, partitions and `halfvec` | Notes golden files pass their tests on Postgres            | Platform |
-| M0-4 | Move shadcn from `apps/web/src/shadcn/ui` to `packages/ui`; Tailwind preset; lime theme, light + dark                                                                          | `apps/web` builds from `packages/ui`                       | Product  |
-| M0-5 | Tenant pattern: `withTenant(companyId, tx)` helper; DAL methods take `tx`; transactional flows throw to roll back; new golden DAL + Repo on a tenant table                     | Golden files listed in CLAUDE.md                           | Platform |
-| M0-6 | Extend CLAUDE.md, `pattern-rules.md` and `llm-context/` (Neon, Hyperdrive, Durable Objects, Think, AI Gateway, Queues, pgvector)                                               | Pattern Enforcer flags a tenant query outside `withTenant` | Platform |
-| M0-7 | Secrets Store master key, `.dev.vars` template                                                                                                                                 | Local and staging read the master key                      | Platform |
+| ID   | Task                                                                                                                                                                           | Done when                                          | Lane     |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------- |
+| M0-1 | Create the companion repo from the scaffold; rename Workers; keep Notes as the golden example until M0-5 replaces it                                                           | `pnpm dev` runs web + backend                      | Platform |
+| M0-2 | D1 → Neon Postgres via Hyperdrive: Drizzle pg client, `bigint` identity ids, `updated_at NOT NULL default now()`, a raw-SQL migration folder for RLS, partitions and `halfvec` | Notes golden files pass their tests on Postgres    | Platform |
+| M0-4 | Move shadcn from `apps/web/src/shadcn/ui` to `packages/ui`; Tailwind preset; lime theme, light + dark                                                                          | `apps/web` builds from `packages/ui`               | Product  |
+| M0-5 | Tenant pattern: `withTenant(companyId, tx)` helper; DAL methods take `tx`; transactional flows throw to roll back; new golden DAL + Repo on a tenant table                     | Golden files listed in CLAUDE.md                   | Platform |
+| M0-6 | Extend CLAUDE.md and `llm-context/` (Neon, Hyperdrive, Durable Objects, Think, AI Gateway, Queues, pgvector)                                                                   | CLAUDE.md bans a tenant query outside `withTenant` | Platform |
+| M0-7 | Secrets Store master key, `.dev.vars` template                                                                                                                                 | Local and staging read the master key              | Platform |
 
 ### M1 Data, tenancy, crypto
 

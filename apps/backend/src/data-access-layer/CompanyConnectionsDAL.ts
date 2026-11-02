@@ -126,7 +126,7 @@ export default class CompanyConnectionsDAL {
   }
 
   // DEV_NOTE: The JWT issuer → connection lookup (widget auth). Runs in withPlatform because no company is known
-  // yet, so it is the one method here that doesn't filter on companyId (pattern rule 3.3). jwt_issuer is unique
+  // yet, so it is the one method here that doesn't filter on companyId. jwt_issuer is unique
   // across companies, so at most one row matches.
   async getCompanyConnectionByIssuer(
     tx: NodePgTransaction<EmptyRelations>,

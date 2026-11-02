@@ -53,7 +53,7 @@ function toRow(
   return { ...row, isUndoable: inverseOp !== null && inverseOp !== undefined };
 }
 
-// DEV_NOTE: Only ids reach a log: params may hold the encrypted payload (rule 3.19: no ciphertext or iv in metadata)
+// DEV_NOTE: Only ids reach a log: params may hold the encrypted payload (no ciphertext or iv in metadata)
 const idsOf = (params: { companyId: string; conversationId?: string; publicId?: string }) => ({
   companyId: params.companyId,
   conversationId: params.conversationId ?? null,

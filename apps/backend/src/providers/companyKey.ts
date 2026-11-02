@@ -8,7 +8,7 @@ import AppLogger from "@/providers/logger";
 import MasterKeyProvider from "@/providers/masterKey";
 
 // DEV_NOTE: The one place a company key is created or decrypted, and the only path from a Repo to @app/crypto for
-// encrypted_* values. It calls CompanyEncryptionKeysDAL directly with the caller's tx (pattern rule 1.1: a provider
+// encrypted_* values. It calls CompanyEncryptionKeysDAL directly with the caller's tx (a provider
 // may call a DAL inside the Repo's transaction, never opening one itself), so the secrets Repos encrypt and write in
 // one withTenant. Keys stay non-extractable CryptoKeys in memory for one call; plaintext never reaches a log.
 export default class CompanyKeyProvider {

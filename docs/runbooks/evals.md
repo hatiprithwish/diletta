@@ -143,7 +143,7 @@ The request and answer shapes are Zod schemas in `packages/schemas/src/evalHarne
 pnpm --filter @app/schemas schema:export && pnpm evals:types && pnpm evals:check
 ```
 
-and commit the output with the change (pattern rule 3.50).
+and commit the output with the change.
 
 ## Troubleshooting
 
