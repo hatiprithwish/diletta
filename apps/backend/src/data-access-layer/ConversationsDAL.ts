@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   exists,
+  gt,
   gte,
   inArray,
   isNotNull,
@@ -412,12 +413,7 @@ export default class ConversationsDAL {
       const conditions = [
         eq(conversations.companyId, params.companyId),
         isNull(conversations.contentPurgedAt),
-        // DEV_NOTE: A chat of an erased user (M6-2) is due whatever its age: a turn that was running, or one started as
-        // the user was erased, is picked up here
-        or(
-          lt(conversations.lastActivityAt, params.lastActivityBefore),
-          isNotNull(chatbotUsers.erasedAt),
-        ),
+        lt(conversations.lastActivityAt, params.lastActivityBefore),
         or(
           isNull(conversations.contentPurgeAttemptedAt),
           lt(conversations.contentPurgeAttemptedAt, params.now),
@@ -457,7 +453,58 @@ export default class ConversationsDAL {
     return response;
   }
 
-  // DEV_NOTE: One user's chats not yet purged, for the pass right after their erasure (M6-2)
+  // DEV_NOTE: Chats of the company's erased users (M6-2), due whatever their age: a turn that was running, or a chat
+  // started as the user was erased, is picked up here. Its own read, from the erased users, so the cut-off read above
+  // stays a range on its index.
+  async getErasedUsersConversationsToPurge(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetErasedUsersConversationsToPurgeDALRequest,
+  ) {
+    const response: Schemas.ConversationsPastRetentionDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(chatbotUsers.companyId, params.companyId),
+        isNotNull(chatbotUsers.erasedAt),
+        isNull(conversations.contentPurgedAt),
+        or(
+          isNull(conversations.contentPurgeAttemptedAt),
+          lt(conversations.contentPurgeAttemptedAt, params.now),
+        ),
+      ];
+      const joinConditions = [
+        eq(conversations.chatbotUserId, chatbotUsers.id),
+        eq(conversations.companyId, chatbotUsers.companyId),
+      ];
+      response.conversations = await tx
+        .select(PURGE_ROW_COLUMNS)
+        .from(chatbotUsers)
+        .innerJoin(conversations, and(...joinConditions))
+        .where(and(...conditions))
+        .orderBy(
+          sql`${conversations.contentPurgeAttemptedAt} ASC NULLS FIRST`,
+          asc(conversations.id),
+        )
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Erased users' conversations fetched successfully";
+    } catch (error) {
+      const message = "Unknown error in fetching erased users' conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: { companyId: params.companyId, limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One user's chats not yet purged, a page at a time, for the pass right after their erasure (M6-2)
   async getUserConversationsToPurge(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetUserConversationsToPurgeDALRequest,
@@ -470,6 +517,7 @@ export default class ConversationsDAL {
         eq(conversations.chatbotUserId, params.chatbotUserId),
         isNull(conversations.contentPurgedAt),
       ];
+      if (params.afterId) conditions.push(gt(conversations.id, params.afterId));
       const userJoinConditions = [
         eq(chatbotUsers.id, conversations.chatbotUserId),
         eq(chatbotUsers.companyId, conversations.companyId),
@@ -553,8 +601,8 @@ export default class ConversationsDAL {
       ];
       const [oldest] = await tx
         .select({ erasedAt: min(chatbotUsers.erasedAt) })
-        .from(conversations)
-        .innerJoin(chatbotUsers, and(...userJoinConditions))
+        .from(chatbotUsers)
+        .innerJoin(conversations, and(...userJoinConditions))
         .where(and(...conditions));
 
       response.isSuccess = true;
@@ -660,7 +708,10 @@ export default class ConversationsDAL {
         status: Schemas.ConversationStatusIntEnum.Closed,
         outcome: sql`COALESCE(${conversations.outcome}, ${outcome}::smallint)`,
       },
-      sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open} AND ${conversations.lastActivityAt} < ${lastActivityBefore.toISOString()}::timestamptz`,
+      // DEV_NOTE: No cut-off = an erased user's chat (M6-2), which closes whatever its last activity
+      lastActivityBefore
+        ? sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open} AND ${conversations.lastActivityAt} < ${lastActivityBefore.toISOString()}::timestamptz`
+        : sql`${conversations.status} = ${Schemas.ConversationStatusIntEnum.Open}`,
     );
   }
 

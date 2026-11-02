@@ -90,7 +90,6 @@ function SectionNote({ children }: PropsWithChildren) {
 }
 
 // DEV_NOTE: The whole /security body (DESIGN.md dashboard-Security)
-// end to end (M6-2).
 export function SecurityPage({ search }: Schemas.DashboardSecurityPageProps) {
   const navigate = useNavigate();
   const goTo = (next: Schemas.SecurityPageSearch) =>
@@ -416,6 +415,7 @@ function EraseUserForm() {
           id="erase-user-id"
           className="font-mono"
           autoComplete="off"
+          disabled={erase.isPending}
           value={hostUserId}
           onChange={(event) => setHostUserId(event.target.value)}
         />

@@ -11,7 +11,11 @@ import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
 import Utilities from "@/utils";
-import { QUERY_KEY_ROOTS, SECURITY_KEY_SEGMENTS } from "../-invalidation";
+import {
+  QUERY_KEY_ROOTS,
+  SECURITY_KEY_SEGMENTS,
+  invalidateErasedUserViews,
+} from "../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
@@ -248,6 +252,7 @@ export function useEraseChatbotUser() {
       }),
     onSuccess: () => {
       refreshAuditLog(queryClient);
+      invalidateErasedUserViews(queryClient);
       toast.success("User erased. Any chat still running is deleted within the hour.");
     },
     onError: (error) => {

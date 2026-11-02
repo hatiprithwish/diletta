@@ -47,6 +47,12 @@ export interface ConversationsPastRetentionDALResponse extends ApiResponse {
   conversations?: ConversationPastRetentionRow[];
 }
 
+// DEV_NOTE: The overdue alert's read of one company: past the cut-off, and since the erasure (M6-2)
+export interface OverduePurgeDALResponse extends ApiResponse {
+  lastActivityAt?: Date | null;
+  erasedAt?: Date | null;
+}
+
 export interface OldestErasedUserPendingDALResponse extends ApiResponse {
   erasedAt?: Date | null;
 }

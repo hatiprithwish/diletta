@@ -507,6 +507,41 @@ export default class QualityIssuesDAL {
     return response;
   }
 
+  // DEV_NOTE: One chat of an erased user, as its purge reaches it (M6-2): a note added since the erasure goes too
+  async clearConversationNotes(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ClearConversationContentDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.conversationId, params.conversationId),
+        eq(qualityIssues.companyId, params.companyId),
+        isNotNull(qualityIssues.note),
+      ];
+      await tx
+        .update(qualityIssues)
+        .set({ note: null, updatedAt: new Date() })
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Conversation's quality issue notes cleared successfully";
+    } catch (error) {
+      const message = "Unknown error in clearing the conversation's quality issue notes";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.EraseChatbotUser,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: The erasure (M6-2): an admin's note on the user's chats may name them. The issues stay, without it.
   async clearChatbotUserNotes(
     tx: NodePgTransaction<EmptyRelations>,

@@ -1,0 +1,1 @@
+CREATE INDEX "IDX_chatbot_users_company_id_erased" ON "chatbot_users" ("company_id") WHERE "erased_at" IS NOT NULL;

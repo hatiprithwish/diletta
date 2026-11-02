@@ -126,11 +126,18 @@ SecurityRoutes.post(
   async (c) => {
     const companyId = c.get("companyId");
     const repo = new UserErasureRepo(c.env);
-    const { outboxIds, chatbotUserId, ...response } = await repo.eraseUser({
+    const erased = await repo.eraseUser({
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
     });
+    const { isSuccess, message, isNotFound, conversationCount, chatbotUserId, outboxIds } = erased;
+    const response: Schemas.EraseChatbotUserApiResponse = {
+      isSuccess,
+      message,
+      isNotFound,
+      conversationCount,
+    };
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
     ContentRetentionRepo.purgeErasedUserInBackground(c.env, c.executionCtx, {
       companyId,

@@ -1,3 +1,4 @@
+import type { WithOutboxIds } from "../auditLog/AuditLogCommon";
 import type { ApiResponse, TotalRecordsResponse } from "../common";
 import type {
   CompanyConnectionEnvironmentIntEnum,
@@ -87,11 +88,11 @@ export interface EraseChatbotUserApiResponse extends ApiResponse {
   conversationCount?: number;
 }
 
-// DEV_NOTE: What the route needs after the commit (M6-2): neither reaches the client
-export interface EraseChatbotUserRepoResponse extends EraseChatbotUserApiResponse {
-  chatbotUserId?: string;
-  outboxIds?: string[];
-}
+// DEV_NOTE: The Repo's answer (M6-2), on purpose not an API response: chatbotUserId is internal, and the route builds
+// EraseChatbotUserApiResponse from this field by field
+export type EraseChatbotUserRepoResponse = WithOutboxIds<
+  ApiResponse & { conversationCount?: number; chatbotUserId?: string }
+>;
 
 // DEV_NOTE: A prompt-injection event: for now a quality issue typed Prompt injection. detectedIn = the admin's note,
 // else where the issue came from; the conversation's title is null once purged.

@@ -317,6 +317,66 @@ describe("User erasure (M6-2)", () => {
     }
   });
 
+  it("leaves a chat with a turn running as it is, then finishes it next run", async () => {
+    const { hostUserId, chatbotUserId, conversationPublicId } = await seed();
+    await erase(hostUserId);
+    const wipe = vi
+      .spyOn(
+        ContentRetentionRepo.prototype as unknown as {
+          wipeConversationDo: () => Promise<boolean>;
+        },
+        "wipeConversationDo",
+      )
+      .mockResolvedValue(false);
+
+    expect(
+      await new ContentRetentionRepo(env).purgeErasedUserContent({ companyId, chatbotUserId }),
+    ).toMatchObject({ purgedCount: 0, skippedCount: 1 });
+    const busy = (await readChat(conversationPublicId)).conversation;
+    expect(busy.status).toBe(Schemas.ConversationStatusIntEnum.Open);
+    expect(busy.outcome).toBeNull();
+    expect(busy.contentPurgedAt).toBeNull();
+
+    wipe.mockRestore();
+    await purgeHourly();
+    const done = (await readChat(conversationPublicId)).conversation;
+    expect(done.status).toBe(Schemas.ConversationStatusIntEnum.Closed);
+    expect(done.contentPurgedAt).not.toBeNull();
+  });
+
+  it("works through more chats than one batch in the first pass, past one it skips", async () => {
+    const { hostUserId, chatbotUserId, conversationPublicId } = await seed();
+    const more = await withOwnerDb(async (ownerDb) => [
+      await seedChat(ownerDb, { companyId, chatbotId }, chatbotUserId),
+      await seedChat(ownerDb, { companyId, chatbotId }, chatbotUserId),
+    ]);
+    await erase(hostUserId);
+    const wipe = ContentRetentionRepo.prototype as unknown as {
+      wipeConversationDo: (row: { publicId: string }) => Promise<boolean>;
+    };
+    const realWipe = wipe.wipeConversationDo;
+    vi.spyOn(wipe, "wipeConversationDo").mockImplementation(function (
+      this: unknown,
+      row: { publicId: string },
+    ) {
+      if (row.publicId === conversationPublicId) return Promise.resolve(false);
+      return realWipe.call(this, row);
+    });
+
+    expect(
+      await new ContentRetentionRepo(env).purgeErasedUserContent({
+        companyId,
+        chatbotUserId,
+        batchSize: 1,
+      }),
+    ).toMatchObject({ isSuccess: true, purgedCount: 2, skippedCount: 1 });
+    for (const publicId of more) {
+      expect((await readChat(publicId)).conversation.contentPurgedAt).not.toBeNull();
+    }
+    vi.restoreAllMocks();
+    await purgeHourly();
+  });
+
   it("doesn't touch another user's recent chat", async () => {
     const erasedUser = await seed();
     const other = await seed();
@@ -348,6 +408,29 @@ describe("User erasure (M6-2)", () => {
 
     vi.restoreAllMocks();
     await new ContentRetentionRepo(env).purgeErasedUserContent({ companyId, chatbotUserId });
+  });
+
+  it("alerts when the overdue read itself fails, so it can't pass for a healthy run", async () => {
+    const { hostUserId } = await seed();
+    await erase(hostUserId);
+    vi.spyOn(ConversationsDAL.prototype, "closeConversationPastRetention").mockResolvedValue({
+      isSuccess: false,
+      message: "Keeps failing",
+    });
+    vi.spyOn(ConversationsDAL.prototype, "getOldestErasedUserPending").mockResolvedValue({
+      isSuccess: false,
+      message: "Read failed",
+    });
+
+    expect(await purgeHourly()).toMatchObject({ overdueCompanyCount: 1 });
+    expect(AppLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ reason: "unreadable" }),
+      }),
+    );
+
+    vi.restoreAllMocks();
+    await purgeHourly();
   });
 
   it("answers not found for an unknown id and for one already erased, writing nothing", async () => {
@@ -393,7 +476,7 @@ describe("User erasure (M6-2)", () => {
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(row.actorType).toBe(Schemas.ActivityLogActorTypeIntEnum.Admin);
-      expect(row.detail).toEqual({ label: "1 chat" });
+      expect(row.detail).toEqual({ label: expect.stringMatching(/^\d+ chats?$/) });
       expect(JSON.stringify(row)).not.toContain(hostUserId);
     }
   });
