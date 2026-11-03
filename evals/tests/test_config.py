@@ -64,6 +64,19 @@ def test_refuses_a_key_the_worker_wont_verify(env: pytest.MonkeyPatch, value: st
 
 
 def test_an_unknown_host_kind_lists_the_known_ones(env: pytest.MonkeyPatch) -> None:
-    env.setenv("EVAL_HOST_KIND", "eregister")
-    with pytest.raises(ConfigError, match="test_host"):
+    env.setenv("EVAL_HOST_KIND", "some_host")
+    with pytest.raises(ConfigError, match="test_host, eregister"):
         load_config()
+
+
+def test_eregister_needs_its_firebase_key_and_test_user(env: pytest.MonkeyPatch) -> None:
+    env.setenv("EVAL_HOST_KIND", "eregister")
+    with pytest.raises(ConfigError, match="EREGISTER_FIREBASE_API_KEY"):
+        load_config()
+    env.setenv("EREGISTER_FIREBASE_API_KEY", "web-key")
+    env.setenv("EREGISTER_TEST_USER_EMAIL", "eval@example.com")
+    env.setenv("EREGISTER_TEST_USER_PASSWORD", "secret")
+    loaded = load_config()
+    assert loaded.test_host is None
+    assert loaded.eregister is not None
+    assert loaded.eregister.email == "eval@example.com"

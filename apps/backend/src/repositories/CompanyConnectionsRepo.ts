@@ -3,7 +3,8 @@ import CompanyConnectionsDAL from "@/data-access-layer/CompanyConnectionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
 import JwksProvider from "@/providers/jwks";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { adminAuditActor, operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
@@ -49,34 +50,59 @@ export default class CompanyConnectionsRepo {
 
   private withCompanyConnectionResponse(
     result: Schemas.CompanyConnectionDALResponse,
-  ): Schemas.GetCompanyConnectionApiResponse {
-    const { companyConnection, ...rest } = result;
+  ): Schemas.GetCompanyConnectionApiResponse & { failure?: Schemas.CompanyConnectionFailureEnum } {
+    const { companyConnection, isIssuerTaken, ...rest } = result;
     return {
       ...rest,
+      ...(isIssuerTaken ? { failure: Schemas.CompanyConnectionFailureEnum.IssuerTaken } : {}),
       companyConnection: companyConnection ? this.withStatusLabel(companyConnection) : undefined,
     };
   }
 
+  private refuse(message: string) {
+    return { isSuccess: false, message, failure: Schemas.CompanyConnectionFailureEnum.Invalid };
+  }
+
+  // DEV_NOTE: Operator only (M7-1, CompanyConnectionsRoutes): the connection and its Created audit row (actor Operator,
+  // labelled with the environment) in one transaction. The request already checked the auth settings and reset op.
   async createCompanyConnection(
-    params: Schemas.CreateCompanyConnectionApiRequest & { companyId: string },
-  ): Promise<Schemas.CreateCompanyConnectionApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const { companyConnection } = params;
-      const result = await this.dal.createCompanyConnection(tx, {
-        companyId: params.companyId,
-        environment: companyConnection.environment,
-        adapterType:
-          companyConnection.adapterType ?? Schemas.CompanyConnectionAdapterTypeIntEnum.Rest,
-        baseUrl: companyConnection.baseUrl,
-        authType: companyConnection.authType,
-        authConfig: companyConnection.authConfig,
-        credentialScope: companyConnection.credentialScope,
-        jwtIssuer: companyConnection.jwtIssuer,
-        allowedOrigins: companyConnection.allowedOrigins,
-        resetOp: companyConnection.resetOp ?? null,
-      });
-      return this.withCompanyConnectionResponse(result);
-    });
+    params: Schemas.CreateCompanyConnectionApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.CreateCompanyConnectionApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.CreateCompanyConnectionApiResponse>> => {
+        const { companyConnection } = params;
+        const result = await this.dal.createCompanyConnection(tx, {
+          companyId: params.companyId,
+          environment: companyConnection.environment,
+          adapterType:
+            companyConnection.adapterType ?? Schemas.CompanyConnectionAdapterTypeIntEnum.Rest,
+          baseUrl: companyConnection.baseUrl,
+          authType: companyConnection.authType,
+          authConfig: companyConnection.authConfig,
+          credentialScope: companyConnection.credentialScope,
+          jwtIssuer: companyConnection.jwtIssuer,
+          allowedOrigins: companyConnection.allowedOrigins,
+          resetOp: companyConnection.resetOp ?? null,
+          createdBy: params.adminId,
+        });
+        if (!result.isSuccess || !result.companyConnection) {
+          return this.withCompanyConnectionResponse(result);
+        }
+        const connection = result.companyConnection;
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: operatorAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.CompanyConnection,
+          entityAction: Schemas.AuditEntityActionEnum.Created,
+          entity: connection,
+          label: Schemas.COMPANY_CONNECTION_ENVIRONMENT_LABEL_MAP[connection.environment],
+        });
+        return { ...this.withCompanyConnectionResponse(result), outboxIds: [outboxId] };
+      },
+    );
   }
 
   async getCompanyConnectionDetails(params: {
@@ -103,53 +129,117 @@ export default class CompanyConnectionsRepo {
     });
   }
 
+  // DEV_NOTE: Operator only (M7-1). The row is locked first and the request compared with it: a field that's absent or
+  // equal to the stored one is no change, and a save that changes nothing writes and records nothing. One audit row per
+  // kind of change (actor Operator): Updated for base URL, auth settings, issuer or reset op, OriginsChanged for the
+  // origins (compared as a set, like the Security page's edit), Activated / Disabled for the status.
   async updateCompanyConnection(
-    params: Schemas.UpdateCompanyConnectionApiRequest & { companyId: string; publicId: string },
-  ): Promise<Schemas.UpdateCompanyConnectionApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const { companyConnection } = params;
-      // DEV_NOTE: A new auth_config must fit the stored auth type and credential scope (both fixed at create). A row saved
-      // before M3-2 with an auth type that has no AuthStrategy yet can't take any auth_config: it can't serve tool calls
-      // either way, so the fix is a new connection with a supported auth type.
-      // DEV_NOTE: A reset op (M5-2) only on a Staging connection: an eval never resets a production host
-      const hasResetOp =
-        companyConnection.resetOp !== undefined && companyConnection.resetOp !== null;
-      if (companyConnection.authConfig !== undefined || hasResetOp) {
+    params: Schemas.UpdateCompanyConnectionApiRequest & {
+      companyId: string;
+      publicId: string;
+      adminId: string;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateCompanyConnectionApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateCompanyConnectionApiResponse>> => {
+        const { companyConnection } = params;
         const found = await this.dal.getCompanyConnectionDetails(tx, {
           companyId: params.companyId,
           publicId: params.publicId,
+          isForUpdate: true,
         });
         if (!found.isSuccess || !found.companyConnection) {
           return this.withCompanyConnectionResponse(found);
         }
+        const before = found.companyConnection;
+
+        // DEV_NOTE: A new auth_config must fit the stored auth type and credential scope (both fixed at create). A row saved
+        // before M3-2 with an auth type that has no AuthStrategy yet can't take any auth_config: it can't serve tool calls
+        // either way, so the fix is a new connection with a supported auth type.
         if (companyConnection.authConfig !== undefined) {
           const issue = Schemas.getAuthConfigIssue({
-            authType: found.companyConnection.authType,
-            credentialScope: found.companyConnection.credentialScope,
+            authType: before.authType,
+            credentialScope: before.credentialScope,
             authConfig: companyConnection.authConfig,
           });
-          if (issue) return { isSuccess: false, message: issue };
+          if (issue) return this.refuse(issue);
         }
+        // DEV_NOTE: A reset op (M5-2) only on a Staging connection: an eval never resets a production host
         if (
-          hasResetOp &&
-          found.companyConnection.environment !==
-            Schemas.CompanyConnectionEnvironmentIntEnum.Staging
+          companyConnection.resetOp !== undefined &&
+          companyConnection.resetOp !== null &&
+          before.environment !== Schemas.CompanyConnectionEnvironmentIntEnum.Staging
         ) {
-          return { isSuccess: false, message: "Only a staging connection has a reset op" };
+          return this.refuse("Only a staging connection has a reset op");
         }
-      }
-      const result = await this.dal.updateCompanyConnection(tx, {
-        companyId: params.companyId,
-        publicId: params.publicId,
-        baseUrl: companyConnection.baseUrl ?? null,
-        authConfig: companyConnection.authConfig ?? null,
-        jwtIssuer: companyConnection.jwtIssuer ?? null,
-        allowedOrigins: companyConnection.allowedOrigins ?? null,
-        status: companyConnection.status ?? null,
-        resetOp: companyConnection.resetOp,
-      });
-      return this.withCompanyConnectionResponse(result);
-    });
+
+        const isChanged = (next: unknown, stored: unknown) =>
+          next !== undefined && Utility.stableStringify(next) !== Utility.stableStringify(stored);
+        const isFieldsChanged =
+          // DEV_NOTE: A null base URL leaves it as stored (the DAL ignores null), so it is no change
+          isChanged(companyConnection.baseUrl ?? undefined, before.baseUrl) ||
+          isChanged(companyConnection.authConfig, before.authConfig) ||
+          isChanged(companyConnection.jwtIssuer, before.jwtIssuer) ||
+          isChanged(companyConnection.resetOp, before.resetOp);
+        const storedOrigins = new Set(before.allowedOrigins);
+        const nextOrigins = companyConnection.allowedOrigins
+          ? new Set(companyConnection.allowedOrigins)
+          : undefined;
+        const isOriginsChanged =
+          nextOrigins !== undefined &&
+          (nextOrigins.size !== storedOrigins.size ||
+            [...nextOrigins].some((origin) => !storedOrigins.has(origin)));
+        const isStatusChanged =
+          companyConnection.status !== undefined && companyConnection.status !== before.status;
+        if (!isFieldsChanged && !isOriginsChanged && !isStatusChanged) {
+          return { ...this.withCompanyConnectionResponse(found), outboxIds: [] };
+        }
+
+        const result = await this.dal.updateCompanyConnection(tx, {
+          companyId: params.companyId,
+          publicId: params.publicId,
+          baseUrl: companyConnection.baseUrl ?? null,
+          authConfig: companyConnection.authConfig ?? null,
+          jwtIssuer: companyConnection.jwtIssuer ?? null,
+          allowedOrigins: isOriginsChanged ? [...(nextOrigins ?? [])] : null,
+          status: companyConnection.status ?? null,
+          resetOp: companyConnection.resetOp,
+          updatedBy: params.adminId,
+        });
+        if (!result.isSuccess || !result.companyConnection) {
+          return this.withCompanyConnectionResponse(result);
+        }
+        const connection = result.companyConnection;
+
+        const actions: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.CompanyConnection>[] =
+          [];
+        if (isFieldsChanged) actions.push(Schemas.AuditEntityActionEnum.Updated);
+        if (isOriginsChanged) actions.push(Schemas.AuditEntityActionEnum.OriginsChanged);
+        if (isStatusChanged) {
+          actions.push(
+            connection.status === Schemas.CompanyConnectionStatusIntEnum.Active
+              ? Schemas.AuditEntityActionEnum.Activated
+              : Schemas.AuditEntityActionEnum.Disabled,
+          );
+        }
+        const outboxIds: string[] = [];
+        for (const entityAction of actions) {
+          outboxIds.push(
+            await recordAuditOrRollback(tx, {
+              companyId: params.companyId,
+              actor: operatorAuditActor(params.adminId),
+              entityType: Schemas.AuditEntityTypeEnum.CompanyConnection,
+              entityAction,
+              entity: connection,
+              label: Schemas.COMPANY_CONNECTION_ENVIRONMENT_LABEL_MAP[connection.environment],
+            }),
+          );
+        }
+        return { ...this.withCompanyConnectionResponse(result), outboxIds };
+      },
+    );
   }
 
   // DEV_NOTE: The Security page's view of a connection (M4-9): issuer, origins and when its signing keys were last

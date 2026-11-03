@@ -51,6 +51,10 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Deleted]: "Deleted tool draft",
   },
   [Schemas.AuditEntityTypeEnum.CompanyConnection]: {
+    [Schemas.AuditEntityActionEnum.Created]: "Created connection",
+    [Schemas.AuditEntityActionEnum.Updated]: "Updated connection",
+    [Schemas.AuditEntityActionEnum.Activated]: "Activated connection",
+    [Schemas.AuditEntityActionEnum.Disabled]: "Disabled connection",
     [Schemas.AuditEntityActionEnum.OriginsChanged]: "Changed allowed origins",
   },
   [Schemas.AuditEntityTypeEnum.CompanyEncryptionKey]: {
