@@ -3,7 +3,7 @@ import CompanyConnectionsDAL from "@/data-access-layer/CompanyConnectionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
 import JwksProvider from "@/providers/jwks";
-import { adminAuditActor, operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -326,6 +326,7 @@ export default class CompanyConnectionsRepo {
       companyId: string;
       publicId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateAllowedOriginsApiResponse>> {
     const updated = await withTenant(
@@ -356,7 +357,7 @@ export default class CompanyConnectionsRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.CompanyConnection,
           entityAction: Schemas.AuditEntityActionEnum.OriginsChanged,
           entity: connection,

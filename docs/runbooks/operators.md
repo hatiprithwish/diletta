@@ -2,12 +2,12 @@
 
 Everyone who signs in to the dashboard has one row in `admins`, keyed by their Clerk user id. The role comes from `admins.company_id`:
 
-| `company_id` | Role          | Can use                                                |
-| ------------ | ------------- | ------------------------------------------------------ |
-| set          | company admin | `/dashboard/*`, on their own company only              |
-| `NULL`       | operator      | `/operator/*` (operator-only actions across companies) |
+| `company_id` | Role          | Can use                                                                                                        |
+| ------------ | ------------- | -------------------------------------------------------------------------------------------------------------- |
+| set          | company admin | `/dashboard/*`, on their own company only                                                                      |
+| `NULL`       | operator      | `/operator/*` (operator-only actions across companies), and `/dashboard/*` in any company they pick (ADR 0006) |
 
-Every route checks this through one function, `can(admin, action, resource)` (`packages/schemas/src/authz/`). A Clerk user with no `admins` row gets 403 on every dashboard and operator route. `/dashboard/*` routes act on the caller's own company, so an operator (no company) gets 403 there. Operator views of one company will come under `/operator/*`.
+Every route checks this through one function, `can(admin, action, resource)` (`packages/schemas/src/authz/`). A Clerk user with no `admins` row gets 403 on every dashboard and operator route. `/dashboard/*` routes act on a company admin's own company. An operator acts on the company they pick (below).
 
 Admins of a **churned** company get 403 everywhere, and an invite to a churned company creates no admin. Admins of a **paused** company keep access, so they can see why the chatbot is paused. Operators are unaffected by company status.
 
@@ -48,6 +48,16 @@ Public metadata can only be written from the Clerk backend or dashboard, so a us
    ```
 
 3. Check: `GET /dashboard/me` as that person returns `"role": "operator"` and `"company": null`.
+
+## Act in a company as an operator
+
+ADR 0006. An operator can open any company's dashboard and act there as one of its admins, with every admin action, for as long as they like.
+
+1. Sign in to the dashboard as the operator. Instead of a company's pages you get **Open a company's dashboard**: every company that isn't churned.
+2. Pick one. The URL gets `?company=<publicId>` (kept on every page; bookmark or share it), the top bar shows **Acting as <company>**, and every request carries the `x-acting-company` header. **Switch company** goes back to the list.
+3. Every change you make is in the company's audit log as **Operator**, never as one of its admins, and opening the company records one **Opened the dashboard as Diletta support** row (each time you open it in a page load). On a change's timeline you show as **Diletta support**.
+
+You never become one of the company's admins: no `admins` row is added, you're not on its Team page, and you never count as its last admin. A churned company can't be opened (403), the same as for its own admins. Calling the API directly works the same way: send `x-acting-company: <companyPublicId>` with the operator's token. Without it, an operator gets 403 on `/dashboard/*`.
 
 ## Remove an operator or a company admin
 

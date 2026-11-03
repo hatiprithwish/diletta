@@ -39,6 +39,7 @@ export default class AdminsRepo {
   private toProfile(
     admin: Schemas.Admin,
     company: Schemas.Company | undefined,
+    actingCompanies: Schemas.ActingCompany[] | null = null,
   ): Schemas.AdminProfile {
     const {
       id: _id,
@@ -51,7 +52,30 @@ export default class AdminsRepo {
       ...rest,
       role: this.toContext(admin).role,
       company: company ? { publicId: company.publicId, name: company.name } : null,
+      actingCompanies,
     };
+  }
+
+  // DEV_NOTE: ADR 0006. The companies an operator may act in (the dashboard's picker): every one that isn't churned.
+  // Cross-company, so withPlatform.
+  private async getActingCompanies(): Promise<
+    Schemas.ApiResponse & { actingCompanies?: Schemas.ActingCompany[] }
+  > {
+    return await withPlatform(this.db, async (tx) => {
+      const found = await this.companiesDal.getCompaniesByStatus(tx, {
+        statuses: [Schemas.CompanyStatusIntEnum.Active, Schemas.CompanyStatusIntEnum.Paused],
+      });
+      if (!found.isSuccess || !found.companies) {
+        return { isSuccess: false, message: found.message };
+      }
+      return {
+        isSuccess: true,
+        actingCompanies: found.companies.map((company) => ({
+          ...company,
+          statusLabel: Schemas.COMPANY_STATUS_LABEL_MAP[company.status],
+        })),
+      };
+    });
   }
 
   // DEV_NOTE: isNotFound = no admins row (getMe may provision). isSuccess with no admin = no access: the company
@@ -120,7 +144,14 @@ export default class AdminsRepo {
     }
 
     const admin = await this.syncEmail(resolved.admin, params.sessionEmail);
-    return { isSuccess: true, admin: this.toProfile(admin, resolved.company) };
+    if (admin.companyId !== null) {
+      return { isSuccess: true, admin: this.toProfile(admin, resolved.company) };
+    }
+    const acting = await this.getActingCompanies();
+    if (!acting.isSuccess || !acting.actingCompanies) {
+      return { isSuccess: false, message: acting.message };
+    }
+    return { isSuccess: true, admin: this.toProfile(admin, undefined, acting.actingCompanies) };
   }
 
   // DEV_NOTE: Best effort — a failed update is logged by the DAL and the profile keeps the stored email. An

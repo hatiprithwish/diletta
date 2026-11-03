@@ -17,14 +17,14 @@ Operators (an `admins` row with no company) can only call `/operator/*`, and the
 2. **Company admins can't use it.** For a company admin the header is ignored: their company always comes from their own row. A client can never pick a company by itself.
 3. **Full admin, no time box.** An operator acting in a company may do every company-admin action there (`can()` already allows it), with no expiry. `OPERATOR_ONLY_ACTIONS` stay operator-only.
 4. **Every write names the operator.** Dashboard Repos take the actor from the request: `operatorAuditActor` when the caller is an operator, `adminAuditActor` otherwise. The company's audit log shows these rows as made by Diletta, not by one of its admins. `<verb>_by` columns hold the operator's `admins.id` as they do today.
-5. **Starting to act is audited.** Picking a company records one audit row in that company (entity Company, action `OperatorActed`, actor Operator), so the company can see when we came in. Reads after that aren't audited, the same as an admin's.
+5. **Starting to act is audited.** Opening a company records one audit row in it (entity Company, action `OperatorActed`, actor Operator, `POST /dashboard/acting`), once per company per page load: a pick, a reload or a shared `?company=` link each record one. So the company can see when we came in. Reads after that aren't audited, the same as an admin's.
 6. **The operator is never on the company's team.** No `admins` row is created or changed. The Team page lists the company's own admins only, and the last-admin and remove-yourself rules count only them.
 7. **Web app.** `/dashboard/me` answers an operator with `role: operator` and the list of companies (name, publicId, status). The shell shows a company picker instead of No access, keeps the pick in the URL (`?company=<publicId>`), sends it as `X-Acting-Company` through `apiClient`, and shows a banner "Acting as <company>" with a way to switch. Changing company clears every query.
 
 ## Consequences
 
 - The role that can reach every company can now also change its configuration from the dashboard, so the protection is accountability, not isolation: every write is an Operator audit row, and every entry is recorded. Operators are still added by hand only (`docs/runbooks/operators.md`).
-- A company admin's request is unchanged. A test in `rls.test.ts` style proves a company admin's `X-Acting-Company` is ignored, and an operator without it gets 403.
-- Every dashboard Repo's `recordAuditOrRollback` call takes its actor from the request instead of always `adminAuditActor`. A Repo that forgets would record an operator's write as an Admin row; a test covers each audited route.
+- A company admin's request is unchanged. `operatorActing.test.ts` proves a company admin's `X-Acting-Company` is ignored, and an operator gets 403 without it, 404 for an unknown company and 403 for a churned one.
+- Every audited dashboard write takes its actor from the request (`actor: auditActorFor(c.get("admin"))`) instead of a hard-coded Admin actor, and so do the change request and quality issue events. The actor is a required Repo parameter, so a route that leaves it out doesn't compile; `operatorActing.test.ts` checks an operator's write lands as an Operator row.
 - Widget, eval and operator routes are unaffected.
 - The Team page, Settings › Team invites and admin removal never see operators, so a company can't remove us and we never count as its last admin.

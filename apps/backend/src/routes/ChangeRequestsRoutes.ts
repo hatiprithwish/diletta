@@ -6,6 +6,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Changes page (M4-4 detail; M4-5 the list, the Requested by choices, timeline, needs-a-person count and
 // Mark resolved), mounted at /dashboard/change-requests. Chain: checkAuth → authorizeCompany(action) → zValidator →
@@ -84,6 +85,7 @@ ChangeRequestsRoutes.post(
     const { outboxId, ...response } = await repo.resolveChangeRequest({
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       publicId: c.req.param("publicId"),
     });
     if (outboxId) {

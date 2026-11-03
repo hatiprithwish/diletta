@@ -7,7 +7,7 @@ import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import DocGapQualityProvider from "@/providers/docGapQuality";
 import AppLogger from "@/providers/logger";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
@@ -127,6 +127,7 @@ export default class DocGapClustersRepo {
       companyId: string;
       publicId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>> {
     const { companyId } = params;
@@ -180,6 +181,7 @@ export default class DocGapClustersRepo {
     companyId: string;
     publicId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.UpdateDocGapClusterApiResponse>> {
     const { companyId } = params;
     const result = await withTenant(
@@ -215,13 +217,13 @@ export default class DocGapClustersRepo {
   // the write back
   private async audit(
     tx: Tx,
-    params: { companyId: string; adminId: string },
+    params: { companyId: string; adminId: string; actor: Schemas.AuditActor },
     row: Schemas.DocGapClusterRow,
     entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.DocGapCluster>,
   ): Promise<string> {
     return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: adminAuditActor(params.adminId),
+      actor: params.actor,
       entityType: Schemas.AuditEntityTypeEnum.DocGapCluster,
       entityAction,
       entity: row,
@@ -232,7 +234,7 @@ export default class DocGapClustersRepo {
   // DEV_NOTE: The group's Quality item follows it closed (M5-6); a failure rolls the write back
   private async closeQualityItem(
     tx: Tx,
-    params: { companyId: string; adminId: string },
+    params: { companyId: string; adminId: string; actor: Schemas.AuditActor },
     row: Schemas.DocGapClusterRow,
     status: Schemas.QualityIssueCloseStatus,
   ): Promise<string[]> {
@@ -241,6 +243,7 @@ export default class DocGapClustersRepo {
       docGapClusterId: row.id,
       status,
       adminId: params.adminId,
+      actor: params.actor,
     });
     if (!closed.isSuccess) {
       throw new TenantRollbackError(closed.message ?? "Quality item not closed");

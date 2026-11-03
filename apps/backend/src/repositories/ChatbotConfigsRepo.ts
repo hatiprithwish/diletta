@@ -11,7 +11,7 @@ import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import Constants from "@/config/Constants";
 import EvalRunsProvider from "@/providers/evalRuns";
 import AppLogger from "@/providers/logger";
-import { adminAuditActor, recordAuditOrRollback, systemAuditActor } from "@/repositories/audit";
+import { recordAuditOrRollback, systemAuditActor } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -180,17 +180,17 @@ export default class ChatbotConfigsRepo {
     };
   }
 
-  // DEV_NOTE: adminId null = no person made the write (a gate run's move): a System row
+  // DEV_NOTE: actor System = no person made the write (a gate run's move)
   private async audit(
     tx: Tx,
-    params: { companyId: string; adminId: string | null },
+    params: { companyId: string; actor: Schemas.AuditActor },
     chatbot: Pick<Schemas.Chatbot, "name">,
     chatbotConfig: Schemas.ChatbotConfig,
     entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ChatbotConfig>,
   ): Promise<string> {
     return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: params.adminId === null ? systemAuditActor() : adminAuditActor(params.adminId),
+      actor: params.actor,
       entityType: Schemas.AuditEntityTypeEnum.ChatbotConfig,
       entityAction,
       entity: chatbotConfig,
@@ -203,7 +203,7 @@ export default class ChatbotConfigsRepo {
   // rolls the write back (TenantRollbackError), so a 500 never hides a write that committed.
   private async answerWrite(
     tx: Tx,
-    params: { companyId: string; adminId: string },
+    params: { companyId: string; adminId: string; actor: Schemas.AuditActor },
     chatbot: Schemas.Chatbot,
     written: Schemas.ChatbotConfigDALResponse,
     entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ChatbotConfig>,
@@ -388,7 +388,8 @@ export default class ChatbotConfigsRepo {
 
   // DEV_NOTE: A new draft from the editor's body (a chatbot's first version, or one started blank)
   async createChatbotConfig(
-    params: Schemas.SaveChatbotConfigApiRequest & ChatbotScope & { adminId: string },
+    params: Schemas.SaveChatbotConfigApiRequest &
+      ChatbotScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     const normalized = await this.normalize(params.body);
     if (!normalized.isSuccess) return normalized.response;
@@ -428,7 +429,7 @@ export default class ChatbotConfigsRepo {
   // DEV_NOTE: Rollback as copy (and Open draft from the live version): any version's body, upgraded to the current schema
   // version, becomes a new draft at the next version number. The copied version itself never changes.
   async copyChatbotConfig(
-    params: ConfigScope & { adminId: string },
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     return await withTenant(
       this.db,
@@ -481,7 +482,8 @@ export default class ChatbotConfigsRepo {
 
   // DEV_NOTE: A body whose hash is unchanged writes nothing and records nothing
   async saveChatbotConfigDraft(
-    params: Schemas.SaveChatbotConfigApiRequest & ConfigScope & { adminId: string },
+    params: Schemas.SaveChatbotConfigApiRequest &
+      ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     const normalized = await this.normalize(params.body);
     if (!normalized.isSuccess) return normalized.response;
@@ -532,7 +534,7 @@ export default class ChatbotConfigsRepo {
   }
 
   async discardChatbotConfigDraft(
-    params: ConfigScope & { adminId: string },
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     return await withTenant(
       this.db,
@@ -636,7 +638,7 @@ export default class ChatbotConfigsRepo {
   // (a config that couldn't go live isn't worth testing; publish checks them again), and its audit row. The gate run is
   // then started by the eval harness (trigger Gate), whose finish moves it to Ready or back to Draft.
   async sendChatbotConfigToTesting(
-    params: ConfigScope & { adminId: string },
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     return await withTenant(
       this.db,
@@ -682,7 +684,7 @@ export default class ChatbotConfigsRepo {
   // DEV_NOTE: Testing / Ready → Draft (M5-4): the admin takes the version back to edit it, or out of a gate run that
   // never finished. Its approval is cleared; a gate run still going for it never moves it again (it started before this).
   async moveChatbotConfigToDraft(
-    params: ConfigScope & { adminId: string },
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     return await withTenant(
       this.db,
@@ -784,7 +786,7 @@ export default class ChatbotConfigsRepo {
     }
     const outboxId = await this.audit(
       tx,
-      { companyId, adminId: null },
+      { companyId, actor: systemAuditActor() },
       chatbot.chatbot,
       moved.chatbotConfig,
       params.hasPassed
@@ -864,7 +866,7 @@ export default class ChatbotConfigsRepo {
   // checked again (a key or tool may have changed since it was tested), the old Published version archived, this one
   // published, and its audit row. The runtime reads the Published config at every turn, so the next message uses it.
   async publishChatbotConfig(
-    params: ConfigScope & { adminId: string },
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
     return await withTenant(
       this.db,

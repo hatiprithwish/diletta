@@ -60,6 +60,8 @@ export enum AuditEntityActionEnum {
   Removed = "removed",
   // DEV_NOTE: System only (M6-3): the rotation job moved every value off a Retiring key and destroyed it
   Retired = "retired",
+  // DEV_NOTE: Operator only (ADR 0006): a Diletta operator picked this company to act in as an admin
+  OperatorActed = "operator_acted",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -121,6 +123,7 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.TurnedOn,
     AuditEntityActionEnum.TurnedOff,
     AuditEntityActionEnum.BudgetChanged,
+    AuditEntityActionEnum.OperatorActed,
   ],
   [AuditEntityTypeEnum.ModelKey]: [AuditEntityActionEnum.Created, AuditEntityActionEnum.Rotated],
   [AuditEntityTypeEnum.AdminInvite]: [AuditEntityActionEnum.Created, AuditEntityActionEnum.Revoked],

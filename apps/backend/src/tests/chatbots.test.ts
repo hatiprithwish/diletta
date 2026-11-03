@@ -8,6 +8,7 @@ import * as Schemas from "@app/schemas";
 import { activityLog, admins, chatbots, companies, eventOutbox } from "@/db/tables";
 import ChatbotsRepo from "@/repositories/ChatbotsRepo";
 import Utility from "@/utils/Utility";
+import { adminAuditActor } from "@/repositories/audit";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -112,6 +113,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
     const created = await repo.createChatbot({
       companyId: companyA,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       chatbot: { name: "Support" },
     });
     expect(created.isSuccess).toBe(true);
@@ -138,6 +140,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyA,
       publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       chatbot: { status: Schemas.ChatbotStatusIntEnum.Paused },
     });
     expect(paused.isSuccess).toBe(true);
@@ -151,6 +154,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyA,
       publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       chatbot: { name: "Support" },
     });
     expect(unchanged.isSuccess).toBe(true);
@@ -194,6 +198,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
     const created = await repo.createChatbot({
       companyId: companyA,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       chatbot: { name: "Private" },
     });
     const publicId = created.chatbot?.publicId ?? "";
@@ -208,6 +213,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyB,
       publicId,
       adminId: adminB,
+      actor: adminAuditActor(adminB),
       chatbot: { name: "Hijacked" },
     });
     expect(updated.isSuccess).toBe(false);
@@ -228,6 +234,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
     const result = await repo.createChatbot({
       companyId: "0",
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       chatbot: { name: "Orphan" },
     });
     expect(result).toEqual({ isSuccess: false, message: "Company not found", chatbot: undefined });
@@ -238,11 +245,13 @@ describe("ChatbotsRepo (tenant golden)", () => {
     const first = await repo.createChatbot({
       companyId: companyB,
       adminId: adminB,
+      actor: adminAuditActor(adminB),
       chatbot: { name: "First" },
     });
     const second = await repo.createChatbot({
       companyId: companyB,
       adminId: adminB,
+      actor: adminAuditActor(adminB),
       chatbot: { name: "Second" },
     });
     const firstId = first.chatbot?.publicId ?? "";
@@ -252,6 +261,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyB,
       publicId: firstId,
       adminId: adminB,
+      actor: adminAuditActor(adminB),
     });
     expect(firstDefault.isSuccess).toBe(true);
     expect(firstDefault.chatbot?.isDefault).toBe(true);
@@ -262,6 +272,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyB,
       publicId: firstId,
       adminId: adminB,
+      actor: adminAuditActor(adminB),
     });
     expect(again.isSuccess).toBe(true);
     expect(again.outboxIds).toEqual([]);
@@ -275,6 +286,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyB,
       publicId: "does-not-exist",
       adminId: adminB,
+      actor: adminAuditActor(adminB),
     });
     expect(failed.isSuccess).toBe(false);
     expect(failed.isNotFound).toBe(true);
@@ -286,6 +298,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyA,
       publicId: secondId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
     });
     expect(crossCompany.isNotFound).toBe(true);
 
@@ -293,6 +306,7 @@ describe("ChatbotsRepo (tenant golden)", () => {
       companyId: companyB,
       publicId: secondId,
       adminId: adminB,
+      actor: adminAuditActor(adminB),
     });
     expect(switched.isSuccess).toBe(true);
     expect(switched.chatbot?.isDefault).toBe(true);

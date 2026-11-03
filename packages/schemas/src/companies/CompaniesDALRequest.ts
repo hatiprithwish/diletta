@@ -24,6 +24,9 @@ export type GetCompaniesRetentionDALRequest = { companyIds: string[] | null };
 
 export type GetCompanyIdsByStatusDALRequest = { statuses: Company["status"][] };
 
+// DEV_NOTE: The companies an operator may act in (ADR 0006), name order
+export type GetCompaniesByStatusDALRequest = { statuses: Company["status"][] };
+
 // DEV_NOTE: The Bots page's Read-only mode (M4-10), by the admin, on the company's own row (withTenant)
 export type UpdateCompanyReadOnlyDALRequest = FindCompanyDALRequest &
   Pick<Company, "isReadOnly"> & { updatedBy: string };

@@ -3,7 +3,7 @@ import CompanyEncryptionKeysDAL from "@/data-access-layer/CompanyEncryptionKeysD
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import CompanyKeyProvider from "@/providers/companyKey";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
@@ -86,6 +86,7 @@ export default class CompanyEncryptionKeysRepo {
   async rotateCompanyEncryptionKey(params: {
     companyId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.RotateCompanyEncryptionKeyApiResponse>> {
     return await withTenant(this.db, params.companyId, async (tx) => {
       const listed = await this.dal.getCompanyEncryptionKeys(tx, {
@@ -136,7 +137,7 @@ export default class CompanyEncryptionKeysRepo {
 
       const outboxId = await recordAuditOrRollback(tx, {
         companyId: params.companyId,
-        actor: adminAuditActor(params.adminId),
+        actor: params.actor,
         entityType: Schemas.AuditEntityTypeEnum.CompanyEncryptionKey,
         entityAction: Schemas.AuditEntityActionEnum.Rotated,
         entity: created.companyEncryptionKey,
@@ -193,6 +194,7 @@ export default class CompanyEncryptionKeysRepo {
   async rotateFromDashboard(params: {
     companyId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.RotateEncryptionKeyApiResponse>> {
     const rotated = await this.rotateCompanyEncryptionKey(params);
     const failure = "failure" in rotated ? rotated.failure : undefined;

@@ -1,5 +1,6 @@
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@clerk/tanstack-react-start";
+import { toast } from "sonner";
 import type * as Schemas from "@app/schemas";
 import { apiClient } from "@/providers/apiClient";
 
@@ -26,4 +27,19 @@ export class MeQueries {
 export function useMe() {
   const { userId, getToken } = useAuth();
   return useQuery({ ...MeQueries.detail(userId ?? "", getToken), enabled: Boolean(userId) });
+}
+
+// DEV_NOTE: ADR 0006. An operator starts acting in a company (the acting-company header already names it): the
+// backend records their entry in the company's audit log. Nothing to cache.
+export function useRecordOperatorActing() {
+  const { getToken } = useAuth();
+  return useMutation({
+    mutationFn: () =>
+      apiClient<Schemas.RecordOperatorActedApiResponse>("/dashboard/acting", getToken, {
+        method: "POST",
+      }),
+    onError: () => {
+      toast.error("Your visit to this company wasn't recorded. Reload the page to try again.");
+    },
+  });
 }

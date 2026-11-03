@@ -6,6 +6,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Quality page (M4-6), mounted at /dashboard/quality-issues. Chain: checkAuth → authorizeCompany(action)
 // → zValidator → handler. For the admin's company (c.get("companyId")); an issue is addressed by publicId. Reads:
@@ -92,6 +93,7 @@ QualityIssuesRoutes.patch(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       publicId: c.req.param("publicId"),
     });
     const { response, status } = answerWrite(c.env, c.executionCtx, companyId, result);
@@ -110,6 +112,7 @@ for (const [path, status] of CLOSE_ROUTES) {
       const result = await repo.closeQualityIssue({
         companyId,
         adminId: c.get("admin").adminId,
+        actor: auditActorFor(c.get("admin")),
         publicId: c.req.param("publicId"),
         status,
       });
@@ -153,6 +156,7 @@ QualityIssuesRoutes.post(
     const result = await repo.convertQualityIssue({
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       publicId: c.req.param("publicId"),
       draft,
       confirmedTerms: confirmedTerms ?? [],

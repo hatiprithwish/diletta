@@ -8,6 +8,7 @@ import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import Constants from "@/config/Constants";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: Knowledge sources and their documents (M2-5), mounted at /dashboard/knowledge-sources. Chain: checkAuth →
 // authorizeCompany(action) → zValidator → handler. companyId comes from the signed-in admin, never the client; sources
@@ -79,6 +80,7 @@ KnowledgeSourcesRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -99,6 +101,7 @@ KnowledgeSourcesRoutes.patch(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -117,6 +120,7 @@ KnowledgeSourcesRoutes.delete(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -135,6 +139,7 @@ KnowledgeSourcesRoutes.post(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -193,6 +198,7 @@ KnowledgeSourcesRoutes.post(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -212,6 +218,7 @@ KnowledgeSourcesRoutes.delete(
       publicId: c.req.param("publicId"),
       documentPublicId: c.req.param("documentPublicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 

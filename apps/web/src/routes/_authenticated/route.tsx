@@ -1,18 +1,31 @@
-import { createFileRoute, Outlet, Link } from "@tanstack/react-router";
+import { useEffect } from "react";
+import {
+  createFileRoute,
+  Outlet,
+  Link,
+  retainSearchParams,
+  useNavigate,
+  useSearch,
+} from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Button } from "@app/ui/components/button";
 import { SidebarInset, SidebarProvider } from "@app/ui/components/sidebar";
 import { Skeleton } from "@app/ui/components/skeleton";
 import * as Schemas from "@app/schemas";
-import { ApiError } from "@/providers/apiClient";
+import { ApiError, setActingCompany } from "@/providers/apiClient";
 import Utilities from "@/utils";
-import { useMe } from "./-data";
+import { MeQueries, useMe, useRecordOperatorActing } from "./-data";
+import { CompanyPicker } from "./-CompanyPicker";
 import { AppSidebar } from "./-AppSidebar";
 import { TopBar } from "./-TopBar";
 import { NoAccess } from "./-NoAccess";
 import { ShellMessage } from "./-ShellMessage";
 
+// DEV_NOTE: ADR 0006. ?company= is the company a signed-in operator acts in, kept on every dashboard link
 export const Route = createFileRoute("/_authenticated")({
+  validateSearch: Schemas.ZActingCompanySearch,
+  search: { middlewares: [retainSearchParams(["company"])] },
   component: AuthenticatedLayout,
 });
 
@@ -44,6 +57,36 @@ const SIDEBAR_STATE_COOKIE = "sidebar_state";
 function DashboardShell() {
   const me = useMe();
   const isSidebarOpen = Utilities.getCookie(SIDEBAR_STATE_COOKIE) !== "false";
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const recordActing = useRecordOperatorActing();
+  const { company } = Schemas.ZActingCompanySearch.parse(useSearch({ strict: false }));
+
+  // DEV_NOTE: ADR 0006. An operator acts in the company ?company names (one they may act in, else the picker). The
+  // header is set during render, so the pages' first requests already carry it; a company admin never sends one.
+  const admin = me.data?.admin;
+  const actingCompany =
+    admin?.role === Schemas.AdminRoleEnum.Operator
+      ? (admin.actingCompanies?.find((row) => row.publicId === company) ?? null)
+      : null;
+  setActingCompany(actingCompany?.publicId ?? null);
+
+  // DEV_NOTE: One audit row per company an operator opens in this page load (a reload, or a link with ?company,
+  // records again). recordActing is stable enough: only the company changes the effect.
+  const actingPublicId = actingCompany?.publicId;
+  const { mutate: recordEntry } = recordActing;
+  useEffect(() => {
+    if (actingPublicId) recordEntry();
+  }, [actingPublicId, recordEntry]);
+
+  // DEV_NOTE: Another company's data must never show: everything but the signed-in admin is dropped on a switch
+  const actIn = (publicId: string | undefined) => {
+    setActingCompany(publicId ?? null);
+    queryClient.removeQueries({
+      predicate: (query) => query.queryKey[0] !== MeQueries.keys.all()[0],
+    });
+    void navigate({ to: ".", search: (prev) => ({ ...prev, company: publicId }) });
+  };
 
   if (me.isPending) {
     return (
@@ -69,14 +112,26 @@ function DashboardShell() {
     );
   }
 
-  const admin = me.data.admin;
-  if (!admin || admin.role !== Schemas.AdminRoleEnum.CompanyAdmin) return <NoAccess />;
+  if (!admin) return <NoAccess />;
+  if (admin.role === Schemas.AdminRoleEnum.Operator && !actingCompany) {
+    return <CompanyPicker companies={admin.actingCompanies ?? []} onPick={actIn} />;
+  }
 
+  // DEV_NOTE: Keyed by the acting company, so switching remounts every page on the new company's data
   return (
-    <SidebarProvider defaultOpen={isSidebarOpen}>
-      <AppSidebar admin={admin} />
+    <SidebarProvider key={actingCompany?.publicId ?? "own"} defaultOpen={isSidebarOpen}>
+      <AppSidebar
+        admin={
+          actingCompany
+            ? { ...admin, company: { publicId: actingCompany.publicId, name: actingCompany.name } }
+            : admin
+        }
+      />
       <SidebarInset>
-        <TopBar />
+        <TopBar
+          actingCompanyName={actingCompany?.name ?? null}
+          onSwitchCompany={() => actIn(undefined)}
+        />
         <div className="mx-auto w-full max-w-[1180px] px-8 pt-9 pb-12">
           <Outlet />
         </div>
