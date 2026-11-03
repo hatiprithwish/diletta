@@ -6,7 +6,7 @@ import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AppLogger from "@/providers/logger";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -140,7 +140,11 @@ export default class EvalCasesRepo {
   // DEV_NOTE: New case: a case judged on its rubric (no other checks) for botId's chatbot, else the company's default one (unknown, or no default → 404).
   // Saved active, never a safety case.
   async createEvalCase(
-    params: Schemas.CreateEvalCaseApiRequest & { companyId: string; adminId: string },
+    params: Schemas.CreateEvalCaseApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse>> {
     const { companyId } = params;
     return await withTenant(
@@ -206,6 +210,7 @@ export default class EvalCasesRepo {
       companyId: string;
       publicId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.WriteEvalCaseApiResponse>> {
     const { companyId } = params;
@@ -307,13 +312,13 @@ export default class EvalCasesRepo {
   // failure rolls the write back
   private async audit(
     tx: Tx,
-    params: { companyId: string; adminId: string },
+    params: { companyId: string; adminId: string; actor: Schemas.AuditActor },
     row: Schemas.DashboardEvalCaseRow,
     entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.EvalCase>,
   ): Promise<string> {
     return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: adminAuditActor(params.adminId),
+      actor: params.actor,
       entityType: Schemas.AuditEntityTypeEnum.EvalCase,
       entityAction,
       entity: row,

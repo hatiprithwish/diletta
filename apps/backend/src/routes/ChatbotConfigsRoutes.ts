@@ -6,6 +6,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: Settings › Bots versions (M4-10), mounted at /dashboard/chatbots/:chatbotPublicId/configs. Chain: checkAuth →
 // authorizeCompany(action) → zValidator → handler. The chatbot and the version are addressed by publicId, the version
@@ -82,6 +83,7 @@ ChatbotConfigsRoutes.post(
       companyId,
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -102,6 +104,7 @@ ChatbotConfigsRoutes.post(
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -123,6 +126,7 @@ ChatbotConfigsRoutes.put(
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -142,6 +146,7 @@ ChatbotConfigsRoutes.post(
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -162,6 +167,7 @@ ChatbotConfigsRoutes.post(
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -181,6 +187,7 @@ ChatbotConfigsRoutes.post(
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -201,6 +208,7 @@ ChatbotConfigsRoutes.post(
       chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 

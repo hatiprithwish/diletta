@@ -8,6 +8,9 @@ export interface GetMeApiResponse extends ApiResponse {
   admin?: AdminProfile;
 }
 
+// DEV_NOTE: POST /dashboard/acting (ADR 0006): the operator's entry into the company is recorded
+export type RecordOperatorActedApiResponse = ApiResponse;
+
 // DEV_NOTE: Server-side only (auth middleware), never sent to a client: AdminContext carries internal ids.
 // Same split as GetMeApiResponse: isSuccess with no admin = no admins row, or a churned company (403).
 export interface GetAdminContextResponse extends ApiResponse {

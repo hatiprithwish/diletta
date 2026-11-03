@@ -7,6 +7,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Conversations page (M4-4), mounted at /dashboard/conversations. Chain: checkAuth →
 // authorizeCompany(action) → zValidator → handler. Read-only for the admin's company (c.get("companyId")), except the
@@ -73,6 +74,7 @@ ConversationsRoutes.post(
     const { outboxId, ...response } = await repo.flagConversation({
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       conversationPublicId: c.req.param("publicId"),
     });
     if (outboxId) {

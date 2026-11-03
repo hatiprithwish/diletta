@@ -6,6 +6,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Tests page's cases (M4-8), mounted at /dashboard/eval-cases. Chain: checkAuth → authorizeCompany(action)
 // → zValidator → handler. For the admin's company (c.get("companyId")); a case is addressed by publicId. Reads:
@@ -55,6 +56,7 @@ EvalCasesRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -77,6 +79,7 @@ EvalCasesRoutes.patch(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 

@@ -1,4 +1,4 @@
-import type { AdminProfile } from "../admins";
+import type { ActingCompany, AdminProfile } from "../admins";
 import type {
   ChangeRequestDetail,
   ChangeRequestListTabEnum,
@@ -84,6 +84,18 @@ export interface DashboardPageHeaderProps {
 
 export interface DashboardSidebarProps {
   admin: AdminProfile;
+}
+
+// DEV_NOTE: ADR 0006. An operator's company picker (no company picked yet) and the acting banner in the top bar
+export interface DashboardCompanyPickerProps {
+  companies: ActingCompany[];
+  onPick: (publicId: string) => void;
+}
+
+export interface DashboardTopBarProps {
+  // The company an operator acts in, else null (a company admin)
+  actingCompanyName: string | null;
+  onSwitchCompany: () => void;
 }
 
 export interface DashboardShellMessageProps {

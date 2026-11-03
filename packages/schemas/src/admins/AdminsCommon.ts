@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CompanyStatusIntEnum, CompanyStatusLabelEnum } from "../companies/CompaniesCommon";
 
 // DEV_NOTE: Derived from admins.company_id, never stored: NULL = operator, set = company admin.
 // There is no role column, so this is a string enum for API responses and can(), not a Status Enum.
@@ -31,11 +32,31 @@ export type AdminContext =
   | { adminId: Admin["id"]; role: AdminRoleEnum.Operator; companyId: null }
   | { adminId: Admin["id"]; role: AdminRoleEnum.CompanyAdmin; companyId: string };
 
+// DEV_NOTE: A company an operator may act in as an admin (ADR 0006): every company that isn't churned
+export interface ActingCompany {
+  publicId: string;
+  name: string;
+  status: CompanyStatusIntEnum;
+  statusLabel: CompanyStatusLabelEnum;
+}
+
 // API response shape — internal ids structurally omitted; the company is identified by its publicId
+// DEV_NOTE: actingCompanies is set for an operator only (null for a company admin): the companies the picker offers
 export type AdminProfile = Omit<Admin, "id" | "companyId" | "removedAt" | "removedBy"> & {
   role: AdminRoleEnum;
   company: { publicId: string; name: string } | null;
+  actingCompanies: ActingCompany[] | null;
 };
+
+// DEV_NOTE: ADR 0006. An operator's /dashboard/* request names the company it acts in with this header (the company's
+// publicId); authorizeCompany resolves it server-side. A company admin's header is ignored: their company is their own.
+export const ACTING_COMPANY_HEADER = "x-acting-company";
+
+// DEV_NOTE: The web app keeps an operator's pick in the URL (?company=<publicId>) across every dashboard page
+export const ZActingCompanySearch = z.object({
+  company: z.string().trim().min(1).max(64).optional().catch(undefined),
+});
+export type ActingCompanySearch = z.infer<typeof ZActingCompanySearch>;
 
 // DEV_NOTE: What the dashboard needs from a Clerk user to provision an admin. companyPublicId comes from the
 // invite's publicMetadata (Settings › Team, M4-10); null = not invited to any company. adminInvitePublicId names the

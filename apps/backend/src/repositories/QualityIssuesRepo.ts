@@ -321,7 +321,7 @@ export default class QualityIssuesRepo {
   // chatbot routing at tier Mid, taskType QualityTestRewrite, on the company's key with the budget held. The call is
   // the chatbot's, not the conversation's (conversationId null), so it never adds to the conversation's cost.
   async draftQualityTest(
-    params: Omit<Schemas.QualityIssueActionRequest, "adminId">,
+    params: Omit<Schemas.QualityIssueActionRequest, "adminId" | "actor">,
     ctx: Pick<ExecutionContext, "waitUntil">,
   ): Promise<Schemas.DraftQualityTestApiResponse> {
     const { companyId } = params;
@@ -635,8 +635,7 @@ export default class QualityIssuesRepo {
 
         const event = await CriticalEventProvider.record(tx, {
           companyId,
-          actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
-          actorId: params.adminId,
+          ...params.actor,
           entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
           entityId: qualityIssue.id,
           entityAction: Schemas.QualityIssueEntityActionEnum.Opened,
@@ -714,8 +713,7 @@ export default class QualityIssuesRepo {
   ): Promise<string> {
     const recorded = await CriticalEventProvider.record(tx, {
       companyId: params.companyId,
-      actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
-      actorId: params.adminId,
+      ...params.actor,
       entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
       entityId: row.id,
       entityAction: event.action,

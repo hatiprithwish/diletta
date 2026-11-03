@@ -36,7 +36,48 @@ const COMPANY_ADMIN: Schemas.AdminProfile = {
   updatedAt: new Date(),
   role: Schemas.AdminRoleEnum.CompanyAdmin,
   company: { publicId: "cmp_1", name: "eRegister" },
+  actingCompanies: null,
 };
+
+// DEV_NOTE: ADR 0006. An operator: no company of their own, the companies they may act in
+const OPERATOR: Schemas.AdminProfile = {
+  ...COMPANY_ADMIN,
+  role: Schemas.AdminRoleEnum.Operator,
+  company: null,
+  actingCompanies: [
+    {
+      publicId: "cmp_1",
+      name: "eRegister",
+      status: Schemas.CompanyStatusIntEnum.Active,
+      statusLabel: Schemas.CompanyStatusLabelEnum.Active,
+    },
+    {
+      publicId: "cmp_2",
+      name: "Northfield",
+      status: Schemas.CompanyStatusIntEnum.Paused,
+      statusLabel: Schemas.CompanyStatusLabelEnum.Paused,
+    },
+  ],
+};
+
+// An operator's /dashboard/me, and every other call answered as a success; returns the fetch mock to inspect
+function mockOperator() {
+  const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+    String(url).endsWith("/dashboard/me")
+      ? new Response(JSON.stringify({ isSuccess: true, admin: OPERATOR }), { status: 200 })
+      : new Response(JSON.stringify({ isSuccess: true }), { status: 200 }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+// The acting-company header of each call to a path
+function actingHeaders(fetchMock: ReturnType<typeof mockOperator>, path: string) {
+  return fetchMock.mock.calls
+    .filter(([url]) => String(url).endsWith(path))
+    .map(([, init]) => (init?.headers ?? {}) as Record<string, string>)
+    .map((headers) => headers[Schemas.ACTING_COMPANY_HEADER]);
+}
 
 function mockMe(status: number, body: Schemas.GetMeApiResponse) {
   vi.stubGlobal(
@@ -171,14 +212,50 @@ describe("dashboard shell", () => {
     expect(screen.queryByText("page /overview")).not.toBeInTheDocument();
   });
 
-  it("shows No access to an operator", async () => {
-    mockMe(200, {
-      isSuccess: true,
-      admin: { ...COMPANY_ADMIN, role: Schemas.AdminRoleEnum.Operator, company: null },
-    });
+  it("asks an operator to pick a company, then acts in it and records the entry", async () => {
+    const fetchMock = mockOperator();
     renderShell("/overview");
 
-    expect(await screen.findByText("You don't have access to this dashboard")).toBeInTheDocument();
+    expect(await screen.findByText("Open a company's dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("page /overview")).not.toBeInTheDocument();
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "eRegister" }));
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(screen.getByText("Acting as eRegister")).toBeInTheDocument();
+    await waitFor(() => expect(actingHeaders(fetchMock, "/dashboard/acting")).toEqual(["cmp_1"]));
+  });
+
+  it("opens the company ?company names straight away, and switches back to the picker", async () => {
+    const fetchMock = mockOperator();
+    renderShell("/overview?company=cmp_2");
+
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(screen.getByText("Acting as Northfield")).toBeInTheDocument();
+    expect(sidebar().getByText("Northfield")).toBeInTheDocument();
+    await waitFor(() => expect(actingHeaders(fetchMock, "/dashboard/acting")).toEqual(["cmp_2"]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch company" }));
+    expect(await screen.findByText("Open a company's dashboard")).toBeInTheDocument();
+  });
+
+  it("shows an operator the picker for a company they can't act in", async () => {
+    mockOperator();
+    renderShell("/overview?company=cmp_gone");
+
+    expect(await screen.findByText("Open a company's dashboard")).toBeInTheDocument();
+  });
+
+  it("never sends the acting header for a company admin", async () => {
+    mockMe(200, { isSuccess: true, admin: COMPANY_ADMIN });
+    renderShell("/overview?company=cmp_2");
+
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(screen.queryByText(/Acting as/)).not.toBeInTheDocument();
+    const calls = vi.mocked(fetch).mock.calls;
+    for (const [, init] of calls) {
+      expect((init as RequestInit).headers).not.toHaveProperty(Schemas.ACTING_COMPANY_HEADER);
+    }
   });
 
   it("offers a retry when /dashboard/me fails", async () => {

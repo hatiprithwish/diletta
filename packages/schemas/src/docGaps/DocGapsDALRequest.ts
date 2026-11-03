@@ -1,5 +1,6 @@
 import type { DocGap } from "./DocGapsCommon";
 import type { QualityIssueCloseStatus } from "../qualityIssues";
+import type { AuditActor } from "../auditLog/AuditLogCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 
@@ -40,6 +41,8 @@ export interface CloseDocGapQualityIssueRequest {
   docGapClusterId: string;
   status: QualityIssueCloseStatus;
   adminId: string;
+  // DEV_NOTE: Who closed it: the company admin, or an operator acting in the company (ADR 0006)
+  actor: AuditActor;
 }
 
 // DEV_NOTE: Groups reopened by removing their document: the items closing them marked Fixed open again

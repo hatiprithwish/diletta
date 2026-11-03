@@ -48,6 +48,13 @@ export const operatorAuditActor = (adminId: string): Schemas.AuditActor => ({
   actorId: adminId,
 });
 
+// DEV_NOTE: The signed-in caller of a /dashboard/* write: a company admin, or an operator acting in the company
+// (ADR 0006), whose writes the company's audit log shows as Diletta's, never as one of its admins'
+export const auditActorFor = (admin: Schemas.AdminContext): Schemas.AuditActor =>
+  admin.role === Schemas.AdminRoleEnum.Operator
+    ? operatorAuditActor(admin.adminId)
+    : adminAuditActor(admin.adminId);
+
 // DEV_NOTE: The platform as an audit actor: a change no person made, on Schemas.AUDIT_SYSTEM_ENTITY_TYPES only (M5-4: a
 // gate run's finish moving a chatbot version, ChatbotConfigsRepo.applyGateResult)
 export const systemAuditActor = (): Schemas.AuditActor => ({

@@ -63,6 +63,7 @@ import {
   testHostToolColumns,
 } from "@/tests/helpers/testHost";
 import { createKey, signToken } from "@/tests/helpers/widgetJwt";
+import { adminAuditActor } from "@/repositories/audit";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -1146,6 +1147,7 @@ describe("Publish gate (M5-4)", { timeout: GATE_TIMEOUT_MS }, () => {
       chatbotPublicId: tenant.chatbotPublicId,
       publicId: tenant.configPublicId,
       adminId,
+      actor: adminAuditActor(adminId),
     };
     return { ...tenant, version };
   }

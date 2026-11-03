@@ -67,6 +67,7 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.TurnedOn]: "Turned on read-only mode",
     [Schemas.AuditEntityActionEnum.TurnedOff]: "Turned off read-only mode",
     [Schemas.AuditEntityActionEnum.BudgetChanged]: "Changed spending budget",
+    [Schemas.AuditEntityActionEnum.OperatorActed]: "Opened the dashboard as Diletta support",
   },
   [Schemas.AuditEntityTypeEnum.ModelKey]: {
     [Schemas.AuditEntityActionEnum.Created]: "Added model key",

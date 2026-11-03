@@ -15,7 +15,7 @@ import KnowledgeDocumentFilesProvider from "@/providers/knowledgeDocumentFiles";
 import KnowledgeExtractProvider from "@/providers/knowledgeExtract";
 import KnowledgeSyncWorkflowProvider from "@/providers/knowledgeSyncWorkflow";
 import AppLogger from "@/providers/logger";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -98,15 +98,14 @@ export default class KnowledgeSourcesRepo {
     tx: NodePgTransaction<EmptyRelations>,
     params: {
       companyId: string;
-      adminId: string;
+      actor: Schemas.AuditActor;
       entityType: T;
       entityAction: Schemas.AuditEntityActionFor<T>;
       entity: { id: string; publicId: string };
       label: string | null;
     },
   ): Promise<string> {
-    const { adminId, ...rest } = params;
-    return await recordAuditOrRollback(tx, { ...rest, actor: adminAuditActor(adminId) });
+    return await recordAuditOrRollback(tx, params);
   }
 
   private withSourceResponse(
@@ -123,7 +122,11 @@ export default class KnowledgeSourcesRepo {
   // syncs when a file is uploaded. A first sync that can't start leaves the source Failed, and the response carries
   // the source as it now is (the create itself succeeded).
   async createKnowledgeSource(
-    params: Schemas.CreateKnowledgeSourceApiRequest & { companyId: string; adminId: string },
+    params: Schemas.CreateKnowledgeSourceApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.CreateKnowledgeSourceApiResponse>> {
     const body = params.knowledgeSource;
     const isWeb = body.type !== Schemas.KnowledgeSourceTypeIntEnum.Upload;
@@ -142,7 +145,7 @@ export default class KnowledgeSourcesRepo {
         if (!result.isSuccess || !result.knowledgeSource) return this.withSourceResponse(result);
         const outboxId = await this.audit(tx, {
           companyId: params.companyId,
-          adminId: params.adminId,
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.KnowledgeSource,
           entityAction: Schemas.AuditEntityActionEnum.Created,
           entity: result.knowledgeSource,
@@ -243,6 +246,7 @@ export default class KnowledgeSourcesRepo {
       companyId: string;
       publicId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateKnowledgeSourceApiResponse>> {
     let isUploadResumed = false;
@@ -310,7 +314,7 @@ export default class KnowledgeSourcesRepo {
           outboxIds.push(
             await this.audit(tx, {
               companyId: params.companyId,
-              adminId: params.adminId,
+              actor: params.actor,
               entityType: Schemas.AuditEntityTypeEnum.KnowledgeSource,
               entityAction,
               entity: after,
@@ -335,6 +339,7 @@ export default class KnowledgeSourcesRepo {
     companyId: string;
     publicId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.ApiResponse>> {
     const result = await withTenant(
       this.db,
@@ -366,7 +371,7 @@ export default class KnowledgeSourcesRepo {
         if (!deleted.isSuccess) throw new TenantRollbackError(deleted.message);
         const outboxId = await this.audit(tx, {
           companyId: params.companyId,
-          adminId: params.adminId,
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.KnowledgeSource,
           entityAction: Schemas.AuditEntityActionEnum.Deleted,
           entity: source,
@@ -409,13 +414,14 @@ export default class KnowledgeSourcesRepo {
     companyId: string;
     publicId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.SyncKnowledgeSourceApiResponse>> {
-    return await this.claimSync(params, params.adminId);
+    return await this.claimSync(params, params.actor);
   }
 
   private async claimSync(
     params: { companyId: string; publicId: string },
-    adminId: string | null,
+    actor: Schemas.AuditActor | null,
   ): Promise<Schemas.WithOutboxIds<Schemas.SyncKnowledgeSourceApiResponse>> {
     const now = Date.now();
     const syncRunId = `ks-${params.publicId}-${Utility.generateUlid()}`;
@@ -458,12 +464,12 @@ export default class KnowledgeSourcesRepo {
           lastSyncedAt: null,
           syncRunId,
         });
-        if (!result.isSuccess || !result.knowledgeSource || adminId === null) {
+        if (!result.isSuccess || !result.knowledgeSource || actor === null) {
           return { ...this.withSourceResponse(result), source: result.knowledgeSource };
         }
         const outboxId = await this.audit(tx, {
           companyId: params.companyId,
-          adminId,
+          actor,
           entityType: Schemas.AuditEntityTypeEnum.KnowledgeSource,
           entityAction: Schemas.AuditEntityActionEnum.SyncStarted,
           entity: result.knowledgeSource,
@@ -578,6 +584,7 @@ export default class KnowledgeSourcesRepo {
       companyId: string;
       publicId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.UploadKnowledgeDocumentApiResponse>> {
     const mime = Schemas.resolveKnowledgeUploadMime(params.file);
@@ -648,7 +655,7 @@ export default class KnowledgeSourcesRepo {
         }
         const outboxId = await this.audit(tx, {
           companyId: params.companyId,
-          adminId: params.adminId,
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.KnowledgeDocument,
           entityAction: Schemas.AuditEntityActionEnum.Uploaded,
           entity: created.knowledgeDocument,
@@ -749,6 +756,7 @@ export default class KnowledgeSourcesRepo {
     publicId: string;
     documentPublicId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.DeleteKnowledgeDocumentApiResponse>> {
     const result = await withTenant(
       this.db,
@@ -790,7 +798,7 @@ export default class KnowledgeSourcesRepo {
         if (!removed.isSuccess) throw new TenantRollbackError(removed.message);
         const outboxId = await this.audit(tx, {
           companyId: params.companyId,
-          adminId: params.adminId,
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.KnowledgeDocument,
           entityAction: Schemas.AuditEntityActionEnum.Deleted,
           entity: document.knowledgeDocument,

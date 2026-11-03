@@ -1,4 +1,4 @@
-import type * as Schemas from "@app/schemas";
+import * as Schemas from "@app/schemas";
 
 const BASE_URL = import.meta.env.VITE_API_URL;
 
@@ -10,6 +10,15 @@ export class ApiError extends Error {
     super(body.message ?? `API error ${status}`);
     this.name = "ApiError";
   }
+}
+
+// DEV_NOTE: ADR 0006. The company a signed-in operator acts in (its publicId), set by the dashboard shell from ?company;
+// every request then names it in the acting-company header. null for a company admin, whose company is their own
+// (the backend ignores the header for them anyway).
+let actingCompanyPublicId: string | null = null;
+
+export function setActingCompany(publicId: string | null): void {
+  actingCompanyPublicId = publicId;
 }
 
 // DEV_NOTE: getToken is passed as a param (not called via useAuth() here) because this is a plain async function — hooks can only run inside React components/hooks.
@@ -28,6 +37,7 @@ export async function apiClient<T>(
     headers: {
       ...(options?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(actingCompanyPublicId ? { [Schemas.ACTING_COMPANY_HEADER]: actingCompanyPublicId } : {}),
       ...options?.headers,
     },
   });

@@ -5,7 +5,7 @@ import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — owns the db client and opens one withTenant transaction per call.
@@ -46,13 +46,13 @@ export default class ChatbotsRepo {
   // DEV_NOTE: An admin's audit row (M4-9) in the write's transaction; a failure rolls the write back
   private async audit(
     tx: NodePgTransaction<EmptyRelations>,
-    params: { companyId: string; adminId: string },
+    params: { companyId: string; adminId: string; actor: Schemas.AuditActor },
     chatbot: Schemas.Chatbot,
     entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.Chatbot>,
   ): Promise<string> {
     return await recordAuditOrRollback(tx, {
       companyId: params.companyId,
-      actor: adminAuditActor(params.adminId),
+      actor: params.actor,
       entityType: Schemas.AuditEntityTypeEnum.Chatbot,
       entityAction,
       entity: chatbot,
@@ -61,7 +61,11 @@ export default class ChatbotsRepo {
   }
 
   async createChatbot(
-    params: Schemas.CreateChatbotApiRequest & { companyId: string; adminId: string },
+    params: Schemas.CreateChatbotApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.CreateChatbotApiResponse>> {
     return await withTenant(
       this.db,
@@ -107,6 +111,7 @@ export default class ChatbotsRepo {
       companyId: string;
       publicId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateChatbotApiResponse>> {
     return await withTenant(
@@ -209,6 +214,7 @@ export default class ChatbotsRepo {
     companyId: string;
     publicId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
   }): Promise<Schemas.WithOutboxIds<Schemas.SetDefaultChatbotApiResponse>> {
     return await withTenant(
       this.db,

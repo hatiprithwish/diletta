@@ -27,6 +27,7 @@ import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import ToolDefinitionsRepo from "@/repositories/ToolDefinitionsRepo";
 import Utility from "@/utils/Utility";
 import { testHostIssuer, testHostToolColumns } from "@/tests/helpers/testHost";
+import { adminAuditActor } from "@/repositories/audit";
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
@@ -127,6 +128,7 @@ async function createTenant(): Promise<Tenant> {
     return {
       companyId,
       adminId: admin?.id ?? "",
+      actor: adminAuditActor(admin?.id ?? ""),
       chatbotId: chatbot?.id ?? "",
       chatbotPublicId: chatbot?.publicId ?? "",
       toolPublicIds,
@@ -210,6 +212,7 @@ async function passGate(
     chatbotPublicId: tenant.chatbotPublicId,
     publicId,
     adminId: tenant.adminId,
+    actor: adminAuditActor(tenant.adminId),
   });
   expect(sent.chatbotConfig?.chatbotConfigStatus).toBe(Schemas.ChatbotConfigStatusIntEnum.Testing);
   return await withOwnerDb(async (ownerDb) => {
@@ -311,6 +314,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
     const created = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     expect(created.isSuccess).toBe(true);
@@ -333,6 +337,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
     const second = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     expect(second.failure).toBe(Schemas.ChatbotConfigFailureEnum.DraftExists);
@@ -342,6 +347,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody({ persona: { instructions: "  You answer questions about records.  " } }),
     });
     expect(saved.isSuccess).toBe(true);
@@ -354,6 +360,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody({ persona: { instructions: "You answer questions about records." } }),
     });
     expect(unchanged.isSuccess).toBe(true);
@@ -363,6 +370,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: { ...configBody(), persona: { instructions: "" } },
     });
     expect(invalid.isSuccess).toBe(false);
@@ -387,6 +395,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
     const created = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     const publicId = created.chatbotConfig?.publicId ?? "";
@@ -395,6 +404,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(discarded.isSuccess).toBe(true);
     expect(discarded.chatbotConfig?.chatbotConfigStatus).toBe(
@@ -405,6 +415,7 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     expect(edited.failure).toBe(Schemas.ChatbotConfigFailureEnum.NotDraft);
@@ -412,12 +423,14 @@ describe("ChatbotConfigsRepo: drafts", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(again.failure).toBe(Schemas.ChatbotConfigFailureEnum.NotDraft);
 
     const next = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     expect(next.chatbotConfig?.configVersion).toBe(2);
@@ -432,6 +445,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
     const v1 = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     const v1Id = v1.chatbotConfig?.publicId ?? "";
@@ -441,6 +455,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v1Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(noKey.isSuccess).toBe(false);
     expect(noKey.failure).toBe(Schemas.ChatbotConfigFailureEnum.ModelKeyMissing);
@@ -455,6 +470,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v1Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(fromDraft.failure).toBe(Schemas.ChatbotConfigFailureEnum.NotReady);
 
@@ -469,6 +485,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v1Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(invalidKey.failure).toBe(Schemas.ChatbotConfigFailureEnum.ModelKeyMissing);
     await new CompanySecretsRepo(env).updateCompanySecret({
@@ -482,6 +499,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v1Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(published.isSuccess).toBe(true);
     expect(published.outboxIds).toHaveLength(1);
@@ -493,11 +511,17 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v1Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(republished.failure).toBe(Schemas.ChatbotConfigFailureEnum.NotReady);
 
     // Rollback as copy: v1 → v2 draft with v1's body; v2 published archives v1
-    const v2 = await repo.copyChatbotConfig({ ...scope, publicId: v1Id, adminId: tenant.adminId });
+    const v2 = await repo.copyChatbotConfig({
+      ...scope,
+      publicId: v1Id,
+      adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
+    });
     expect(v2.isSuccess).toBe(true);
     expect(v2.chatbotConfig?.configVersion).toBe(2);
     expect(v2.chatbotConfig?.body).toEqual(published.chatbotConfig?.body);
@@ -506,6 +530,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v1Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(copiedAgain.failure).toBe(Schemas.ChatbotConfigFailureEnum.DraftExists);
 
@@ -514,6 +539,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId: v2Id,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(v2Published.isSuccess).toBe(true);
 
@@ -559,6 +585,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
     const created = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody({
         tools: [
           { name: "get_record", version: 1 },
@@ -573,6 +600,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(blocked.failure).toBe(Schemas.ChatbotConfigFailureEnum.ToolNotActive);
     expect(blocked.inactiveTools).toEqual([
@@ -584,6 +612,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody({
         routing: {
           ...configBody().routing,
@@ -596,6 +625,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(unpricedSend.failure).toBe(Schemas.ChatbotConfigFailureEnum.ModelNotPriced);
     expect(unpricedSend.unpricedModels).toEqual(["anthropic/claude-unknown"]);
@@ -605,6 +635,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     await passGate(tenant, publicId);
@@ -618,6 +649,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(disabledSince.failure).toBe(Schemas.ChatbotConfigFailureEnum.ToolNotActive);
   });
@@ -630,6 +662,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
     const created = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     const tools = new ToolDefinitionsRepo(env);
@@ -656,6 +689,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       ...scope,
       publicId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
     });
     expect(published.isSuccess).toBe(true);
     const refused = await tools.setToolDefinitionStatus({
@@ -676,6 +710,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       companyId: tenantA.companyId,
       chatbotPublicId: tenantA.chatbotPublicId,
       adminId: tenantA.adminId,
+      actor: adminAuditActor(tenantA.adminId),
       body: configBody(),
     });
     const publicId = created.chatbotConfig?.publicId ?? "";
@@ -685,18 +720,44 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
     expect((await repo.getChatbotConfigs(asB)).isNotFound).toBe(true);
     expect((await repo.getChatbotConfigDetails({ ...asB, publicId })).isNotFound).toBe(true);
     expect(
-      (await repo.publishChatbotConfig({ ...asB, publicId, adminId: tenantB.adminId })).isNotFound,
+      (
+        await repo.publishChatbotConfig({
+          ...asB,
+          publicId,
+          adminId: tenantB.adminId,
+          actor: adminAuditActor(tenantB.adminId),
+        })
+      ).isNotFound,
     ).toBe(true);
     expect(
-      (await repo.sendChatbotConfigToTesting({ ...asB, publicId, adminId: tenantB.adminId }))
-        .isNotFound,
+      (
+        await repo.sendChatbotConfigToTesting({
+          ...asB,
+          publicId,
+          adminId: tenantB.adminId,
+          actor: adminAuditActor(tenantB.adminId),
+        })
+      ).isNotFound,
     ).toBe(true);
     expect(
-      (await repo.moveChatbotConfigToDraft({ ...asB, publicId, adminId: tenantB.adminId }))
-        .isNotFound,
+      (
+        await repo.moveChatbotConfigToDraft({
+          ...asB,
+          publicId,
+          adminId: tenantB.adminId,
+          actor: adminAuditActor(tenantB.adminId),
+        })
+      ).isNotFound,
     ).toBe(true);
     expect(
-      (await repo.copyChatbotConfig({ ...asB, publicId, adminId: tenantB.adminId })).isNotFound,
+      (
+        await repo.copyChatbotConfig({
+          ...asB,
+          publicId,
+          adminId: tenantB.adminId,
+          actor: adminAuditActor(tenantB.adminId),
+        })
+      ).isNotFound,
     ).toBe(true);
     // Company B's own chatbot with company A's version id: the version isn't found under it
     const asOwnChatbot = {
@@ -704,6 +765,7 @@ describe("ChatbotConfigsRepo: publish", { timeout: SUITE_TIMEOUT_MS }, () => {
       chatbotPublicId: tenantB.chatbotPublicId,
       publicId,
       adminId: tenantB.adminId,
+      actor: adminAuditActor(tenantB.adminId),
     };
     expect(
       (await repo.saveChatbotConfigDraft({ ...asOwnChatbot, body: configBody() })).isNotFound,
@@ -737,10 +799,16 @@ describe("ChatbotConfigsRepo: the gate (M5-4)", { timeout: SUITE_TIMEOUT_MS }, (
     const created = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     const publicId = created.chatbotConfig?.publicId ?? "";
-    const version = { ...scope, publicId, adminId: tenant.adminId };
+    const version = {
+      ...scope,
+      publicId,
+      adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
+    };
 
     const sent = await repo.sendChatbotConfigToTesting(version);
     expect(sent.isSuccess).toBe(true);
@@ -808,10 +876,16 @@ describe("ChatbotConfigsRepo: the gate (M5-4)", { timeout: SUITE_TIMEOUT_MS }, (
     const created = await repo.createChatbotConfig({
       ...scope,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       body: configBody(),
     });
     const publicId = created.chatbotConfig?.publicId ?? "";
-    const version = { ...scope, publicId, adminId: tenant.adminId };
+    const version = {
+      ...scope,
+      publicId,
+      adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
+    };
     await addSafetyCase(tenant);
 
     // A Ready version whose run didn't pass, ran each case fewer than EVAL_GATE_MIN_K times, or wasn't a Gate run never
@@ -859,6 +933,7 @@ describe("CompaniesRepo: read-only mode", { timeout: SUITE_TIMEOUT_MS }, () => {
     const on = await repo.updateReadOnlyMode({
       companyId: tenant.companyId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       isReadOnly: true,
     });
     expect(on.readOnlyMode).toEqual({ isReadOnly: true });
@@ -866,12 +941,14 @@ describe("CompaniesRepo: read-only mode", { timeout: SUITE_TIMEOUT_MS }, () => {
     const unchanged = await repo.updateReadOnlyMode({
       companyId: tenant.companyId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       isReadOnly: true,
     });
     expect(unchanged.outboxIds).toEqual([]);
     const off = await repo.updateReadOnlyMode({
       companyId: tenant.companyId,
       adminId: tenant.adminId,
+      actor: adminAuditActor(tenant.adminId),
       isReadOnly: false,
     });
     expect(off.readOnlyMode).toEqual({ isReadOnly: false });

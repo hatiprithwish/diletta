@@ -6,7 +6,7 @@ import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import ClerkProvider from "@/providers/clerk";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 type TeamWrite = Schemas.WithOutboxIds<Schemas.TeamWriteApiResponse>;
@@ -125,7 +125,11 @@ export default class TeamRepo {
   // A Clerk failure marks the row Revoked (nothing points at it) and answers 502; a failure at 3 revokes it on Clerk and
   // the row too, best effort, and answers 500.
   async inviteAdmin(
-    params: Schemas.CreateAdminInviteApiRequest & { companyId: string; adminId: string },
+    params: Schemas.CreateAdminInviteApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<TeamWrite> {
     const account = await ClerkProvider.findUserByEmail(this.env, params.email);
     if (!account.isSuccess) {
@@ -251,7 +255,7 @@ export default class TeamRepo {
         }
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.AdminInvite,
           entityAction: Schemas.AuditEntityActionEnum.Created,
           entity: updated.adminInvite,
@@ -298,6 +302,7 @@ export default class TeamRepo {
   async revokeInvite(params: {
     companyId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
     publicId: string;
   }): Promise<TeamWrite> {
     const result: TeamWrite & { adminInvite?: Schemas.AdminInvite } = await withTenant(
@@ -339,7 +344,7 @@ export default class TeamRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.AdminInvite,
           entityAction: Schemas.AuditEntityActionEnum.Revoked,
           entity: updated.adminInvite,
@@ -371,6 +376,7 @@ export default class TeamRepo {
   async removeAdmin(params: {
     companyId: string;
     adminId: string;
+    actor: Schemas.AuditActor;
     clerkUserId: string;
   }): Promise<TeamWrite> {
     return await withTenant(this.db, params.companyId, async (tx): Promise<TeamWrite> => {
@@ -418,7 +424,7 @@ export default class TeamRepo {
 
       const outboxId = await recordAuditOrRollback(tx, {
         companyId: params.companyId,
-        actor: adminAuditActor(params.adminId),
+        actor: params.actor,
         entityType: Schemas.AuditEntityTypeEnum.Admin,
         entityAction: Schemas.AuditEntityActionEnum.Removed,
         entity: { id: found.admin.id, publicId: found.admin.clerkUserId },

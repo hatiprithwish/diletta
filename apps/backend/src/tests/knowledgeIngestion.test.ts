@@ -25,6 +25,7 @@ import KnowledgeIngestionRepo from "@/repositories/KnowledgeIngestionRepo";
 import KnowledgeSourcesRepo from "@/repositories/KnowledgeSourcesRepo";
 import Utility from "@/utils/Utility";
 import { KnowledgeSyncWorkflow } from "@/workflows/KnowledgeSyncWorkflow";
+import { adminAuditActor } from "@/repositories/audit";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -187,6 +188,7 @@ async function createSitemapSource(
   const created = await repo.createKnowledgeSource({
     companyId,
     adminId,
+    actor: adminAuditActor(adminId),
     knowledgeSource: {
       type: Schemas.KnowledgeSourceTypeIntEnum.Sitemap,
       name: "Help center",
@@ -204,6 +206,7 @@ async function createUploadSource(companyId: string, adminId: string) {
   const created = await new KnowledgeSourcesRepo(env).createKnowledgeSource({
     companyId,
     adminId,
+    actor: adminAuditActor(adminId),
     knowledgeSource: { type: Schemas.KnowledgeSourceTypeIntEnum.Upload, name: "Uploads" },
   });
   const publicId = created.knowledgeSource?.publicId ?? "";
@@ -215,6 +218,7 @@ async function upload(publicId: string, name: string, content: string, type = ""
     companyId: companyA,
     publicId,
     adminId: adminA,
+    actor: adminAuditActor(adminA),
     file: new File([content], name, { type }),
   });
 }
@@ -564,6 +568,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
     const created = await new KnowledgeSourcesRepo(env).createKnowledgeSource({
       companyId: companyA,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       knowledgeSource: {
         type: Schemas.KnowledgeSourceTypeIntEnum.Sitemap,
         name: "Missing",
@@ -604,6 +609,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       knowledgeSource: { status: Schemas.KnowledgeSourceStatusIntEnum.Paused },
     });
     expect(paused.knowledgeSource?.knowledgeSourceStatusLabel).toBe(
@@ -662,6 +668,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
         companyId: companyA,
         publicId: source.publicId,
         adminId: adminA,
+        actor: adminAuditActor(adminA),
         knowledgeSource: { status },
       });
     }
@@ -725,6 +732,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       knowledgeSource: { syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Weekly },
     });
     expect(
@@ -781,6 +789,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       publicId: source.publicId,
       documentPublicId: document!.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
     });
     expect(deleted.isSuccess).toBe(true);
     expect(await documentsOf(source.id)).toEqual([]);
@@ -835,6 +844,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       knowledgeSource: { status: Schemas.KnowledgeSourceStatusIntEnum.Paused },
     });
     await upload(source.publicId, "paused.md", "# Paused\n\nWaits.");
@@ -844,6 +854,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       knowledgeSource: { status: Schemas.KnowledgeSourceStatusIntEnum.Active },
     });
     expect(mocks.startWorkflow).toHaveBeenCalledTimes(1);
@@ -860,6 +871,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: web.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       file: new File(["text"], "a.txt", { type: "text/plain" }),
     });
     expect(toWeb.failure).toBe(Schemas.KnowledgeSourceFailureEnum.NotUploadSource);
@@ -874,6 +886,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
       knowledgeSource: { syncFrequency: Schemas.KnowledgeSourceSyncFrequencyIntEnum.Daily },
     });
     expect(updated.failure).toBe(Schemas.KnowledgeSourceFailureEnum.NotWebSource);
@@ -892,6 +905,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
       companyId: companyA,
       publicId: source.publicId,
       adminId: adminA,
+      actor: adminAuditActor(adminA),
     });
     expect(deleted.isSuccess).toBe(true);
     expect(await sourceRow(source.publicId)).toBeUndefined();
@@ -973,6 +987,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
           companyId: companyB,
           publicId: source.publicId,
           adminId: adminB,
+          actor: adminAuditActor(adminB),
           knowledgeSource: { status: Schemas.KnowledgeSourceStatusIntEnum.Paused },
         })
       ).isNotFound,
@@ -986,6 +1001,7 @@ describe("knowledge sync (M2-5)", { timeout: 120_000 }, () => {
           companyId: companyB,
           publicId: source.publicId,
           adminId: adminB,
+          actor: adminAuditActor(adminB),
         })
       ).isNotFound,
     ).toBe(true);

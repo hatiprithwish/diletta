@@ -243,8 +243,7 @@ export default class ChangeRequestsRepo {
       const action = Schemas.ChangeRequestEntityActionEnum.Resolved;
       const event = await CriticalEventProvider.record(tx, {
         companyId,
-        actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
-        actorId: params.adminId,
+        ...params.actor,
         entityType: Schemas.CHANGE_REQUEST_ENTITY_TYPE,
         entityId: row.id,
         entityAction: action,

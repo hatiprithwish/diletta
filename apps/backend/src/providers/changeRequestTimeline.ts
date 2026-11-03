@@ -26,6 +26,8 @@ const TIMELINE_TEXT = {
   undoneBy: "Undone",
   resolved: "Marked resolved",
   someone: { admin: "an admin", user: "the user" },
+  // DEV_NOTE: An operator acting in the company (ADR 0006); RLS hides their admins row from the company, so no name
+  operator: "Diletta support",
 } as const;
 
 // DEV_NOTE: A change's timeline from its activity_log events (M4-5), pure so it is unit-tested on its own: one step per
@@ -52,7 +54,8 @@ export default class ChangeRequestTimelineProvider {
     const by = (text: string) => `${text} by ${ChangeRequestTimelineProvider.actorName(row)}`;
     const isPerson =
       row.actorType === Schemas.ActivityLogActorTypeIntEnum.ChatbotUser ||
-      row.actorType === Schemas.ActivityLogActorTypeIntEnum.Admin;
+      row.actorType === Schemas.ActivityLogActorTypeIntEnum.Admin ||
+      row.actorType === Schemas.ActivityLogActorTypeIntEnum.Operator;
 
     switch (row.entityAction) {
       case Action.Proposed:
@@ -119,6 +122,8 @@ export default class ChangeRequestTimelineProvider {
 
   // DEV_NOTE: The actor's name, or who they were when it is unknown (none sent, erased, or the row is gone)
   private static actorName(row: Schemas.ActivityLogTimelineRow): string {
+    if (row.actorType === Schemas.ActivityLogActorTypeIntEnum.Operator)
+      return TIMELINE_TEXT.operator;
     if (row.actorName) return row.actorName;
     return row.actorType === Schemas.ActivityLogActorTypeIntEnum.Admin
       ? TIMELINE_TEXT.someone.admin

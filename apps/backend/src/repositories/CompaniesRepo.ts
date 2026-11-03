@@ -7,7 +7,7 @@ import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import BudgetPeriodSpendProvider from "@/providers/budgetPeriodSpend";
 import CompanyKeyProvider from "@/providers/companyKey";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenancy-root Repo. Creating and listing companies are operator actions across companies, so they
@@ -85,6 +85,42 @@ export default class CompaniesRepo {
     });
   }
 
+  // DEV_NOTE: ADR 0006. The company an operator's X-Acting-Company names, with its status (authorizeCompany refuses a
+  // churned one, as for its own admins). Pre-tenant lookup, so withPlatform; the route then runs in withTenant on it.
+  async resolveActingCompany(params: { publicId: string }): Promise<Schemas.ActingCompanyResponse> {
+    return await withPlatform(this.db, async (tx): Promise<Schemas.ActingCompanyResponse> => {
+      const { company, ...rest } = await this.dal.getCompanyByPublicId(tx, params);
+      return { ...rest, companyId: company?.id, status: company?.status };
+    });
+  }
+
+  // DEV_NOTE: ADR 0006. An operator picked this company to act in: one Operator audit row in it, so the company sees
+  // when Diletta came in. Every pick records one (a reload keeps the pick in the URL and records nothing).
+  async recordOperatorActed(params: {
+    companyId: string;
+    actor: Schemas.AuditActor;
+  }): Promise<Schemas.WithOutboxIds<Schemas.RecordOperatorActedApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.RecordOperatorActedApiResponse>> => {
+        const found = await this.dal.getCompanyDetails(tx, { companyId: params.companyId });
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: params.actor,
+          entityType: Schemas.AuditEntityTypeEnum.Company,
+          entityAction: Schemas.AuditEntityActionEnum.OperatorActed,
+          entity: found.company,
+          label: found.company.name,
+        });
+        return { isSuccess: true, message: "Operator entry recorded", outboxIds: [outboxId] };
+      },
+    );
+  }
+
   async getCompaniesCount(): Promise<Schemas.GetCompaniesCountApiResponse> {
     return await withPlatform(this.db, async (tx) => {
       return await this.dal.getCompaniesCount(tx);
@@ -159,7 +195,11 @@ export default class CompaniesRepo {
   // (NULL = DEFAULT_CONTENT_RETENTION_DAYS), under the row lock: the days already in force, the default included, change
   // nothing and record nothing. The purge that deletes chat content past it is M6-1.
   async updateContentRetention(
-    params: Schemas.UpdateContentRetentionApiRequest & { companyId: string; adminId: string },
+    params: Schemas.UpdateContentRetentionApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateContentRetentionApiResponse>> {
     return await withTenant(
       this.db,
@@ -195,7 +235,7 @@ export default class CompaniesRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.Company,
           entityAction: Schemas.AuditEntityActionEnum.RetentionChanged,
           entity: updated.company,
@@ -236,7 +276,11 @@ export default class CompaniesRepo {
   // already in force writes nothing and records nothing. The action engine reads is_read_only at every turn start (a
   // read-only company gets read tools only) and every change request step re-checks it, so it takes effect at once.
   async updateReadOnlyMode(
-    params: Schemas.UpdateReadOnlyModeApiRequest & { companyId: string; adminId: string },
+    params: Schemas.UpdateReadOnlyModeApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateReadOnlyModeApiResponse>> {
     return await withTenant(
       this.db,
@@ -269,7 +313,7 @@ export default class CompaniesRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.Company,
           entityAction: params.isReadOnly
             ? Schemas.AuditEntityActionEnum.TurnedOn
@@ -336,7 +380,11 @@ export default class CompaniesRepo {
   // micro-dollars with the budget in force (NULL = DEFAULT_SPENDING_BUDGET_USD), under the row lock: the amount already
   // in force, the default included, writes nothing and records nothing. BudgetDO picks it up within BUDGET_REFRESH_MS.
   async updateSpendingBudget(
-    params: Schemas.UpdateSpendingBudgetApiRequest & { companyId: string; adminId: string },
+    params: Schemas.UpdateSpendingBudgetApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.UpdateSpendingBudgetApiResponse>> {
     return await withTenant(
       this.db,
@@ -367,7 +415,7 @@ export default class CompaniesRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.Company,
           entityAction: Schemas.AuditEntityActionEnum.BudgetChanged,
           entity: updated.company,

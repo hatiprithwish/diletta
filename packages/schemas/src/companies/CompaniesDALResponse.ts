@@ -26,3 +26,15 @@ export interface CompaniesRetentionDALResponse extends ApiResponse {
 export interface CompanyIdsDALResponse extends ApiResponse {
   companyIds?: string[];
 }
+
+// DEV_NOTE: Server-side only: the companies an operator may act in (ADR 0006), for the dashboard's company picker
+export type ActingCompanyRow = Pick<Company, "publicId" | "name" | "status">;
+export interface ActingCompaniesDALResponse extends ApiResponse {
+  companies?: ActingCompanyRow[];
+}
+
+// DEV_NOTE: Server-side only: the company an operator's X-Acting-Company names, resolved before withTenant
+export interface ActingCompanyResponse extends ApiResponse {
+  companyId?: string;
+  status?: Company["status"];
+}

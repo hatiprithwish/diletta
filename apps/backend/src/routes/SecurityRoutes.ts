@@ -12,6 +12,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Security page (M4-9), mounted at /dashboard/security (the audit log is /dashboard/audit-log). Chain:
 // checkAuth → authorizeCompany(action) → zValidator → handler. For the admin's company (c.get("companyId")); a connection
@@ -45,6 +46,7 @@ SecurityRoutes.put(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -74,6 +76,7 @@ SecurityRoutes.post(
     const { outboxIds, ...response } = await repo.rotateFromDashboard({
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -115,6 +118,7 @@ SecurityRoutes.put(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -134,6 +138,7 @@ SecurityRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     const { isSuccess, message, isNotFound, conversationCount, chatbotUserId, outboxIds } = erased;
     const response: Schemas.EraseChatbotUserApiResponse = {

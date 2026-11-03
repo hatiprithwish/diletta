@@ -12,13 +12,14 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@app/ui/components/breadcrumb";
+import type * as Schemas from "@app/schemas";
 import { useTheme } from "@/providers/ThemeProvider";
 import { getBreadcrumbs } from "./-nav";
 
 // DEV_NOTE: Set at build time (deploy workflows); local dev runs against the staging branch, so unset = Staging
 const ENVIRONMENT_LABEL = import.meta.env.VITE_APP_ENV === "production" ? "Production" : "Staging";
 
-export function TopBar() {
+export function TopBar({ actingCompanyName, onSwitchCompany }: Schemas.DashboardTopBarProps) {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { toggleSidebar } = useSidebar();
   const { resolvedTheme, setTheme } = useTheme();
@@ -54,6 +55,16 @@ export function TopBar() {
         </BreadcrumbList>
       </Breadcrumb>
       <div className="ml-auto flex items-center gap-2">
+        {actingCompanyName !== null && (
+          <>
+            <Badge variant="outline" className="max-w-56 truncate">
+              Acting as {actingCompanyName}
+            </Badge>
+            <Button variant="ghost" size="sm" onClick={onSwitchCompany}>
+              Switch company
+            </Button>
+          </>
+        )}
         <Badge className="gap-1.5 bg-brand-soft text-brand-text">
           <span className="size-1.5 rounded-full bg-current" aria-hidden />
           {ENVIRONMENT_LABEL}
