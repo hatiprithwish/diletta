@@ -48,6 +48,7 @@ export * from "./insights";
 export * from "./roiAssumptions";
 export * from "./eventOutbox";
 export * from "./testHost";
+export * from "./eregister";
 export * from "./crons";
 export * from "./dashboard";
 export * from "./log";

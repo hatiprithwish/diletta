@@ -4,6 +4,7 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: The backend's own publicId generator, so seeded rows get ids made like every other
 import Utility from "../../backend/src/utils/Utility.ts";
 import { readOwnerDatabaseUrl } from "../../backend/src/db/ownerDatabaseUrl.ts";
+import { canonical, seedToolDefinition } from "../../backend/src/db/seedToolDefinitions.ts";
 
 // DEV_NOTE: Puts the test host on our test company (docs/runbooks/test-host.md). Idempotent: rerun it after changing
 // Schemas.TEST_HOST_TOOL_DEFINITIONS.
@@ -85,105 +86,6 @@ async function upsertConnection(
     ],
   );
   return { connectionId: inserted.rows[0]!.id, isActive: true };
-}
-
-// DEV_NOTE: JSON with sorted keys, so a stored jsonb (key order not kept) compares equal to the definition
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function isSameDefinition(
-  row: Schemas.TestHostSeedToolRow,
-  connectionId: string,
-  tool: Schemas.TestHostToolDefinition,
-  ops: Schemas.ToolOps,
-  schemaVersion: number,
-): boolean {
-  return (
-    row.connection_id === connectionId &&
-    row.description === tool.description &&
-    row.risk === tool.risk &&
-    row.idempotency_mode === tool.idempotencyMode &&
-    row.approval === tool.approval &&
-    row.source === tool.source &&
-    row.schema_version === schemaVersion &&
-    canonical([row.input_schema, row.call_op, row.readback_op, row.inverse_op]) ===
-      canonical([ops.inputSchema, ops.callOp, ops.readbackOp, ops.inverseOp])
-  );
-}
-
-async function seedTool(
-  client: pg.Client,
-  companyId: string,
-  connectionId: string,
-  tool: Schemas.TestHostToolDefinition,
-): Promise<{ name: string; version: number; change: string }> {
-  const riskIssue = Schemas.getToolRiskOpsIssue(tool.risk, tool.idempotencyMode, tool.ops);
-  const normalized = Schemas.normalizeToolOps(tool.ops);
-  if (riskIssue || !normalized.ops || normalized.schemaVersion === undefined) {
-    throw new Error(`Tool ${tool.name} is invalid: ${riskIssue ?? normalized.message}`);
-  }
-  const { ops, schemaVersion } = normalized;
-
-  // DEV_NOTE: The same advisory lock as ToolDefinitionsDAL's new version, so a seed can't race an operator's edit
-  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-    `tool_definition:${companyId}:${tool.name}`,
-  ]);
-  const rows = await client.query<Schemas.TestHostSeedToolRow>(
-    `SELECT id, version, status, connection_id, description, risk, idempotency_mode, approval, source,
-            schema_version, input_schema, call_op, readback_op, inverse_op
-       FROM tool_definitions WHERE company_id = $1 AND name = $2 ORDER BY version DESC`,
-    [companyId, tool.name],
-  );
-  if (rows.rows.some((row) => row.status === Schemas.ToolDefinitionStatusIntEnum.Draft)) {
-    throw new Error(`Tool ${tool.name} has a Draft version: activate or delete it first`);
-  }
-
-  const latest = rows.rows[0];
-  if (latest && isSameDefinition(latest, connectionId, tool, ops, schemaVersion)) {
-    if (latest.status === Schemas.ToolDefinitionStatusIntEnum.Active) {
-      return { name: tool.name, version: latest.version, change: "unchanged" };
-    }
-    await client.query(
-      "UPDATE tool_definitions SET status = $1, updated_at = now() WHERE id = $2",
-      [Schemas.ToolDefinitionStatusIntEnum.Active, latest.id],
-    );
-    return { name: tool.name, version: latest.version, change: "re-activated" };
-  }
-
-  const version = (latest?.version ?? 0) + 1;
-  await client.query(
-    `INSERT INTO tool_definitions
-       (public_id, company_id, connection_id, name, version, description, risk, schema_version, input_schema,
-        call_op, readback_op, inverse_op, idempotency_mode, approval, source, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-    [
-      Utility.generatePublicId(),
-      companyId,
-      connectionId,
-      tool.name,
-      version,
-      tool.description,
-      tool.risk,
-      schemaVersion,
-      JSON.stringify(ops.inputSchema),
-      JSON.stringify(ops.callOp),
-      ops.readbackOp === null ? null : JSON.stringify(ops.readbackOp),
-      ops.inverseOp === null ? null : JSON.stringify(ops.inverseOp),
-      tool.idempotencyMode,
-      tool.approval,
-      tool.source,
-      Schemas.ToolDefinitionStatusIntEnum.Active,
-    ],
-  );
-  return { name: tool.name, version, change: latest ? "new version" : "created" };
 }
 
 // DEV_NOTE: Each case's change ("created", "updated", "unchanged"), or null when the company has no active default
@@ -303,7 +205,7 @@ async function main() {
     const seeded = [];
     if (isActive) {
       for (const tool of Schemas.TEST_HOST_TOOL_DEFINITIONS) {
-        seeded.push(await seedTool(client, companyRow.id, connectionId, tool));
+        seeded.push(await seedToolDefinition(client, companyRow.id, connectionId, tool));
       }
     }
     const seededCases = isActive ? await seedEvalCases(client, companyRow.id) : null;

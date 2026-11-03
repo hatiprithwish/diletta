@@ -366,24 +366,6 @@ export interface TestHostTestBindings {
   TEST_HOST_ADMIN_SECRET: string;
 }
 
-// DEV_NOTE: A tool_definitions row as the seed script reads it with pg (snake_case columns, jsonb ops untyped)
-export interface TestHostSeedToolRow {
-  id: string;
-  version: number;
-  status: number;
-  connection_id: string;
-  description: string;
-  risk: number;
-  idempotency_mode: number;
-  approval: number;
-  source: number;
-  schema_version: number;
-  input_schema: unknown;
-  call_op: unknown;
-  readback_op: unknown;
-  inverse_op: unknown;
-}
-
 // DEV_NOTE: An eval_cases row as the seed script reads it with pg (M5-5: the test company's own cases, bodies untyped)
 export interface TestHostSeedEvalCaseRow {
   id: string;
