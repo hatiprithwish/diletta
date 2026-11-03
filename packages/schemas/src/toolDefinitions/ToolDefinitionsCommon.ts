@@ -226,6 +226,28 @@ export const ZToolDefinitionBase = z.object({
 });
 export type ToolDefinitionBase = z.infer<typeof ZToolDefinitionBase>;
 
+// DEV_NOTE: A tool definition a seed script stores on a connection it already knows (the test host's, M3-3;
+// eRegister's, M7-2), so no connection publicId
+export type ToolDefinitionSeed = Omit<ToolDefinitionBase, "connectionPublicId">;
+
+// DEV_NOTE: A tool_definitions row as a seed script reads it with pg (snake_case columns, jsonb ops untyped)
+export interface ToolDefinitionSeedRow {
+  id: string;
+  version: number;
+  status: number;
+  connection_id: string;
+  description: string;
+  risk: number;
+  idempotency_mode: number;
+  approval: number;
+  source: number;
+  schema_version: number;
+  input_schema: unknown;
+  call_op: unknown;
+  readback_op: unknown;
+  inverse_op: unknown;
+}
+
 // Whole Tool Definition Body — DB shape (enums stored as integers, ops as jsonb columns)
 // DEV_NOTE: id, companyId, connectionId, createdBy and updatedBy are internal bigint ids — used by DAL/Repo only,
 // NEVER sent to a client. The op columns are typed unknown: only loadToolOps turns them into ops.

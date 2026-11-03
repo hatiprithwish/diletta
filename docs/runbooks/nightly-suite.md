@@ -31,7 +31,7 @@ The job runs `python -m diletta_evals run --chatbot $NIGHTLY_CHATBOT_ID --trigge
 | "The nightly platform suite failed" / "didn't finish"     | backend error log (`Eval` / `ReportNightlyEvalRun`)         | A Nightly run finished without passing (any company, any way it was started)                                                            |
 | "The nightly platform suite hasn't finished a run lately" | backend error log (`Eval` / `CheckNightlySuite`), 06:00 UTC | No Nightly run of `NIGHTLY_SUITE_COMPANY_ID` reached Done in the last 26 hours: the job didn't run, was cancelled, or every run stopped |
 
-The backend's error logs reach Sentry with M6-6. `NIGHTLY_SUITE_COMPANY_ID` is a `wrangler.jsonc` var, set on staging only; empty means nothing is checked (local and production).
+The backend's error logs reach Sentry and #diletta-alerts (`docs/runbooks/observability.md`). `NIGHTLY_SUITE_COMPANY_ID` is a `wrangler.jsonc` var, set on staging only; empty means nothing is checked (local and production).
 
 **What to do on a failure:** open the run on the Tests page (Tests › Runs, "Nightly platform suite"), find the failed cases and their grader output and transcripts. A failed platform safety case is the most urgent: it will block every company's next publish. If the change that broke it is in `main`, revert or fix it before the next customer gate.
 

@@ -104,7 +104,13 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Disabled,
     AuditEntityActionEnum.Deleted,
   ],
-  [AuditEntityTypeEnum.CompanyConnection]: [AuditEntityActionEnum.OriginsChanged],
+  [AuditEntityTypeEnum.CompanyConnection]: [
+    AuditEntityActionEnum.Created,
+    AuditEntityActionEnum.Updated,
+    AuditEntityActionEnum.Activated,
+    AuditEntityActionEnum.Disabled,
+    AuditEntityActionEnum.OriginsChanged,
+  ],
   [AuditEntityTypeEnum.CompanyEncryptionKey]: [
     AuditEntityActionEnum.Rotated,
     AuditEntityActionEnum.Retired,

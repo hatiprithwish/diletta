@@ -169,6 +169,79 @@ export default class ModelCallsDAL {
     return response;
   }
 
+  // DEV_NOTE: The load test's window start (M6-5): the database's now(), the clock created_at is written with
+  async getLoadWindowStart(tx: NodePgTransaction<EmptyRelations>) {
+    const response: Schemas.LoadWindowStartDALResponse = { isSuccess: false };
+
+    try {
+      const [row] = await tx.execute<{ now: Date }>(sql`select now() as now`).then((r) => r.rows);
+
+      response.isSuccess = true;
+      response.message = "Load window start fetched successfully";
+      response.startedAt = row ? new Date(row.now) : new Date();
+    } catch (error) {
+      const message = "Unknown error in fetching load window start";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.StartLoadWindow,
+        message,
+        error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The load test's window (M6-5): the company's calls since `since`, counted the way BudgetDO counts spend
+  // (Embed rows left out: the platform pays for them). costMicros is the exact sum of cost_usd in micro-dollars
+  // (numeric(12, 6) × 1e6 is a whole number); pendingCount = rows whose cost isn't final (Pending, or Unknown at 0).
+  async getLoadWindowStats(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetLoadWindowStatsDALRequest,
+  ) {
+    const response: Schemas.LoadModelCallStatsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(modelCalls.companyId, params.companyId),
+        gte(modelCalls.createdAt, params.since),
+        ne(modelCalls.tier, Schemas.ModelCallTierIntEnum.Embed),
+      ];
+      const [row] = await tx
+        .select({
+          callCount: count(),
+          pendingCount: sql<number>`count(*) filter (where ${inArray(modelCalls.usageStatus, [
+            Schemas.ModelCallUsageStatusIntEnum.Pending,
+            Schemas.ModelCallUsageStatusIntEnum.Unknown,
+          ])})`,
+          costMicros: sql<string>`coalesce(sum(round(${modelCalls.costUsd} * 1000000)), 0)::bigint`,
+        })
+        .from(modelCalls)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Load window model call stats fetched successfully";
+      response.stats = {
+        callCount: Number(row?.callCount ?? 0),
+        pendingCount: Number(row?.pendingCount ?? 0),
+        costMicros: Number(row?.costMicros ?? 0),
+      };
+    } catch (error) {
+      const message = "Unknown error in fetching load window model call stats";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLoadModelCallStats,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Platform read (withPlatform) for the backfill sweep: Pending rows across companies, least recently tried
   // first (updated_at); the IDX_model_calls_created_at_pending partial index keeps the read to Pending rows
   async getPendingModelCalls(

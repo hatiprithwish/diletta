@@ -1014,7 +1014,16 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
   it("marks a run reset with no reset op, refuses an invalid one, and keeps reset ops on staging", async () => {
     const tenant = await createTenant();
     const connections = new CompanyConnectionsRepo(env);
-    const scope = { companyId: tenant.companyId, publicId: tenant.stagingPublicId };
+    // DEV_NOTE: Connection writes are an operator's (M7-1); an admins row of the tenant's company stands in as the
+    // actor, so the suite's cleanup (admins by company) removes it
+    const adminId = await withOwnerDb(async (ownerDb) => {
+      const [admin] = await ownerDb
+        .insert(admins)
+        .values({ clerkUserId: `user_reset_${crypto.randomUUID()}`, companyId: tenant.companyId })
+        .returning({ id: admins.id });
+      return admin?.id ?? "";
+    });
+    const scope = { companyId: tenant.companyId, publicId: tenant.stagingPublicId, adminId };
 
     const cleared = await connections.updateCompanyConnection({
       ...scope,
@@ -1054,6 +1063,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
     const onProduction = await connections.updateCompanyConnection({
       companyId: tenant.companyId,
       publicId: tenant.productionPublicId,
+      adminId,
       companyConnection: { resetOp: Schemas.TEST_HOST_RESET_OP },
     });
     expect(onProduction).toMatchObject({

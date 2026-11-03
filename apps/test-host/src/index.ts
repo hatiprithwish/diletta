@@ -2,20 +2,23 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import AuthRoutes from "@/routes/AuthRoutes";
 import ControlRoutes from "@/routes/ControlRoutes";
+import ModelStubRoutes from "@/routes/ModelStubRoutes";
 import RecordsRoutes from "@/routes/RecordsRoutes";
 import type AppContext from "@/AppContext";
-import type * as Schemas from "@app/schemas";
+import * as Schemas from "@app/schemas";
 
 export { TestHostWorkspaceDO } from "@/durable-objects/TestHostWorkspaceDO";
 
 // DEV_NOTE: The test host (M3-3, docs/runbooks/test-host.md). Identity (/.well-known/jwks.json, /auth/tokens), the
-// record API (/v1, the connection's base_url) and fault control (/control). Every error answers { error } as JSON with
-// a fixed reason; nothing is logged beyond Workers' invocation logs
+// record API (/v1, the connection's base_url), fault control (/control) and the stub model (M6-5, answers in the
+// provider's own shapes, errors included). Every other error answers { error } as JSON with a fixed reason; nothing is
+// logged beyond Workers' invocation logs.
 const app = new Hono<AppContext>();
 
 app.route("/", AuthRoutes);
 app.route("/v1", RecordsRoutes);
 app.route("/control", ControlRoutes);
+app.route(Schemas.TEST_HOST_MODEL_STUB_PATH, ModelStubRoutes);
 
 app.notFound((c) => c.json({ error: "Not found" } satisfies Schemas.TestHostErrorBody, 404));
 

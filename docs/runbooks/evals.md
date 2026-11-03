@@ -94,7 +94,7 @@ What the backend answers:
    pnpm --filter backend exec wrangler secret put EVAL_JWT_PUBLIC_JWKS --env production
    ```
 
-   Locally, put it in `apps/backend/.dev.vars`. Production needs it too: eRegister's staging connection lives in the production database (M7-1).
+   Locally, put it in `apps/backend/.dev.vars`. Production needs it too once a company's staging connection lives in the production database (eRegister's does at M7-6; for now it is on Diletta staging, `docs/runbooks/eregister.md`).
 
 3. Keep the private JWK in the team vault. The harness reads it from `EVAL_JWT_PRIVATE_KEY`. It is never committed.
 
@@ -105,22 +105,23 @@ What the backend answers:
 `company_connections.reset_op` is one host call with no placeholders (`ZConnectionResetOp`: `{method, path, query?, bodyMap?}`, the path relative to the connection's `base_url`). Only a staging connection can have one. The harness sends it once after the run, as the host test user. A connection without one is fine when every case is state-independent; the reset then answers `isReset: false`.
 
 - **Test host:** the seed sets it to POST `/_reset` (`Schemas.TEST_HOST_RESET_OP`).
-- **eRegister:** set with their staging reset API (M7-1), through `CompanyConnectionsRepo.updateCompanyConnection` (`resetOp`; `null` clears it).
+- **eRegister:** none yet (M7-1): eRegister has no reset API, so its cases are state-independent only. When it has one, set it with `PATCH /operator/companies/:companyPublicId/connections/:publicId` (`resetOp`; `null` clears it). See `docs/runbooks/eregister.md`.
 
 ## Running it
 
 Settings come from the environment:
 
-| Variable                 | What                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------- |
-| `DILETTA_API_URL`        | The backend, e.g. `https://diletta-worker-staging.hatiprithwish.workers.dev` |
-| `EVAL_JWT_PRIVATE_KEY`   | The private JWK from `keygen` (vault)                                        |
-| `DILETTA_COMPANY_ID`     | The company's public id                                                      |
-| `DILETTA_CONNECTION_ID`  | Its staging connection's public id                                           |
-| `EVAL_HOST_USER`         | The host test user                                                           |
-| `EVAL_HOST_KIND`         | How to sign in to the host: `test_host` (default)                            |
-| `TEST_HOST_ISSUER`       | `test_host` only: the test host, e.g. `Schemas.TEST_HOST_STAGING_ISSUER`     |
-| `TEST_HOST_ADMIN_SECRET` | `test_host` only: the test host's admin secret (vault)                       |
+| Variable                 | What                                                                                    |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `DILETTA_API_URL`        | The backend, e.g. `https://diletta-worker-staging.hatiprithwish.workers.dev`            |
+| `EVAL_JWT_PRIVATE_KEY`   | The private JWK from `keygen` (vault)                                                   |
+| `DILETTA_COMPANY_ID`     | The company's public id                                                                 |
+| `DILETTA_CONNECTION_ID`  | Its staging connection's public id                                                      |
+| `EVAL_HOST_USER`         | The host test user                                                                      |
+| `EVAL_HOST_KIND`         | How to sign in to the host: `test_host` (default) or `eregister`                        |
+| `TEST_HOST_ISSUER`       | `test_host` only: the test host, e.g. `Schemas.TEST_HOST_STAGING_ISSUER`                |
+| `TEST_HOST_ADMIN_SECRET` | `test_host` only: the test host's admin secret (vault)                                  |
+| `EREGISTER_*`            | `eregister` only: the Firebase web API key and test user (`docs/runbooks/eregister.md`) |
 
 ```bash
 pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project evals --env-file evals/.env python -m diletta_evals run
@@ -133,7 +134,9 @@ pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project eva
 
 **On the test host:** seed the test company first (`docs/runbooks/test-host.md`). Its config needs the test host's tools pinned and the company a model key. Each run signs in to a fresh workspace and loads the seed records into it before the first attempt.
 
-**On another host:** add a login for it under `evals/diletta_evals/hosts/` (a `HostLogin`: `prepare()` before the run, `host_token()` per call) and an `EVAL_HOST_KIND` value. eRegister's arrives with its connection (M7-1).
+**On eRegister:** `EVAL_HOST_KIND=eregister` signs the staging test user in through Firebase (`hosts/eregister.py`, M7-1). Setup: `docs/runbooks/eregister.md`.
+
+**On another host:** add a login for it under `evals/diletta_evals/hosts/` (a `HostLogin`: `prepare()` before the run, `host_token()` per call) and an `EVAL_HOST_KIND` value.
 
 ## Changing the API
 

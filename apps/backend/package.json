@@ -11,6 +11,7 @@
     "db:generate:sql": "drizzle-kit generate --custom --name",
     "db:migrate": "drizzle-kit migrate",
     "db:rollback": "node src/db/rollback.ts",
+    "eregister:tools": "tsx src/db/seedEregisterTools.ts",
     "test": "pnpm typecheck && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -29,6 +30,7 @@
     "@logtape/hono": "^2.3.2",
     "@logtape/logtape": "^2.3.2",
     "@logtape/redaction": "^2.3.2",
+    "@sentry/cloudflare": "10.76.2",
     "agents": "0.24.0",
     "ai": "7.0.126",
     "drizzle-orm": "1.0.0-rc.4",
@@ -43,6 +45,7 @@
     "@types/node": "^25.9.5",
     "@types/pg": "^8.15.6",
     "drizzle-kit": "1.0.0-rc.4",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.3",
     "vitest": "^4.1.11",
     "wrangler": "^4.127.0"

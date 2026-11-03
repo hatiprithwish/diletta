@@ -21,12 +21,22 @@ class HostKind(StrEnum):
     """How the harness gets the host test user's bearer token (one login per host app)."""
 
     TEST_HOST = "test_host"
+    EREGISTER = "eregister"
 
 
 @dataclass(frozen=True)
 class TestHostSettings:
     issuer: str
     admin_secret: str
+
+
+@dataclass(frozen=True)
+class ERegisterSettings:
+    # The Firebase web API key of eRegister's staging project (public in their web app, kept in the vault with the rest)
+    firebase_api_key: str
+    # The staging test user's email and password (vault); EVAL_HOST_USER is its Firebase uid
+    email: str
+    password: str
 
 
 @dataclass(frozen=True)
@@ -43,6 +53,7 @@ class HarnessConfig:
     host_user: str
     host_kind: HostKind
     test_host: TestHostSettings | None
+    eregister: ERegisterSettings | None = None
 
 
 def _required(name: str) -> str:
@@ -52,7 +63,12 @@ def _required(name: str) -> str:
     return value
 
 
-def load_config() -> HarnessConfig:
+def required_setting(name: str) -> str:
+    return _required(name)
+
+
+def load_private_jwk() -> dict[str, object]:
+    """EVAL_JWT_PRIVATE_KEY, checked: a private P-256 JWK with a kid (the worker verifies ES256 only)."""
     try:
         private_jwk = json.loads(_required("EVAL_JWT_PRIVATE_KEY"))
     except json.JSONDecodeError as error:
@@ -66,6 +82,11 @@ def load_config() -> HarnessConfig:
         raise ConfigError("EVAL_JWT_PRIVATE_KEY is not an EC private JWK") from error
     if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
         raise ConfigError("EVAL_JWT_PRIVATE_KEY must be a P-256 (ES256) private key")
+    return private_jwk
+
+
+def load_config() -> HarnessConfig:
+    private_jwk = load_private_jwk()
 
     raw_kind = os.environ.get("EVAL_HOST_KIND", HostKind.TEST_HOST.value).strip()
     try:
@@ -80,6 +101,13 @@ def load_config() -> HarnessConfig:
             issuer=_required("TEST_HOST_ISSUER").rstrip("/"),
             admin_secret=_required("TEST_HOST_ADMIN_SECRET"),
         )
+    eregister = None
+    if host_kind is HostKind.EREGISTER:
+        eregister = ERegisterSettings(
+            firebase_api_key=_required("EREGISTER_FIREBASE_API_KEY"),
+            email=_required("EREGISTER_TEST_USER_EMAIL"),
+            password=_required("EREGISTER_TEST_USER_PASSWORD"),
+        )
 
     return HarnessConfig(
         api_url=_required("DILETTA_API_URL").rstrip("/"),
@@ -89,4 +117,5 @@ def load_config() -> HarnessConfig:
         host_user=_required("EVAL_HOST_USER"),
         host_kind=host_kind,
         test_host=test_host,
+        eregister=eregister,
     )

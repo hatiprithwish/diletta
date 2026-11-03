@@ -35,6 +35,11 @@ export const BUDGET_RATE_LIMIT_MESSAGE =
 // period. A string like the numeric(12,6) column, so the same parse applies to both.
 export const DEFAULT_SPENDING_BUDGET_USD = "10.000000";
 
+// DEV_NOTE: The share of the company's budget whose use alerts our team (M6-6), once per company per billing period
+// each. Our team only: admin-facing budget notifications aren't in v1.
+export const BUDGET_ALERT_THRESHOLD_PERCENTS = [50, 80, 100] as const;
+export type BudgetAlertThresholdPercent = (typeof BUDGET_ALERT_THRESHOLD_PERCENTS)[number];
+
 // DEV_NOTE: Money in BudgetDO is counted in whole micro-dollars (1e-6 USD, the scale of every *_usd column), so sums
 // never drift the way float dollars would. numeric(12,6) tops out near 1e12 micros, well inside Number's exact range.
 const MICROS_PER_USD = 1_000_000;

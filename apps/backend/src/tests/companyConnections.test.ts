@@ -1,11 +1,11 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { companies, companyConnections } from "@/db/tables";
+import { activityLog, admins, companies, companyConnections, eventOutbox } from "@/db/tables";
 import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -28,6 +28,9 @@ const ownerDatabaseUrl =
   "DATABASE_URL" in env && typeof env.DATABASE_URL === "string" ? env.DATABASE_URL : "";
 let companyA = "";
 let companyB = "";
+// DEV_NOTE: The operator (admins row with no company) every write is made by: its internal id is the audit actor
+const operatorClerkUserId = `user_op_${crypto.randomUUID()}`;
+let operatorId = "";
 
 async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   const pool = new Pool({ connectionString: ownerDatabaseUrl, max: 1 });
@@ -63,13 +66,21 @@ beforeAll(async () => {
       .returning({ id: companies.id });
     companyA = created[0]!.id;
     companyB = created[1]!.id;
+    const [operator] = await ownerDb
+      .insert(admins)
+      .values({ clerkUserId: operatorClerkUserId, companyId: null })
+      .returning({ id: admins.id });
+    operatorId = operator!.id;
   });
 });
 
 afterAll(async () => {
   const companyIds = [companyA, companyB].filter(Boolean);
-  if (companyIds.length === 0) return;
   await withOwnerDb(async (ownerDb) => {
+    await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operatorClerkUserId]));
+    if (companyIds.length === 0) return;
+    await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
+    await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb
       .delete(companyConnections)
       .where(inArray(companyConnections.companyId, companyIds));
@@ -83,6 +94,7 @@ describe("CompanyConnectionsRepo", () => {
 
     const created = await repo.createCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       companyConnection: connectionInput(),
     });
     expect(created.isSuccess).toBe(true);
@@ -124,6 +136,7 @@ describe("CompanyConnectionsRepo", () => {
     // Partial update: omitted fields are left unchanged
     const disabled = await repo.updateCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       publicId,
       companyConnection: {
         status: Schemas.CompanyConnectionStatusIntEnum.Disabled,
@@ -141,10 +154,84 @@ describe("CompanyConnectionsRepo", () => {
     );
   });
 
+  it("records one audit row per kind of change, as the operator, and none for a save that changes nothing", async () => {
+    const repo = new CompanyConnectionsRepo(env);
+    const created = await repo.createCompanyConnection({
+      companyId: companyB,
+      adminId: operatorId,
+      companyConnection: connectionInput(),
+    });
+    expect(created.isSuccess).toBe(true);
+    expect(created.outboxIds).toHaveLength(1);
+    const publicId = created.companyConnection?.publicId ?? "";
+
+    const same = await repo.updateCompanyConnection({
+      companyId: companyB,
+      publicId,
+      adminId: operatorId,
+      companyConnection: {
+        baseUrl: "https://host.example.com/api",
+        authConfig: {},
+        allowedOrigins: ["https://app.example.com"],
+        status: Schemas.CompanyConnectionStatusIntEnum.Active,
+      },
+    });
+    expect(same).toMatchObject({ isSuccess: true, outboxIds: [] });
+
+    const changed = await repo.updateCompanyConnection({
+      companyId: companyB,
+      publicId,
+      adminId: operatorId,
+      companyConnection: {
+        baseUrl: "https://host.example.com/api/v2",
+        allowedOrigins: ["https://app.example.com", "https://admin.example.com"],
+        status: Schemas.CompanyConnectionStatusIntEnum.Disabled,
+      },
+    });
+    expect(changed.isSuccess).toBe(true);
+    expect(changed.outboxIds).toHaveLength(3);
+
+    let rows: { actorType: number; actorId: string | null; entityAction: string | null }[] = [];
+    await withOwnerDb(async (ownerDb) => {
+      const [connection] = await ownerDb
+        .select({ id: companyConnections.id })
+        .from(companyConnections)
+        .where(eq(companyConnections.publicId, publicId));
+      const conditions = [
+        eq(activityLog.companyId, companyB),
+        eq(activityLog.entityType, Schemas.AuditEntityTypeEnum.CompanyConnection),
+        eq(activityLog.entityId, connection!.id),
+      ];
+      rows = await ownerDb
+        .select({
+          actorType: activityLog.actorType,
+          actorId: activityLog.actorId,
+          entityAction: activityLog.entityAction,
+        })
+        .from(activityLog)
+        .where(and(...conditions))
+        .orderBy(asc(activityLog.id));
+    });
+    expect(rows.map((row) => row.entityAction)).toEqual([
+      Schemas.AuditEntityActionEnum.Created,
+      Schemas.AuditEntityActionEnum.Updated,
+      Schemas.AuditEntityActionEnum.OriginsChanged,
+      Schemas.AuditEntityActionEnum.Disabled,
+    ]);
+    expect(
+      rows.every(
+        (row) =>
+          row.actorType === Schemas.ActivityLogActorTypeIntEnum.Operator &&
+          row.actorId === operatorId,
+      ),
+    ).toBe(true);
+  });
+
   it("never reads or writes another company's connection", async () => {
     const repo = new CompanyConnectionsRepo(env);
     const created = await repo.createCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       companyConnection: connectionInput(),
     });
     const publicId = created.companyConnection?.publicId ?? "";
@@ -159,6 +246,7 @@ describe("CompanyConnectionsRepo", () => {
 
     const updated = await repo.updateCompanyConnection({
       companyId: companyB,
+      adminId: operatorId,
       publicId,
       companyConnection: { baseUrl: "https://attacker.example.com" },
     });
@@ -173,32 +261,38 @@ describe("CompanyConnectionsRepo", () => {
     const taken = connectionInput();
     const first = await repo.createCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       companyConnection: taken,
     });
     expect(first.isSuccess).toBe(true);
 
     const clash = await repo.createCompanyConnection({
       companyId: companyB,
+      adminId: operatorId,
       companyConnection: connectionInput({ jwtIssuer: taken.jwtIssuer }),
     });
     expect(clash).toEqual({
       isSuccess: false,
       message: "Issuer already in use",
+      failure: Schemas.CompanyConnectionFailureEnum.IssuerTaken,
       companyConnection: undefined,
     });
 
     const other = await repo.createCompanyConnection({
       companyId: companyB,
+      adminId: operatorId,
       companyConnection: connectionInput(),
     });
     const updateClash = await repo.updateCompanyConnection({
       companyId: companyB,
+      adminId: operatorId,
       publicId: other.companyConnection?.publicId ?? "",
       companyConnection: { jwtIssuer: taken.jwtIssuer },
     });
     expect(updateClash).toEqual({
       isSuccess: false,
       message: "Issuer already in use",
+      failure: Schemas.CompanyConnectionFailureEnum.IssuerTaken,
       companyConnection: undefined,
     });
   });
@@ -208,6 +302,7 @@ describe("CompanyConnectionsRepo", () => {
     // DEV_NOTE: identity ids start at 1, so 0 never references a company
     const result = await repo.createCompanyConnection({
       companyId: "0",
+      adminId: operatorId,
       companyConnection: connectionInput(),
     });
     expect(result).toEqual({
@@ -263,20 +358,24 @@ describe("CompanyConnectionsRepo", () => {
     const repo = new CompanyConnectionsRepo(env);
     const created = await repo.createCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       companyConnection: connectionInput(),
     });
     const publicId = created.companyConnection?.publicId ?? "";
 
     const refused = await repo.updateCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       publicId,
       companyConnection: { authConfig: { header: "X-Token" } },
     });
     expect(refused.isSuccess).toBe(false);
     expect(refused.message).toContain("Invalid auth config");
+    expect(refused.failure).toBe(Schemas.CompanyConnectionFailureEnum.Invalid);
 
     const accepted = await repo.updateCompanyConnection({
       companyId: companyA,
+      adminId: operatorId,
       publicId,
       companyConnection: { authConfig: {} },
     });
@@ -285,6 +384,7 @@ describe("CompanyConnectionsRepo", () => {
 
     const missing = await repo.updateCompanyConnection({
       companyId: companyB,
+      adminId: operatorId,
       publicId,
       companyConnection: { authConfig: {} },
     });

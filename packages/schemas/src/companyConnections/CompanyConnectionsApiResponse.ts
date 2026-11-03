@@ -1,8 +1,12 @@
-import type { CompanyConnectionWithStatus } from "./CompanyConnectionsCommon";
+import type {
+  CompanyConnectionFailureEnum,
+  CompanyConnectionWithStatus,
+} from "./CompanyConnectionsCommon";
 import type { ApiResponse } from "../common";
 
 export interface CreateCompanyConnectionApiResponse extends ApiResponse {
   companyConnection?: CompanyConnectionWithStatus;
+  failure?: CompanyConnectionFailureEnum;
 }
 
 export interface GetCompanyConnectionApiResponse extends ApiResponse {
@@ -15,4 +19,5 @@ export interface GetCompanyConnectionsApiResponse extends ApiResponse {
 
 export interface UpdateCompanyConnectionApiResponse extends ApiResponse {
   companyConnection?: CompanyConnectionWithStatus;
+  failure?: CompanyConnectionFailureEnum;
 }

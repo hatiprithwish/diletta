@@ -28,6 +28,15 @@ export default class Constants {
   static readonly OUTBOX_MAX_ATTEMPTS = 5;
   static readonly OUTBOX_PUBLISHED_RETENTION_DAYS = 3;
   static readonly OUTBOX_LAST_ERROR_MAX_LENGTH = 500;
+  // DEV_NOTE: Outbox health (M6-6): checked every tick right after the sweep, which has just published every Pending
+  // row older than OUTBOX_SWEEP_MIN_AGE_MS it could. A Pending row still older than this means the sweep couldn't
+  // send it (a Queue outage, a DB failure, more rows than OUTBOX_SWEEP_MAX_BATCHES) and alerts; so does any Failed row.
+  static readonly OUTBOX_LAG_ALERT_MS = 5 * 60_000;
+
+  // DEV_NOTE: Sentry (M6-6, docs/runbooks/observability.md): how long a log record's send may hold the request open
+  // (waitUntil), and how deep its metadata is kept
+  static readonly SENTRY_FLUSH_TIMEOUT_MS = 2_000;
+  static readonly SENTRY_NORMALIZE_DEPTH = 6;
 
   // DEV_NOTE: activity_log partition maintenance (M1-9): the current UTC month plus this many after it must always
   // have a partition. The SQL function caps creation at 12 months ahead.

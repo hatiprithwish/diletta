@@ -33,3 +33,7 @@ MASTER_KEY_V1=          # local-only
 # AI Gateway token for the model router (cf-aig-authorization), staging gateway.
 # MUST equal the staging Secrets Store secret `diletta-aig-token-staging` — see docs/runbooks/ai-gateway.md.
 AI_GATEWAY_TOKEN=       # local-only
+
+# Sentry DSN for the backend (M6-6): set per env with `wrangler secret put SENTRY_DSN --env staging|production`.
+# Leave empty locally: empty = Sentry off (local dev and tests never send). See docs/runbooks/observability.md.
+SENTRY_DSN=             # runtime-only

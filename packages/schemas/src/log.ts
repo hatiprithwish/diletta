@@ -24,6 +24,8 @@ export enum LogCategory {
   Insights = "Insights",
   // DEV_NOTE: The eval harness's /eval/* API (M5-2)
   Eval = "Eval",
+  // DEV_NOTE: The load test's /eval/load/* API (M6-5)
+  LoadTest = "LoadTest",
 }
 
 export enum LogAction {
@@ -154,6 +156,9 @@ export enum LogAction {
   ReserveBudget = "ReserveBudget",
   SettleBudget = "SettleBudget",
   ExpireBudgetReservation = "ExpireBudgetReservation",
+  // Budget alerts (M6-6)
+  ReachBudgetThreshold = "ReachBudgetThreshold",
+  ExhaustCompanyBudget = "ExhaustCompanyBudget",
 
   // Tool definitions
   CreateToolDefinition = "CreateToolDefinition",
@@ -330,6 +335,9 @@ export enum LogAction {
   SweepPendingEvents = "SweepPendingEvents",
   PurgePublishedEvents = "PurgePublishedEvents",
   ConsumeEvent = "ConsumeEvent",
+  // Outbox health (M6-6)
+  GetEventOutboxHealth = "GetEventOutboxHealth",
+  CheckEventOutboxHealth = "CheckEventOutboxHealth",
 
   // Activity log partitions
   CreateActivityLogPartition = "CreateActivityLogPartition",
@@ -457,6 +465,9 @@ export enum LogAction {
   // Cron
   DispatchCron = "DispatchCron",
 
+  // Observability (M6-6): an error no handler caught (Hono onError)
+  HandleUncaughtError = "HandleUncaughtError",
+
   // Eval harness (M5-2)
   GetRunnableEvalCases = "GetRunnableEvalCases",
   CreateEvalRun = "CreateEvalRun",
@@ -503,4 +514,15 @@ export enum LogAction {
   // Prompt injection (M6-4)
   DetectPromptInjection = "DetectPromptInjection",
   RecordPromptInjection = "RecordPromptInjection",
+  // Load test (M6-5)
+  AuthorizeLoadTest = "AuthorizeLoadTest",
+  StartLoadWindow = "StartLoadWindow",
+  GetLoadSummary = "GetLoadSummary",
+  ReserveLoadBudget = "ReserveLoadBudget",
+  ReleaseLoadBudget = "ReleaseLoadBudget",
+  GetBudgetSnapshot = "GetBudgetSnapshot",
+  GetBudgetTimings = "GetBudgetTimings",
+  ResetBudgetTimings = "ResetBudgetTimings",
+  GetLoadModelCallStats = "GetLoadModelCallStats",
+  GetLoadOutboxStats = "GetLoadOutboxStats",
 }

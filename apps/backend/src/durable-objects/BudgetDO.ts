@@ -8,6 +8,9 @@ import * as Schemas from "@app/schemas";
 const LEDGER_KEY = "ledger";
 const RESERVATION_PREFIX = "reservation:";
 const USER_PREFIX = "user:";
+// DEV_NOTE: The budget alerts already sent this period (M6-6): `alerted:<periodKey>:<50|80|100|exhausted>`
+const ALERT_PREFIX = "alerted:";
+const EXHAUSTED_ALERT = "exhausted";
 
 // DEV_NOTE: BudgetDO (M2-4): one per company, named by companies.id (internal; reached only from the worker and the
 // Conversation DO through BudgetDO.forCompany, never routed publicly). The live counters behind every model call:
@@ -23,9 +26,21 @@ const USER_PREFIX = "user:";
 // concurrent calls can't both take the last of the budget. Fails closed: no ledger for the current period (Neon
 // unreachable) refuses with Unavailable. A failed load isn't retried for BUDGET_LOAD_RETRY_MS (a stale budget is kept
 // meanwhile), so an outage doesn't add a Neon timeout to every call.
+//
+// Timings (M6-5, the load test): each admitTurn / reserve / settle is timed from its start to its answer, and the last
+// BUDGET_TIMING_MAX_SAMPLES of each are kept in memory (getTimings, resetTimings; lost when the DO is evicted, which
+// getTimings shows as a later timingsSince). Workers' clock moves only at I/O, so a call that never waits (a ledger
+// already loaded) counts 0 ms and one that waits for Neon counts the wait: the time that varies under load.
+//
+// Alerts (M6-6, our team only): each ledger write checks which of BUDGET_ALERT_THRESHOLD_PERCENTS the period's settled
+// spend has reached, and a company-budget refusal counts as used up; each logs one error per company per period
+// (→ Sentry → the team channel), remembered in kv so an evicted DO doesn't send it again. A new period's ledger
+// drops the old period's marks.
 export class BudgetDO extends DurableObject<Env> {
   private loading: Promise<void> | null = null;
   private lastFailedLoadAt = 0;
+  private samples: Record<Schemas.BudgetTimedOperationEnum, number[]> = BudgetDO.emptySamples();
+  private timingsSince = Date.now();
 
   // DEV_NOTE: The only way to reach a company's BudgetDO, so the naming rule lives in one place
   static forCompany(env: Env, companyId: string): DurableObjectStub<BudgetDO> {
@@ -33,6 +48,105 @@ export class BudgetDO extends DurableObject<Env> {
   }
 
   async admitTurn(raw: Schemas.AdmitBudgetTurnRequest): Promise<Schemas.BudgetAdmissionResponse> {
+    return await this.timed(Schemas.BudgetTimedOperationEnum.AdmitTurn, () =>
+      this.runAdmitTurn(raw),
+    );
+  }
+
+  async reserve(raw: Schemas.ReserveBudgetRequest): Promise<Schemas.BudgetReservationResponse> {
+    return await this.timed(Schemas.BudgetTimedOperationEnum.Reserve, () => this.runReserve(raw));
+  }
+
+  async settle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
+    return await this.timed(Schemas.BudgetTimedOperationEnum.Settle, () => this.runSettle(raw));
+  }
+
+  // DEV_NOTE: The ledger as it stands, for the load test (M6-5): the same opening as a reserve (loaded when due,
+  // expired holds charged first), then nothing written
+  async getSnapshot(
+    raw: Schemas.GetBudgetSnapshotRequest,
+  ): Promise<Schemas.BudgetSnapshotResponse> {
+    const parsed = Schemas.ZGetBudgetSnapshotRequest.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        isSuccess: false,
+        message: this.reject(Schemas.LogAction.GetBudgetSnapshot, raw).message,
+      };
+    }
+    const opened = await this.openLedger(parsed.data.companyId);
+    if (!opened) return { isSuccess: false, message: "No usable ledger" };
+    const { ledger, reservations } = opened;
+    return {
+      isSuccess: true,
+      message: "Budget snapshot read",
+      snapshot: {
+        spentMicros: ledger.spentMicros,
+        budgetMicros: ledger.budgetMicros,
+        heldMicros: reservations.reduce((sum, reservation) => sum + reservation.amountMicros, 0),
+        openReservationCount: reservations.length,
+      },
+    };
+  }
+
+  getTimings(): Schemas.BudgetTimingsResponse {
+    return {
+      isSuccess: true,
+      message: "Budget timings read",
+      timingsSince: this.timingsSince,
+      timings: {
+        admitTurn: Schemas.summarizeDurations(
+          this.samples[Schemas.BudgetTimedOperationEnum.AdmitTurn].slice(
+            -Schemas.BUDGET_TIMING_MAX_SAMPLES,
+          ),
+        ),
+        reserve: Schemas.summarizeDurations(
+          this.samples[Schemas.BudgetTimedOperationEnum.Reserve].slice(
+            -Schemas.BUDGET_TIMING_MAX_SAMPLES,
+          ),
+        ),
+        settle: Schemas.summarizeDurations(
+          this.samples[Schemas.BudgetTimedOperationEnum.Settle].slice(
+            -Schemas.BUDGET_TIMING_MAX_SAMPLES,
+          ),
+        ),
+      },
+    };
+  }
+
+  resetTimings(): Schemas.ApiResponse {
+    this.samples = BudgetDO.emptySamples();
+    this.timingsSince = Date.now();
+    return { isSuccess: true, message: "Budget timings reset" };
+  }
+
+  private static emptySamples(): Record<Schemas.BudgetTimedOperationEnum, number[]> {
+    return {
+      [Schemas.BudgetTimedOperationEnum.AdmitTurn]: [],
+      [Schemas.BudgetTimedOperationEnum.Reserve]: [],
+      [Schemas.BudgetTimedOperationEnum.Settle]: [],
+    };
+  }
+
+  private async timed<T>(
+    operation: Schemas.BudgetTimedOperationEnum,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now();
+    try {
+      return await run();
+    } finally {
+      const samples = this.samples[operation];
+      samples.push(Date.now() - startedAt);
+      // DEV_NOTE: Trimmed in chunks, so a busy DO doesn't shift the array on every call
+      if (samples.length >= Schemas.BUDGET_TIMING_MAX_SAMPLES * 2) {
+        samples.splice(0, samples.length - Schemas.BUDGET_TIMING_MAX_SAMPLES);
+      }
+    }
+  }
+
+  private async runAdmitTurn(
+    raw: Schemas.AdmitBudgetTurnRequest,
+  ): Promise<Schemas.BudgetAdmissionResponse> {
     const action = Schemas.LogAction.AdmitBudgetTurn;
     const parsed = Schemas.ZAdmitBudgetTurnRequest.safeParse(raw);
     if (!parsed.success) return this.reject(action, raw);
@@ -63,7 +177,9 @@ export class BudgetDO extends DurableObject<Env> {
     return { isSuccess: true, message: "Turn admitted" };
   }
 
-  async reserve(raw: Schemas.ReserveBudgetRequest): Promise<Schemas.BudgetReservationResponse> {
+  private async runReserve(
+    raw: Schemas.ReserveBudgetRequest,
+  ): Promise<Schemas.BudgetReservationResponse> {
     const action = Schemas.LogAction.ReserveBudget;
     const parsed = Schemas.ZReserveBudgetRequest.safeParse(raw);
     if (!parsed.success) return this.reject(action, raw);
@@ -111,7 +227,7 @@ export class BudgetDO extends DurableObject<Env> {
 
   // DEV_NOTE: No Neon read: a settle only moves a hold into spend. An unknown id (already expired and counted, or
   // settled twice) is a no-op success.
-  async settle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
+  private async runSettle(raw: Schemas.SettleBudgetRequest): Promise<Schemas.ApiResponse> {
     const parsed = Schemas.ZSettleBudgetRequest.safeParse(raw);
     if (!parsed.success) return this.reject(Schemas.LogAction.SettleBudget, raw);
     const request = parsed.data;
@@ -215,6 +331,7 @@ export class BudgetDO extends DurableObject<Env> {
         spentMicros: Schemas.usdToMicros(seed.spentUsd),
       });
       this.pruneUsers(opened.dayKey);
+      this.pruneAlerts(opened.periodKey);
       this.putLedger(opened);
       return;
     }
@@ -320,6 +437,20 @@ export class BudgetDO extends DurableObject<Env> {
     } else {
       AppLogger.warn(entry);
     }
+    if (refusal === Schemas.BudgetRefusalEnum.CompanyBudget) {
+      const ledger = this.getLedger();
+      this.alertOnce(ledger?.periodKey ?? Schemas.budgetPeriodKey(Date.now()), EXHAUSTED_ALERT, {
+        category: Schemas.LogCategory.Budget,
+        action: Schemas.LogAction.ExhaustCompanyBudget,
+        message: "Company budget used up; model calls refused",
+        metadata: {
+          companyId: request.companyId,
+          periodKey: ledger?.periodKey ?? null,
+          spentUsd: ledger ? Schemas.microsToUsd(ledger.spentMicros) : null,
+          budgetUsd: ledger ? Schemas.microsToUsd(ledger.budgetMicros) : null,
+        },
+      });
+    }
     return { isSuccess: false, message: "Budget refused", refusal };
   }
 
@@ -330,6 +461,45 @@ export class BudgetDO extends DurableObject<Env> {
 
   private putLedger(ledger: Schemas.BudgetLedger): void {
     this.ctx.storage.kv.put(LEDGER_KEY, ledger);
+    this.alertReachedThresholds(ledger);
+  }
+
+  private alertReachedThresholds(ledger: Schemas.BudgetLedger): void {
+    for (const percent of BudgetLedgerProvider.reachedAlertThresholds(ledger)) {
+      this.alertOnce(ledger.periodKey, String(percent), {
+        category: Schemas.LogCategory.Budget,
+        action: Schemas.LogAction.ReachBudgetThreshold,
+        message: `Company budget ${percent}% used`,
+        metadata: {
+          companyId: ledger.companyId,
+          periodKey: ledger.periodKey,
+          thresholdPercent: percent,
+          spentUsd: Schemas.microsToUsd(ledger.spentMicros),
+          budgetUsd: Schemas.microsToUsd(ledger.budgetMicros),
+        },
+      });
+    }
+  }
+
+  // DEV_NOTE: Logs the alert unless this period already has it. Marked before logging, with no await between, so two
+  // calls in flight can't both send it.
+  private alertOnce(
+    periodKey: string,
+    alert: string,
+    entry: Parameters<typeof AppLogger.error>[0],
+  ): void {
+    const key = `${ALERT_PREFIX}${periodKey}:${alert}`;
+    if (this.ctx.storage.kv.get(key) !== undefined) return;
+    this.ctx.storage.kv.put(key, Date.now());
+    AppLogger.error(entry);
+  }
+
+  private pruneAlerts(periodKey: string): void {
+    for (const [key] of this.ctx.storage.kv.list({ prefix: ALERT_PREFIX })) {
+      if (!key.startsWith(`${ALERT_PREFIX}${periodKey}:`)) {
+        this.ctx.storage.kv.delete(key);
+      }
+    }
   }
 
   private getUser(chatbotUserId: string): Schemas.BudgetUserCounters | undefined {

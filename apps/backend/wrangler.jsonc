@@ -19,6 +19,14 @@
     // DEV_NOTE: The nightly platform suite's company (M5-5, our test company's public id): the daily cron alerts when it
     // has no Nightly run that finished lately. Empty = nothing to check (local and production).
     "NIGHTLY_SUITE_COMPANY_ID": "",
+    // DEV_NOTE: The load test (M6-5, docs/runbooks/load.md). LOAD_TEST_COMPANY_ID: the load test company's public id, the
+    // only company /eval/load/* serves. MODEL_BASE_URL_OVERRIDE: the stub model, used only by a company key that starts
+    // with LOAD_STUB_MODEL_KEY_PREFIX (ADR 0005). Empty = off (local and production).
+    "LOAD_TEST_COMPANY_ID": "",
+    "MODEL_BASE_URL_OVERRIDE": "",
+    // DEV_NOTE: Sentry's environment tag (M6-6, docs/runbooks/observability.md). SENTRY_DSN is a secret per env
+    // (wrangler secret put); empty or unset = Sentry off, as locally and in tests.
+    "SENTRY_ENVIRONMENT": "",
   },
   "observability": {
     "logs": {
@@ -152,6 +160,11 @@
         "AI_GATEWAY_NAME": "diletta-staging",
         // DEV_NOTE: Diletta Test Company (docs/runbooks/nightly-suite.md)
         "NIGHTLY_SUITE_COMPANY_ID": "Ufli6o4w4WCEg5BOOEiOY",
+        // DEV_NOTE: The load test company (M6-5, docs/runbooks/load.md › Set up): its public id, set once it exists.
+        // MODEL_BASE_URL_OVERRIDE = Schemas.TEST_HOST_STAGING_ISSUER + Schemas.TEST_HOST_MODEL_STUB_PATH
+        "LOAD_TEST_COMPANY_ID": "",
+        "MODEL_BASE_URL_OVERRIDE": "https://diletta-test-host-staging.hatiprithwish.workers.dev/model-stub/anthropic/v1",
+        "SENTRY_ENVIRONMENT": "staging",
       },
       "observability": {
         "logs": {
@@ -225,6 +238,9 @@
         "AI_GATEWAY_ACCOUNT_ID": "6faf96669e14e06076115359a41497a0",
         "AI_GATEWAY_NAME": "diletta-production",
         "NIGHTLY_SUITE_COMPANY_ID": "",
+        "LOAD_TEST_COMPANY_ID": "",
+        "MODEL_BASE_URL_OVERRIDE": "",
+        "SENTRY_ENVIRONMENT": "production",
       },
       "observability": {
         "logs": {

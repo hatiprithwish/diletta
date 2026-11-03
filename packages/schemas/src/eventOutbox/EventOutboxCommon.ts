@@ -57,5 +57,8 @@ export const ZEventOutboxMessage = z.object({
   activityLogId: z.string().min(1),
   eventType: z.string().min(1),
   dedupeKey: z.string().min(1),
+  // DEV_NOTE: The outbox row's created_at in epoch ms, for the consumer's lag log (M6-6). Optional: a message sent
+  // before it existed still parses.
+  createdAtMs: z.number().int().optional(),
 });
 export type EventOutboxMessage = z.infer<typeof ZEventOutboxMessage>;

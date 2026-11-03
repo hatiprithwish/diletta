@@ -53,6 +53,8 @@ export default class CompanyConnectionsDAL {
           jwtIssuer: params.jwtIssuer,
           allowedOrigins: params.allowedOrigins,
           resetOp: params.resetOp,
+          createdBy: params.createdBy,
+          updatedBy: params.createdBy,
         })
         .returning();
 
@@ -60,9 +62,11 @@ export default class CompanyConnectionsDAL {
       response.message = "Company connection created successfully";
       response.companyConnection = companyConnectionResponse;
     } catch (error) {
-      const message = Utility.isUniqueViolation(error, JWT_ISSUER_INDEX)
+      const isIssuerTaken = Utility.isUniqueViolation(error, JWT_ISSUER_INDEX);
+      const message = isIssuerTaken
         ? "Issuer already in use"
         : "Unknown error in creating company connection";
+      if (isIssuerTaken) response.isIssuerTaken = true;
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateCompanyConnection,
@@ -218,6 +222,7 @@ export default class CompanyConnectionsDAL {
           status: params.status ?? undefined,
           // DEV_NOTE: undefined = unchanged, null = cleared
           resetOp: params.resetOp,
+          updatedBy: params.updatedBy,
           updatedAt: now,
         })
         .where(and(...conditions))
@@ -232,6 +237,7 @@ export default class CompanyConnectionsDAL {
           metadata: params,
         });
         response.message = message;
+        response.isNotFound = true;
         return response;
       }
 
@@ -239,9 +245,11 @@ export default class CompanyConnectionsDAL {
       response.message = "Company connection updated successfully";
       response.companyConnection = companyConnectionResponse;
     } catch (error) {
-      const message = Utility.isUniqueViolation(error, JWT_ISSUER_INDEX)
+      const isIssuerTaken = Utility.isUniqueViolation(error, JWT_ISSUER_INDEX);
+      const message = isIssuerTaken
         ? "Issuer already in use"
         : "Unknown error in updating company connection";
+      if (isIssuerTaken) response.isIssuerTaken = true;
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.UpdateCompanyConnection,
