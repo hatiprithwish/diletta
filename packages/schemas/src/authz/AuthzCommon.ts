@@ -85,6 +85,12 @@ export enum AuthzActionEnum {
 
   // Activity rollups (operator only, on one company named by the route): rebuild a range of days by hand
   ActivityRollupRebuild = "activity_rollup.rebuild",
+
+  // Company connections (operator only, on one company named by the route, M7-1): a host's issuer, base URL, auth and
+  // origins are set up by operators; company admins only edit origins (ConnectionOriginsUpdate)
+  CompanyConnectionRead = "company_connection.read",
+  CompanyConnectionCreate = "company_connection.create",
+  CompanyConnectionUpdate = "company_connection.update",
 }
 
 // DEV_NOTE: Actions only an operator may perform. Everything else is company-scoped: an operator may perform it
@@ -97,6 +103,9 @@ export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.ToolDefinitionUpdate,
   AuthzActionEnum.ToolDefinitionDelete,
   AuthzActionEnum.ActivityRollupRebuild,
+  AuthzActionEnum.CompanyConnectionRead,
+  AuthzActionEnum.CompanyConnectionCreate,
+  AuthzActionEnum.CompanyConnectionUpdate,
 ]);
 
 // DEV_NOTE: The company a resource belongs to (internal companies.id, resolved server-side). null = no single

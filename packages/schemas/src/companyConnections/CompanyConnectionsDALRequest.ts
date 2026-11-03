@@ -3,7 +3,7 @@ import type { CompanyConnection, CompanyConnectionBase } from "./CompanyConnecti
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 export type CreateCompanyConnectionDALRequest = CompanyConnectionBase &
-  Pick<CompanyConnection, "companyId">;
+  Pick<CompanyConnection, "companyId" | "createdBy">;
 
 // Params to find a company connection by its public ID within one company
 export type FindCompanyConnectionDALRequest = Pick<CompanyConnection, "publicId" | "companyId">;
@@ -26,4 +26,4 @@ export type UpdateCompanyConnectionDALRequest = FindCompanyConnectionDALRequest 
   NullableDALFields<
     Pick<CompanyConnectionBase, "baseUrl" | "authConfig" | "jwtIssuer" | "allowedOrigins"> &
       Pick<CompanyConnection, "status">
-  > & { resetOp?: CompanyConnectionBase["resetOp"] };
+  > & { resetOp?: CompanyConnectionBase["resetOp"] } & Pick<CompanyConnection, "updatedBy">;

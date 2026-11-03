@@ -101,6 +101,23 @@ export const COMPANY_CONNECTION_SIGN_IN_LABEL_MAP: Record<CompanyConnectionAuthT
   [CompanyConnectionAuthTypeEnum.HmacSigned]: "Signed requests",
 };
 
+// DEV_NOTE: Why an operator's connection write (M7-1) was refused, and its HTTP status
+// (COMPANY_CONNECTION_FAILURE_HTTP_STATUS_MAP).
+//   IssuerTaken: jwt_issuer is unique across every company (it picks the connection for a widget token).
+//   Invalid: the auth settings don't fit the stored auth type, or a reset op on a connection that isn't Staging.
+export enum CompanyConnectionFailureEnum {
+  IssuerTaken = "IssuerTaken",
+  Invalid = "Invalid",
+}
+
+export const COMPANY_CONNECTION_FAILURE_HTTP_STATUS_MAP: Record<
+  CompanyConnectionFailureEnum,
+  400 | 409
+> = {
+  [CompanyConnectionFailureEnum.IssuerTaken]: 409,
+  [CompanyConnectionFailureEnum.Invalid]: 400,
+};
+
 // DEV_NOTE: auth_type is text: a value this build doesn't know reads as such, never as another method
 export function companyConnectionSignInLabel(authType: string): string {
   return Object.hasOwn(COMPANY_CONNECTION_SIGN_IN_LABEL_MAP, authType)
