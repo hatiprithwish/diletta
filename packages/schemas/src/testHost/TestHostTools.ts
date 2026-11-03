@@ -3,7 +3,7 @@ import {
   ToolDefinitionIdempotencyModeIntEnum,
   ToolDefinitionRiskIntEnum,
   ToolDefinitionSourceIntEnum,
-  type ToolDefinitionBase,
+  type ToolDefinitionSeed,
 } from "../toolDefinitions/ToolDefinitionsCommon";
 import { ToolOpMethodEnum } from "../toolDefinitions/ToolOpsV1";
 import {
@@ -23,7 +23,7 @@ import {
 //   delete_record: destructive, Native. The read-before proves the record exists; undo PUTs the read-before record
 //     back under the same id.
 // Paths are relative to the connection's base_url ({issuer}/v1/). A change here is a new tool version on the next seed.
-export type TestHostToolDefinition = Omit<ToolDefinitionBase, "connectionPublicId">;
+export type TestHostToolDefinition = ToolDefinitionSeed;
 
 const RECORD_ID_PROPERTY = {
   type: "string",

@@ -1,6 +1,6 @@
 # eRegister
 
-eRegister is the first customer host (M7). This runbook covers its connection to Diletta (M7-1).
+eRegister is the first customer host (M7). This runbook covers its connection to Diletta (M7-1) and its tools (M7-2).
 
 For now, eRegister runs only against **Diletta staging**, through its own eRegister env `ai-agent`. That env is a separate backend Worker and a separate frontend Pages project. It reuses the eRegister `test` env's database, KV, R2, queues, sandbox and Firebase project (`digital-registers-test`). The `test` and `feature` envs are not changed. There's no production connection yet; that comes with M7-6.
 
@@ -105,6 +105,68 @@ In `evals/.env`:
 
 The harness signs the test user in through Firebase (`accounts:signInWithPassword`) before the first attempt and again before the hour-long token runs out. It refuses a token whose uid isn't `EVAL_HOST_USER`, because the eval conversation runs as that user. The login error names Firebase's reason (`INVALID_LOGIN_CREDENTIALS`, `USER_DISABLED`…), never the email or password.
 
+## Tools (M7-2)
+
+The chatbot reads and changes eRegister configuration through 47 tools (`Schemas.EREGISTER_TOOL_DEFINITIONS`, `packages/schemas/src/eregister/`). eRegister has no OpenAPI spec, so the tools are written by hand over eRegister's own Zod request schemas. Each tool runs as the signed-in user, with that user's eRegister role.
+
+| Area          | Reads                                                                         | Writes                                                       |
+| ------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Companies     | `eregister_list_companies` (every other tool needs a `companyId` from it)     | none                                                         |
+| Field types   | `eregister_get_field_types` (the list; with `type`, that field's JSON Schema) | none                                                         |
+| Registers     | list, get                                                                     | create, update (whole schema), delete                        |
+| Code blocks   | list, get (with source)                                                       | create, update (source inline), delete                       |
+| Layouts       | list, get (with template text)                                                | create, update (Lexical / HTML template inline), delete      |
+| Actions       | list, get                                                                     | create, update (whole action), delete                        |
+| Reports       | list, get                                                                     | create, update, delete                                       |
+| Report charts | list, get                                                                     | create, update, delete                                       |
+| Dashboards    | list, get                                                                     | create, update, delete                                       |
+| Widgets       | list, get                                                                     | create, update, delete                                       |
+| Buttons       | list, get                                                                     | create, update (name, description, status, priority), delete |
+
+Not tools: running, deploying, triggering, importing, exporting or printing anything.
+
+**What every write does.** Every write needs the user's approval and is read back after the commit:
+
+| Kind   | Read back                      | Undo                                                         | A lost answer                           |
+| ------ | ------------------------------ | ------------------------------------------------------------ | --------------------------------------- |
+| Create | by the new id: the fields sent | deletes it                                                   | not resent: a person checks it          |
+| Update | the fields sent                | puts the read-before values back                             | read back first, then resent or settled |
+| Delete | must answer 404                | **none**: eRegister can't recreate a record under its old id | not resent: a person checks it          |
+
+A field eRegister reshapes when it is read isn't compared. That covers a register's schema and flow, an action's triggers, roles access and a button's execution config. A register update or an action update still puts the whole read-before record back on undo. A Word (Docx) layout's file can only be uploaded in eRegister.
+
+**eRegister side** (`eregister-backend`, the same `ai-agent` env as M7-1):
+
+- `POST`/`PUT …/code-blocks` take `sourceFiles: [{fileName, content}]` in place of `fileInfo`, and the backend writes them to R2. `GET …/code-blocks/:id?includeSource=true` returns them as `data.sourceFiles`, sorted by name.
+- `POST`/`PUT …/layouts` take `content` (Lexical JSON or HTML / Liquid) in place of `fileId`. `GET …/layouts/:id?includeContent=true` returns it as `data.content`.
+- `GET …/:mode/field-types[?type=]` answers the field types and one type's JSON Schema.
+- Register create and update are validated with `ZCreateRegisterReq`.
+- A GET answers 404 only for a record that's gone, deleted registers included, never for a failed read. Without that, a delete couldn't be confirmed.
+
+### Change or add a tool
+
+1. If an eRegister request body changed, regenerate the input schemas from an eregister-backend checkout at the deployed commit:
+
+   ```bash
+   pnpm --filter @app/schemas eregister:schemas --eregister ../wbb/eregister/eregister-backend
+   ```
+
+   The header of `EregisterInputSchemas.ts` names the eRegister commit. Commit it with the change. `EregisterTools.test.ts` fails if a body grows past 20K characters or a tool stops converting.
+
+2. Store the tools on the connection. This runs as the owner role, on the staging branch (`apps/backend/.env`):
+
+   ```bash
+   pnpm --filter backend eregister:tools --company <companyPublicId> --connection <connectionPublicId>
+   ```
+
+   It is idempotent. A tool gets a new version only when it changed, so a config pinned to the old version keeps it. It refuses while a tool has a Draft version (an operator is editing it). It refuses a connection that isn't the company's or isn't Active. It isn't audited: it's setup a person runs, like the test host seed.
+
+3. Pin the printed `{name, version}` list in the chatbot's config (`tools`). Pin only the tools the chatbot needs: every pinned tool's schema goes into every model call. All 47 come to about 30K tokens.
+
+### Check it works (M7-2 done when)
+
+Every write tool has a readback, and the undo where eRegister allows one. `pnpm --filter @app/schemas test` (`EregisterTools.test.ts`) checks this for every tool: each one saves, its args convert, each write has a readback, creates and updates undo, deletes are marked not undoable, and an update sends only what it compares or restores. On staging, after the seed, run one create, update and delete of a button through the widget. Each ends Verified, and undoing the update ends Undone.
+
 ## Check it works (M7-1 done when)
 
 1. **Staging eval JWT works.** Run `pnpm evals:run --config <any config publicId of the company>`. The harness signs in to Firebase, then starts a run. Any answer past auth shows the eval JWT and the connection were accepted. Before M7-2 and M7-4 add tools and cases, that answer is likely a 400 `Invalid` (no active case). A 401 means the key (see `docs/runbooks/evals.md`), and a 403 means the connection isn't Staging or isn't Active.
@@ -119,6 +181,8 @@ The harness signs the test user in through Firebase (`accounts:signInWithPasswor
 | Harness: "uid is not EVAL_HOST_USER"                                              | `EVAL_HOST_USER` holds the email or another user's uid                                                                                            |
 | Widget: every connect refused as an unknown issuer                                | The connection's `jwt_issuer` and the token's `iss` differ (a trailing slash, the wrong env)                                                      |
 | Widget: signature refused                                                         | `COMPANION_JWT_SIGNING_KEY` was rotated and the JWKS cache hasn't refetched yet (within a minute), or the JWKS route answers 404 (secret missing) |
+| A write ends "needs a person" right after a create or a delete                    | eRegister's answer was lost: check the record in eRegister, then resolve it on the Changes page                                                   |
+| Every update of one kind ends Changes undone                                      | eRegister stores a compared field in another form: regenerate the schemas, or drop that field from the tool's compare                             |
 | `/companion/token` or `/.well-known/jwks.json` is 404                             | `COMPANION_JWT_SIGNING_KEY` isn't set on that env                                                                                                 |
 | Sign-in fails on the ai-agent app                                                 | `eregister-ai-agent-1ms.pages.dev` isn't an authorized domain in Firebase                                                                         |
 | Browser CORS error calling the eRegister API                                      | The app's origin isn't in the ai-agent env's `CORS_WHITELIST`                                                                                     |
