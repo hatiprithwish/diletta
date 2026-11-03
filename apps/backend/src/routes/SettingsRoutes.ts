@@ -9,6 +9,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Settings pages' company-wide settings (M4-10), mounted at /dashboard/settings. Chain: checkAuth →
 // authorizeCompany(action) → zValidator → handler. Read-only mode lives on the Bots page. A model key write refused by
@@ -53,6 +54,7 @@ SettingsRoutes.put(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -84,6 +86,7 @@ SettingsRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -103,6 +106,7 @@ SettingsRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       publicId: c.req.param("publicId"),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
@@ -135,6 +139,7 @@ SettingsRoutes.put(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -185,6 +190,7 @@ SettingsRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -202,6 +208,7 @@ SettingsRoutes.post(
     const { outboxIds, ...response } = await repo.revokeInvite({
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       publicId: c.req.param("publicId"),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
@@ -220,6 +227,7 @@ SettingsRoutes.delete(
     const { outboxIds, ...response } = await repo.removeAdmin({
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
       clerkUserId: c.req.param("clerkUserId"),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });

@@ -6,6 +6,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: Impact's minutes per task (M4-3), mounted at /dashboard/roi-assumptions. Chain: checkAuth →
 // authorizeCompany(RoiAssumptionUpdate) → zValidator → handler. A save is a new row in force from today; an unknown
@@ -24,6 +25,7 @@ RoiAssumptionsRoutes.post(
       ...c.req.valid("json"),
       companyId,
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 

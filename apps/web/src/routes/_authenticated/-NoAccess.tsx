@@ -2,8 +2,8 @@ import { useClerk } from "@clerk/tanstack-react-start";
 import { Button } from "@app/ui/components/button";
 import { ShellMessage } from "./-ShellMessage";
 
-// DEV_NOTE: Signed in to Clerk but no dashboard: not invited (no admins row), the company has churned, or an
-// operator (no company; the dashboard is company-level). /dashboard/me answers 403 for the first two.
+// DEV_NOTE: Signed in to Clerk but no dashboard: not invited (no admins row), or the company has churned.
+// /dashboard/me answers 403 for both. An operator gets the company picker instead (ADR 0006).
 export function NoAccess() {
   const { signOut } = useClerk();
 

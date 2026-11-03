@@ -4,7 +4,7 @@ import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AiGatewayProvider from "@/providers/aiGateway";
 import CompanyKeyProvider from "@/providers/companyKey";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Trailing characters kept in plaintext for display (last_four_chars), and only for a secret long enough
@@ -244,7 +244,11 @@ export default class CompanySecretsRepo {
   // a key added at the same moment), the value encrypted, the row Active with last_validated_at, and its Created audit
   // row labelled with the provider. The value is never logged or returned.
   async addModelKey(
-    params: Schemas.AddModelKeyApiRequest & { companyId: string; adminId: string },
+    params: Schemas.AddModelKeyApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> {
     // DEV_NOTE: The one-Active-key rule first, so a second Add answers 409 without a provider call; checked again in the
     // write's transaction (and by the unique index) for an Add at the same moment
@@ -309,7 +313,7 @@ export default class CompanySecretsRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.ModelKey,
           entityAction: Schemas.AuditEntityActionEnum.Created,
           entity: created.companySecret,
@@ -333,6 +337,7 @@ export default class CompanySecretsRepo {
     params: Schemas.RotateModelKeyApiRequest & {
       companyId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
       publicId: string;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.ModelKeyWriteApiResponse>> {
@@ -412,7 +417,7 @@ export default class CompanySecretsRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId: params.companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.ModelKey,
           entityAction: Schemas.AuditEntityActionEnum.Rotated,
           entity: updated.companySecret,

@@ -6,6 +6,7 @@ import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizeCompany } from "@/middlewares/AdminMiddleware";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
+import { auditActorFor } from "@/repositories/audit";
 
 // DEV_NOTE: The Knowledge page's questions it couldn't answer (M4-7), mounted at /dashboard/doc-gap-clusters. Chain:
 // checkAuth → authorizeCompany(action) → zValidator → handler. For the admin's company (c.get("companyId")); a group
@@ -49,6 +50,7 @@ DocGapClustersRoutes.post(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
@@ -67,6 +69,7 @@ DocGapClustersRoutes.post(
       companyId,
       publicId: c.req.param("publicId"),
       adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
     });
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 

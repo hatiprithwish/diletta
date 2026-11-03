@@ -3,7 +3,7 @@ import RoiAssumptionsDAL from "@/data-access-layer/RoiAssumptionsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant from "@/db/withTenant";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: Tenant Repo — Impact's minutes per task (M4-3). A save is a new row in force from today (UTC), never an
@@ -30,6 +30,7 @@ export default class RoiAssumptionsRepo {
     params: Schemas.CreateRoiAssumptionApiRequest & {
       companyId: string;
       adminId: string;
+      actor: Schemas.AuditActor;
       now?: number;
     },
   ): Promise<Schemas.WithOutboxIds<Schemas.CreateRoiAssumptionApiResponse>> {
@@ -60,7 +61,7 @@ export default class RoiAssumptionsRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.RoiAssumption,
           entityAction: Schemas.AuditEntityActionEnum.Updated,
           entity: roiAssumption,

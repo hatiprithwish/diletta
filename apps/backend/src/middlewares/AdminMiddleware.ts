@@ -16,60 +16,88 @@ type CompanyContextEnv = {
   Variables: AppContext["Variables"] & AdminVariables & CompanyVariables;
 };
 
-type AuthorizeResult =
-  | { isAllowed: true; admin: Schemas.AdminContext }
-  | { isAllowed: false; status: 403 | 500; message?: string };
-
-// DEV_NOTE: Runs after checkAuth. The one can() check for a route (architecture baseline): resolves the signed-in
-// admin (Clerk admin → company lookup) and refuses with 403 when there is no access (no admins row, a churned
-// company) or can() says no.
-async function authorize(
+// DEV_NOTE: Runs after checkAuth: resolves the signed-in admin (Clerk admin → company lookup). No admins row, or a
+// churned company, is no access (403).
+async function resolveAdmin(
   env: Env,
   clerkUserId: string,
-  action: Schemas.AuthzActionEnum,
-  scope: "company" | "platform",
-): Promise<AuthorizeResult> {
+): Promise<
+  | { isFound: true; admin: Schemas.AdminContext }
+  | { isFound: false; status: 403 | 500; message?: string }
+> {
   const result = await new AdminsRepo(env).getAdminContext({ clerkUserId });
-  if (!result.isSuccess) {
-    return { isAllowed: false, status: 500, message: result.message };
-  }
-
-  const admin = result.admin;
-  // DEV_NOTE: A /dashboard route acts on the admin's own company, so the resource's company is the admin's and
-  // can()'s ownership check passes by construction there: it still enforces the role and action. Isolation
-  // between companies comes from withTenant + RLS on c.get("companyId"). Ownership matters once a route acts
-  // on a company named by the request (operator views of one company).
-  const resource: Schemas.AuthzResource = {
-    companyId: scope === "company" ? (admin?.companyId ?? null) : null,
-  };
-  if (!admin || !Schemas.can(admin, action, resource)) {
+  if (!result.isSuccess) return { isFound: false, status: 500, message: result.message };
+  if (!result.admin) {
     AppLogger.warn({
       category: Schemas.LogCategory.Authz,
       action: Schemas.LogAction.Authorize,
       message: "Forbidden",
-      metadata: { clerkUserId, authzAction: action, role: admin?.role ?? null },
+      metadata: { clerkUserId, role: null },
     });
-    return { isAllowed: false, status: 403, message: "Forbidden" };
+    return { isFound: false, status: 403, message: "Forbidden" };
   }
-
-  return { isAllowed: true, admin };
+  return { isFound: true, admin: result.admin };
 }
 
-// DEV_NOTE: For /dashboard/* routes on the admin's own company. Sets admin and companyId (the withTenant key).
-// An operator has no company, so company routes refuse them; operator views of one company come under /operator.
+// DEV_NOTE: The one can() check for a route (architecture baseline). Isolation between companies comes from
+// withTenant + RLS on the companyId the route then uses.
+function authorize(
+  admin: Schemas.AdminContext,
+  clerkUserId: string,
+  action: Schemas.AuthzActionEnum,
+  resource: Schemas.AuthzResource,
+): boolean {
+  if (Schemas.can(admin, action, resource)) return true;
+  AppLogger.warn({
+    category: Schemas.LogCategory.Authz,
+    action: Schemas.LogAction.Authorize,
+    message: "Forbidden",
+    metadata: { clerkUserId, authzAction: action, role: admin.role },
+  });
+  return false;
+}
+
+// DEV_NOTE: For /dashboard/* routes. Sets admin and companyId (the withTenant key). A company admin acts on their own
+// company, always: any X-Acting-Company header is ignored. An operator acts on the company their header names (ADR
+// 0006): resolved server-side, an unknown one 404, a churned one 403 (as for its own admins); no header = 403.
 export function authorizeCompany(action: Schemas.AuthzActionEnum) {
   return createMiddleware<CompanyContextEnv>(async (c, next) => {
-    const result = await authorize(c.env, c.get("clerkUserId"), action, "company");
-    if (!result.isAllowed) {
-      return c.json({ isSuccess: false, message: result.message }, result.status);
+    const clerkUserId = c.get("clerkUserId");
+    const resolved = await resolveAdmin(c.env, clerkUserId);
+    if (!resolved.isFound) {
+      return c.json({ isSuccess: false, message: resolved.message }, resolved.status);
     }
-    // DEV_NOTE: can() already refused an operator here (no company); checking the role narrows companyId
-    if (result.admin.role !== Schemas.AdminRoleEnum.CompanyAdmin) {
-      return c.json({ isSuccess: false, message: "Forbidden" }, 403);
+    const admin = resolved.admin;
+
+    let companyId: string;
+    if (admin.role === Schemas.AdminRoleEnum.CompanyAdmin) {
+      companyId = admin.companyId;
+    } else {
+      const publicId = c.req.header(Schemas.ACTING_COMPANY_HEADER)?.trim();
+      if (!publicId) return c.json({ isSuccess: false, message: "Forbidden" }, 403);
+      const acting = await new CompaniesRepo(c.env).resolveActingCompany({ publicId });
+      if (!acting.isSuccess || !acting.companyId) {
+        if (!acting.isNotFound) {
+          AppLogger.error({
+            category: Schemas.LogCategory.Middleware,
+            action: Schemas.LogAction.ResolveActingCompany,
+            message: acting.message ?? "Company lookup failed",
+            metadata: { companyPublicId: publicId },
+          });
+        }
+        return c.json({ isSuccess: false, message: acting.message }, acting.isNotFound ? 404 : 500);
+      }
+      if (acting.status === Schemas.CompanyStatusIntEnum.Churned) {
+        return c.json({ isSuccess: false, message: "Forbidden" }, 403);
+      }
+      companyId = acting.companyId;
     }
 
-    c.set("admin", result.admin);
-    c.set("companyId", result.admin.companyId);
+    if (!authorize(admin, clerkUserId, action, { companyId })) {
+      return c.json({ isSuccess: false, message: "Forbidden" }, 403);
+    }
+    c.set("admin", admin);
+    c.set("companyId", companyId);
     await next();
   });
 }
@@ -78,12 +106,16 @@ export function authorizeCompany(action: Schemas.AuthzActionEnum) {
 // company-scoped action passed here fails closed.
 export function authorizePlatform(action: Schemas.AuthzActionEnum) {
   return createMiddleware<AdminContextEnv>(async (c, next) => {
-    const result = await authorize(c.env, c.get("clerkUserId"), action, "platform");
-    if (!result.isAllowed) {
-      return c.json({ isSuccess: false, message: result.message }, result.status);
+    const clerkUserId = c.get("clerkUserId");
+    const resolved = await resolveAdmin(c.env, clerkUserId);
+    if (!resolved.isFound) {
+      return c.json({ isSuccess: false, message: resolved.message }, resolved.status);
+    }
+    if (!authorize(resolved.admin, clerkUserId, action, { companyId: null })) {
+      return c.json({ isSuccess: false, message: "Forbidden" }, 403);
     }
 
-    c.set("admin", result.admin);
+    c.set("admin", resolved.admin);
     await next();
   });
 }

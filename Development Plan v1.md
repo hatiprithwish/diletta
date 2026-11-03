@@ -261,6 +261,7 @@ Exit: eRegister live in production, first week monitored.
 | M7-4 | eRegister eval cases incl. safety; gate passes on staging                          | Gate run approves the first config                 | Knowledge + Evals |
 | M7-5 | Widget embedded in eRegister staging; internal pilot                               | Pilot users complete real tasks                    | Product           |
 | M7-6 | Production publish and first-week watch                                            | Launch readiness all ticked                        | All               |
+| M7-7 | Operator acts as a company admin in any company (ADR 0006); before M7-5            | Operator edits eRegister's config, audited as us   | Platform          |
 
 ## Testing strategy
 

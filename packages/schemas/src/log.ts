@@ -52,6 +52,7 @@ export enum LogAction {
   ListCompanies = "ListCompanies",
   CountCompanies = "CountCompanies",
   ListCompanyIdsByStatus = "ListCompanyIdsByStatus",
+  ListCompaniesByStatus = "ListCompaniesByStatus",
   UpdateCompany = "UpdateCompany",
 
   // Chatbot users
@@ -173,6 +174,9 @@ export enum LogAction {
   DeleteToolDefinitionDraft = "DeleteToolDefinitionDraft",
   LoadToolOps = "LoadToolOps",
   ResolveOperatorCompany = "ResolveOperatorCompany",
+  ResolveActingCompany = "ResolveActingCompany",
+  RecordOperatorActed = "RecordOperatorActed",
+  GetActingCompanies = "GetActingCompanies",
   GetPinnedToolDefinitions = "GetPinnedToolDefinitions",
   GetToolDefinitionById = "GetToolDefinitionById",
 

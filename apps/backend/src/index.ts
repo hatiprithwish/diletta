@@ -83,7 +83,12 @@ app.use((c, next) =>
           return allowed.includes(origin) ? origin : null;
         },
         allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowHeaders: ["Content-Type", "Authorization", "x-request-id"],
+        allowHeaders: [
+          "Content-Type",
+          "Authorization",
+          "x-request-id",
+          Schemas.ACTING_COMPANY_HEADER,
+        ],
         exposeHeaders: ["x-request-id"],
         maxAge: 7200,
         credentials: true,

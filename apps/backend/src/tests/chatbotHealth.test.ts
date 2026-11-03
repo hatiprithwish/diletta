@@ -19,6 +19,7 @@ import ChatbotHealthRepo from "@/repositories/ChatbotHealthRepo";
 import Constants from "@/config/Constants";
 import QualityIssuesRepo from "@/repositories/QualityIssuesRepo";
 import Utility from "@/utils/Utility";
+import { adminAuditActor } from "@/repositories/audit";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -279,6 +280,7 @@ describe("A Health drop issue on the Quality page", () => {
     const converted = await repo.convertQualityIssue({
       companyId: companyA,
       adminId: adminAId,
+      actor: adminAuditActor(adminAId),
       publicId,
       confirmedTerms: [],
       draft: {
@@ -306,6 +308,7 @@ describe("A Health drop issue on the Quality page", () => {
     await new QualityIssuesRepo(env).triageQualityIssue({
       companyId: companyA,
       adminId: adminAId,
+      actor: adminAuditActor(adminAId),
       publicId: issue?.publicId ?? "",
       issueType: Schemas.QualityIssueTypeIntEnum.ToolBug,
     });
@@ -409,6 +412,7 @@ describe("A Health drop issue on the Quality page", () => {
     const converted = await repo.convertQualityIssue({
       ...scope,
       adminId: adminAId,
+      actor: adminAuditActor(adminAId),
       confirmedTerms: [],
       draft: {
         name: "A test",

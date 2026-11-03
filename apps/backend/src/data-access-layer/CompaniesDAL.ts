@@ -221,6 +221,39 @@ export default class CompaniesDAL {
     return response;
   }
 
+  // DEV_NOTE: Cross-company (withPlatform, ADR 0006): the companies in one of the statuses, by name, for an operator's
+  // company picker. Unpaged: one row per customer company, a short list by design
+  async getCompaniesByStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetCompaniesByStatusDALRequest,
+  ) {
+    const response: Schemas.ActingCompaniesDALResponse = { isSuccess: false };
+
+    try {
+      const rows = await tx
+        .select({ publicId: companies.publicId, name: companies.name, status: companies.status })
+        .from(companies)
+        .where(inArray(companies.status, params.statuses))
+        .orderBy(asc(companies.name), asc(companies.id));
+
+      response.isSuccess = true;
+      response.message = "Companies fetched successfully";
+      response.companies = rows;
+    } catch (error) {
+      const message = "Unknown error in listing companies";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListCompaniesByStatus,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Every company's retention setting (withPlatform, M6-1), churned ones too: their chats still expire.
   // companyIds null = every company; a list limits it (tests on the shared staging branch)
   async getCompaniesRetention(

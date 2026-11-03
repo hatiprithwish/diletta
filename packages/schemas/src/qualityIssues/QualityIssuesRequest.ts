@@ -1,3 +1,4 @@
+import type { AuditActor } from "../auditLog/AuditLogCommon";
 import type { EvalCaseMessage } from "../evalCases";
 import type { TriageQualityIssueApiRequest } from "./QualityIssuesApiRequest";
 import type {
@@ -23,6 +24,8 @@ export interface OpenUserQualityIssueRequest {
 export interface FlagConversationRequest {
   companyId: string;
   adminId: string;
+  // DEV_NOTE: The company admin, or an operator acting in the company (ADR 0006)
+  actor: AuditActor;
   conversationPublicId: string;
 }
 
@@ -31,6 +34,8 @@ export interface FlagConversationRequest {
 export interface QualityIssueActionRequest {
   companyId: string;
   adminId: string;
+  // DEV_NOTE: The company admin, or an operator acting in the company (ADR 0006)
+  actor: AuditActor;
   publicId: string;
 }
 

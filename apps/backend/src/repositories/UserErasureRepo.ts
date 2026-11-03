@@ -6,7 +6,7 @@ import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import QualityIssuesDAL from "@/data-access-layer/QualityIssuesDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
-import { adminAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import { recordAuditOrRollback } from "@/repositories/audit";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: User erasure (M6-2). This transaction is the point of no return: the user's identity and credentials go, with
@@ -31,7 +31,11 @@ export default class UserErasureRepo {
   }
 
   async eraseUser(
-    params: Schemas.EraseChatbotUserApiRequest & { companyId: string; adminId: string },
+    params: Schemas.EraseChatbotUserApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
   ): Promise<Schemas.EraseChatbotUserRepoResponse> {
     const { companyId, hostUserId } = params;
     return await withTenant<Schemas.EraseChatbotUserRepoResponse>(
@@ -61,7 +65,7 @@ export default class UserErasureRepo {
 
         const outboxId = await recordAuditOrRollback(tx, {
           companyId,
-          actor: adminAuditActor(params.adminId),
+          actor: params.actor,
           entityType: Schemas.AuditEntityTypeEnum.Company,
           entityAction: Schemas.AuditEntityActionEnum.UserErased,
           entity: company.company,

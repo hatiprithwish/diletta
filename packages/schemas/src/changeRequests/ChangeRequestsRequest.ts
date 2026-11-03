@@ -1,3 +1,4 @@
+import type { AuditActor } from "../auditLog/AuditLogCommon";
 import type { ConversationSession } from "../conversations/ConversationsCommon";
 import type { RuntimeTool, ToolCallErrorCodeEnum, ToolCallStatusIntEnum } from "../toolCalls";
 import type {
@@ -162,5 +163,7 @@ export interface SaveEditRequest {
 export interface ResolveChangeRequestRequest {
   companyId: string;
   adminId: string;
+  // DEV_NOTE: The company admin, or an operator acting in the company (ADR 0006)
+  actor: AuditActor;
   publicId: string;
 }

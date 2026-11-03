@@ -91,6 +91,9 @@ export enum AuthzActionEnum {
   CompanyConnectionRead = "company_connection.read",
   CompanyConnectionCreate = "company_connection.create",
   CompanyConnectionUpdate = "company_connection.update",
+
+  // Act as a company admin in a company the operator picks (operator only, ADR 0006): records that they came in
+  CompanyActAs = "company.act_as",
 }
 
 // DEV_NOTE: Actions only an operator may perform. Everything else is company-scoped: an operator may perform it
@@ -106,6 +109,7 @@ export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.CompanyConnectionRead,
   AuthzActionEnum.CompanyConnectionCreate,
   AuthzActionEnum.CompanyConnectionUpdate,
+  AuthzActionEnum.CompanyActAs,
 ]);
 
 // DEV_NOTE: The company a resource belongs to (internal companies.id, resolved server-side). null = no single

@@ -24,6 +24,7 @@ import AppLogger from "@/providers/logger";
 import ContentRetentionRepo from "@/repositories/ContentRetentionRepo";
 import UserErasureRepo from "@/repositories/UserErasureRepo";
 import Utility from "@/utils/Utility";
+import { adminAuditActor } from "@/repositories/audit";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -173,7 +174,12 @@ const readUser = (chatbotUserId: string) =>
   });
 
 const erase = (hostUserId: string, company = companyId) =>
-  new UserErasureRepo(env).eraseUser({ companyId: company, adminId, hostUserId });
+  new UserErasureRepo(env).eraseUser({
+    companyId: company,
+    adminId,
+    actor: adminAuditActor(adminId),
+    hostUserId,
+  });
 
 const purgeHourly = () =>
   new ContentRetentionRepo(env).purgeExpiredContent({ companyIds: [companyId] });

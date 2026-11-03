@@ -19,6 +19,7 @@ import CompaniesRepo from "@/repositories/CompaniesRepo";
 import CompanyEncryptionKeysRepo from "@/repositories/CompanyEncryptionKeysRepo";
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import Utility from "@/utils/Utility";
+import { adminAuditActor } from "@/repositories/audit";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -140,7 +141,11 @@ describe("CompanyEncryptionKeysRepo", () => {
     const before = await createModelKey(companyId, Schemas.ModelProviderEnum.Google, "g-before");
     expect(await storedKeyVersion(before)).toBe(1);
 
-    const rotated = await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
+    const rotated = await keysRepo.rotateCompanyEncryptionKey({
+      companyId,
+      adminId: "1",
+      actor: adminAuditActor("1"),
+    });
     expect(rotated.isSuccess).toBe(true);
     expect(rotated.companyEncryptionKey?.version).toBe(2);
     expect(rotated.companyEncryptionKey?.companyEncryptionKeyStatus).toBe(
@@ -183,11 +188,21 @@ describe("CompanyEncryptionKeysRepo", () => {
   it("refuses a second rotation while a retiring key is still waiting for the rotation job", async () => {
     const companyId = await createCompany();
     const repo = new CompanyEncryptionKeysRepo(env);
-    expect((await repo.rotateCompanyEncryptionKey({ companyId, adminId: "1" })).isSuccess).toBe(
-      true,
-    );
+    expect(
+      (
+        await repo.rotateCompanyEncryptionKey({
+          companyId,
+          adminId: "1",
+          actor: adminAuditActor("1"),
+        })
+      ).isSuccess,
+    ).toBe(true);
 
-    const again = await repo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
+    const again = await repo.rotateCompanyEncryptionKey({
+      companyId,
+      adminId: "1",
+      actor: adminAuditActor("1"),
+    });
     expect(again).toEqual({
       isSuccess: false,
       message: "Key rotation already in progress",
@@ -205,7 +220,11 @@ describe("CompanyEncryptionKeysRepo", () => {
     const keysRepo = new CompanyEncryptionKeysRepo(env);
     const secretsRepo = new CompanySecretsRepo(env);
     const shredded = await createModelKey(companyId, Schemas.ModelProviderEnum.Google, "g-v1");
-    await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
+    await keysRepo.rotateCompanyEncryptionKey({
+      companyId,
+      adminId: "1",
+      actor: adminAuditActor("1"),
+    });
     const kept = await createModelKey(companyId, Schemas.ModelProviderEnum.OpenAI, "o-v2");
 
     // DEV_NOTE: A destroy with a value still on the key, played by the owner connection: the rotation job (M6-3)
@@ -230,7 +249,11 @@ describe("CompanyEncryptionKeysRepo", () => {
     const stillThere = await secretsRepo.getDecryptedCompanySecret({ companyId, publicId: kept });
     expect(stillThere.secret).toBe("o-v2");
 
-    const rotated = await keysRepo.rotateCompanyEncryptionKey({ companyId, adminId: "1" });
+    const rotated = await keysRepo.rotateCompanyEncryptionKey({
+      companyId,
+      adminId: "1",
+      actor: adminAuditActor("1"),
+    });
     expect(rotated.isSuccess).toBe(true);
     expect(rotated.companyEncryptionKey?.version).toBe(3);
   });
@@ -274,7 +297,13 @@ describe("CompanyEncryptionKeysRepo", () => {
     createdCompanyIds.push(companyId);
     const repo = new CompanyEncryptionKeysRepo(env);
 
-    expect(await repo.rotateCompanyEncryptionKey({ companyId, adminId: "1" })).toEqual({
+    expect(
+      await repo.rotateCompanyEncryptionKey({
+        companyId,
+        adminId: "1",
+        actor: adminAuditActor("1"),
+      }),
+    ).toEqual({
       isSuccess: false,
       message: "Active encryption key not found",
     });

@@ -80,7 +80,7 @@ export default class DocGapQualityProvider {
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.CloseDocGapQualityIssueRequest,
   ): Promise<Schemas.CloseDocGapQualityIssueResponse> {
-    const { companyId, docGapClusterId, status, adminId } = params;
+    const { companyId, docGapClusterId, status, adminId, actor } = params;
     const found = await DocGapQualityProvider.dal.getQualityIssueByDocGapCluster(tx, {
       companyId,
       docGapClusterId,
@@ -104,8 +104,7 @@ export default class DocGapQualityProvider {
     const action = Schemas.QUALITY_ISSUE_CLOSE_ENTITY_ACTION_MAP[status];
     const event = await CriticalEventProvider.record(tx, {
       companyId,
-      actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
-      actorId: adminId,
+      ...actor,
       entityType: Schemas.QUALITY_ISSUE_ENTITY_TYPE,
       entityId: qualityIssue.id,
       entityAction: action,

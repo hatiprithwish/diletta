@@ -27,6 +27,7 @@ import CompanyEncryptionKeysRepo from "@/repositories/CompanyEncryptionKeysRepo"
 import CompanySecretsRepo from "@/repositories/CompanySecretsRepo";
 import KeyRotationRepo from "@/repositories/KeyRotationRepo";
 import Utility from "@/utils/Utility";
+import { adminAuditActor } from "@/repositories/audit";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -244,6 +245,7 @@ async function rotate(companyId: string) {
   const rotated = await new CompanyEncryptionKeysRepo(env).rotateCompanyEncryptionKey({
     companyId,
     adminId: "1",
+    actor: adminAuditActor("1"),
   });
   if (!rotated.isSuccess) throw new Error(`Not rotated: ${rotated.message}`);
 }
@@ -387,6 +389,7 @@ describe("KeyRotationRepo", { timeout: 120_000 }, () => {
     const again = await new CompanyEncryptionKeysRepo(env).rotateCompanyEncryptionKey({
       companyId,
       adminId: "1",
+      actor: adminAuditActor("1"),
     });
     expect(again.isSuccess).toBe(true);
     expect(again.companyEncryptionKey?.version).toBe(3);
@@ -527,7 +530,7 @@ describe("KeyRotationRepo", { timeout: 120_000 }, () => {
       await encryptedSignal;
 
       const rotation = new CompanyEncryptionKeysRepo(env)
-        .rotateCompanyEncryptionKey({ companyId, adminId: "1" })
+        .rotateCompanyEncryptionKey({ companyId, adminId: "1", actor: adminAuditActor("1") })
         .then((rotated) => {
           isRotationDone = true;
           return rotated;
