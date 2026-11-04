@@ -193,6 +193,10 @@ screenshots; it isn't part of the canvas above, so it has no files in `pages/` o
   `Pager`. New company is a `Dialog` with a name only.
 - **Company** (`operator/companies/$id/`): h1 + status chip, "Created … · <public id in mono>", Open dashboard
   (primary, `ArrowSquareOut`; off for a churned company), then a `ToggleGroup` of its sections in the URL.
+  Connections (default): one bordered card per connection (environment chip, Edit outline button, label / value rows
+  like Settings › Connections), Add connection (primary). The add / edit page is a form at 860px: on edit a "Set when
+  created" box with the fixed settings read-only; Address and sign-in, Allowed origins (one per line), Clean-up after
+  tests (staging only: switch + JSON call), Active switch (edit only), Cancel / Save at the foot. JSON and URLs in mono.
   Maintenance: Rebuild insights (two date inputs, outline button "Rebuild N days", rules under it) and Company
   status (bordered rows, each move with its effect; Churn in destructive text, confirmed by typing the name).
 - Status chips: Active success, Paused warning, Churned destructive.

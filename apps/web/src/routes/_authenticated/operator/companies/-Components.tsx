@@ -39,6 +39,7 @@ import {
   useRebuildInsights,
   useSetCompanyStatus,
 } from "./-data";
+import { ConnectionsSection } from "./-Connections";
 
 const { Active, Paused, Churned } = Schemas.CompanyStatusIntEnum;
 
@@ -343,6 +344,7 @@ function NewCompanyForm({ onClose }: Schemas.DashboardDialogProps) {
 
 // DEV_NOTE: The sections of a company's page, in tab order; the first is the default
 const COMPANY_TABS: { value: Schemas.OperatorCompanyTabEnum; label: string }[] = [
+  { value: Schemas.OperatorCompanyTabEnum.Connections, label: "Connections" },
   { value: Schemas.OperatorCompanyTabEnum.Maintenance, label: "Maintenance" },
 ];
 
@@ -409,6 +411,9 @@ export function OperatorCompanyPage({
           ))}
         </ToggleGroup>
       </div>
+      {tab === Schemas.OperatorCompanyTabEnum.Connections && (
+        <ConnectionsSection company={company} />
+      )}
       {tab === Schemas.OperatorCompanyTabEnum.Maintenance && (
         <MaintenanceSection company={company} />
       )}

@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -13,6 +13,8 @@ import {
 import * as Schemas from "@app/schemas";
 import { Route as CompaniesRoute } from "@/routes/_authenticated/operator/companies/index";
 import { Route as CompanyRoute } from "@/routes/_authenticated/operator/companies/$id/index";
+import { Route as NewConnectionRoute } from "@/routes/_authenticated/operator/companies/$id/connections/new/index";
+import { Route as ConnectionRoute } from "@/routes/_authenticated/operator/companies/$id/connections/$connectionId/index";
 
 vi.mock("@clerk/tanstack-react-start", () => ({
   useAuth: () => ({
@@ -63,6 +65,49 @@ const ROWS: Schemas.OperatorCompanyListItem[] = [
   { ...NORTHFIELD, connectionEnvironments: [], connectionEnvironmentLabels: [] },
 ];
 
+function connection(
+  publicId: string,
+  environment: Schemas.CompanyConnectionEnvironmentIntEnum,
+  resetOp: Schemas.ConnectionResetOp | null,
+): Schemas.CompanyConnectionWithStatus {
+  const host =
+    environment === Schemas.CompanyConnectionEnvironmentIntEnum.Staging ? "staging-api" : "api";
+  return {
+    publicId,
+    environment,
+    adapterType: Schemas.CompanyConnectionAdapterTypeIntEnum.Rest,
+    baseUrl: `https://${host}.eregister.example/v1`,
+    authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
+    authConfig: {},
+    credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
+    jwtIssuer: `https://${host}.eregister.example`,
+    allowedOrigins: ["https://app.eregister.example"],
+    resetOp,
+    status: Schemas.CompanyConnectionStatusIntEnum.Active,
+    createdAt: new Date("2026-10-12T09:00:00.000Z"),
+    updatedAt: new Date("2026-10-12T09:00:00.000Z"),
+    companyConnectionStatus: Schemas.CompanyConnectionStatusIntEnum.Active,
+    companyConnectionStatusLabel: Schemas.CompanyConnectionStatusLabelEnum.Active,
+    companyConnectionEnvironment: environment,
+    companyConnectionEnvironmentLabel:
+      Schemas.COMPANY_CONNECTION_ENVIRONMENT_LABEL_MAP[environment],
+    companyConnectionAdapterType: Schemas.CompanyConnectionAdapterTypeIntEnum.Rest,
+    companyConnectionAdapterTypeLabel: Schemas.CompanyConnectionAdapterTypeLabelEnum.Rest,
+    companyConnectionCredentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
+    companyConnectionCredentialScopeLabel: Schemas.CompanyConnectionCredentialScopeLabelEnum.None,
+  };
+}
+
+const STAGING = connection("con_stg", Schemas.CompanyConnectionEnvironmentIntEnum.Staging, {
+  method: Schemas.ToolOpMethodEnum.Post,
+  path: "/test-data/reset",
+});
+const PRODUCTION = connection(
+  "con_prd",
+  Schemas.CompanyConnectionEnvironmentIntEnum.Production,
+  null,
+);
+
 const COUNTS: Schemas.CompanyStatusCounts = {
   [Schemas.CompanyStatusIntEnum.Active]: 1,
   [Schemas.CompanyStatusIntEnum.Paused]: 0,
@@ -87,6 +132,15 @@ let eRegisterStatus = Schemas.CompanyStatusIntEnum.Active;
 function defaultApi(url: string, init: RequestInit | undefined): { status: number; body: unknown } {
   const method = init?.method ?? "GET";
   const path = new URL(url, "http://api.test").pathname;
+  if (path.endsWith("/operator/companies/cmp_1/connections") && method === "GET") {
+    return { status: 200, body: { isSuccess: true, companyConnections: [STAGING, PRODUCTION] } };
+  }
+  if (path.endsWith("/operator/companies/cmp_1/connections") && method === "POST") {
+    return { status: 201, body: { isSuccess: true, companyConnection: PRODUCTION } };
+  }
+  if (path.endsWith("/operator/companies/cmp_1/connections/con_stg")) {
+    return { status: 200, body: { isSuccess: true, companyConnection: STAGING } };
+  }
   if (path.endsWith("/operator/companies/status-counts")) {
     return { status: 200, body: { isSuccess: true, counts: COUNTS } };
   }
@@ -145,6 +199,16 @@ function renderPage(path: string) {
       }),
       createRoute({
         getParentRoute: () => rootRoute,
+        path: "/operator/companies/$id/connections/new",
+        component: NewConnectionRoute.options.component,
+      }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/operator/companies/$id/connections/$connectionId",
+        component: ConnectionRoute.options.component,
+      }),
+      createRoute({
+        getParentRoute: () => rootRoute,
         path: "/overview",
         component: () => <p>dashboard overview</p>,
       }),
@@ -164,6 +228,21 @@ const calls = (fetchMock: ReturnType<typeof mockApi>, method: string, part: stri
   fetchMock.mock.calls.filter(
     ([url, init]) => (init?.method ?? "GET") === method && String(url).includes(part),
   );
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  // DEV_NOTE: Radix Select needs these, which jsdom lacks
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => undefined;
+  Element.prototype.scrollIntoView = () => undefined;
+});
 
 afterEach(() => {
   eRegisterStatus = Schemas.CompanyStatusIntEnum.Active;
@@ -240,7 +319,7 @@ describe("Companies list", () => {
 describe("One company", () => {
   it("shows the company's header and its Maintenance section", async () => {
     mockApi();
-    renderPage("/operator/companies/cmp_1");
+    renderPage("/operator/companies/cmp_1?tab=maintenance");
 
     expect(await screen.findByRole("heading", { name: "eRegister" })).toBeInTheDocument();
     expect(screen.getByText("cmp_1")).toBeInTheDocument();
@@ -255,7 +334,7 @@ describe("One company", () => {
 
   it("rebuilds insights for the days picked", async () => {
     const fetchMock = mockApi();
-    renderPage("/operator/companies/cmp_1");
+    renderPage("/operator/companies/cmp_1?tab=maintenance");
     await screen.findByRole("heading", { name: "eRegister" });
 
     const from = screen.getByLabelText("From");
@@ -280,7 +359,7 @@ describe("One company", () => {
           }
         : null,
     );
-    renderPage("/operator/companies/cmp_1");
+    renderPage("/operator/companies/cmp_1?tab=maintenance");
     await screen.findByRole("heading", { name: "eRegister" });
 
     await userEvent.click(screen.getByRole("button", { name: /^Rebuild \d+ days$/ }));
@@ -295,7 +374,7 @@ describe("One company", () => {
 
   it("refuses a range in the wrong order before sending it", async () => {
     const fetchMock = mockApi();
-    renderPage("/operator/companies/cmp_1");
+    renderPage("/operator/companies/cmp_1?tab=maintenance");
     await screen.findByRole("heading", { name: "eRegister" });
 
     const from = screen.getByLabelText("From");
@@ -312,7 +391,7 @@ describe("One company", () => {
 
   it("churns a company only once its name is typed", async () => {
     const fetchMock = mockApi();
-    renderPage("/operator/companies/cmp_1");
+    renderPage("/operator/companies/cmp_1?tab=maintenance");
     await screen.findByRole("heading", { name: "eRegister" });
 
     await userEvent.click(screen.getByRole("button", { name: "Churn company" }));
@@ -336,7 +415,7 @@ describe("One company", () => {
 
   it("offers only Make active for a churned company, whose dashboard can't be opened", async () => {
     mockApi();
-    renderPage("/operator/companies/cmp_2");
+    renderPage("/operator/companies/cmp_2?tab=maintenance");
 
     expect(await screen.findByRole("heading", { name: "Northfield" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open dashboard" })).toBeDisabled();
@@ -349,5 +428,124 @@ describe("One company", () => {
     renderPage("/operator/companies/cmp_gone");
 
     expect(await screen.findByText("This company didn't load")).toBeInTheDocument();
+  });
+});
+
+describe("Connections", () => {
+  it("shows the company's connections by default, staging first", async () => {
+    mockApi();
+    renderPage("/operator/companies/cmp_1");
+
+    const staging = await screen.findByRole("group", { name: "Staging connection" });
+    expect(
+      within(staging).getByText("https://staging-api.eregister.example/v1"),
+    ).toBeInTheDocument();
+    expect(within(staging).getByText("Forward the user's token")).toBeInTheDocument();
+    expect(within(staging).getByText("POST /test-data/reset")).toBeInTheDocument();
+    const production = screen.getByRole("group", { name: "Production connection" });
+    expect(within(production).queryByText("Clean-up after tests")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add connection" })).toHaveAttribute(
+      "href",
+      "/operator/companies/cmp_1/connections/new",
+    );
+  });
+
+  it("adds a connection with the fields the API needs, then goes back", async () => {
+    const fetchMock = mockApi();
+    const router = renderPage("/operator/companies/cmp_1/connections/new");
+
+    await userEvent.type(
+      await screen.findByLabelText("API address"),
+      "https://staging-api.harbor.example/v1",
+    );
+    await userEvent.type(screen.getByLabelText("JWT issuer"), "https://staging-api.harbor.example");
+    await userEvent.type(screen.getByLabelText("Allowed origins"), "https://app.harbor.example");
+    await userEvent.click(screen.getByRole("button", { name: "Add connection" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/operator/companies/cmp_1"));
+    const [[, init]] = calls(fetchMock, "POST", "/operator/companies/cmp_1/connections");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      companyConnection: {
+        environment: Schemas.CompanyConnectionEnvironmentIntEnum.Staging,
+        adapterType: Schemas.CompanyConnectionAdapterTypeIntEnum.Rest,
+        baseUrl: "https://staging-api.harbor.example/v1",
+        authType: Schemas.CompanyConnectionAuthTypeEnum.JwtForward,
+        authConfig: {},
+        credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
+        jwtIssuer: "https://staging-api.harbor.example",
+        allowedOrigins: ["https://app.harbor.example"],
+        resetOp: null,
+      },
+    });
+    expect(toast.success).toHaveBeenCalledWith("Connection added.");
+  });
+
+  it("shows a taken issuer on its field and stays on the page", async () => {
+    mockApi((url, init) =>
+      init?.method === "POST" && url.includes("/connections")
+        ? {
+            status: 409,
+            body: { isSuccess: false, failure: Schemas.CompanyConnectionFailureEnum.IssuerTaken },
+          }
+        : null,
+    );
+    const router = renderPage("/operator/companies/cmp_1/connections/new");
+
+    await userEvent.type(
+      await screen.findByLabelText("API address"),
+      "https://staging-api.harbor.example/v1",
+    );
+    await userEvent.type(
+      screen.getByLabelText("JWT issuer"),
+      "https://staging-api.eregister.example",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add connection" }));
+
+    expect(
+      await screen.findByText("Another connection already uses this issuer"),
+    ).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Another connection already uses this JWT issuer. Nothing was saved.",
+    );
+    expect(router.state.location.pathname).toBe("/operator/companies/cmp_1/connections/new");
+  });
+
+  it("refuses an issuer that isn't https before sending it", async () => {
+    const fetchMock = mockApi();
+    renderPage("/operator/companies/cmp_1/connections/new");
+
+    await userEvent.type(await screen.findByLabelText("JWT issuer"), "http://issuer.example");
+    expect(screen.getByLabelText("JWT issuer")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Add connection" })).toBeDisabled();
+    expect(calls(fetchMock, "POST", "/connections")).toHaveLength(0);
+  });
+
+  it("edits a connection: fixed settings read-only, the rest sent with its status", async () => {
+    const fetchMock = mockApi((url, init) =>
+      init?.method === "PATCH"
+        ? { status: 200, body: { isSuccess: true, companyConnection: STAGING } }
+        : null,
+    );
+    const router = renderPage("/operator/companies/cmp_1/connections/con_stg");
+
+    expect(await screen.findByRole("heading", { name: "Staging connection" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Environment")).not.toBeInTheDocument();
+    const origins = screen.getByLabelText("Allowed origins");
+    await userEvent.type(origins, "{enter}http://localhost:5173");
+    await userEvent.click(screen.getByRole("switch", { name: "Active" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/operator/companies/cmp_1"));
+    const [[, init]] = calls(fetchMock, "PATCH", "/connections/con_stg");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      companyConnection: {
+        baseUrl: "https://staging-api.eregister.example/v1",
+        jwtIssuer: "https://staging-api.eregister.example",
+        authConfig: {},
+        allowedOrigins: ["https://app.eregister.example", "http://localhost:5173"],
+        status: Schemas.CompanyConnectionStatusIntEnum.Disabled,
+        resetOp: { method: "POST", path: "/test-data/reset" },
+      },
+    });
   });
 });

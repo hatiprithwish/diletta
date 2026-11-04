@@ -1,4 +1,5 @@
 import type { ActingCompany, AdminProfile } from "../admins";
+import type { CompanyConnectionWithStatus } from "../companyConnections";
 import type {
   CompanyStatusIntEnum,
   CompanyWithStatus,
@@ -937,4 +938,21 @@ export interface DashboardOperatorCompanySectionProps {
 export interface DashboardOperatorStatusDialogProps extends DashboardDialogProps {
   company: CompanyWithStatus;
   status: CompanyStatusIntEnum;
+}
+
+// DEV_NOTE: M7-8. A company's Connections section (operator): one card per connection, and the page that adds or edits
+// one (connectionPublicId null = add)
+export interface DashboardOperatorConnectionCardProps {
+  companyPublicId: string;
+  connection: CompanyConnectionWithStatus;
+}
+
+export interface DashboardOperatorConnectionPageProps {
+  companyPublicId: string;
+  connectionPublicId: string | null;
+}
+
+export interface DashboardOperatorConnectionFormProps {
+  companyPublicId: string;
+  connection: CompanyConnectionWithStatus | null;
 }

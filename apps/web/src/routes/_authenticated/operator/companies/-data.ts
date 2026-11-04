@@ -12,9 +12,10 @@ import { ApiError, apiClient } from "@/providers/apiClient";
 import Utilities from "@/utils";
 import { QUERY_KEY_ROOTS, invalidateOperatorCompanyViews } from "../../-invalidation";
 
-// DEV_NOTE: The operator's Companies pages (M7-8): the list per status tab + page, the tab counts, and one company.
-// keys.all() covers them all. A status change sets the company's detail (setQueryData) and refetches the lists and
-// counts; a new company refetches them too.
+// DEV_NOTE: The operator's Companies pages (M7-8): the list per status tab + page, the tab counts, one company, and its
+// connections. keys.all() covers them all. A status change sets the company's detail (setQueryData) and refetches the
+// lists and counts; a new company refetches them too. A connection write sets that connection and refetches the
+// company's list and the Companies list (its environments column).
 export class OperatorCompaniesQueries {
   static keys = {
     all: () => QUERY_KEY_ROOTS.operatorCompanies,
@@ -24,6 +25,10 @@ export class OperatorCompaniesQueries {
     statusCounts: () => [...OperatorCompaniesQueries.keys.all(), "status-counts"] as const,
     details: () => [...OperatorCompaniesQueries.keys.all(), "detail"] as const,
     detail: (publicId: string) => [...OperatorCompaniesQueries.keys.details(), publicId] as const,
+    connections: (publicId: string) =>
+      [...OperatorCompaniesQueries.keys.detail(publicId), "connections"] as const,
+    connection: (publicId: string, connectionPublicId: string) =>
+      [...OperatorCompaniesQueries.keys.connections(publicId), connectionPublicId] as const,
   };
 
   static list(
@@ -69,6 +74,34 @@ export class OperatorCompaniesQueries {
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetCompanyApiResponse>(
           `/operator/companies/${encodeURIComponent(publicId)}`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  static connections(publicId: string, getToken: Parameters<typeof apiClient>[1]) {
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.connections(publicId),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetCompanyConnectionsApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/connections`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  static connection(
+    publicId: string,
+    connectionPublicId: string,
+    getToken: Parameters<typeof apiClient>[1],
+  ) {
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.connection(publicId, connectionPublicId),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetCompanyConnectionApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}`,
           getToken,
           { signal },
         ),
@@ -170,5 +203,87 @@ export function useRebuildInsights(publicId: string) {
         `Rebuilt ${Utilities.plural(body.rebuiltDays?.length ?? 0, "day")}. ${failed.map((day) => Utilities.formatDay(day)).join(", ")} didn't rebuild: try those days again.`,
       );
     },
+  });
+}
+
+export function useCompanyConnections(publicId: string) {
+  const { getToken } = useAuth();
+  return useQuery(OperatorCompaniesQueries.connections(publicId, getToken));
+}
+
+// DEV_NOTE: enabled = false on the Add connection page
+export function useCompanyConnection(publicId: string, connectionPublicId: string | null) {
+  const { getToken } = useAuth();
+  return useQuery({
+    ...OperatorCompaniesQueries.connection(publicId, connectionPublicId ?? "", getToken),
+    enabled: connectionPublicId !== null,
+  });
+}
+
+// DEV_NOTE: Why a connection write was refused (409 / 400), in the page's words. A 409 is shown on the issuer field too.
+export const CONNECTION_FAILURE_TEXT: Record<Schemas.CompanyConnectionFailureEnum, string> = {
+  [Schemas.CompanyConnectionFailureEnum.IssuerTaken]:
+    "Another connection already uses this JWT issuer. Nothing was saved.",
+  [Schemas.CompanyConnectionFailureEnum.Invalid]:
+    "The sign-in settings or clean-up call don't fit this connection. Nothing was saved.",
+};
+
+export function connectionFailure(error: unknown): Schemas.CompanyConnectionFailureEnum | null {
+  if (!(error instanceof ApiError)) return null;
+  return (error.body as Schemas.CreateCompanyConnectionApiResponse).failure ?? null;
+}
+
+function toastConnectionError(error: unknown) {
+  const failure = connectionFailure(error);
+  toast.error(
+    failure ? CONNECTION_FAILURE_TEXT[failure] : "The connection wasn't saved. Try again.",
+  );
+}
+
+// DEV_NOTE: Add a connection. The caller awaits it (mutateAsync) to go back to the company's page, or to show a refusal
+// on its field.
+export function useCreateConnection(publicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.CreateCompanyConnectionApiRequest) =>
+      apiClient<Schemas.CreateCompanyConnectionApiResponse>(
+        `/operator/companies/${encodeURIComponent(publicId)}/connections`,
+        getToken,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      invalidateOperatorCompanyViews(queryClient);
+      toast.success("Connection added.");
+    },
+    onError: toastConnectionError,
+  });
+}
+
+export function useUpdateConnection(publicId: string, connectionPublicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.UpdateCompanyConnectionApiRequest) =>
+      apiClient<Schemas.UpdateCompanyConnectionApiResponse>(
+        `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}`,
+        getToken,
+        { method: "PATCH", body: JSON.stringify(body) },
+      ),
+    onSuccess: (response) => {
+      if (response.companyConnection) {
+        queryClient.setQueryData<Schemas.GetCompanyConnectionApiResponse>(
+          OperatorCompaniesQueries.keys.connection(publicId, connectionPublicId),
+          (previous) => ({
+            ...previous,
+            isSuccess: true,
+            companyConnection: response.companyConnection,
+          }),
+        );
+      }
+      invalidateOperatorCompanyViews(queryClient);
+      toast.success("Connection saved.");
+    },
+    onError: toastConnectionError,
   });
 }
