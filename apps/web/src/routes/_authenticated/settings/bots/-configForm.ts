@@ -115,7 +115,8 @@ export function toConfigBodyInput(
   return {
     persona: { instructions: values.instructions },
     procedures: values.procedures,
-    tools: values.tools,
+    // DEV_NOTE: A ticked tool is a whole option (description, risk…): the body keeps only its pin
+    tools: values.tools.map((tool) => ({ name: tool.name, version: tool.version })),
     approvalRules: values.approvalRules.map((rule) => ({
       roles: rule.roles
         .split(",")

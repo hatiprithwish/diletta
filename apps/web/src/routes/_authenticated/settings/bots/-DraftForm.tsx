@@ -236,8 +236,43 @@ export function ConfigForm({
                     : pinned.filter((tool) => pinKey(tool) !== pinKey(pin)),
                 );
               const unavailable = pinned.filter((tool) => !toolOptionKeys.has(pinKey(tool)));
+              // DEV_NOTE: One version per tool (a bot pins one): the version already pinned, else the latest
+              const selectable = new Map<string, Schemas.ChatbotConfigPin>();
+              for (const tool of options.tools) {
+                const chosen = selectable.get(tool.name);
+                const isPinnedVersion = isPinned(tool);
+                if (
+                  !chosen ||
+                  isPinnedVersion ||
+                  (!isPinned(chosen) && tool.version > chosen.version)
+                ) {
+                  selectable.set(tool.name, tool);
+                }
+              }
+              const selectableTools = [...selectable.values()];
+              const pinnedCount = selectableTools.filter(isPinned).length;
+              const toggleAll = (isOn: boolean) =>
+                field.handleChange([
+                  ...pinned.filter((tool) => !selectable.has(tool.name)),
+                  ...(isOn ? selectableTools : []),
+                ]);
               return (
                 <div className="flex flex-col gap-3">
+                  {selectableTools.length > 1 && (
+                    <label className="flex items-center gap-3">
+                      <Checkbox
+                        checked={
+                          pinnedCount === selectableTools.length
+                            ? true
+                            : pinnedCount === 0
+                              ? false
+                              : "indeterminate"
+                        }
+                        onCheckedChange={(checked) => toggleAll(checked === true)}
+                      />
+                      <span className="text-body text-foreground">Select all</span>
+                    </label>
+                  )}
                   {options.tools.length === 0 && unavailable.length === 0 && (
                     <p className="text-body text-muted-foreground">
                       No tools are turned on for your company yet.
@@ -374,9 +409,12 @@ export function ConfigForm({
                                   Every tool (none is chosen above).
                                 </p>
                               )}
-                              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                              <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-3">
                                 {pinnedTools.map((tool) => (
-                                  <label key={tool.name} className="flex items-center gap-2">
+                                  <label
+                                    key={tool.name}
+                                    className="flex min-w-0 items-center gap-2"
+                                  >
                                     <Checkbox
                                       checked={field.state.value.includes(tool.name)}
                                       onCheckedChange={(checked) =>
@@ -389,7 +427,10 @@ export function ConfigForm({
                                         )
                                       }
                                     />
-                                    <span className="font-mono text-mono-value text-foreground">
+                                    <span
+                                      className="truncate font-mono text-mono-value text-foreground"
+                                      title={tool.name}
+                                    >
                                       {tool.name}
                                     </span>
                                   </label>
