@@ -8,7 +8,6 @@ import {
   useLocation,
   useNavigate,
   useParams,
-  useSearch,
 } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@clerk/tanstack-react-start";
@@ -75,7 +74,12 @@ function DashboardShell() {
   const queryClient = useQueryClient();
   const recordActing = useRecordOperatorActing();
   const pathname = useLocation({ select: (location) => location.pathname });
-  const { company } = Schemas.ZActingCompanySearch.parse(useSearch({ strict: false }));
+  // DEV_NOTE: From the location, not useSearch: on a link click the router moves the location (and pathname) first and
+  // the matches, which useSearch reads, a render later. Reading them here saw the new page with the old, empty
+  // search and bounced an operator back to the operator pages.
+  const { company } = Schemas.ZActingCompanySearch.parse(
+    useLocation({ select: (location) => location.search }),
+  );
   const params: { id?: string } = useParams({ strict: false });
   const isOperatorPage = isOperatorPath(pathname);
 
