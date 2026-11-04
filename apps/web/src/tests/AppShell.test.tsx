@@ -9,6 +9,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Link,
 } from "@tanstack/react-router";
 import { TooltipProvider } from "@app/ui/components/tooltip";
 import * as Schemas from "@app/schemas";
@@ -104,6 +105,8 @@ function renderShell(
     getParentRoute: () => rootRoute,
     id: "_authenticated",
     component: AuthenticatedRoute.options.component,
+    validateSearch: AuthenticatedRoute.options.validateSearch,
+    search: AuthenticatedRoute.options.search,
   });
   const paths = [
     ...NAV_GROUPS.flatMap((group) =>
@@ -118,7 +121,17 @@ function renderShell(
     createRoute({
       getParentRoute: () => layoutRoute,
       path: to,
-      component: () => <p>page {to}</p>,
+
+      component: () => (
+        <>
+          <p>page {to}</p>
+          {to === "/operator/companies" && (
+            <Link to="/overview" search={{ company: "cmp_2" }}>
+              Open dashboard
+            </Link>
+          )}
+        </>
+      ),
     }),
   );
   const router = createRouter({
@@ -222,6 +235,17 @@ describe("dashboard shell", () => {
 
     expect(await screen.findByText("You don't have access to this dashboard")).toBeInTheDocument();
     expect(screen.queryByText("page /overview")).not.toBeInTheDocument();
+  });
+
+  it("stays on the dashboard when an operator opens a company's dashboard from a link", async () => {
+    mockOperator();
+    renderShell("/operator/companies");
+
+    await userEvent.click(await screen.findByRole("link", { name: "Open dashboard" }));
+
+    expect(await screen.findByText("Acting as Northfield")).toBeInTheDocument();
+    expect(screen.getByText("page /overview")).toBeInTheDocument();
+    expect(screen.queryByText("page /operator/companies")).not.toBeInTheDocument();
   });
 
   it("sends an operator with no company picked to the operator pages", async () => {
