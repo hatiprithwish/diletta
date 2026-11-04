@@ -145,6 +145,8 @@ A field eRegister reshapes when it is read isn't compared. That covers a registe
 
 ### Change or add a tool
 
+One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md`): open it, **New version**, edit the draft, save, **Make active**. The steps below change them all from code, so the next seed keeps them:
+
 1. If an eRegister request body changed, regenerate the input schemas from an eregister-backend checkout at the deployed commit:
 
    ```bash

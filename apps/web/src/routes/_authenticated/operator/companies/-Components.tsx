@@ -40,6 +40,7 @@ import {
   useSetCompanyStatus,
 } from "./-data";
 import { ConnectionsSection } from "./-Connections";
+import { ToolsSection } from "./-Tools";
 
 const { Active, Paused, Churned } = Schemas.CompanyStatusIntEnum;
 
@@ -66,10 +67,7 @@ function createdWhen(company: Schemas.CompanyWithStatus) {
 
 // DEV_NOTE: ADR 0006. Open a company's dashboard as its admin: the shell acts in the company ?company names. A churned
 // company can't be opened (403), so its button is off.
-function OpenDashboardButton({
-  company,
-  variant,
-}: Schemas.DashboardOperatorCompanySectionProps & { variant: "default" | "outline" }) {
+function OpenDashboardButton({ company, variant }: Schemas.DashboardOpenDashboardButtonProps) {
   const isChurned = company.companyStatus === Churned;
   return (
     <Button
@@ -345,6 +343,7 @@ function NewCompanyForm({ onClose }: Schemas.DashboardDialogProps) {
 // DEV_NOTE: The sections of a company's page, in tab order; the first is the default
 const COMPANY_TABS: { value: Schemas.OperatorCompanyTabEnum; label: string }[] = [
   { value: Schemas.OperatorCompanyTabEnum.Connections, label: "Connections" },
+  { value: Schemas.OperatorCompanyTabEnum.Tools, label: "Tools" },
   { value: Schemas.OperatorCompanyTabEnum.Maintenance, label: "Maintenance" },
 ];
 
@@ -413,6 +412,19 @@ export function OperatorCompanyPage({
       </div>
       {tab === Schemas.OperatorCompanyTabEnum.Connections && (
         <ConnectionsSection company={company} />
+      )}
+      {tab === Schemas.OperatorCompanyTabEnum.Tools && (
+        <ToolsSection
+          company={company}
+          search={search}
+          onSearch={(next) =>
+            void navigate({
+              to: "/operator/companies/$id",
+              params: { id: companyPublicId },
+              search: Schemas.ZOperatorCompanyPageSearch.parse(next),
+            })
+          }
+        />
       )}
       {tab === Schemas.OperatorCompanyTabEnum.Maintenance && (
         <MaintenanceSection company={company} />

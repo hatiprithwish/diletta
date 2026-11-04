@@ -110,6 +110,29 @@ export const TOOL_DEFINITION_STATUS_LABEL_MAP: Record<
   [ToolDefinitionStatusIntEnum.Disabled]: ToolDefinitionStatusLabelEnum.Disabled,
 };
 
+// DEV_NOTE: M7-8. The status tabs of a company's Tools section (operator page, URL ?tools=), and the status each lists
+export enum OperatorToolStatusTabEnum {
+  Active = "active",
+  Draft = "draft",
+  Disabled = "disabled",
+  All = "all",
+}
+
+export const OPERATOR_TOOL_STATUS_TAB_MAP: Record<
+  OperatorToolStatusTabEnum,
+  ToolDefinitionStatusIntEnum | null
+> = {
+  [OperatorToolStatusTabEnum.Active]: ToolDefinitionStatusIntEnum.Active,
+  [OperatorToolStatusTabEnum.Draft]: ToolDefinitionStatusIntEnum.Draft,
+  [OperatorToolStatusTabEnum.Disabled]: ToolDefinitionStatusIntEnum.Disabled,
+  [OperatorToolStatusTabEnum.All]: null,
+};
+
+export const OPERATOR_TOOLS_PAGE_SIZE = 25;
+
+// DEV_NOTE: M7-8. The versions of one tool listed next to the one open (newest first); a tool has few
+export const OPERATOR_TOOL_VERSIONS_PAGE_SIZE = 50;
+
 export enum ToolDefinitionSortColumn {
   CreatedAt = "createdAt",
   Name = "name",

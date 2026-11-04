@@ -7,6 +7,7 @@ import {
   ZCompanySortColumn,
 } from "./CompaniesCommon";
 import { ZPageApiRequest } from "../common";
+import { OperatorToolStatusTabEnum } from "../toolDefinitions/ToolDefinitionsCommon";
 
 export const ZCreateCompanyApiRequest = z.object({
   company: ZCompanyBase,
@@ -46,9 +47,11 @@ export const ZOperatorCompaniesPageSearch = z.object({
 });
 export type OperatorCompaniesPageSearch = z.infer<typeof ZOperatorCompaniesPageSearch>;
 
-// DEV_NOTE: M7-8. An operator's company page URL search: its section
+// DEV_NOTE: M7-8. An operator's company page URL search: its section, and the Tools section's status tab and page
 export const ZOperatorCompanyPageSearch = z.object({
   tab: z.enum(OperatorCompanyTabEnum).optional().catch(undefined),
+  tools: z.enum(OperatorToolStatusTabEnum).optional().catch(undefined),
+  page: z.coerce.number().int().min(1).optional().catch(undefined),
 });
 export type OperatorCompanyPageSearch = z.infer<typeof ZOperatorCompanyPageSearch>;
 

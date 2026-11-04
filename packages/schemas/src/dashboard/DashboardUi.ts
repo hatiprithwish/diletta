@@ -1,6 +1,13 @@
 import type { ActingCompany, AdminProfile } from "../admins";
 import type { CompanyConnectionWithStatus } from "../companyConnections";
 import type {
+  OperatorToolStatusTabEnum,
+  ToolDefinitionIdempotencyModeIntEnum,
+  ToolDefinitionRiskIntEnum,
+  ToolDefinitionWithStatus,
+  ToolOps,
+} from "../toolDefinitions";
+import type {
   CompanyStatusIntEnum,
   CompanyWithStatus,
   OperatorCompaniesPageSearch,
@@ -955,4 +962,74 @@ export interface DashboardOperatorConnectionPageProps {
 export interface DashboardOperatorConnectionFormProps {
   companyPublicId: string;
   connection: CompanyConnectionWithStatus | null;
+}
+
+// DEV_NOTE: M7-8. A company's Tools section (operator): its status tab and page live in the company page's URL
+export interface DashboardOperatorToolsSectionProps {
+  company: CompanyWithStatus;
+  search: OperatorCompanyPageSearch;
+  onSearch: (next: OperatorCompanyPageSearch) => void;
+}
+
+export interface DashboardOperatorToolRowProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus;
+  connections: CompanyConnectionWithStatus[];
+}
+
+// DEV_NOTE: One tool version's page (toolPublicId null = a new tool)
+export interface DashboardOperatorToolPageProps {
+  companyPublicId: string;
+  toolPublicId: string | null;
+}
+
+export interface DashboardOperatorToolFormProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus | null;
+  connections: CompanyConnectionWithStatus[];
+}
+
+export interface DashboardOperatorToolVersionsProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus;
+}
+
+export interface DashboardOperatorToolActionsProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus;
+  isDirty: boolean;
+}
+
+export interface DashboardOperatorToolTabCountProps {
+  companyPublicId: string;
+  tab: OperatorToolStatusTabEnum;
+}
+
+// DEV_NOTE: The tool form's values: enums as select strings, the ops as JSON text (a blank readback or undo is none)
+export interface DashboardOperatorToolFormValues {
+  name: string;
+  description: string;
+  risk: string;
+  approval: string;
+  idempotencyMode: string;
+  connectionPublicId: string;
+  inputSchema: string;
+  callOp: string;
+  readbackOp: string;
+  inverseOp: string;
+}
+
+// DEV_NOTE: The form checked as the API would: the request's typed fields, or the first reason it would be refused
+export type DashboardOperatorToolCheck =
+  | {
+      isValid: true;
+      risk: ToolDefinitionRiskIntEnum;
+      idempotencyMode: ToolDefinitionIdempotencyModeIntEnum;
+      ops: ToolOps;
+    }
+  | { isValid: false; issue: string };
+
+// DEV_NOTE: Open dashboard on the operator pages: a row's outline button or the company page's primary one
+export interface DashboardOpenDashboardButtonProps extends DashboardOperatorCompanySectionProps {
+  variant: "default" | "outline";
 }

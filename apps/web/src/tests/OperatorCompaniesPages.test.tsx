@@ -15,6 +15,8 @@ import { Route as CompaniesRoute } from "@/routes/_authenticated/operator/compan
 import { Route as CompanyRoute } from "@/routes/_authenticated/operator/companies/$id/index";
 import { Route as NewConnectionRoute } from "@/routes/_authenticated/operator/companies/$id/connections/new/index";
 import { Route as ConnectionRoute } from "@/routes/_authenticated/operator/companies/$id/connections/$connectionId/index";
+import { Route as NewToolRoute } from "@/routes/_authenticated/operator/companies/$id/tools/new/index";
+import { Route as ToolRoute } from "@/routes/_authenticated/operator/companies/$id/tools/$toolId/index";
 
 vi.mock("@clerk/tanstack-react-start", () => ({
   useAuth: () => ({
@@ -108,6 +110,57 @@ const PRODUCTION = connection(
   null,
 );
 
+const READ_OPS: Schemas.ToolOps = {
+  inputSchema: {
+    type: "object",
+    properties: { registerId: { type: "string" } },
+    required: ["registerId"],
+  },
+  callOp: { method: Schemas.ToolOpMethodEnum.Get, path: "/registers/{args.registerId}" },
+  readbackOp: null,
+  inverseOp: null,
+};
+
+function tool(
+  publicId: string,
+  version: number,
+  status: Schemas.ToolDefinitionStatusIntEnum,
+  risk: Schemas.ToolDefinitionRiskIntEnum = Schemas.ToolDefinitionRiskIntEnum.Read,
+): Schemas.ToolDefinitionWithStatus {
+  return {
+    publicId,
+    name: "eregister_get_register",
+    version,
+    description: "Read one register",
+    risk,
+    schemaVersion: 1,
+    idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.None,
+    approval: Schemas.ToolDefinitionApprovalIntEnum.Never,
+    source: Schemas.ToolDefinitionSourceIntEnum.Manual,
+    status,
+    connectionPublicId: "con_stg",
+    createdAt: new Date("2026-10-28T09:00:00.000Z"),
+    updatedAt: new Date("2026-10-28T09:00:00.000Z"),
+    ops: READ_OPS,
+    toolDefinitionStatus: status,
+    toolDefinitionStatusLabel: Schemas.TOOL_DEFINITION_STATUS_LABEL_MAP[status],
+    riskLabel: Schemas.TOOL_DEFINITION_RISK_LABEL_MAP[risk],
+    idempotencyModeLabel: Schemas.ToolDefinitionIdempotencyModeLabelEnum.None,
+    approvalLabel: Schemas.ToolDefinitionApprovalLabelEnum.Never,
+    sourceLabel: Schemas.ToolDefinitionSourceLabelEnum.Manual,
+  };
+}
+
+const TOOL_V1 = tool("tool_1", 1, Schemas.ToolDefinitionStatusIntEnum.Active);
+const TOOL_V2 = tool("tool_2", 2, Schemas.ToolDefinitionStatusIntEnum.Draft);
+// A write draft with no readback: the API would refuse it
+const TOOL_BAD = tool(
+  "tool_bad",
+  3,
+  Schemas.ToolDefinitionStatusIntEnum.Draft,
+  Schemas.ToolDefinitionRiskIntEnum.Write,
+);
+
 const COUNTS: Schemas.CompanyStatusCounts = {
   [Schemas.CompanyStatusIntEnum.Active]: 1,
   [Schemas.CompanyStatusIntEnum.Paused]: 0,
@@ -132,6 +185,32 @@ let eRegisterStatus = Schemas.CompanyStatusIntEnum.Active;
 function defaultApi(url: string, init: RequestInit | undefined): { status: number; body: unknown } {
   const method = init?.method ?? "GET";
   const path = new URL(url, "http://api.test").pathname;
+  if (path.endsWith("/tool-definitions/count")) {
+    return { status: 200, body: { isSuccess: true, totalRecords: 1 } };
+  }
+  if (path.endsWith("/operator/companies/cmp_1/tool-definitions") && method === "GET") {
+    return { status: 200, body: { isSuccess: true, toolDefinitions: [TOOL_V2, TOOL_V1] } };
+  }
+  if (path.endsWith("/operator/companies/cmp_1/tool-definitions") && method === "POST") {
+    return { status: 201, body: { isSuccess: true, toolDefinition: TOOL_V2 } };
+  }
+  if (path.endsWith("/tool-definitions/tool_1/versions")) {
+    return { status: 201, body: { isSuccess: true, toolDefinition: TOOL_V2 } };
+  }
+  if (path.endsWith("/tool-definitions/tool_2/status")) {
+    return {
+      status: 200,
+      body: {
+        isSuccess: true,
+        toolDefinition: tool("tool_2", 2, Schemas.ToolDefinitionStatusIntEnum.Active),
+      },
+    };
+  }
+  for (const found of [TOOL_V1, TOOL_V2, TOOL_BAD]) {
+    if (path.endsWith(`/tool-definitions/${found.publicId}`)) {
+      return { status: 200, body: { isSuccess: true, toolDefinition: found } };
+    }
+  }
   if (path.endsWith("/operator/companies/cmp_1/connections") && method === "GET") {
     return { status: 200, body: { isSuccess: true, companyConnections: [STAGING, PRODUCTION] } };
   }
@@ -206,6 +285,16 @@ function renderPage(path: string) {
         getParentRoute: () => rootRoute,
         path: "/operator/companies/$id/connections/$connectionId",
         component: ConnectionRoute.options.component,
+      }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/operator/companies/$id/tools/new",
+        component: NewToolRoute.options.component,
+      }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/operator/companies/$id/tools/$toolId",
+        component: ToolRoute.options.component,
       }),
       createRoute({
         getParentRoute: () => rootRoute,
@@ -547,5 +636,116 @@ describe("Connections", () => {
         resetOp: { method: "POST", path: "/test-data/reset" },
       },
     });
+  });
+});
+
+describe("Tools", () => {
+  it("lists the company's tool versions with their status, risk and connection", async () => {
+    const fetchMock = mockApi();
+    renderPage("/operator/companies/cmp_1?tab=tools");
+
+    const links = await screen.findAllByRole("link", { name: "eregister_get_register" });
+    expect(links[0]).toHaveAttribute("href", "/operator/companies/cmp_1/tools/tool_2");
+    expect(screen.getAllByText("Staging").length).toBeGreaterThan(0);
+    expect(screen.getByText("v1")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        calls(
+          fetchMock,
+          "GET",
+          `/tool-definitions?status=${Schemas.ToolDefinitionStatusIntEnum.Active}&pageNo=1`,
+        ),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("creates a read tool as a draft with the checked ops, then opens it", async () => {
+    const fetchMock = mockApi();
+    const router = renderPage("/operator/companies/cmp_1/tools/new");
+
+    await userEvent.type(await screen.findByLabelText("Name"), "eregister_get_register");
+    await userEvent.type(screen.getByLabelText("Description"), "Read one register");
+    await userEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/operator/companies/cmp_1/tools/tool_2"),
+    );
+    const [[, init]] = calls(fetchMock, "POST", "/tool-definitions");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      toolDefinition: {
+        connectionPublicId: "con_stg",
+        name: "eregister_get_register",
+        description: "Read one register",
+        risk: Schemas.ToolDefinitionRiskIntEnum.Read,
+        idempotencyMode: Schemas.ToolDefinitionIdempotencyModeIntEnum.None,
+        approval: Schemas.ToolDefinitionApprovalIntEnum.Always,
+        source: Schemas.ToolDefinitionSourceIntEnum.Manual,
+        ops: {
+          inputSchema: { type: "object", properties: {} },
+          callOp: { method: "GET", path: "/" },
+          readbackOp: null,
+          inverseOp: null,
+        },
+      },
+    });
+  });
+
+  it("says why a draft can't be saved, before sending it", async () => {
+    const fetchMock = mockApi();
+    renderPage("/operator/companies/cmp_1/tools/tool_bad");
+
+    expect(await screen.findByText("A write tool needs a readback op")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Make active" })).toBeDisabled();
+    expect(calls(fetchMock, "PATCH", "/tool-definitions")).toHaveLength(0);
+  });
+
+  it("makes a saved draft active", async () => {
+    const fetchMock = mockApi();
+    renderPage("/operator/companies/cmp_1/tools/tool_2");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Make active" }));
+
+    await waitFor(() => expect(calls(fetchMock, "PUT", "/tool_2/status")).toHaveLength(1));
+    const [[, init]] = calls(fetchMock, "PUT", "/tool_2/status");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      status: Schemas.ToolDefinitionStatusIntEnum.Active,
+    });
+  });
+
+  it("shows an active version read-only and starts a new version from it", async () => {
+    mockApi();
+    const router = renderPage("/operator/companies/cmp_1/tools/tool_1");
+
+    expect(await screen.findByLabelText("Call")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: "Save draft" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "New version" }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/operator/companies/cmp_1/tools/tool_2"),
+    );
+  });
+
+  it("says why a version can't be disabled", async () => {
+    mockApi((url, init) =>
+      init?.method === "PUT"
+        ? {
+            status: 409,
+            body: {
+              isSuccess: false,
+              failure: Schemas.ToolDefinitionFailureEnum.PinnedByPublishedConfig,
+            },
+          }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1/tools/tool_1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Disable" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "A published bot version uses this tool version. Publish one without it first.",
+      ),
+    );
   });
 });

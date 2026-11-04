@@ -29,6 +29,19 @@ export class OperatorCompaniesQueries {
       [...OperatorCompaniesQueries.keys.detail(publicId), "connections"] as const,
     connection: (publicId: string, connectionPublicId: string) =>
       [...OperatorCompaniesQueries.keys.connections(publicId), connectionPublicId] as const,
+    tools: (publicId: string) =>
+      [...OperatorCompaniesQueries.keys.detail(publicId), "tools"] as const,
+    toolList: (
+      publicId: string,
+      status: Schemas.ToolDefinitionStatusIntEnum | null,
+      page: number,
+    ) => [...OperatorCompaniesQueries.keys.tools(publicId), "list", status, page] as const,
+    toolCount: (publicId: string, status: Schemas.ToolDefinitionStatusIntEnum | null) =>
+      [...OperatorCompaniesQueries.keys.tools(publicId), "count", status] as const,
+    toolVersions: (publicId: string, name: string) =>
+      [...OperatorCompaniesQueries.keys.tools(publicId), "versions", name] as const,
+    tool: (publicId: string, toolPublicId: string) =>
+      [...OperatorCompaniesQueries.keys.tools(publicId), "detail", toolPublicId] as const,
   };
 
   static list(
@@ -74,6 +87,79 @@ export class OperatorCompaniesQueries {
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetCompanyApiResponse>(
           `/operator/companies/${encodeURIComponent(publicId)}`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  static toolList(
+    publicId: string,
+    status: Schemas.ToolDefinitionStatusIntEnum | null,
+    page: number,
+    getToken: Parameters<typeof apiClient>[1],
+  ) {
+    const params = new URLSearchParams();
+    if (status !== null) params.set("status", String(status));
+    params.set("pageNo", String(page));
+    params.set("pageSize", String(Schemas.OPERATOR_TOOLS_PAGE_SIZE));
+    params.set("sortColumn", Schemas.ToolDefinitionSortColumn.Name);
+    params.set("sortDirection", Schemas.SortDirection.Asc);
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.toolList(publicId, status, page),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetToolDefinitionsApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/tool-definitions?${params.toString()}`,
+          getToken,
+          { signal },
+        ),
+      placeholderData: keepPreviousData,
+    });
+  }
+
+  static toolCount(
+    publicId: string,
+    status: Schemas.ToolDefinitionStatusIntEnum | null,
+    getToken: Parameters<typeof apiClient>[1],
+  ) {
+    const params = new URLSearchParams();
+    if (status !== null) params.set("status", String(status));
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.toolCount(publicId, status),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetToolDefinitionsCountApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/tool-definitions/count?${params.toString()}`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  static toolVersions(publicId: string, name: string, getToken: Parameters<typeof apiClient>[1]) {
+    const params = new URLSearchParams({
+      name,
+      pageNo: "1",
+      pageSize: String(Schemas.OPERATOR_TOOL_VERSIONS_PAGE_SIZE),
+      sortColumn: Schemas.ToolDefinitionSortColumn.CreatedAt,
+      sortDirection: Schemas.SortDirection.Desc,
+    });
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.toolVersions(publicId, name),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetToolDefinitionsApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/tool-definitions?${params.toString()}`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  static tool(publicId: string, toolPublicId: string, getToken: Parameters<typeof apiClient>[1]) {
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.tool(publicId, toolPublicId),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetToolDefinitionApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/tool-definitions/${encodeURIComponent(toolPublicId)}`,
           getToken,
           { signal },
         ),
@@ -285,5 +371,188 @@ export function useUpdateConnection(publicId: string, connectionPublicId: string
       toast.success("Connection saved.");
     },
     onError: toastConnectionError,
+  });
+}
+
+// ─── Tools
+
+export function useCompanyTools(
+  publicId: string,
+  status: Schemas.ToolDefinitionStatusIntEnum | null,
+  page: number,
+) {
+  const { getToken } = useAuth();
+  return useQuery(OperatorCompaniesQueries.toolList(publicId, status, page, getToken));
+}
+
+export function useCompanyToolCount(
+  publicId: string,
+  status: Schemas.ToolDefinitionStatusIntEnum | null,
+) {
+  const { getToken } = useAuth();
+  return useQuery(OperatorCompaniesQueries.toolCount(publicId, status, getToken));
+}
+
+export function useToolVersions(publicId: string, name: string) {
+  const { getToken } = useAuth();
+  return useQuery(OperatorCompaniesQueries.toolVersions(publicId, name, getToken));
+}
+
+// DEV_NOTE: enabled = false on the New tool page
+export function useCompanyTool(publicId: string, toolPublicId: string | null) {
+  const { getToken } = useAuth();
+  return useQuery({
+    ...OperatorCompaniesQueries.tool(publicId, toolPublicId ?? "", getToken),
+    enabled: toolPublicId !== null,
+  });
+}
+
+// DEV_NOTE: Why a tool write was refused (409 / 400), in the page's words
+const TOOL_FAILURE_TEXT: Record<Schemas.ToolDefinitionFailureEnum, string> = {
+  [Schemas.ToolDefinitionFailureEnum.NotDraft]:
+    "Only a draft can be changed. Start a new version instead. Nothing was saved.",
+  [Schemas.ToolDefinitionFailureEnum.DraftExists]:
+    "This tool already has a draft. Open it from Versions.",
+  [Schemas.ToolDefinitionFailureEnum.NameTaken]:
+    "A tool with this name exists. Start a new version of it instead.",
+  [Schemas.ToolDefinitionFailureEnum.InvalidTransition]:
+    "That status change isn't allowed from where this version is. Nothing changed.",
+  [Schemas.ToolDefinitionFailureEnum.InvalidOps]:
+    "The calls don't fit this tool's risk or input. Nothing was saved.",
+  [Schemas.ToolDefinitionFailureEnum.ConnectionNotFound]:
+    "That connection isn't one of this company's. Nothing was saved.",
+  [Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable]:
+    "That connection is off or can't run tools. Nothing was saved.",
+  [Schemas.ToolDefinitionFailureEnum.PinnedByPublishedConfig]:
+    "A published bot version uses this tool version. Publish one without it first.",
+};
+
+function toastToolError(fallback: string) {
+  return (error: unknown) => {
+    const failure =
+      error instanceof ApiError
+        ? (error.body as Schemas.ToolDefinitionStateResponse).failure
+        : undefined;
+    toast.error(failure ? TOOL_FAILURE_TEXT[failure] : fallback);
+  };
+}
+
+function toolsPath(publicId: string, toolPublicId?: string) {
+  const base = `/operator/companies/${encodeURIComponent(publicId)}/tool-definitions`;
+  return toolPublicId ? `${base}/${encodeURIComponent(toolPublicId)}` : base;
+}
+
+// DEV_NOTE: Every tool write answers with the version as it now is: set it, and refetch the company's tool lists,
+// counts, versions and details
+function useToolWriteSuccess(publicId: string) {
+  const queryClient = useQueryClient();
+  return (response: Schemas.ToolDefinitionMutationResponse) => {
+    if (response.toolDefinition) {
+      queryClient.setQueryData<Schemas.GetToolDefinitionApiResponse>(
+        OperatorCompaniesQueries.keys.tool(publicId, response.toolDefinition.publicId),
+        { isSuccess: true, toolDefinition: response.toolDefinition },
+      );
+    }
+    void queryClient.invalidateQueries({ queryKey: OperatorCompaniesQueries.keys.tools(publicId) });
+  };
+}
+
+// DEV_NOTE: The callers await these (mutateAsync) to open the version the write made or left
+export function useCreateTool(publicId: string) {
+  const { getToken } = useAuth();
+  const onWrite = useToolWriteSuccess(publicId);
+  return useMutation({
+    mutationFn: (body: Schemas.CreateToolDefinitionApiRequest) =>
+      apiClient<Schemas.CreateToolDefinitionApiResponse>(toolsPath(publicId), getToken, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (response) => {
+      onWrite(response);
+      toast.success("Tool created as a draft.");
+    },
+    onError: toastToolError("The tool wasn't created. Nothing changed, try again."),
+  });
+}
+
+export function useUpdateTool(publicId: string, toolPublicId: string) {
+  const { getToken } = useAuth();
+  const onWrite = useToolWriteSuccess(publicId);
+  return useMutation({
+    mutationFn: (body: Schemas.UpdateToolDefinitionApiRequest) =>
+      apiClient<Schemas.UpdateToolDefinitionApiResponse>(
+        toolsPath(publicId, toolPublicId),
+        getToken,
+        { method: "PATCH", body: JSON.stringify(body) },
+      ),
+    onSuccess: (response) => {
+      onWrite(response);
+      toast.success("Draft saved.");
+    },
+    onError: toastToolError("The draft wasn't saved. Try again."),
+  });
+}
+
+export function useSetToolStatus(publicId: string, toolPublicId: string) {
+  const { getToken } = useAuth();
+  const onWrite = useToolWriteSuccess(publicId);
+  return useMutation({
+    mutationFn: (body: Schemas.SetToolDefinitionStatusApiRequest) =>
+      apiClient<Schemas.SetToolDefinitionStatusApiResponse>(
+        `${toolsPath(publicId, toolPublicId)}/status`,
+        getToken,
+        { method: "PUT", body: JSON.stringify(body) },
+      ),
+    onSuccess: (response) => {
+      onWrite(response);
+      toast.success(
+        response.toolDefinition?.toolDefinitionStatus === Schemas.ToolDefinitionStatusIntEnum.Active
+          ? "Version is active. Bot versions can now pin it."
+          : "Version disabled.",
+      );
+    },
+    onError: toastToolError("The status didn't change. Try again."),
+  });
+}
+
+export function useCreateToolVersion(publicId: string, toolPublicId: string) {
+  const { getToken } = useAuth();
+  const onWrite = useToolWriteSuccess(publicId);
+  return useMutation({
+    mutationFn: () =>
+      apiClient<Schemas.CreateToolDefinitionVersionApiResponse>(
+        `${toolsPath(publicId, toolPublicId)}/versions`,
+        getToken,
+        { method: "POST" },
+      ),
+    onSuccess: (response) => {
+      onWrite(response);
+      toast.success("New draft version started.");
+    },
+    onError: toastToolError("The new version wasn't started. Try again."),
+  });
+}
+
+export function useDeleteTool(publicId: string, toolPublicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  const onWrite = useToolWriteSuccess(publicId);
+  return useMutation({
+    mutationFn: () =>
+      apiClient<Schemas.DeleteToolDefinitionApiResponse>(
+        toolsPath(publicId, toolPublicId),
+        getToken,
+        {
+          method: "DELETE",
+        },
+      ),
+    onSuccess: (response) => {
+      queryClient.removeQueries({
+        queryKey: OperatorCompaniesQueries.keys.tool(publicId, toolPublicId),
+      });
+      onWrite(response);
+      toast.success("Draft deleted.");
+    },
+    onError: toastToolError("The draft wasn't deleted. Try again."),
   });
 }
