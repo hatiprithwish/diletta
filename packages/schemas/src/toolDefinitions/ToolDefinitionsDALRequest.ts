@@ -22,6 +22,19 @@ export type CreateToolDefinitionDALRequest = Pick<
   | "createdBy"
 >;
 
+// DEV_NOTE: M7-8. Many new versions of one company in one insert, all at one status (a tool set's load: Active)
+export type CreateToolDefinitionsDALRequest = Pick<
+  ToolDefinition,
+  "companyId" | "createdBy" | "status"
+> & {
+  toolDefinitions: Omit<CreateToolDefinitionDALRequest, "companyId" | "createdBy">[];
+};
+
+// DEV_NOTE: M7-8. Many versions made Active in one update (a tool set's load)
+export type ActivateToolDefinitionsDALRequest = Pick<ToolDefinition, "companyId" | "updatedBy"> & {
+  publicIds: string[];
+};
+
 // DEV_NOTE: isForUpdate locks the row for the rest of the transaction (SELECT … FOR UPDATE), so a state change (edit,
 // status, delete) reads and writes the status with no other change in between
 export type FindToolDefinitionDALRequest = Pick<ToolDefinition, "publicId" | "companyId"> & {
@@ -36,6 +49,11 @@ export type FindToolConnectionDALRequest = Pick<ToolDefinition, "companyId"> & {
 // DEV_NOTE: Every version of one tool name. Used under lockToolDefinitionName, so the next version number and the
 // one-Draft rule are read with no concurrent create in between.
 export type FindToolDefinitionNameDALRequest = Pick<ToolDefinition, "companyId" | "name">;
+
+// DEV_NOTE: M7-8. Many names at once (a tool set's load)
+export type FindToolDefinitionNamesDALRequest = Pick<ToolDefinition, "companyId"> & {
+  names: string[];
+};
 
 export type GetToolDefinitionsCountDALRequest = Pick<ToolDefinition, "companyId"> &
   NullableDALFields<Pick<ToolDefinition, "name" | "status">>;

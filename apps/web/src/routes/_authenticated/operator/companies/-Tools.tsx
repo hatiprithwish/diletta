@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { Plus, Trash, Warning } from "@phosphor-icons/react";
+import { DownloadSimple, Plus, Trash, Warning } from "@phosphor-icons/react";
 import * as Schemas from "@app/schemas";
 import { Button } from "@app/ui/components/button";
 import {
@@ -33,6 +33,7 @@ import {
 import { Textarea } from "@app/ui/components/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@app/ui/components/toggle-group";
 import { cn } from "@app/ui/lib/utils";
+import { toast } from "sonner";
 import { PageError } from "@/components/page-state";
 import { Pager, PastEndNote } from "@/components/pager";
 import { SectionHeader } from "@/components/section-header";
@@ -46,6 +47,7 @@ import {
   useCreateTool,
   useCreateToolVersion,
   useDeleteTool,
+  useLoadToolSet,
   useOperatorCompany,
   useSetToolStatus,
   useToolVersions,
@@ -114,6 +116,7 @@ export function ToolsSection({
   const connections = useCompanyConnections(company.publicId).data?.companyConnections ?? [];
   const tools = query.data?.toolDefinitions;
   const isStale = query.isPlaceholderData;
+  const [isLoadingSet, setIsLoadingSet] = useState(false);
   const goTo = (next: Pick<Schemas.OperatorCompanyPageSearch, "tools" | "page">) =>
     onSearch({ ...search, ...next });
 
@@ -123,6 +126,10 @@ export function ToolsSection({
         title="Tools"
         description={`What the assistant can do in ${company.name}. Bots pin a version, so an active version never changes: start a new one.`}
       >
+        <Button variant="outline" onClick={() => setIsLoadingSet(true)}>
+          <DownloadSimple aria-hidden />
+          Load tool set
+        </Button>
         <Button asChild>
           <Link to="/operator/companies/$id/tools/new" params={{ id: company.publicId }}>
             <Plus aria-hidden />
@@ -130,6 +137,11 @@ export function ToolsSection({
           </Link>
         </Button>
       </SectionHeader>
+      <LoadToolSetDialog
+        company={company}
+        isOpen={isLoadingSet}
+        onClose={() => setIsLoadingSet(false)}
+      />
       <ToggleGroup
         type="single"
         variant="outline"
@@ -218,6 +230,205 @@ export function ToolsSection({
         </div>
       )}
     </section>
+  );
+}
+
+// ─── Load a tool set
+
+const TOOL_SET_OPTIONS = Object.values(Schemas.ToolSetEnum).map((value) => ({
+  value,
+  label: Schemas.TOOL_SET_LABEL_MAP[value],
+}));
+
+// DEV_NOTE: In the order a load's summary reads them: what changed first
+const TOOL_SET_CHANGES: { change: Schemas.ToolSetChangeEnum; text: string }[] = [
+  { change: Schemas.ToolSetChangeEnum.Created, text: "new" },
+  { change: Schemas.ToolSetChangeEnum.NewVersion, text: "new versions" },
+  { change: Schemas.ToolSetChangeEnum.Reactivated, text: "made active again" },
+  { change: Schemas.ToolSetChangeEnum.Unchanged, text: "unchanged" },
+];
+
+// DEV_NOTE: The form is mounted only while the dialog is open, so every opening starts fresh; after a load it shows
+// what changed and the pins for a bot version
+function LoadToolSetDialog({
+  company,
+  isOpen,
+  onClose,
+}: Schemas.DashboardOperatorLoadToolSetDialogProps) {
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-xl">
+        {isOpen && <LoadToolSetForm company={company} isOpen={isOpen} onClose={onClose} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function LoadToolSetForm({ company, onClose }: Schemas.DashboardOperatorLoadToolSetDialogProps) {
+  const load = useLoadToolSet(company.publicId);
+  const connectionsQuery = useCompanyConnections(company.publicId);
+  const connections = (connectionsQuery.data?.companyConnections ?? []).filter(
+    (connection) =>
+      connection.companyConnectionStatus === Schemas.CompanyConnectionStatusIntEnum.Active,
+  );
+  const [loaded, setLoaded] = useState<Schemas.ToolSetTool[] | null>(null);
+  const form = useForm({
+    defaultValues: {
+      toolSet: TOOL_SET_OPTIONS[0]!.value as string,
+      connectionPublicId: connections.length === 1 ? connections[0]!.publicId : "",
+    },
+    onSubmit: async ({ value }) => {
+      const parsed = Schemas.ZLoadToolSetApiRequest.safeParse(value);
+      if (!parsed.success) return;
+      const response = await load.mutateAsync(parsed.data);
+      setLoaded(response.tools ?? []);
+    },
+  });
+
+  if (loaded) return <ToolSetResult tools={loaded} onClose={onClose} />;
+
+  return (
+    <form
+      className="flex flex-col gap-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void form.handleSubmit().catch(() => undefined);
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Load tool set</DialogTitle>
+        <DialogDescription>
+          Adds every tool of the set to {company.name} on one connection, active. A tool that
+          changed gets a new version; bot versions keep the version they pin.
+        </DialogDescription>
+      </DialogHeader>
+      <form.Field name="toolSet">
+        {(field) => (
+          <Field>
+            <FieldLabel htmlFor="tool-set">Tool set</FieldLabel>
+            <Select value={field.state.value} onValueChange={field.handleChange}>
+              <SelectTrigger id="tool-set" className="w-full">
+                <SelectValue placeholder="Choose one" />
+              </SelectTrigger>
+              <SelectContent>
+                {TOOL_SET_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
+      </form.Field>
+      <form.Field
+        name="connectionPublicId"
+        validators={{ onChange: ({ value }) => (value ? undefined : "Choose a connection.") }}
+      >
+        {(field) => (
+          <Field data-invalid={field.state.meta.errors.length > 0}>
+            <FieldLabel htmlFor="tool-set-connection">Connection</FieldLabel>
+            <Select
+              value={field.state.value}
+              onValueChange={field.handleChange}
+              disabled={connections.length === 0}
+            >
+              <SelectTrigger id="tool-set-connection" className="w-full">
+                <SelectValue
+                  placeholder={
+                    connectionsQuery.isPending
+                      ? "Loading…"
+                      : connections.length === 0
+                        ? "No active connection"
+                        : "Choose one"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {connections.map((connection) => (
+                  <SelectItem key={connection.publicId} value={connection.publicId}>
+                    {connection.companyConnectionEnvironmentLabel} · {connection.baseUrl}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              The tools call this connection&apos;s API address. Only active connections are listed.
+            </FieldDescription>
+            <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
+          </Field>
+        )}
+      </form.Field>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <form.Subscribe
+          selector={(state) =>
+            [state.canSubmit, state.isSubmitting, state.values.connectionPublicId] as const
+          }
+        >
+          {([canSubmit, isSubmitting, connectionPublicId]) => (
+            <Button type="submit" disabled={!canSubmit || isSubmitting || !connectionPublicId}>
+              {isSubmitting ? "Loading…" : "Load tools"}
+            </Button>
+          )}
+        </form.Subscribe>
+      </DialogFooter>
+    </form>
+  );
+}
+
+// DEV_NOTE: What a load did, by change, and the {name, version} pins to put in a bot version's tools
+function ToolSetResult({ tools, onClose }: Schemas.DashboardOperatorToolSetResultProps) {
+  const pins = JSON.stringify(
+    tools.map(({ name, version }) => ({ name, version })),
+    null,
+    2,
+  );
+  const summary = TOOL_SET_CHANGES.map(({ change, text }) => {
+    const count = tools.filter((tool) => tool.change === change).length;
+    return count > 0 ? `${Utilities.formatCount(count)} ${text}` : null;
+  })
+    .filter((part) => part !== null)
+    .join(", ");
+
+  return (
+    <div className="flex flex-col gap-5">
+      <DialogHeader>
+        <DialogTitle>Tools loaded</DialogTitle>
+        <DialogDescription>
+          {Utilities.formatCount(tools.length)} tools: {summary}. Pin the ones a bot needs in its
+          draft version; every pinned tool goes into every model call.
+        </DialogDescription>
+      </DialogHeader>
+      <Field>
+        <FieldLabel htmlFor="tool-set-pins">Pins</FieldLabel>
+        <Textarea
+          id="tool-set-pins"
+          readOnly
+          value={pins}
+          className="h-56 font-mono text-mono-value"
+        />
+      </Field>
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            navigator.clipboard.writeText(pins).then(
+              () => toast.success("Pins copied."),
+              () => toast.error("Couldn't copy. Select the pins and copy them instead."),
+            );
+          }}
+        >
+          Copy pins
+        </Button>
+        <Button type="button" onClick={onClose}>
+          Done
+        </Button>
+      </DialogFooter>
+    </div>
   );
 }
 

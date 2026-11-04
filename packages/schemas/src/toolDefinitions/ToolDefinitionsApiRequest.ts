@@ -6,6 +6,7 @@ import {
   ZToolDefinitionSortColumn,
   getToolRiskOpsIssue,
 } from "./ToolDefinitionsCommon";
+import { ToolSetEnum } from "./ToolSets";
 import { ZPageApiRequest } from "../common";
 
 export const ZCreateToolDefinitionApiRequest = z.object({
@@ -51,3 +52,10 @@ export const ZGetToolDefinitionsCountApiRequest = ZGetToolDefinitionsApiRequest.
   status: true,
 });
 export type GetToolDefinitionsCountApiRequest = z.infer<typeof ZGetToolDefinitionsCountApiRequest>;
+
+// DEV_NOTE: M7-8. Loads a whole tool set (TOOL_SETS) onto one of the company's connections, in one transaction
+export const ZLoadToolSetApiRequest = z.object({
+  toolSet: z.enum(ToolSetEnum),
+  connectionPublicId: z.string().trim().min(1).max(64),
+});
+export type LoadToolSetApiRequest = z.infer<typeof ZLoadToolSetApiRequest>;

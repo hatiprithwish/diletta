@@ -726,6 +726,65 @@ describe("Tools", () => {
     );
   });
 
+  it("loads a tool set onto the chosen connection and shows what changed and the pins", async () => {
+    const tools: Schemas.ToolSetTool[] = [
+      { name: "eregister_list_companies", version: 1, change: Schemas.ToolSetChangeEnum.Created },
+      { name: "eregister_get_register", version: 2, change: Schemas.ToolSetChangeEnum.Unchanged },
+    ];
+    const fetchMock = mockApi((url, init) =>
+      init?.method === "POST" && url.endsWith("/tool-definitions/tool-sets")
+        ? { status: 200, body: { isSuccess: true, tools } }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1?tab=tools");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Load tool set" }));
+    expect(screen.getByRole("button", { name: "Load tools" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("combobox", { name: "Connection" }));
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Production · https://api.eregister.example/v1" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Load tools" }));
+
+    expect(await screen.findByText("Tools loaded")).toBeInTheDocument();
+    const [[, init]] = calls(fetchMock, "POST", "/tool-definitions/tool-sets");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      toolSet: Schemas.ToolSetEnum.Eregister,
+      connectionPublicId: "con_prd",
+    });
+    expect(screen.getByText(/2 tools: 1 new, 1 unchanged/)).toBeInTheDocument();
+    expect(JSON.parse((screen.getByLabelText("Pins") as HTMLTextAreaElement).value)).toEqual([
+      { name: "eregister_list_companies", version: 1 },
+      { name: "eregister_get_register", version: 2 },
+    ]);
+  });
+
+  it("names the tools whose drafts refuse a tool set load", async () => {
+    const message =
+      "These tools have a draft version; make it active or delete it first: eregister_get_register";
+    mockApi((url, init) =>
+      init?.method === "POST" && url.endsWith("/tool-definitions/tool-sets")
+        ? {
+            status: 409,
+            body: {
+              isSuccess: false,
+              message,
+              failure: Schemas.ToolDefinitionFailureEnum.DraftExists,
+            },
+          }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1?tab=tools");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Load tool set" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Connection" }));
+    await userEvent.click(await screen.findByRole("option", { name: /^Staging/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Load tools" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
+    expect(screen.queryByText("Tools loaded")).not.toBeInTheDocument();
+  });
+
   it("says why a version can't be disabled", async () => {
     mockApi((url, init) =>
       init?.method === "PUT"

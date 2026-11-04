@@ -91,6 +91,28 @@ ToolDefinitionsRoutes.post(
   },
 );
 
+// DEV_NOTE: M7-8. Loads a whole tool set onto one of the company's connections (ToolDefinitionsRepo.loadToolSet);
+// answers each tool's {name, version} for the bot config's pins. Registered before /:publicId routes.
+ToolDefinitionsRoutes.post(
+  "/tool-sets",
+  checkAuth,
+  authorizePlatform(Schemas.AuthzActionEnum.ToolDefinitionCreate),
+  resolveOperatorCompany(),
+  zValidator("json", Schemas.ZLoadToolSetApiRequest),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new ToolDefinitionsRepo(c.env);
+    const { outboxIds, ...response } = await repo.loadToolSet({
+      ...c.req.valid("json"),
+      companyId,
+      adminId: c.get("admin").adminId,
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, stateStatus(response, 200));
+  },
+);
+
 ToolDefinitionsRoutes.patch(
   "/:publicId",
   checkAuth,

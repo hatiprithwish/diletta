@@ -322,5 +322,37 @@ describe(
       expect(taken.status).toBe(409);
       expect(taken.body.failure).toBe(Schemas.ToolDefinitionFailureEnum.NameTaken);
     });
+
+    it("loads a tool set: 403 to a company admin, 400 for a bad body or connection, 200 with every tool audited", async () => {
+      const path = `${base()}/tool-sets`;
+      const body = { toolSet: Schemas.ToolSetEnum.Eregister, connectionPublicId: connectionA };
+      expect((await call("POST", path, { as: adminA, body })).status).toBe(403);
+      expect(
+        (await call("POST", path, { as: operator, body: { ...body, toolSet: "other" } })).status,
+      ).toBe(400);
+      const unknown = await call("POST", path, {
+        as: operator,
+        body: { ...body, connectionPublicId: "con_missing" },
+      });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionNotFound);
+
+      const setTools = Schemas.TOOL_SETS[Schemas.ToolSetEnum.Eregister];
+      const loaded = await call("POST", path, { as: operator, body });
+      expect(loaded.status).toBe(200);
+      expect(loaded.body).not.toHaveProperty("outboxIds");
+      const tools = loaded.body.tools as Schemas.ToolSetTool[];
+      expect(tools.map((tool) => tool.name)).toEqual(setTools.map((tool) => tool.name));
+
+      const events = await auditEvents(companyA, Schemas.AuditEntityTypeEnum.ToolDefinition);
+      const first = setTools[0]!.name;
+      const forFirst = events.filter(
+        (event) => (event.detail as { label: string }).label === first,
+      );
+      expect(forFirst.map((event) => [event.actorType, event.entityAction])).toEqual([
+        [Schemas.ActivityLogActorTypeIntEnum.Operator, Schemas.AuditEntityActionEnum.Created],
+        [Schemas.ActivityLogActorTypeIntEnum.Operator, Schemas.AuditEntityActionEnum.Activated],
+      ]);
+    });
   },
 );

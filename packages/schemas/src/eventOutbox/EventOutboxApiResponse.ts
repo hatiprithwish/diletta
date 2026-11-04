@@ -11,6 +11,12 @@ export interface RecordCriticalEventResponse extends ApiResponse {
   wasDuplicate?: boolean;
 }
 
+// DEV_NOTE: M7-8. A batch of critical events: one outbox id per event, in the events' order (an existing row's id for
+// a duplicate). Relay them after commit.
+export interface RecordCriticalEventsResponse extends ApiResponse {
+  outboxIds?: string[];
+}
+
 // DEV_NOTE: publishedCount = rows handed to the Queue; failedCount = rows whose send failed (still pending, or Failed
 // once they reach the attempt cap)
 export interface RelayEventsResponse extends ApiResponse {

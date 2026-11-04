@@ -166,12 +166,15 @@ export enum LogAction {
 
   // Tool definitions
   CreateToolDefinition = "CreateToolDefinition",
+  CreateToolDefinitions = "CreateToolDefinitions",
+  ActivateToolDefinitions = "ActivateToolDefinitions",
   GetToolDefinitionDetails = "GetToolDefinitionDetails",
   ListToolDefinitions = "ListToolDefinitions",
   CountToolDefinitions = "CountToolDefinitions",
   GetToolConnection = "GetToolConnection",
   LockToolDefinitionName = "LockToolDefinitionName",
   GetToolDefinitionNameState = "GetToolDefinitionNameState",
+  GetLatestToolDefinitions = "GetLatestToolDefinitions",
   UpdateToolDefinitionDraft = "UpdateToolDefinitionDraft",
   SetToolDefinitionStatus = "SetToolDefinitionStatus",
   DeleteToolDefinitionDraft = "DeleteToolDefinitionDraft",
@@ -329,10 +332,14 @@ export enum LogAction {
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",
+  CreateActivityLogs = "CreateActivityLogs",
   GetActivityLogsByEntity = "GetActivityLogsByEntity",
   CreateEventOutbox = "CreateEventOutbox",
+  CreateEventOutboxes = "CreateEventOutboxes",
   GetEventOutboxByDedupeKey = "GetEventOutboxByDedupeKey",
+  GetEventOutboxesByDedupeKeys = "GetEventOutboxesByDedupeKeys",
   LockEventOutboxDedupeKey = "LockEventOutboxDedupeKey",
+  LockEventOutboxDedupeKeys = "LockEventOutboxDedupeKeys",
   LockPendingEventOutboxes = "LockPendingEventOutboxes",
   MarkEventOutboxesPublished = "MarkEventOutboxesPublished",
   SetEventOutboxLastError = "SetEventOutboxLastError",
@@ -457,6 +464,7 @@ export enum LogAction {
 
   // Audit log (M4-9)
   RecordAuditEvent = "RecordAuditEvent",
+  RecordAuditEvents = "RecordAuditEvents",
   GetAuditLog = "GetAuditLog",
   CountAuditLog = "CountAuditLog",
   ExportAuditLog = "ExportAuditLog",

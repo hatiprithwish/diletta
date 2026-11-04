@@ -18,3 +18,8 @@ export interface AuditLogDALResponse extends ApiResponse {
 export interface RecordAuditEventResponse extends ApiResponse {
   outboxId?: string;
 }
+
+// DEV_NOTE: M7-8. A batch of audit writes (AuditEventProvider.recordMany): one outbox row per event, in order
+export interface RecordAuditEventsResponse extends ApiResponse {
+  outboxIds?: string[];
+}
