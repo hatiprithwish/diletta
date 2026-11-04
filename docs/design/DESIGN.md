@@ -199,7 +199,9 @@ screenshots; it isn't part of the canvas above, so it has no files in `pages/` o
   tests (staging only: switch + JSON call), Active switch (edit only), Cancel / Save at the foot. JSON and URLs in mono.
   Tools: status `ToggleGroup` (Active default, Draft, Disabled, All, with counts), table (tool name in mono,
   version, status, risk chip — Read neutral, Write warning, Destructive destructive — approval, connection,
-  updated), `Pager`, New tool (primary). A version's page: name in mono as the title with its status chip and
+  updated), `Pager`, Load tool set (outline) and New tool (primary). Load tool set is a dialog: tool set and
+  connection selects (active connections only), then what changed ("47 tools: 47 new") and the pins as read-only
+  mono JSON with Copy pins. A version's page: name in mono as the title with its status chip and
   version, actions right (draft: Delete draft ghost destructive, Save draft, Make active; active: Disable, New
   version; disabled: Make active, New version), a destructive-soft banner with the first reason the API would
   refuse it, Details and Calls (mono JSON text areas on `surface-subtle`, read-only unless a draft), and a

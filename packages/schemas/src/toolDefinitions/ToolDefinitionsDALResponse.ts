@@ -50,3 +50,8 @@ export interface WriteToolSummariesDALResponse extends ApiResponse {
 export interface ToolDefinitionOptionsDALResponse extends ApiResponse {
   options?: Pick<ToolDefinition, "name" | "version" | "description" | "risk">[];
 }
+
+// DEV_NOTE: M7-8. The rows a batch write touched, with what their audit rows need
+export interface ToolDefinitionKeysDALResponse extends ApiResponse {
+  toolDefinitions?: Pick<ToolDefinition, "id" | "publicId" | "name" | "version">[];
+}

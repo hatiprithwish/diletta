@@ -3,6 +3,7 @@ export * from "./ToolDefinitionsApiRequest";
 export * from "./ToolDefinitionsApiResponse";
 export * from "./ToolDefinitionsDALRequest";
 export * from "./ToolDefinitionsDALResponse";
+export * from "./ToolSets";
 export * from "./ToolOpPlaceholders";
 export * from "./ToolOpsV1";
 export * from "./ToolOpsRegistry";

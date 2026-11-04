@@ -376,6 +376,91 @@ describe("CriticalEventProvider", () => {
   });
 });
 
+describe("CriticalEventProvider.recordMany", () => {
+  const recordMany = async (
+    companyId: string,
+    events: Schemas.CriticalEventBase[],
+  ): Promise<Schemas.RecordCriticalEventsResponse> =>
+    await withTenant(getDbClient(env), companyId, (tx) =>
+      CriticalEventProvider.recordMany(tx, { companyId, events }),
+    );
+  const withoutCompany = ({
+    companyId: _companyId,
+    ...event
+  }: Schemas.CriticalEventBase & { companyId: string }) => event;
+
+  it("writes each event's log and outbox row, paired, and answers the outbox ids in order", async () => {
+    const entityId = randomEntityId();
+    const events = [
+      withoutCompany(criticalEvent(companyA, { entityId, entityAction: "created" })),
+      withoutCompany(criticalEvent(companyA, { entityId, entityAction: "activated" })),
+      withoutCompany(criticalEvent(companyA)),
+    ];
+
+    const recorded = await recordMany(companyA, events);
+    expect(recorded.isSuccess).toBe(true);
+    expect(recorded.outboxIds).toHaveLength(3);
+
+    for (const [index, outboxId] of (recorded.outboxIds ?? []).entries()) {
+      const outbox = await getOutboxRow(outboxId);
+      expect(outbox?.dedupeKey).toBe(events[index]!.dedupeKey);
+      const [log] = await withOwnerDb((ownerDb) =>
+        ownerDb
+          .select()
+          .from(activityLog)
+          .where(eq(activityLog.id, outbox?.activityLogId ?? "")),
+      );
+      expect([log?.entityId, log?.entityAction]).toEqual([
+        events[index]!.entityId,
+        events[index]!.entityAction,
+      ]);
+    }
+  });
+
+  it("dedupes against recorded keys: a repeat writes only the new events", async () => {
+    const first = withoutCompany(criticalEvent(companyA));
+    const [firstOutboxId] = (await recordMany(companyA, [first])).outboxIds ?? [];
+
+    const second = withoutCompany(criticalEvent(companyA));
+    const again = await recordMany(companyA, [{ ...first, entityAction: "retried" }, second]);
+    expect(again.isSuccess).toBe(true);
+    expect(again.outboxIds?.[0]).toBe(firstOutboxId);
+
+    const conditions = [
+      eq(activityLog.companyId, companyA),
+      inArray(activityLog.entityId, [first.entityId ?? "", second.entityId ?? ""]),
+    ];
+    const logRows = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ id: activityLog.id })
+        .from(activityLog)
+        .where(and(...conditions)),
+    );
+    expect(logRows).toHaveLength(2);
+  });
+
+  it("refuses a batch that repeats a dedupe key or an entity action, writing nothing", async () => {
+    const event = withoutCompany(criticalEvent(companyA));
+    const repeatedKey = await recordMany(companyA, [event, { ...event, entityAction: "other" }]);
+    expect(repeatedKey.isSuccess).toBe(false);
+
+    const repeatedEntity = await recordMany(companyA, [
+      event,
+      { ...event, dedupeKey: `test:${crypto.randomUUID()}` },
+    ]);
+    expect(repeatedEntity.isSuccess).toBe(false);
+
+    expect(
+      await withOwnerDb((ownerDb) =>
+        ownerDb
+          .select({ id: eventOutbox.id })
+          .from(eventOutbox)
+          .where(eq(eventOutbox.dedupeKey, event.dedupeKey)),
+      ),
+    ).toHaveLength(0);
+  });
+});
+
 describe("EventOutboxRepo relay", () => {
   it("publishes after commit and marks the row published; a second relay sends nothing", async () => {
     const repo = new EventOutboxRepo(repoEnv());

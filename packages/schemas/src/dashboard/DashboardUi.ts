@@ -5,6 +5,7 @@ import type {
   ToolDefinitionIdempotencyModeIntEnum,
   ToolDefinitionRiskIntEnum,
   ToolDefinitionWithStatus,
+  ToolSetTool,
   ToolOps,
 } from "../toolDefinitions";
 import type {
@@ -1003,6 +1004,16 @@ export interface DashboardOperatorToolActionsProps {
 export interface DashboardOperatorToolTabCountProps {
   companyPublicId: string;
   tab: OperatorToolStatusTabEnum;
+}
+
+// DEV_NOTE: M7-8. The Tools section's Load tool set dialog, and what a load answered
+export interface DashboardOperatorLoadToolSetDialogProps extends DashboardDialogProps {
+  company: CompanyWithStatus;
+}
+
+export interface DashboardOperatorToolSetResultProps {
+  tools: ToolSetTool[];
+  onClose: () => void;
 }
 
 // DEV_NOTE: The tool form's values: enums as select strings, the ops as JSON text (a blank readback or undo is none)

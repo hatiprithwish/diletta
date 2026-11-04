@@ -36,6 +36,41 @@ export async function recordAuditOrRollback<T extends Schemas.AuditEntityTypeEnu
   return audited.outboxId;
 }
 
+// DEV_NOTE: M7-8. recordAuditOrRollback for many writes of one company in one batch (AuditEventProvider.recordMany);
+// returns their outbox ids
+export async function recordAuditsOrRollback<T extends Schemas.AuditEntityTypeEnum>(
+  tx: NodePgTransaction<EmptyRelations>,
+  params: {
+    companyId: string;
+    actor: Schemas.AuditActor;
+    entityType: T;
+    events: {
+      entityAction: Schemas.AuditEntityActionFor<T>;
+      entity: { id: string; publicId: string };
+      entityVersion?: number | null;
+      label: string | null;
+    }[];
+  },
+): Promise<string[]> {
+  if (params.events.length === 0) return [];
+  const audited = await AuditEventProvider.recordMany(tx, {
+    companyId: params.companyId,
+    events: params.events.map((event) => ({
+      actor: params.actor,
+      entityType: params.entityType,
+      entityAction: event.entityAction,
+      entityId: event.entity.id,
+      entityPublicId: event.entity.publicId,
+      entityVersion: event.entityVersion,
+      label: event.label,
+    })),
+  });
+  if (!audited.isSuccess || !audited.outboxIds) {
+    throw new TenantRollbackError(audited.message ?? "Audit events not recorded");
+  }
+  return audited.outboxIds;
+}
+
 // DEV_NOTE: The signed-in company admin as an audit actor (dashboard Repos)
 export const adminAuditActor = (adminId: string): Schemas.AuditActor => ({
   actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,

@@ -167,6 +167,17 @@ export type AuditActor =
     }
   | { actorType: ActivityLogActorTypeIntEnum.System; actorId: null };
 
+// DEV_NOTE: One audit write as AuditEventProvider takes it (record, recordMany): server-side only
+export interface AuditEventRecord {
+  actor: AuditActor;
+  entityType: AuditEntityTypeEnum;
+  entityAction: AuditEntityActionEnum;
+  entityId: string;
+  entityPublicId: string;
+  entityVersion?: number | null;
+  label: string | null;
+}
+
 // DEV_NOTE: The entity types whose System rows are audit rows (the audit log reads them, the partial index
 // IDX_activity_log_company_id_created_at_audit covers them); every other System row is a runtime event, never shown.
 // M6-3: the key rotation job retiring a company key.

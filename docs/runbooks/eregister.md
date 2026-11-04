@@ -72,6 +72,8 @@ Content-Type: application/json
 
 `environment` 2 is Staging and `credentialScope` 1 is None (`CompanyConnectionEnvironmentIntEnum`, `CompanyConnectionCredentialScopeIntEnum`). There is no `resetOp`: eRegister has no reset API yet, so every eRegister eval case must name its own records with `{case.tag}`. Keep the connection's `publicId` from the answer.
 
+3. Load the tools: the company's page › **Tools › Load tool set** (eRegister, this connection). See [Tools](#tools-m7-2).
+
 The operator connection routes (`CompanyConnectionsRoutes`):
 
 | Route                                                        | What                                                                                                                             |
@@ -155,19 +157,21 @@ One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md
 
    The header of `EregisterInputSchemas.ts` names the eRegister commit. Commit it with the change. `EregisterTools.test.ts` fails if a body grows past 20K characters or a tool stops converting.
 
-2. Store the tools on the connection. This runs as the owner role, on the staging branch (`apps/backend/.env`):
+2. Store the tools on the connection. On the company's page › **Tools › Load tool set**, pick eRegister and the connection. It loads the set the deployed backend was built with, so deploy the change first. Each tool ends active at its newest version, and each change records an audit row as you. The dialog shows the `{name, version}` pins. The API is `POST /operator/companies/<companyPublicId>/tool-definitions/tool-sets` with `{ "toolSet": "eregister", "connectionPublicId": "<connectionPublicId>" }`.
+
+   It is idempotent. A tool gets a new version only when it changed, so a config pinned to the old version keeps it. It refuses while a tool has a Draft version (an operator is editing it), naming the tools. It refuses a connection that isn't the company's or isn't Active.
+
+   Without the UI (local, before a deploy), the script does the same as the owner role on the staging branch (`apps/backend/.env`), unaudited, like the test host seed:
 
    ```bash
    pnpm --filter backend eregister:tools --company <companyPublicId> --connection <connectionPublicId>
    ```
 
-   It is idempotent. A tool gets a new version only when it changed, so a config pinned to the old version keeps it. It refuses while a tool has a Draft version (an operator is editing it). It refuses a connection that isn't the company's or isn't Active. It isn't audited: it's setup a person runs, like the test host seed.
-
-3. Pin the printed `{name, version}` list in the chatbot's config (`tools`). Pin only the tools the chatbot needs: every pinned tool's schema goes into every model call. All 47 come to about 30K tokens.
+3. Pin the `{name, version}` list (the dialog's pins, or the script's output) in the chatbot's config (`tools`). Pin only the tools the chatbot needs: every pinned tool's schema goes into every model call. All 47 come to about 30K tokens.
 
 ### Check it works (M7-2 done when)
 
-Every write tool has a readback, and the undo where eRegister allows one. `pnpm --filter @app/schemas test` (`EregisterTools.test.ts`) checks this for every tool: each one saves, its args convert, each write has a readback, creates and updates undo, deletes are marked not undoable, and an update sends only what it compares or restores. On staging, after the seed, run one create, update and delete of a button through the widget. Each ends Verified, and undoing the update ends Undone.
+Every write tool has a readback, and the undo where eRegister allows one. `pnpm --filter @app/schemas test` (`EregisterTools.test.ts`) checks this for every tool: each one saves, its args convert, each write has a readback, creates and updates undo, deletes are marked not undoable, and an update sends only what it compares or restores. On staging, after loading the tools, run one create, update and delete of a button through the widget. Each ends Verified, and undoing the update ends Undone.
 
 ## Check it works (M7-1 done when)
 

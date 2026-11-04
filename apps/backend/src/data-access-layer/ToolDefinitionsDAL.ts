@@ -193,6 +193,132 @@ export default class ToolDefinitionsDAL {
     return response;
   }
 
+  // DEV_NOTE: M7-8. createToolDefinition for many versions of one company in one insert, at the given status (a tool
+  // set's load writes them Active). The Repo holds every name's lock and checked each connection.
+  async createToolDefinitions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateToolDefinitionsDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionKeysDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, toolCount: params.toolDefinitions.length };
+
+    try {
+      const [company] = await tx
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, params.companyId))
+        .limit(1);
+
+      if (!company) {
+        const message = "Company not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateToolDefinitions,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const created = await tx
+        .insert(toolDefinitions)
+        .values(
+          params.toolDefinitions.map((toolDefinition) => ({
+            ...toolDefinition,
+            publicId: Utility.generatePublicId(),
+            companyId: params.companyId,
+            status: params.status,
+            createdBy: params.createdBy,
+            updatedBy: params.createdBy,
+          })),
+        )
+        .returning({
+          id: toolDefinitions.id,
+          publicId: toolDefinitions.publicId,
+          name: toolDefinitions.name,
+          version: toolDefinitions.version,
+        });
+
+      response.isSuccess = true;
+      response.message = "Tool definitions created successfully";
+      response.toolDefinitions = created;
+    } catch (error) {
+      const message = Utility.isUniqueViolation(error, NAME_VERSION_INDEX)
+        ? "Tool definition version already exists"
+        : "Unknown error in creating tool definitions";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateToolDefinitions,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. Makes many versions Active in one update (a tool set's load re-activating Disabled ones)
+  async activateToolDefinitions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.ActivateToolDefinitionsDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionKeysDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, toolCount: params.publicIds.length };
+
+    try {
+      const conditions = [
+        inArray(toolDefinitions.publicId, params.publicIds),
+        eq(toolDefinitions.companyId, params.companyId),
+      ];
+      const updated = await tx
+        .update(toolDefinitions)
+        .set({
+          status: Schemas.ToolDefinitionStatusIntEnum.Active,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning({
+          id: toolDefinitions.id,
+          publicId: toolDefinitions.publicId,
+          name: toolDefinitions.name,
+          version: toolDefinitions.version,
+        });
+
+      if (updated.length !== params.publicIds.length) {
+        const message = "Tool definition not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.ActivateToolDefinitions,
+          message,
+          metadata,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Tool definitions activated successfully";
+      response.toolDefinitions = updated;
+    } catch (error) {
+      const message = "Unknown error in activating tool definitions";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ActivateToolDefinitions,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   async getToolDefinitionDetails(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.FindToolDefinitionDALRequest,
@@ -421,6 +547,77 @@ export default class ToolDefinitionsDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. lockToolDefinitionName for many names in one statement (a tool set's load), taken in name order so
+  // two loads can't deadlock; the same key as one name's lock, so a load and an operator's edit take turns too
+  async lockToolDefinitionNames(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindToolDefinitionNamesDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const lockKeys = [...params.names]
+        .sort()
+        .map((name) => sql`${`tool_definition:${params.companyId}:${name}`}`);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(key, 0)) from unnest(array[${sql.join(lockKeys, sql`, `)}]::text[]) with ordinality as keys(key, position) order by position`,
+      );
+
+      response.isSuccess = true;
+      response.message = "Tool definition names locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking tool definition names";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockToolDefinitionName,
+        message,
+        error,
+        metadata: { companyId: params.companyId, nameCount: params.names.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. Each name's highest version (a tool set's load compares it with the set's definition); a name with
+  // no version is left out
+  async getLatestToolDefinitions(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindToolDefinitionNamesDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolDefinitions.companyId, params.companyId),
+        inArray(toolDefinitions.name, params.names),
+      ];
+      const rows = await tx
+        .selectDistinctOn([toolDefinitions.name], rowSelection)
+        .from(toolDefinitions)
+        .leftJoin(companyConnections, and(...connectionJoinConditions))
+        .where(and(...conditions))
+        .orderBy(toolDefinitions.name, desc(toolDefinitions.version));
+
+      response.isSuccess = true;
+      response.message = "Latest tool definitions fetched successfully";
+      response.toolDefinitions = rows;
+    } catch (error) {
+      const message = "Unknown error in fetching the latest tool definitions";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLatestToolDefinitions,
+        message,
+        error,
+        metadata: { companyId: params.companyId, nameCount: params.names.length },
       });
       response.message = message;
     }

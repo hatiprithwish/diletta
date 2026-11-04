@@ -12,6 +12,17 @@ export type FindEventOutboxByDedupeKeyDALRequest = Pick<EventOutbox, "companyId"
 // DEV_NOTE: Serializes writers of the same (companyId, dedupeKey) until the transaction ends
 export type LockEventOutboxDedupeKeyDALRequest = FindEventOutboxByDedupeKeyDALRequest;
 
+// DEV_NOTE: M7-8. The batch forms of the three above (CriticalEventProvider.recordMany): one company, many events
+export type CreateEventOutboxesDALRequest = Pick<EventOutbox, "companyId"> & {
+  events: Pick<EventOutbox, "activityLogId" | "eventType" | "dedupeKey">[];
+};
+
+export type FindEventOutboxesByDedupeKeysDALRequest = Pick<EventOutbox, "companyId"> & {
+  dedupeKeys: string[];
+};
+
+export type LockEventOutboxDedupeKeysDALRequest = FindEventOutboxesByDedupeKeysDALRequest;
+
 // DEV_NOTE: Pending rows to publish, locked FOR UPDATE SKIP LOCKED so a concurrent relay or sweep skips them.
 // After-commit relay: companyId + outboxIds. Sweep: companyId null, rows created before createdBefore, optionally
 // limited to companyIds (tests scope the cross-company sweep to their own companies; the Cron passes null).

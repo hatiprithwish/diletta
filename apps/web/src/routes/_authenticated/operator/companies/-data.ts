@@ -556,3 +556,32 @@ export function useDeleteTool(publicId: string, toolPublicId: string) {
     onError: toastToolError("The draft wasn't deleted. Try again."),
   });
 }
+
+// DEV_NOTE: M7-8. Loads a whole tool set onto a connection; the caller awaits it (mutateAsync) to show what changed and
+// the pins. A draft refusal names its tools, so its toast is the server's message.
+export function useLoadToolSet(publicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  const fallback = toastToolError("The tools weren't loaded. Nothing changed, try again.");
+  return useMutation({
+    mutationFn: (body: Schemas.LoadToolSetApiRequest) =>
+      apiClient<Schemas.LoadToolSetApiResponse>(`${toolsPath(publicId)}/tool-sets`, getToken, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: OperatorCompaniesQueries.keys.tools(publicId),
+      });
+    },
+    onError: (error) => {
+      const body =
+        error instanceof ApiError ? (error.body as Schemas.LoadToolSetApiResponse) : undefined;
+      if (body?.failure === Schemas.ToolDefinitionFailureEnum.DraftExists && body.message) {
+        toast.error(body.message);
+        return;
+      }
+      fallback(error);
+    },
+  });
+}

@@ -74,6 +74,134 @@ export default class EventOutboxDAL {
     return response;
   }
 
+  // DEV_NOTE: M7-8. createEventOutbox for many events of one company in one insert (CriticalEventProvider.recordMany),
+  // with the activity log reference checked once for the batch
+  async createEventOutboxes(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateEventOutboxesDALRequest,
+  ) {
+    const response: Schemas.EventOutboxesDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, eventCount: params.events.length };
+
+    try {
+      const logIds = [...new Set(params.events.map((event) => event.activityLogId))];
+      const conditions = [
+        inArray(activityLog.id, logIds),
+        eq(activityLog.companyId, params.companyId),
+      ];
+      const [found] = await tx
+        .select({ total: count() })
+        .from(activityLog)
+        .where(and(...conditions));
+
+      if ((found?.total ?? 0) !== logIds.length) {
+        const message = "Activity log not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateEventOutboxes,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const eventOutboxes = await tx
+        .insert(eventOutbox)
+        .values(params.events.map((event) => ({ ...event, companyId: params.companyId })))
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Event outboxes created successfully";
+      response.eventOutboxes = eventOutboxes;
+    } catch (error) {
+      // DEV_NOTE: Backstop only, as for one row: the provider locks and checks every key first
+      const message = Utility.isUniqueViolation(error, DEDUPE_KEY_CONSTRAINT)
+        ? "Event already recorded"
+        : "Unknown error in creating event outboxes";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateEventOutboxes,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. findEventOutboxByDedupeKey for many keys: the rows that exist, in no order
+  async findEventOutboxesByDedupeKeys(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindEventOutboxesByDedupeKeysDALRequest,
+  ) {
+    const response: Schemas.EventOutboxesDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, keyCount: params.dedupeKeys.length };
+
+    try {
+      const conditions = [
+        eq(eventOutbox.companyId, params.companyId),
+        inArray(eventOutbox.dedupeKey, params.dedupeKeys),
+      ];
+      const eventOutboxes = await tx
+        .select()
+        .from(eventOutbox)
+        .where(and(...conditions));
+
+      response.isSuccess = true;
+      response.message = "Event outboxes fetched successfully";
+      response.eventOutboxes = eventOutboxes;
+    } catch (error) {
+      const message = "Unknown error in fetching event outboxes by dedupe keys";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetEventOutboxesByDedupeKeys,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. lockEventOutboxDedupeKey for many keys in one statement, the same lock key per dedupe key, taken in
+  // key order so two batches can't deadlock
+  async lockEventOutboxDedupeKeys(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.LockEventOutboxDedupeKeysDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const lockKeys = [...new Set(params.dedupeKeys)]
+        .map((dedupeKey) => `event_outbox:${params.companyId}:${dedupeKey}`)
+        .sort()
+        .map((lockKey) => sql`${lockKey}`);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(lock_key, 0)) from unnest(array[${sql.join(lockKeys, sql`, `)}]::text[]) with ordinality as keys(lock_key, position) order by position`,
+      );
+
+      response.isSuccess = true;
+      response.message = "Dedupe keys locked successfully";
+    } catch (error) {
+      const message = "Unknown error in locking event outbox dedupe keys";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LockEventOutboxDedupeKeys,
+        message,
+        error,
+        metadata: { companyId: params.companyId, keyCount: params.dedupeKeys.length },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: The load test's window (M6-5): the company's outbox rows created since `since`, and how long the published
   // ones waited (published_at − created_at) in milliseconds. A row the retention purge already removed isn't counted:
   // the purge window is hours, a load run minutes.
