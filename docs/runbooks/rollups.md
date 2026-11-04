@@ -53,7 +53,7 @@ Churned companies are skipped by the hourly run. Their rows stay as they are.
 
 ## Rebuild a range by hand
 
-Use this after fixing data in a source table, after a long outage, or to fill in days from before rollups existed. You must be signed in as an operator:
+Use this after fixing data in a source table, after a long outage, or to fill in days from before rollups existed. On the operator pages: the company's page › **Maintenance › Rebuild insights**. Or call the API, signed in as an operator:
 
 ```http
 POST /operator/companies/<companyPublicId>/rollups/rebuild

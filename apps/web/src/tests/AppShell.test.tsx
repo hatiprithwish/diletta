@@ -14,7 +14,7 @@ import { TooltipProvider } from "@app/ui/components/tooltip";
 import * as Schemas from "@app/schemas";
 import { ThemeProvider } from "@/providers/ThemeProvider";
 import { Route as AuthenticatedRoute } from "@/routes/_authenticated/route";
-import { NAV_GROUPS, getBreadcrumbs } from "@/routes/_authenticated/-nav";
+import { NAV_GROUPS, OPERATOR_NAV_GROUPS, getBreadcrumbs } from "@/routes/_authenticated/-nav";
 
 const auth = vi.hoisted(() => ({ userId: "user_1" }));
 
@@ -60,13 +60,21 @@ const OPERATOR: Schemas.AdminProfile = {
   ],
 };
 
-// An operator's /dashboard/me, and every other call answered as a success; returns the fetch mock to inspect
+// An operator's /dashboard/me, Northfield's operator page, and every other call answered as a success; returns the
+// fetch mock to inspect
 function mockOperator() {
-  const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
-    String(url).endsWith("/dashboard/me")
-      ? new Response(JSON.stringify({ isSuccess: true, admin: OPERATOR }), { status: 200 })
-      : new Response(JSON.stringify({ isSuccess: true }), { status: 200 }),
-  );
+  const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+    if (String(url).endsWith("/dashboard/me")) {
+      return new Response(JSON.stringify({ isSuccess: true, admin: OPERATOR }), { status: 200 });
+    }
+    if (String(url).endsWith("/operator/companies/cmp_2")) {
+      return new Response(
+        JSON.stringify({ isSuccess: true, company: { publicId: "cmp_2", name: "Northfield" } }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ isSuccess: true }), { status: 200 });
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -97,11 +105,15 @@ function renderShell(
     id: "_authenticated",
     component: AuthenticatedRoute.options.component,
   });
-  const paths = NAV_GROUPS.flatMap((group) =>
-    group.items.flatMap((item): string[] =>
-      "items" in item ? item.items.map((subItem) => subItem.to) : [item.to],
+  const paths = [
+    ...NAV_GROUPS.flatMap((group) =>
+      group.items.flatMap((item): string[] =>
+        "items" in item ? item.items.map((subItem) => subItem.to) : [item.to],
+      ),
     ),
-  );
+    ...OPERATOR_NAV_GROUPS.flatMap((group) => group.items.map((item) => item.to)),
+    "/operator/companies/$id",
+  ];
   const pageRoutes = paths.map((to) =>
     createRoute({
       getParentRoute: () => layoutRoute,
@@ -212,21 +224,22 @@ describe("dashboard shell", () => {
     expect(screen.queryByText("page /overview")).not.toBeInTheDocument();
   });
 
-  it("asks an operator to pick a company, then acts in it and records the entry", async () => {
-    const fetchMock = mockOperator();
+  it("sends an operator with no company picked to the operator pages", async () => {
+    mockOperator();
     renderShell("/overview");
 
-    expect(await screen.findByText("Open a company's dashboard")).toBeInTheDocument();
-    expect(screen.queryByText("page /overview")).not.toBeInTheDocument();
-    expect(screen.getByText("Paused")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "eRegister" }));
-    expect(await screen.findByText("page /overview")).toBeInTheDocument();
-    expect(screen.getByText("Acting as eRegister")).toBeInTheDocument();
-    await waitFor(() => expect(actingHeaders(fetchMock, "/dashboard/acting")).toEqual(["cmp_1"]));
+    expect(await screen.findByText("page /operator/companies")).toBeInTheDocument();
+    expect(screen.getByText("Diletta operator")).toBeInTheDocument();
+    expect(sidebar().getByRole("link", { name: "Companies" })).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+    expect(sidebar().queryByRole("link", { name: "Overview" })).not.toBeInTheDocument();
+    const breadcrumb = within(screen.getByRole("navigation", { name: "breadcrumb" }));
+    expect(breadcrumb.getByText("Companies")).toBeInTheDocument();
   });
 
-  it("opens the company ?company names straight away, and switches back to the picker", async () => {
+  it("acts in the company ?company names, records the entry, and goes back to its operator page", async () => {
     const fetchMock = mockOperator();
     renderShell("/overview?company=cmp_2");
 
@@ -235,15 +248,28 @@ describe("dashboard shell", () => {
     expect(sidebar().getByText("Northfield")).toBeInTheDocument();
     await waitFor(() => expect(actingHeaders(fetchMock, "/dashboard/acting")).toEqual(["cmp_2"]));
 
-    await userEvent.click(screen.getByRole("button", { name: "Switch company" }));
-    expect(await screen.findByText("Open a company's dashboard")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back to operator" }));
+    expect(await screen.findByText("page /operator/companies/$id")).toBeInTheDocument();
+    expect(screen.queryByText(/Acting as/)).not.toBeInTheDocument();
+    const breadcrumb = within(screen.getByRole("navigation", { name: "breadcrumb" }));
+    expect(await breadcrumb.findByText("Northfield")).toBeInTheDocument();
+    // The operator pages never name a company to act in
+    expect(actingHeaders(fetchMock, "/operator/companies/cmp_2")).toEqual([undefined]);
   });
 
-  it("shows an operator the picker for a company they can't act in", async () => {
+  it("sends an operator to the operator pages for a company they can't act in", async () => {
     mockOperator();
     renderShell("/overview?company=cmp_gone");
 
-    expect(await screen.findByText("Open a company's dashboard")).toBeInTheDocument();
+    expect(await screen.findByText("page /operator/companies")).toBeInTheDocument();
+  });
+
+  it("keeps a company admin out of the operator pages", async () => {
+    mockMe(200, { isSuccess: true, admin: COMPANY_ADMIN });
+    renderShell("/operator/companies");
+
+    expect(await screen.findByText("page /overview")).toBeInTheDocument();
+    expect(screen.queryByText("Diletta operator")).not.toBeInTheDocument();
   });
 
   it("never sends the acting header for a company admin", async () => {
@@ -401,6 +427,8 @@ describe("getBreadcrumbs", () => {
     expect(getBreadcrumbs("/overview")).toEqual(["Overview"]);
     expect(getBreadcrumbs("/changes/cr_1")).toEqual(["Changes"]);
     expect(getBreadcrumbs("/settings/model-keys")).toEqual(["Settings", "Model keys"]);
+    expect(getBreadcrumbs("/operator/companies")).toEqual(["Companies"]);
+    expect(getBreadcrumbs("/operator/companies/cmp_1")).toEqual(["Companies"]);
     expect(getBreadcrumbs("/unknown")).toEqual([]);
   });
 });

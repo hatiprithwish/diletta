@@ -1,5 +1,12 @@
 import type { ActingCompany, AdminProfile } from "../admins";
 import type {
+  CompanyStatusIntEnum,
+  CompanyWithStatus,
+  OperatorCompaniesPageSearch,
+  OperatorCompanyListItem,
+  OperatorCompanyPageSearch,
+} from "../companies";
+import type {
   ChangeRequestDetail,
   ChangeRequestListTabEnum,
   ChangeRequestListItem,
@@ -82,20 +89,23 @@ export interface DashboardPageHeaderProps {
   description: string;
 }
 
-export interface DashboardSidebarProps {
+// DEV_NOTE: The account menu at the sidebar's foot, the same for both sidebars
+export interface DashboardAccountMenuProps {
   admin: AdminProfile;
 }
 
-// DEV_NOTE: ADR 0006. An operator's company picker (no company picked yet) and the acting banner in the top bar
-export interface DashboardCompanyPickerProps {
-  companies: ActingCompany[];
-  onPick: (publicId: string) => void;
-}
+// DEV_NOTE: The company dashboard's sidebar. admin.company is the company shown (an operator's: the one they act in).
+export type DashboardSidebarProps = DashboardAccountMenuProps;
 
+// DEV_NOTE: M7-8. The operator pages' sidebar (no company: Companion + Diletta operator)
+export type DashboardOperatorSidebarProps = DashboardAccountMenuProps;
+
+// DEV_NOTE: The top bar. crumbs is its breadcrumb trail. ADR 0006 / M7-8: actingCompany is the company an operator acts
+// in (else null), with Back to operator.
 export interface DashboardTopBarProps {
-  // The company an operator acts in, else null (a company admin)
-  actingCompanyName: string | null;
-  onSwitchCompany: () => void;
+  crumbs: string[];
+  actingCompany: ActingCompany | null;
+  onBackToOperator: () => void;
 }
 
 export interface DashboardShellMessageProps {
@@ -898,4 +908,33 @@ export interface DashboardTeamInviteRowProps {
 export interface DashboardInviteDialogProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+// DEV_NOTE: M7-8 operator pages (apps/web _authenticated/operator/). The Companies list, its New company dialog, one
+// company's page (header, sections in the URL) and its Maintenance section.
+export interface DashboardOperatorCompaniesPageProps {
+  search: OperatorCompaniesPageSearch;
+}
+
+export interface DashboardOperatorCompanyRowProps {
+  company: OperatorCompanyListItem;
+}
+
+export interface DashboardDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export interface DashboardOperatorCompanyPageProps {
+  companyPublicId: string;
+  search: OperatorCompanyPageSearch;
+}
+
+export interface DashboardOperatorCompanySectionProps {
+  company: CompanyWithStatus;
+}
+
+export interface DashboardOperatorStatusDialogProps extends DashboardDialogProps {
+  company: CompanyWithStatus;
+  status: CompanyStatusIntEnum;
 }

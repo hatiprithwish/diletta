@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Buildings,
   ChartBar,
   ChatCircle,
   Clock,
@@ -70,6 +71,21 @@ export const NAV_GROUPS = [
   },
 ] as const;
 
+// DEV_NOTE: M7-8. The operator pages' navigation (no company): their own sidebar, and the breadcrumb's first crumb
+export const OPERATOR_NAV_GROUPS = [
+  {
+    label: "Operator",
+    items: [{ label: "Companies", to: "/operator/companies", icon: Buildings }],
+  },
+] as const;
+
+// DEV_NOTE: The operator pages live under /operator; everything else is a company's dashboard
+export const OPERATOR_PATH_PREFIX = "/operator";
+
+export function isOperatorPath(pathname: string) {
+  return isPathActive(pathname, OPERATOR_PATH_PREFIX);
+}
+
 export function isPathActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
@@ -84,8 +100,14 @@ export function getActiveNestedTo(pathname: string): string | null {
   return null;
 }
 
-// DEV_NOTE: Breadcrumb trail for a path: one crumb for a top-level page, <group> › <page> inside a nested group.
-export function getBreadcrumbs(pathname: string) {
+// DEV_NOTE: Breadcrumb trail for a path: one crumb for a top-level page, <group> › <page> inside a nested group. An
+// operator page's trail is its section (Companies); the shell adds the company's name on a company's page.
+export function getBreadcrumbs(pathname: string): string[] {
+  for (const group of OPERATOR_NAV_GROUPS) {
+    for (const item of group.items) {
+      if (isPathActive(pathname, item.to)) return [item.label];
+    }
+  }
   for (const group of NAV_GROUPS) {
     for (const item of group.items) {
       if (!isPathActive(pathname, item.to)) continue;

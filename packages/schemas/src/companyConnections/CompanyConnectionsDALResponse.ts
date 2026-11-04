@@ -11,3 +11,8 @@ export interface CompanyConnectionDALResponse extends ApiResponse {
 export interface CompanyConnectionsDALResponse extends ApiResponse {
   companyConnections?: CompanyConnection[];
 }
+
+// DEV_NOTE: Server-side only: one row per company and environment with an active connection
+export interface ConnectionEnvironmentsDALResponse extends ApiResponse {
+  environments?: Pick<CompanyConnection, "companyId" | "environment">[];
+}

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections } from "@/db/tables";
@@ -189,6 +189,46 @@ export default class CompanyConnectionsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.ListCompanyConnections,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. Cross-company (withPlatform): the environments the listed companies have an active connection in,
+  // one row per company and environment
+  async getConnectionEnvironments(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetConnectionEnvironmentsDALRequest,
+  ) {
+    const response: Schemas.ConnectionEnvironmentsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        inArray(companyConnections.companyId, params.companyIds),
+        eq(companyConnections.status, Schemas.CompanyConnectionStatusIntEnum.Active),
+      ];
+      const rows = await tx
+        .selectDistinct({
+          companyId: companyConnections.companyId,
+          environment: companyConnections.environment,
+        })
+        .from(companyConnections)
+        .where(and(...conditions))
+        .orderBy(asc(companyConnections.environment));
+
+      response.isSuccess = true;
+      response.message = "Connection environments fetched successfully";
+      response.environments = rows;
+    } catch (error) {
+      const message = "Unknown error in listing connection environments";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListConnectionEnvironments,
         message,
         error,
         metadata: params,

@@ -53,7 +53,9 @@ export enum LogAction {
   CountCompanies = "CountCompanies",
   ListCompanyIdsByStatus = "ListCompanyIdsByStatus",
   ListCompaniesByStatus = "ListCompaniesByStatus",
+  CountCompaniesByStatus = "CountCompaniesByStatus",
   UpdateCompany = "UpdateCompany",
+  UpdateCompanyStatus = "UpdateCompanyStatus",
 
   // Chatbot users
   CreateChatbotUser = "CreateChatbotUser",
@@ -67,6 +69,7 @@ export enum LogAction {
   CreateCompanyConnection = "CreateCompanyConnection",
   GetCompanyConnectionDetails = "GetCompanyConnectionDetails",
   ListCompanyConnections = "ListCompanyConnections",
+  ListConnectionEnvironments = "ListConnectionEnvironments",
   UpdateCompanyConnection = "UpdateCompanyConnection",
   GetCompanyConnectionByIssuer = "GetCompanyConnectionByIssuer",
 

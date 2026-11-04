@@ -1,5 +1,5 @@
-import { asc, count, desc, eq, inArray } from "drizzle-orm";
-import type { EmptyRelations } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies } from "@/db/tables";
 import * as Schemas from "@app/schemas";
@@ -139,9 +139,12 @@ export default class CompaniesDAL {
         params.sortDirection === Schemas.SortDirection.Desc ? desc(sortCol) : asc(sortCol);
       const offset = (params.pageNo - 1) * params.pageSize;
 
+      const conditions: SQL[] = [];
+      if (params.status !== null) conditions.push(eq(companies.status, params.status));
       const companiesResponse = await tx
         .select()
         .from(companies)
+        .where(and(...conditions))
         // DEV_NOTE: id breaks ties (same status or created_at), so rows never repeat or go missing between pages
         .orderBy(orderExpr, asc(companies.id))
         .limit(params.pageSize)
@@ -179,6 +182,33 @@ export default class CompaniesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CountCompanies,
+        message,
+        error,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. Cross-company (withPlatform): how many companies are in each status, for the operator's tabs
+  async getCompanyStatusCounts(tx: NodePgTransaction<EmptyRelations>) {
+    const response: Schemas.CompanyStatusCountsDALResponse = { isSuccess: false };
+
+    try {
+      const rows = await tx
+        .select({ status: companies.status, count: count() })
+        .from(companies)
+        .groupBy(companies.status);
+
+      response.isSuccess = true;
+      response.message = "Companies counted successfully";
+      response.counts = rows;
+    } catch (error) {
+      const message = "Unknown error in counting companies by status";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CountCompaniesByStatus,
         message,
         error,
       });
@@ -459,6 +489,48 @@ export default class CompaniesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.UpdateCompanyReadOnly,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-8. An operator pauses, churns or reactivates the company, on its own row (withTenant)
+  async updateCompanyStatus(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.UpdateCompanyStatusDALRequest,
+  ) {
+    const response: Schemas.CompanyDALResponse = { isSuccess: false };
+
+    try {
+      const [companyResponse] = await tx
+        .update(companies)
+        .set({
+          status: params.status,
+          updatedBy: params.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, params.companyId))
+        .returning();
+
+      if (!companyResponse) {
+        response.message = "Company not found";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Company status updated successfully";
+      response.company = companyResponse;
+    } catch (error) {
+      const message = "Unknown error in updating company status";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.UpdateCompanyStatus,
         message,
         error,
         metadata: params,

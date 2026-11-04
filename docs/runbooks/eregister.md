@@ -50,7 +50,7 @@ Keep a copy in the team vault. Check `GET {iss}/.well-known/jwks.json`: it shoul
 
 Sign in to the Diletta dashboard as an operator. Then:
 
-1. Create the company with `POST /operator/companies`. That's the only path that also creates its encryption key.
+1. Create the company: **Companies › New company** on the operator pages, or `POST /operator/companies`. Both create its encryption key; never insert the row by hand.
 2. Create the connection:
 
 ```http

@@ -181,6 +181,24 @@ until an admin triages them (`quality_issues.issue_type` is null until then).
 List + detail pages (Conversations, Changes, Quality, Tests) put the list in a 2-column span and the
 detail card in the third column; below ~1100px the detail stacks under the list.
 
+### Operator pages (M7-8)
+
+Design canvas: https://claude.ai/artifact/ANtyzU7D69o14TvrGTmw4r (built from these tokens and the dashboard
+screenshots; it isn't part of the canvas above, so it has no files in `pages/` or `screenshots/`).
+
+- Same shell, own sidebar: header "Companion" + "Diletta operator", one group **Operator** with Companies
+  (`Buildings`). No badges. Breadcrumb: Companies › <company>.
+- **Companies** (`operator/companies/`): page header + New company (primary), status `ToggleGroup` (All, Active,
+  Paused, Churned, with counts), table (Company, Status chip, Connections, Created, Open dashboard outline button),
+  `Pager`. New company is a `Dialog` with a name only.
+- **Company** (`operator/companies/$id/`): h1 + status chip, "Created … · <public id in mono>", Open dashboard
+  (primary, `ArrowSquareOut`; off for a churned company), then a `ToggleGroup` of its sections in the URL.
+  Maintenance: Rebuild insights (two date inputs, outline button "Rebuild N days", rules under it) and Company
+  status (bordered rows, each move with its effect; Churn in destructive text, confirmed by typing the name).
+- Status chips: Active success, Paused warning, Churned destructive.
+- While acting in a company the top bar shows a warning chip "Acting as <company>" and a ghost **Back to
+  operator** (`ArrowBendUpLeft`).
+
 ## 7. Chat widget
 
 Anatomy (`widget-Welcome` … `widget-Unavailable`):
