@@ -33,6 +33,11 @@ export interface ActingCompaniesDALResponse extends ApiResponse {
   companies?: ActingCompanyRow[];
 }
 
+// DEV_NOTE: M7-8. How many companies are in each status (statuses with none are left out; the Repo fills 0)
+export interface CompanyStatusCountsDALResponse extends ApiResponse {
+  counts?: { status: Company["status"]; count: number }[];
+}
+
 // DEV_NOTE: Server-side only: the company an operator's X-Acting-Company names, resolved before withTenant
 export interface ActingCompanyResponse extends ApiResponse {
   companyId?: string;

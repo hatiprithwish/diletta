@@ -62,6 +62,8 @@ export enum AuditEntityActionEnum {
   Retired = "retired",
   // DEV_NOTE: Operator only (ADR 0006): a Diletta operator picked this company to act in as an admin
   OperatorActed = "operator_acted",
+  // DEV_NOTE: Operator only (M7-8): the company was churned (Paused / Resumed are its other status moves)
+  Churned = "churned",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -124,6 +126,9 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.TurnedOff,
     AuditEntityActionEnum.BudgetChanged,
     AuditEntityActionEnum.OperatorActed,
+    AuditEntityActionEnum.Paused,
+    AuditEntityActionEnum.Resumed,
+    AuditEntityActionEnum.Churned,
   ],
   [AuditEntityTypeEnum.ModelKey]: [AuditEntityActionEnum.Created, AuditEntityActionEnum.Rotated],
   [AuditEntityTypeEnum.AdminInvite]: [AuditEntityActionEnum.Created, AuditEntityActionEnum.Revoked],

@@ -1,4 +1,19 @@
 import type { ActingCompany, AdminProfile } from "../admins";
+import type { CompanyConnectionWithStatus } from "../companyConnections";
+import type {
+  OperatorToolStatusTabEnum,
+  ToolDefinitionIdempotencyModeIntEnum,
+  ToolDefinitionRiskIntEnum,
+  ToolDefinitionWithStatus,
+  ToolOps,
+} from "../toolDefinitions";
+import type {
+  CompanyStatusIntEnum,
+  CompanyWithStatus,
+  OperatorCompaniesPageSearch,
+  OperatorCompanyListItem,
+  OperatorCompanyPageSearch,
+} from "../companies";
 import type {
   ChangeRequestDetail,
   ChangeRequestListTabEnum,
@@ -82,20 +97,23 @@ export interface DashboardPageHeaderProps {
   description: string;
 }
 
-export interface DashboardSidebarProps {
+// DEV_NOTE: The account menu at the sidebar's foot, the same for both sidebars
+export interface DashboardAccountMenuProps {
   admin: AdminProfile;
 }
 
-// DEV_NOTE: ADR 0006. An operator's company picker (no company picked yet) and the acting banner in the top bar
-export interface DashboardCompanyPickerProps {
-  companies: ActingCompany[];
-  onPick: (publicId: string) => void;
-}
+// DEV_NOTE: The company dashboard's sidebar. admin.company is the company shown (an operator's: the one they act in).
+export type DashboardSidebarProps = DashboardAccountMenuProps;
 
+// DEV_NOTE: M7-8. The operator pages' sidebar (no company: Companion + Diletta operator)
+export type DashboardOperatorSidebarProps = DashboardAccountMenuProps;
+
+// DEV_NOTE: The top bar. crumbs is its breadcrumb trail. ADR 0006 / M7-8: actingCompany is the company an operator acts
+// in (else null), with Back to operator.
 export interface DashboardTopBarProps {
-  // The company an operator acts in, else null (a company admin)
-  actingCompanyName: string | null;
-  onSwitchCompany: () => void;
+  crumbs: string[];
+  actingCompany: ActingCompany | null;
+  onBackToOperator: () => void;
 }
 
 export interface DashboardShellMessageProps {
@@ -898,4 +916,120 @@ export interface DashboardTeamInviteRowProps {
 export interface DashboardInviteDialogProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+// DEV_NOTE: M7-8 operator pages (apps/web _authenticated/operator/). The Companies list, its New company dialog, one
+// company's page (header, sections in the URL) and its Maintenance section.
+export interface DashboardOperatorCompaniesPageProps {
+  search: OperatorCompaniesPageSearch;
+}
+
+export interface DashboardOperatorCompanyRowProps {
+  company: OperatorCompanyListItem;
+}
+
+export interface DashboardDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export interface DashboardOperatorCompanyPageProps {
+  companyPublicId: string;
+  search: OperatorCompanyPageSearch;
+}
+
+export interface DashboardOperatorCompanySectionProps {
+  company: CompanyWithStatus;
+}
+
+export interface DashboardOperatorStatusDialogProps extends DashboardDialogProps {
+  company: CompanyWithStatus;
+  status: CompanyStatusIntEnum;
+}
+
+// DEV_NOTE: M7-8. A company's Connections section (operator): one card per connection, and the page that adds or edits
+// one (connectionPublicId null = add)
+export interface DashboardOperatorConnectionCardProps {
+  companyPublicId: string;
+  connection: CompanyConnectionWithStatus;
+}
+
+export interface DashboardOperatorConnectionPageProps {
+  companyPublicId: string;
+  connectionPublicId: string | null;
+}
+
+export interface DashboardOperatorConnectionFormProps {
+  companyPublicId: string;
+  connection: CompanyConnectionWithStatus | null;
+}
+
+// DEV_NOTE: M7-8. A company's Tools section (operator): its status tab and page live in the company page's URL
+export interface DashboardOperatorToolsSectionProps {
+  company: CompanyWithStatus;
+  search: OperatorCompanyPageSearch;
+  onSearch: (next: OperatorCompanyPageSearch) => void;
+}
+
+export interface DashboardOperatorToolRowProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus;
+  connections: CompanyConnectionWithStatus[];
+}
+
+// DEV_NOTE: One tool version's page (toolPublicId null = a new tool)
+export interface DashboardOperatorToolPageProps {
+  companyPublicId: string;
+  toolPublicId: string | null;
+}
+
+export interface DashboardOperatorToolFormProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus | null;
+  connections: CompanyConnectionWithStatus[];
+}
+
+export interface DashboardOperatorToolVersionsProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus;
+}
+
+export interface DashboardOperatorToolActionsProps {
+  companyPublicId: string;
+  tool: ToolDefinitionWithStatus;
+  isDirty: boolean;
+}
+
+export interface DashboardOperatorToolTabCountProps {
+  companyPublicId: string;
+  tab: OperatorToolStatusTabEnum;
+}
+
+// DEV_NOTE: The tool form's values: enums as select strings, the ops as JSON text (a blank readback or undo is none)
+export interface DashboardOperatorToolFormValues {
+  name: string;
+  description: string;
+  risk: string;
+  approval: string;
+  idempotencyMode: string;
+  connectionPublicId: string;
+  inputSchema: string;
+  callOp: string;
+  readbackOp: string;
+  inverseOp: string;
+}
+
+// DEV_NOTE: The form checked as the API would: the request's typed fields, or the first reason it would be refused
+export type DashboardOperatorToolCheck =
+  | {
+      isValid: true;
+      risk: ToolDefinitionRiskIntEnum;
+      idempotencyMode: ToolDefinitionIdempotencyModeIntEnum;
+      ops: ToolOps;
+    }
+  | { isValid: false; issue: string };
+
+// DEV_NOTE: Open dashboard on the operator pages: a row's outline button or the company page's primary one
+export interface DashboardOpenDashboardButtonProps extends DashboardOperatorCompanySectionProps {
+  variant: "default" | "outline";
 }

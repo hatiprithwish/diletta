@@ -15,6 +15,8 @@ export const QUERY_KEY_ROOTS = {
   budget: ["budget"],
   connections: ["connections"],
   team: ["team"],
+  me: ["me"],
+  operatorCompanies: ["operator-companies"],
 } as const;
 
 // DEV_NOTE: The Security page's key segment that Settings › Connections refreshes (SecurityQueries.keys builds from it)
@@ -93,4 +95,12 @@ export function invalidateModelKeyViews(queryClient: QueryClient) {
 // refetches
 export function invalidateBudgetViews(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: QUERY_KEY_ROOTS.overview });
+}
+
+// DEV_NOTE: M7-8. A company was created or changed status on the operator pages: their lists and counts refetch, and
+// so does the signed-in operator (/dashboard/me lists the companies they may act in)
+export function invalidateOperatorCompanyViews(queryClient: QueryClient) {
+  for (const root of [QUERY_KEY_ROOTS.operatorCompanies, QUERY_KEY_ROOTS.me]) {
+    void queryClient.invalidateQueries({ queryKey: root });
+  }
 }

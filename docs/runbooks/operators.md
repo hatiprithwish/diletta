@@ -49,12 +49,25 @@ Public metadata can only be written from the Clerk backend or dashboard, so a us
 
 3. Check: `GET /dashboard/me` as that person returns `"role": "operator"` and `"company": null`.
 
+## Operator pages
+
+M7-8. Signed in as an operator, the dashboard opens on **Companies** (`/operator/companies`), with its own sidebar (Companion, Diletta operator). A company admin never sees these pages.
+
+- **Companies**: every company with its status and the environments it has an active connection in, filtered by status. **New company** asks for a name only and creates the company with its encryption key (the same as `POST /operator/companies`). It starts with no admins and no connections.
+- **A company's page** (click its name): its status, public id and **Open dashboard**, then its sections:
+  - **Connections** (the default): one card per connection, production first. **Add connection** picks the environment and sign-in method (only the ones the platform can run), then the API address, JWT issuer, sign-in settings (JSON), allowed origins (one per line) and, on staging, the clean-up call after tests (a JSON call op). **Edit** shows the environment, type, sign-in and credentials read-only (they never change; add a new connection instead) and can turn the connection off. A JWT issuer another connection uses is refused on its field. Same rules and audit rows as `POST` / `PATCH /operator/companies/:companyPublicId/connections` (`docs/runbooks/eregister.md`).
+  - **Tools**: every version of every tool, by status (Active by default), with risk, approval and connection. **New tool** creates a draft (name, description, risk, approval, repeat safety, connection, and the four calls as JSON: input, call, read back, undo). A version's page shows what the API would refuse before you save (the ops' shape and placeholders, a write without a read back, an input schema the runtime can't check). Only a draft changes: **Save draft**, **Make active** (saved first), **Delete draft**. An active version is read-only (bot versions may pin it): **Disable** (refused while a published bot version uses it) or **New version** (a draft copy; one draft per tool). Same rules and audit rows as `/operator/companies/:companyPublicId/tool-definitions`.
+  - **Maintenance › Rebuild insights**: recounts the daily numbers for up to 31 days (UTC), the same as `POST …/rollups/rebuild` (`docs/runbooks/rollups.md`). Days that fail are named; try those again.
+  - **Maintenance › Company status**: Pause (its chatbots stop answering and test runs are refused; its admins keep the dashboard), Churn (also locks its admins out; you type the company's name to confirm) or Make active. Nothing is deleted. Each move is an audit row in the company's log as **Operator** ("Paused the company", "Churned the company", "Made the company active"); choosing the status it already has records nothing.
+
+The first admin of a new company: open its dashboard and invite them from **Settings › Team** (`docs/runbooks/team.md`), or send a Clerk invite as described above.
+
 ## Act in a company as an operator
 
 ADR 0006. An operator can open any company's dashboard and act there as one of its admins, with every admin action, for as long as they like.
 
-1. Sign in to the dashboard as the operator. Instead of a company's pages you get **Open a company's dashboard**: every company that isn't churned.
-2. Pick one. The URL gets `?company=<publicId>` (kept on every page; bookmark or share it), the top bar shows **Acting as <company>**, and every request carries the `x-acting-company` header. **Switch company** goes back to the list.
+1. On **Companies** or a company's page, choose **Open dashboard**. A churned company's is off.
+2. The URL gets `?company=<publicId>` (kept on every page; bookmark or share it), the top bar shows **Acting as <company>**, and every request carries the `x-acting-company` header. **Back to operator** returns to that company's operator page. A dashboard link without a company you may act in sends you to Companies.
 3. Every change you make is in the company's audit log as **Operator**, never as one of its admins, and opening the company records one **Opened the dashboard as Diletta support** row (each time you open it in a page load). On a change's timeline you show as **Diletta support**.
 
 You never become one of the company's admins: no `admins` row is added, you're not on its Team page, and you never count as its last admin. A churned company can't be opened (403), the same as for its own admins. Calling the API directly works the same way: send `x-acting-company: <companyPublicId>` with the operator's token. Without it, an operator gets 403 on `/dashboard/*`.

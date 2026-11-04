@@ -1,6 +1,5 @@
 import { Fragment } from "react";
-import { useLocation } from "@tanstack/react-router";
-import { Moon, SidebarSimple, Sun } from "@phosphor-icons/react";
+import { ArrowBendUpLeft, Moon, SidebarSimple, Sun } from "@phosphor-icons/react";
 import { Button } from "@app/ui/components/button";
 import { Badge } from "@app/ui/components/badge";
 import { Separator } from "@app/ui/components/separator";
@@ -12,18 +11,18 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@app/ui/components/breadcrumb";
-import type * as Schemas from "@app/schemas";
+import * as Schemas from "@app/schemas";
+import { StatusChip } from "@/components/status-chip";
 import { useTheme } from "@/providers/ThemeProvider";
-import { getBreadcrumbs } from "./-nav";
 
 // DEV_NOTE: Set at build time (deploy workflows); local dev runs against the staging branch, so unset = Staging
 const ENVIRONMENT_LABEL = import.meta.env.VITE_APP_ENV === "production" ? "Production" : "Staging";
 
-export function TopBar({ actingCompanyName, onSwitchCompany }: Schemas.DashboardTopBarProps) {
-  const pathname = useLocation({ select: (location) => location.pathname });
+// DEV_NOTE: ADR 0006 / M7-8. An operator acting in a company sees which one, and Back to operator (that company's
+// operator page)
+export function TopBar({ crumbs, actingCompany, onBackToOperator }: Schemas.DashboardTopBarProps) {
   const { toggleSidebar } = useSidebar();
   const { resolvedTheme, setTheme } = useTheme();
-  const crumbs = getBreadcrumbs(pathname);
   const isDark = resolvedTheme === "dark";
 
   return (
@@ -55,13 +54,22 @@ export function TopBar({ actingCompanyName, onSwitchCompany }: Schemas.Dashboard
         </BreadcrumbList>
       </Breadcrumb>
       <div className="ml-auto flex items-center gap-2">
-        {actingCompanyName !== null && (
+        {actingCompany !== null && (
           <>
-            <Badge variant="outline" className="max-w-56 truncate">
-              Acting as {actingCompanyName}
-            </Badge>
-            <Button variant="ghost" size="sm" onClick={onSwitchCompany}>
-              Switch company
+            <span className="max-w-56 truncate">
+              <StatusChip
+                label={`Acting as ${actingCompany.name}`}
+                tone={Schemas.DashboardChipToneEnum.Warning}
+              />
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-subtle-foreground"
+              onClick={onBackToOperator}
+            >
+              <ArrowBendUpLeft aria-hidden />
+              Back to operator
             </Button>
           </>
         )}

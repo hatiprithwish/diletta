@@ -20,6 +20,10 @@ export type FindCompanyConnectionByIssuerDALRequest = Pick<CompanyConnection, "j
 
 export type GetCompanyConnectionsDALRequest = Pick<CompanyConnection, "companyId">;
 
+// DEV_NOTE: M7-8. Cross-company (withPlatform): the operator's Companies list shows which environments each listed
+// company has an active connection in
+export type GetConnectionEnvironmentsDALRequest = { companyIds: string[] };
+
 // DEV_NOTE: Only client-editable fields. updatedAt is set by the DAL.
 // DEV_NOTE: resetOp (M5-2) is the one field null can't mean "unchanged" for (null clears it): undefined = unchanged
 export type UpdateCompanyConnectionDALRequest = FindCompanyConnectionDALRequest &

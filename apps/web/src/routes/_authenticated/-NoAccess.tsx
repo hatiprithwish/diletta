@@ -3,7 +3,7 @@ import { Button } from "@app/ui/components/button";
 import { ShellMessage } from "./-ShellMessage";
 
 // DEV_NOTE: Signed in to Clerk but no dashboard: not invited (no admins row), or the company has churned.
-// /dashboard/me answers 403 for both. An operator gets the company picker instead (ADR 0006).
+// /dashboard/me answers 403 for both. An operator gets the operator pages instead (ADR 0006, M7-8).
 export function NoAccess() {
   const { signOut } = useClerk();
 
