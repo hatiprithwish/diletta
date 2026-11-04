@@ -181,6 +181,35 @@ until an admin triages them (`quality_issues.issue_type` is null until then).
 List + detail pages (Conversations, Changes, Quality, Tests) put the list in a 2-column span and the
 detail card in the third column; below ~1100px the detail stacks under the list.
 
+### Operator pages (M7-8)
+
+Design canvas: https://claude.ai/artifact/ANtyzU7D69o14TvrGTmw4r (built from these tokens and the dashboard
+screenshots; it isn't part of the canvas above, so it has no files in `pages/` or `screenshots/`).
+
+- Same shell, own sidebar: header "Companion" + "Diletta operator", one group **Operator** with Companies
+  (`Buildings`). No badges. Breadcrumb: Companies › <company>.
+- **Companies** (`operator/companies/`): page header + New company (primary), status `ToggleGroup` (All, Active,
+  Paused, Churned, with counts), table (Company, Status chip, Connections, Created, Open dashboard outline button),
+  `Pager`. New company is a `Dialog` with a name only.
+- **Company** (`operator/companies/$id/`): h1 + status chip, "Created … · <public id in mono>", Open dashboard
+  (primary, `ArrowSquareOut`; off for a churned company), then a `ToggleGroup` of its sections in the URL.
+  Connections (default): one bordered card per connection (environment chip, Edit outline button, label / value rows
+  like Settings › Connections), Add connection (primary). The add / edit page is a form at 860px: on edit a "Set when
+  created" box with the fixed settings read-only; Address and sign-in, Allowed origins (one per line), Clean-up after
+  tests (staging only: switch + JSON call), Active switch (edit only), Cancel / Save at the foot. JSON and URLs in mono.
+  Tools: status `ToggleGroup` (Active default, Draft, Disabled, All, with counts), table (tool name in mono,
+  version, status, risk chip — Read neutral, Write warning, Destructive destructive — approval, connection,
+  updated), `Pager`, New tool (primary). A version's page: name in mono as the title with its status chip and
+  version, actions right (draft: Delete draft ghost destructive, Save draft, Make active; active: Disable, New
+  version; disabled: Make active, New version), a destructive-soft banner with the first reason the API would
+  refuse it, Details and Calls (mono JSON text areas on `surface-subtle`, read-only unless a draft), and a
+  Versions panel on the right that stacks below on narrow screens.
+  Maintenance: Rebuild insights (two date inputs, outline button "Rebuild N days", rules under it) and Company
+  status (bordered rows, each move with its effect; Churn in destructive text, confirmed by typing the name).
+- Status chips: Active success, Paused warning, Churned destructive.
+- While acting in a company the top bar shows a warning chip "Acting as <company>" and a ghost **Back to
+  operator** (`ArrowBendUpLeft`).
+
 ## 7. Chat widget
 
 Anatomy (`widget-Welcome` … `widget-Unavailable`):

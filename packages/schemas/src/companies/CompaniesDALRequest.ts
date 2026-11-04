@@ -17,7 +17,14 @@ export type FindCompanyByPublicIdDALRequest = Pick<Company, "publicId">;
 export type UpdateCompanyDALRequest = FindCompanyDALRequest &
   NullableDALFields<CompanyBase & Pick<Company, "status" | "isReadOnly">>;
 
-export type GetCompaniesDALRequest = PageDALRequest & { sortColumn: CompanySortColumn };
+export type GetCompaniesDALRequest = PageDALRequest & {
+  sortColumn: CompanySortColumn;
+  status: Company["status"] | null;
+};
+
+// DEV_NOTE: M7-8. An operator moves a company to another status, on the company's own row (withTenant)
+export type UpdateCompanyStatusDALRequest = FindCompanyDALRequest &
+  Pick<Company, "status"> & { updatedBy: string };
 
 // DEV_NOTE: Cross-company sweep (withPlatform): every company whose status is one of these
 export type GetCompaniesRetentionDALRequest = { companyIds: string[] | null };

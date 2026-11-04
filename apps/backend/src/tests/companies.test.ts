@@ -103,14 +103,7 @@ describe("CompaniesRepo", () => {
     expect(readOnly.isSuccess).toBe(true);
     expect(readOnly.company?.name).toBe(name);
     expect(readOnly.company?.isReadOnly).toBe(true);
-
-    const paused = await repo.updateCompanyStatus({
-      companyId,
-      company: { status: Schemas.CompanyStatusIntEnum.Paused },
-    });
-    expect(paused.isSuccess).toBe(true);
-    expect(paused.company?.isReadOnly).toBe(true);
-    expect(paused.company?.companyStatusLabel).toBe(Schemas.CompanyStatusLabelEnum.Paused);
+    // DEV_NOTE: Status moves (audited) are covered through their route in operatorCompanies.test.ts
   });
 
   it("pages the operator list and counts every company", async () => {
@@ -205,6 +198,8 @@ describe("CompaniesRepo", () => {
     const statusUpdated = await repo.updateCompanyStatus({
       companyId: "0",
       company: { status: Schemas.CompanyStatusIntEnum.Churned },
+      adminId: "0",
+      actor: { actorType: Schemas.ActivityLogActorTypeIntEnum.Operator, actorId: "0" },
     });
     expect(statusUpdated).toEqual({
       isSuccess: false,

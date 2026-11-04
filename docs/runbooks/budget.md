@@ -36,13 +36,7 @@ When a new month starts, BudgetDO seeds the month from `SUM(model_calls.cost_usd
 
 A company admin sets it on Settings › Budget (M4-10, `/settings/budget`, `PUT /dashboard/settings/budget`): a dollar amount per billing period (the UTC month), above $0, whole cents, at most `SPENDING_BUDGET_MAX_USD`. Saving the amount already in force (the $10 default included) changes nothing and records nothing; any other amount records a "Changed spending budget" audit row (Security › Audit log). The page also shows this period's spend: `SUM(model_calls.cost_usd)` since the 1st, without embeddings, the same sum BudgetDO is seeded from. It is read from Neon, so it can trail BudgetDO by calls still being backfilled (Pending rows add 0) and by holds in flight.
 
-An operator who has to change it for a company (support, an emergency stop) uses the owner connection (`DATABASE_URL`, staging or production); that change has no audit row:
-
-```sql
-UPDATE companies SET spending_budget = 50, updated_at = now() WHERE public_id = '<company public id>';
--- back to the platform default:
-UPDATE companies SET spending_budget = NULL, updated_at = now() WHERE public_id = '<company public id>';
-```
+An operator who has to change it for a company (support, an emergency stop) opens the company's dashboard from the operator pages (**Companies › Open dashboard**, ADR 0006) and saves it on Settings › Budget; the audit row names Diletta support.
 
 BudgetDO re-reads the budget at most a minute later (`BUDGET_REFRESH_MS`). If that read fails it keeps the old budget and tries again 5 seconds later (`BUDGET_LOAD_RETRY_MS`), so a Neon outage doesn't slow every call. Spend already counted this month stays counted: raising the budget is what lets a company that hit 100% answer again before the 1st.
 

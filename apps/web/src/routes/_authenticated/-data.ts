@@ -3,6 +3,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { toast } from "sonner";
 import type * as Schemas from "@app/schemas";
 import { apiClient } from "@/providers/apiClient";
+import { QUERY_KEY_ROOTS } from "./-invalidation";
 
 // DEV_NOTE: The signed-in admin. /dashboard/me also creates the admin on first sign-in from the Clerk invite, so
 // the shell reads it before rendering any page. A 403 (no admins row, a churned company) throws an ApiError the
@@ -11,7 +12,7 @@ import { apiClient } from "@/providers/apiClient";
 // calls /dashboard/me for the new one.
 export class MeQueries {
   static keys = {
-    all: () => ["me"] as const,
+    all: () => QUERY_KEY_ROOTS.me,
     detail: (clerkUserId: string) => [...MeQueries.keys.all(), "detail", clerkUserId] as const,
   };
 

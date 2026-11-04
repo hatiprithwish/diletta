@@ -168,12 +168,7 @@ A published chatbot version is misbehaving: wrong answers, a bad instruction, a 
 | Wrong or harmful changes in the customer's app | Read-only switch (Settings › Bots) | Every bot of the company: read tools only, any change under way is refused. Answers keep working |
 | Wrong or harmful answers from one bot          | Pause the bot (Settings › Bots)    | That bot stops answering from the next message                                                   |
 
-Both are the company admin's, each with an audit row, and both apply at the next message: the runtime reads them every turn. If nobody at the company answers and the harm can't wait, an operator can set them as the owner role, with **no audit row** (say so in the incident thread and tell the company):
-
-```sql
-UPDATE companies SET is_read_only = true, updated_at = now() WHERE id = <id>;
-UPDATE chatbots  SET status = 2, updated_at = now() WHERE id = <chatbot id> AND company_id = <id>; -- Paused
-```
+Both are the company admin's, each with an audit row, and both apply at the next message: the runtime reads them every turn. If nobody at the company answers and the harm can't wait, an operator sets them from the company's dashboard (**Companies › Open dashboard**, ADR 0006): the audit rows name Diletta support. Say so in the incident thread and tell the company. To stop everything at once, pause the whole company (its page › **Maintenance › Company status**).
 
 ### Roll back (the gate's time)
 

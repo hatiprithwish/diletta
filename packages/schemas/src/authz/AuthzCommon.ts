@@ -76,6 +76,9 @@ export enum AuthzActionEnum {
   // Companies (operator only, across companies)
   CompanyCreate = "company.create",
   CompanyList = "company.list",
+  // M7-8: one company's operator page, and pausing, churning or reactivating it
+  CompanyRead = "company.read",
+  CompanyStatusUpdate = "company.status_update",
 
   // Tool definitions (operator only, on one company named by the route): curated from the host's API by operators
   ToolDefinitionRead = "tool_definition.read",
@@ -101,6 +104,8 @@ export enum AuthzActionEnum {
 export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.CompanyCreate,
   AuthzActionEnum.CompanyList,
+  AuthzActionEnum.CompanyRead,
+  AuthzActionEnum.CompanyStatusUpdate,
   AuthzActionEnum.ToolDefinitionRead,
   AuthzActionEnum.ToolDefinitionCreate,
   AuthzActionEnum.ToolDefinitionUpdate,

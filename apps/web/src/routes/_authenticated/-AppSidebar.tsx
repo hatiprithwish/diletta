@@ -245,7 +245,7 @@ function NavCount({ count, label, tone, isRail }: Schemas.DashboardNavCountProps
   );
 }
 
-function AccountMenu({ admin }: Schemas.DashboardSidebarProps) {
+export function AccountMenu({ admin }: Schemas.DashboardAccountMenuProps) {
   const { signOut } = useClerk();
   const displayName = admin.name ?? admin.email ?? "Account";
 

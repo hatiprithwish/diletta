@@ -50,8 +50,8 @@ Keep a copy in the team vault. Check `GET {iss}/.well-known/jwks.json`: it shoul
 
 Sign in to the Diletta dashboard as an operator. Then:
 
-1. Create the company with `POST /operator/companies`. That's the only path that also creates its encryption key.
-2. Create the connection:
+1. Create the company: **Companies › New company** on the operator pages, or `POST /operator/companies`. Both create its encryption key; never insert the row by hand.
+2. Create the connection: the company's page › **Connections › Add connection** (Staging, Forward the user's token, the fields below), or the API:
 
 ```http
 POST /operator/companies/<companyPublicId>/connections
@@ -144,6 +144,8 @@ A field eRegister reshapes when it is read isn't compared. That covers a registe
 - A GET answers 404 only for a record that's gone, deleted registers included, never for a failed read. Without that, a delete couldn't be confirmed.
 
 ### Change or add a tool
+
+One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md`): open it, **New version**, edit the draft, save, **Make active**. The steps below change them all from code, so the next seed keeps them:
 
 1. If an eRegister request body changed, regenerate the input schemas from an eregister-backend checkout at the deployed commit:
 

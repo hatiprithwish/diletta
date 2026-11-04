@@ -1,4 +1,8 @@
-import type { CompanyWithStatus } from "./CompaniesCommon";
+import type {
+  CompanyStatusCounts,
+  CompanyWithStatus,
+  OperatorCompanyListItem,
+} from "./CompaniesCommon";
 import type { ApiResponse, TotalRecordsResponse } from "../common";
 
 export interface CreateCompanyApiResponse extends ApiResponse {
@@ -10,7 +14,12 @@ export interface GetCompanyApiResponse extends ApiResponse {
 }
 
 export interface GetCompaniesApiResponse extends ApiResponse {
-  companies?: CompanyWithStatus[];
+  companies?: OperatorCompanyListItem[];
+}
+
+// DEV_NOTE: M7-8. GET /operator/companies/status-counts: the Companies list's status tabs
+export interface GetCompanyStatusCountsApiResponse extends ApiResponse {
+  counts?: CompanyStatusCounts;
 }
 
 export interface UpdateCompanyApiResponse extends ApiResponse {

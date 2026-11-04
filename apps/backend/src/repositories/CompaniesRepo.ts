@@ -2,6 +2,7 @@ import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import Constants from "@/config/Constants";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
+import CompanyConnectionsDAL from "@/data-access-layer/CompanyConnectionsDAL";
 import getDbClient from "@/db/dbClient";
 import withPlatform from "@/db/withPlatform";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
@@ -17,11 +18,13 @@ export default class CompaniesRepo {
   private env: Env;
   private db: NodePgDatabase;
   private dal: CompaniesDAL;
+  private connectionsDal: CompanyConnectionsDAL;
 
   constructor(env: Env) {
     this.env = env;
     this.db = getDbClient(env);
     this.dal = new CompaniesDAL();
+    this.connectionsDal = new CompanyConnectionsDAL();
   }
 
   private withStatusLabel(company: Schemas.Company): Schemas.CompanyWithStatus {
@@ -61,18 +64,69 @@ export default class CompaniesRepo {
     });
   }
 
+  // DEV_NOTE: The operator's Companies list: a page of companies, each with the environments of its active connections
   async getCompanies(
     params: Schemas.GetCompaniesApiRequest,
   ): Promise<Schemas.GetCompaniesApiResponse> {
-    return await withPlatform(this.db, async (tx) => {
-      const { companies, ...rest } = await this.dal.getCompanies(tx, {
+    return await withPlatform(this.db, async (tx): Promise<Schemas.GetCompaniesApiResponse> => {
+      const listed = await this.dal.getCompanies(tx, {
         pageNo: params.pageNo ?? Constants.DEFAULT_PAGE_NO,
         pageSize: params.pageSize ?? Constants.DEFAULT_PAGE_SIZE,
         sortColumn: params.sortColumn ?? Schemas.CompanySortColumn.CreatedAt,
         sortDirection: params.sortDirection ?? Schemas.SortDirection.Desc,
+        status: params.status ?? null,
       });
-      return { ...rest, companies: companies?.map((company) => this.withStatusLabel(company)) };
+      if (!listed.isSuccess || !listed.companies) {
+        return { isSuccess: false, message: listed.message };
+      }
+      if (listed.companies.length === 0) {
+        return { isSuccess: true, message: listed.message, companies: [] };
+      }
+
+      const found = await this.connectionsDal.getConnectionEnvironments(tx, {
+        companyIds: listed.companies.map((company) => company.id),
+      });
+      if (!found.isSuccess || !found.environments) {
+        return { isSuccess: false, message: found.message };
+      }
+      const environments = found.environments;
+      return {
+        isSuccess: true,
+        message: listed.message,
+        companies: listed.companies.map((company) => {
+          const connectionEnvironments = environments
+            .filter((row) => row.companyId === company.id)
+            .map((row) => row.environment);
+          return {
+            ...this.withStatusLabel(company),
+            connectionEnvironments,
+            connectionEnvironmentLabels: connectionEnvironments.map(
+              (environment) => Schemas.COMPANY_CONNECTION_ENVIRONMENT_LABEL_MAP[environment],
+            ),
+          };
+        }),
+      };
     });
+  }
+
+  // DEV_NOTE: The Companies list's status tabs: every status, 0 when no company has it
+  async getCompanyStatusCounts(): Promise<Schemas.GetCompanyStatusCountsApiResponse> {
+    return await withPlatform(
+      this.db,
+      async (tx): Promise<Schemas.GetCompanyStatusCountsApiResponse> => {
+        const found = await this.dal.getCompanyStatusCounts(tx);
+        if (!found.isSuccess || !found.counts) {
+          return { isSuccess: false, message: found.message };
+        }
+        const counts: Schemas.CompanyStatusCounts = {
+          [Schemas.CompanyStatusIntEnum.Active]: 0,
+          [Schemas.CompanyStatusIntEnum.Paused]: 0,
+          [Schemas.CompanyStatusIntEnum.Churned]: 0,
+        };
+        for (const row of found.counts) counts[row.status] = row.count;
+        return { isSuccess: true, message: found.message, counts };
+      },
+    );
   }
 
   // DEV_NOTE: An operator route on one company (/operator/companies/:companyPublicId/…) names it by public id. The
@@ -148,19 +202,62 @@ export default class CompaniesRepo {
     });
   }
 
-  // DEV_NOTE: Operator only (pause, churn, reactivate). Still withTenant: it changes one known company.
+  // DEV_NOTE: Operator only (M7-8: pause, churn, reactivate), with its audit row (Paused / Churned / Resumed, actor
+  // Operator) in the company's own log, under the row lock; the status already in force writes nothing and records
+  // nothing. Still withTenant: it changes one known company. A churned company's admins get 403 from their next
+  // request (AdminsRepo.resolveAdmin); widget sign-in, turns and eval runs need Active.
   async updateCompanyStatus(
-    params: Schemas.UpdateCompanyStatusApiRequest & { companyId: string },
-  ): Promise<Schemas.UpdateCompanyStatusApiResponse> {
-    return await withTenant(this.db, params.companyId, async (tx) => {
-      const result = await this.dal.updateCompany(tx, {
-        companyId: params.companyId,
-        name: null,
-        status: params.company.status,
-        isReadOnly: null,
-      });
-      return this.withCompanyResponse(result);
-    });
+    params: Schemas.UpdateCompanyStatusApiRequest & {
+      companyId: string;
+      adminId: string;
+      actor: Schemas.AuditActor;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.UpdateCompanyStatusApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.UpdateCompanyStatusApiResponse>> => {
+        const found = await this.dal.getCompanyDetails(tx, {
+          companyId: params.companyId,
+          isForUpdate: true,
+        });
+        if (!found.isSuccess || !found.company) {
+          return { isSuccess: false, message: found.message, isNotFound: found.isNotFound };
+        }
+        if (found.company.status === params.company.status) {
+          return {
+            isSuccess: true,
+            message: "Company status unchanged",
+            company: this.withStatusLabel(found.company),
+            outboxIds: [],
+          };
+        }
+
+        const updated = await this.dal.updateCompanyStatus(tx, {
+          companyId: params.companyId,
+          status: params.company.status,
+          updatedBy: params.adminId,
+        });
+        if (!updated.isSuccess || !updated.company) {
+          return { isSuccess: false, message: updated.message, isNotFound: updated.isNotFound };
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId: params.companyId,
+          actor: params.actor,
+          entityType: Schemas.AuditEntityTypeEnum.Company,
+          entityAction: Schemas.COMPANY_STATUS_AUDIT_ACTION_MAP[params.company.status],
+          entity: updated.company,
+          label: updated.company.name,
+        });
+        return {
+          isSuccess: true,
+          message: "Company status updated successfully",
+          company: this.withStatusLabel(updated.company),
+          outboxIds: [outboxId],
+        };
+      },
+    );
   }
 
   private toRetention(company: Schemas.Company): Schemas.ContentRetention {
