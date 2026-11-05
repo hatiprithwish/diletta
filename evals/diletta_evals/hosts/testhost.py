@@ -23,7 +23,7 @@ if TOKEN_REFRESH_MARGIN_SECONDS >= TOKEN_LIFETIME_SECONDS:
 
 
 class TestHostLogin:
-    def __init__(self, settings: TestHostSettings, *, user: str, http: httpx.Client) -> None:
+    def __init__(self, settings: TestHostSettings, *, user: str, http: httpx.AsyncClient) -> None:
         self._settings = settings
         self._user = user
         self._http = http
@@ -31,25 +31,25 @@ class TestHostLogin:
         self._token: str | None = None
         self._expires_at = 0
 
-    def prepare(self) -> None:
+    async def prepare(self) -> None:
         try:
-            response = self._http.post(
+            response = await self._http.post(
                 f"{self._settings.issuer}/v1/_reset",
-                headers={"Authorization": f"Bearer {self.host_token()}"},
+                headers={"Authorization": f"Bearer {await self.host_token()}"},
             )
         except httpx.HTTPError as error:
             raise HostLoginError(f"Test host unreachable: {type(error).__name__}") from error
         if response.status_code != 200:
             raise HostLoginError(f"Test host reset failed: HTTP {response.status_code}")
 
-    def host_token(self) -> str:
+    async def host_token(self) -> str:
         if self._token is None or self._expires_at - time.time() < TOKEN_REFRESH_MARGIN_SECONDS:
-            self._token = self._mint()
+            self._token = await self._mint()
         return self._token
 
-    def _mint(self) -> str:
+    async def _mint(self) -> str:
         try:
-            response = self._http.post(
+            response = await self._http.post(
                 f"{self._settings.issuer}/auth/tokens",
                 headers={ADMIN_HEADER: self._settings.admin_secret},
                 json={
