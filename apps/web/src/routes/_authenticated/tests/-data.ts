@@ -14,9 +14,16 @@ import { QUERY_KEY_ROOTS, TESTS_KEY_SEGMENTS } from "../-invalidation";
 
 type GetToken = Parameters<typeof apiClient>[1];
 
-// DEV_NOTE: The Tests page (M4-8): the metric strip, the runs (read only: they start with the harness, M5-2), one run's
-// cases, one case's attempts, an attempt's transcript, and the cases with New case / Edit / on-off. keys.all() covers
-// them all. A transcript never changes, so it is never refetched.
+// DEV_NOTE: The Tests page (M4-8): the metric strip, the runs, one run's cases, one case's attempts, an attempt's
+// transcript, and the cases with New case / Edit / on-off. keys.all() covers them all. A transcript never changes, so
+// it is never refetched. Runs start from the CLI or, since M7-9, from Run tests / Run again (useStartTestRun); while a
+// run is Queued or Running, what shows it is refetched every RUN_POLL_MS until it ends.
+const RUN_POLL_MS = 10_000;
+
+const isRunGoing = (status: Schemas.EvalRunStatusIntEnum | undefined) =>
+  status === Schemas.EvalRunStatusIntEnum.Queued || status === Schemas.EvalRunStatusIntEnum.Running;
+
+const pollWhile = (isGoing: boolean) => (isGoing ? RUN_POLL_MS : false);
 export class TestsQueries {
   static keys = {
     all: () => QUERY_KEY_ROOTS.tests,
@@ -43,6 +50,13 @@ export class TestsQueries {
         apiClient<Schemas.GetEvalRunsSummaryApiResponse>("/dashboard/eval-runs/summary", getToken, {
           signal,
         }),
+      refetchInterval: (query) => {
+        const summary = query.state.data?.summary;
+        return pollWhile(
+          isRunGoing(summary?.live?.run?.evalRunStatus) ||
+            isRunGoing(summary?.draft?.run?.evalRunStatus),
+        );
+      },
     });
   }
 
@@ -60,6 +74,8 @@ export class TestsQueries {
           { signal },
         ),
       placeholderData: keepPreviousData,
+      refetchInterval: (query) =>
+        pollWhile((query.state.data?.evalRuns ?? []).some((run) => isRunGoing(run.evalRunStatus))),
     });
   }
 
@@ -72,10 +88,12 @@ export class TestsQueries {
           getToken,
           { signal },
         ),
+      refetchInterval: (query) => pollWhile(isRunGoing(query.state.data?.evalRun?.evalRunStatus)),
     });
   }
 
-  static runCases(publicId: string, page: number, getToken: GetToken) {
+  // DEV_NOTE: isRunning = the run is still Queued or Running: its cases fill in as attempts are graded
+  static runCases(publicId: string, page: number, getToken: GetToken, isRunning = false) {
     const params = new URLSearchParams({
       pageNo: String(page),
       pageSize: String(Schemas.EVAL_RUN_CASES_PAGE_SIZE),
@@ -89,6 +107,7 @@ export class TestsQueries {
           { signal },
         ),
       placeholderData: keepPreviousData,
+      refetchInterval: pollWhile(isRunning),
     });
   }
 
@@ -162,9 +181,9 @@ export function useTestRun(publicId: string) {
   return useQuery(TestsQueries.run(publicId, getToken));
 }
 
-export function useTestRunCases(publicId: string, page: number) {
+export function useTestRunCases(publicId: string, page: number, isRunning = false) {
   const { getToken } = useAuth();
-  return useQuery(TestsQueries.runCases(publicId, page, getToken));
+  return useQuery(TestsQueries.runCases(publicId, page, getToken, isRunning));
 }
 
 export function useTestRunCase(publicId: string, casePublicId: string) {
@@ -277,6 +296,54 @@ export function useUpdateTestCase(publicId: string) {
         return;
       }
       toast.error("The case wasn't saved. Nothing changed, try again.");
+    },
+  });
+}
+
+// DEV_NOTE: Run tests / Run again (M7-9): queues a run of one version on the hosted runner. The runs and the summary
+// are refetched so the Queued run shows at once (and polls). A refusal says why in words: another run of the version
+// still going, a version no longer in testing, no test sign-in, or the runner unavailable (the run is then Failed).
+export function useStartTestRun() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.StartEvalRunApiRequest) =>
+      apiClient<Schemas.StartEvalRunApiResponse>("/dashboard/eval-runs", getToken, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_response, body) => {
+      void queryClient.invalidateQueries({ queryKey: TestsQueries.keys.all() });
+      toast.success(
+        body.trigger === Schemas.EvalRunTriggerIntEnum.Gate
+          ? "Tests started. The version is ready to publish if they pass."
+          : "Tests started.",
+      );
+    },
+    onError: (error) => {
+      void queryClient.invalidateQueries({ queryKey: TestsQueries.keys.all() });
+      const failure =
+        error instanceof ApiError
+          ? (error.body as Schemas.StartEvalRunApiResponse | undefined)?.failure
+          : undefined;
+      switch (failure) {
+        case Schemas.EvalRunStartFailureEnum.AlreadyRunning:
+          toast.error("This version's tests are already running.");
+          return;
+        case Schemas.EvalRunStartFailureEnum.NotTesting:
+          toast.error("This version isn't in testing any more. Nothing was started.");
+          return;
+        case Schemas.EvalRunStartFailureEnum.NoTestLogin:
+          toast.error(
+            "Tests can't run yet: your staging environment has no test sign-in. Ask Diletta to set one up.",
+          );
+          return;
+        case Schemas.EvalRunStartFailureEnum.RunnerUnavailable:
+          toast.error("The test runner couldn't take the run. Try again in a minute.");
+          return;
+        default:
+          toast.error("The tests didn't start. Try again.");
+      }
     },
   });
 }

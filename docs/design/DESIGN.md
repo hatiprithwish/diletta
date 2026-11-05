@@ -181,6 +181,15 @@ until an admin triages them (`quality_issues.issue_type` is null until then).
 List + detail pages (Conversations, Changes, Quality, Tests) put the list in a 2-column span and the
 detail card in the third column; below ~1100px the detail stacks under the list.
 
+Tests (M7-9, ADR 0007): the header has New case (outline) and **Run tests** (primary, `Play`), as in the page file;
+a run's page has **Run again** (outline, `ArrowClockwise`) next to All runs. Both open a confirm `Dialog` that names
+the version and what it costs: "Run the publish check for v13?" for a version in testing ("Each of the 46 cases runs 3
+times (138 conversations) … If they pass, v13 is ready to publish. If not, it goes back to draft.", primary "Run
+publish check"), else "Run the tests of v13?" (once per case, "Nothing about v13 changes."). The button reads
+"Tests running" and is off while a run of that version is Queued or Running (the page refreshes every 10 s until it
+ends), and off without a test sign-in: the strip's Runs on cell then says "No test sign-in yet: ask Diletta to set one
+up" in negative text.
+
 ### Operator pages (M7-8)
 
 Design canvas: https://claude.ai/artifact/ANtyzU7D69o14TvrGTmw4r (built from these tokens and the dashboard
@@ -197,6 +206,10 @@ screenshots; it isn't part of the canvas above, so it has no files in `pages/` o
   like Settings › Connections), Add connection (primary). The add / edit page is a form at 860px: on edit a "Set when
   created" box with the fixed settings read-only; Address and sign-in, Allowed origins (one per line), Clean-up after
   tests (staging only: switch + JSON call), Active switch (edit only), Cancel / Save at the foot. JSON and URLs in mono.
+  A staging connection's card has a Test sign-in row ("eRegister as <uid in mono>", or "None. Admins can't run
+  tests yet."), and its edit page a bordered Test sign-in box under the form (M7-9): the current one with Remove
+  (outline), a Host select (eRegister / Test host) and its fields (password, API key and admin secret as password
+  inputs, cleared after a save: they're never read back), and Save / Replace test sign-in.
   Tools: status `ToggleGroup` (Active default, Draft, Disabled, All, with counts), table (tool name in mono,
   version, status, risk chip — Read neutral, Write warning, Destructive destructive — approval, connection,
   updated), `Pager`, Load tool set (outline) and New tool (primary). Load tool set is a dialog: tool set and
