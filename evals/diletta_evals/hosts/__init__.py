@@ -8,7 +8,7 @@ from diletta_evals.hosts.eregister import ERegisterLogin
 from diletta_evals.hosts.testhost import TestHostLogin
 
 
-def host_login_for(config: HarnessConfig, http: httpx.Client) -> HostLogin:
+def host_login_for(config: HarnessConfig, http: httpx.AsyncClient) -> HostLogin:
     if config.host_kind is HostKind.TEST_HOST and config.test_host is not None:
         return TestHostLogin(config.test_host, user=config.host_user, http=http)
     if config.host_kind is HostKind.EREGISTER and config.eregister is not None:

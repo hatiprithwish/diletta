@@ -22,25 +22,25 @@ TOKEN_REFRESH_MARGIN_SECONDS = REQUEST_TIMEOUT_SECONDS + 30
 
 
 class ERegisterLogin:
-    def __init__(self, settings: ERegisterSettings, *, user: str, http: httpx.Client) -> None:
+    def __init__(self, settings: ERegisterSettings, *, user: str, http: httpx.AsyncClient) -> None:
         self._settings = settings
         self._user = user
         self._http = http
         self._token: str | None = None
         self._expires_at = 0.0
 
-    def prepare(self) -> None:
+    async def prepare(self) -> None:
         # DEV_NOTE: Signs in once before the first attempt, so a bad password or uid stops the run before it starts
-        self.host_token()
+        await self.host_token()
 
-    def host_token(self) -> str:
+    async def host_token(self) -> str:
         if self._token is None or self._expires_at - time.time() < TOKEN_REFRESH_MARGIN_SECONDS:
-            self._token = self._sign_in()
+            self._token = await self._sign_in()
         return self._token
 
-    def _sign_in(self) -> str:
+    async def _sign_in(self) -> str:
         try:
-            response = self._http.post(
+            response = await self._http.post(
                 FIREBASE_SIGN_IN_URL,
                 params={"key": self._settings.firebase_api_key},
                 json={

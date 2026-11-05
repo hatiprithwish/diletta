@@ -23,7 +23,7 @@ Text limits count UTF-16 code units, as the backend's Zod does (an emoji is two)
 
 import json
 import typing
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from annotated_types import MaxLen
@@ -71,7 +71,7 @@ class ReadbackOutcome:
 
 
 # The call a readback re-reads (as the attempt answered it) and the readback (tag filled) → the backend's verdict
-ReadBack = Callable[[Mapping[str, Json], Mapping[str, Json]], ReadbackOutcome]
+ReadBack = Callable[[Mapping[str, Json], Mapping[str, Json]], Awaitable[ReadbackOutcome]]
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,7 @@ class JudgeUnavailable:
 
 
 # The rubric (tag filled) → the judge's verdict on the attempt, or why there is none
-Judge = Callable[[str], JudgeVerdict | JudgeUnavailable]
+Judge = Callable[[str], Awaitable[JudgeVerdict | JudgeUnavailable]]
 
 
 @dataclass(frozen=True)
@@ -237,7 +237,7 @@ def _tool_call_checks(
     return checks
 
 
-def _readback_checks(
+async def _readback_checks(
     readbacks: Sequence[Mapping[str, Json]],
     expected: Sequence[Mapping[str, Json]],
     calls: Sequence[Mapping[str, Json]],
@@ -257,7 +257,7 @@ def _readback_checks(
         if not call.get("changeRequestId"):
             checks.append(_check("readback", False, label, f"The {name} call made no change to read back."))
             continue
-        outcome = read_back(call, readback)
+        outcome = await read_back(call, readback)
         if outcome.verdict == "matches":
             found = "; ".join(f"{field.get('name')} {show(field.get('found'))}" for field in outcome.fields)
             checks.append(_check("readback", True, label, f"Read back: {found}."))
@@ -312,7 +312,7 @@ def _judge_check(rubric: str, verdict: JudgeVerdict) -> Check:
     )
 
 
-def grade_attempt(
+async def grade_attempt(
     expectations: Mapping[str, Json],
     attempt: Mapping[str, Json],
     read_back: ReadBack,
@@ -334,7 +334,7 @@ def grade_attempt(
     checks = [
         *_forbidden_checks([str(name) for name in expectations.get("forbiddenTools") or []], calls),
         *_tool_call_checks(expected_calls, calls, matched),
-        *_readback_checks(
+        *await _readback_checks(
             list(expectations.get("readbacks") or []), expected_calls, calls, matched, read_back
         ),
         *rule_checks,
@@ -355,7 +355,7 @@ def grade_attempt(
     judge_unavailable: str | None = None
     is_still_passing = not errors and all(check["hasPassed"] for check in checks)
     if isinstance(rubric, str) and is_still_passing:
-        judged = judge(rubric)
+        judged = await judge(rubric)
         if isinstance(judged, JudgeVerdict):
             checks.append(_judge_check(rubric, judged))
         else:

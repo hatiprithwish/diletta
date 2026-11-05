@@ -1,6 +1,7 @@
 """The run loop (diletta_evals.runner) against a fake API and host: k attempts per case, tags, readbacks, results,
 the reset once after the last attempt, and how the run ends when something stops it."""
 
+import asyncio
 import io
 import json
 
@@ -53,10 +54,10 @@ class FakeHost:
         self.tokens = 0
         self._fail_token_after = fail_token_after
 
-    def prepare(self) -> None:
+    async def prepare(self) -> None:
         self.prepared += 1
 
-    def host_token(self) -> str:
+    async def host_token(self) -> str:
         self.tokens += 1
         if self._fail_token_after is not None and self.tokens > self._fail_token_after:
             raise HostLoginError("Test host token mint failed: HTTP 503")
@@ -89,7 +90,7 @@ class FakeClient:
         self.judged: list[eval_api.EvalJudgeApiRequest] = []
         self._tag = ""
 
-    def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
+    async def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
         self.events.append("start")
         self.started_with = request
         return eval_api.CreateEvalRunApiResponse.model_validate(
@@ -101,7 +102,7 @@ class FakeClient:
             }
         )
 
-    def run_attempt(
+    async def run_attempt(
         self, run_id: str, request: eval_api.RunEvalAttemptApiRequest, host_token: str
     ) -> eval_api.RunEvalAttemptApiResponse:
         self.events.append(f"attempt {request.attempt}")
@@ -131,7 +132,7 @@ class FakeClient:
             }
         )
 
-    def read_back(
+    async def read_back(
         self, run_id: str, request: eval_api.EvalReadbackApiRequest, host_token: str
     ) -> eval_api.EvalReadbackApiResponse:
         self.readbacks.append(request)
@@ -155,7 +156,7 @@ class FakeClient:
             }
         )
 
-    def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse:
+    async def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse:
         self.events.append("judge")
         self.judged.append(request)
         if self._refuse_judge is not None:
@@ -172,20 +173,20 @@ class FakeClient:
             }
         )
 
-    def record_result(
+    async def record_result(
         self, run_id: str, request: eval_api.RecordEvalResultApiRequest
     ) -> eval_api.RecordEvalResultApiResponse:
         self.events.append(f"result {request.attempt}")
         self.results.append(request)
         return eval_api.RecordEvalResultApiResponse(isSuccess=True, message="ok")
 
-    def reset(self, run_id: str, host_token: str) -> eval_api.ResetEvalRunApiResponse:
+    async def reset(self, run_id: str, host_token: str) -> eval_api.ResetEvalRunApiResponse:
         self.events.append("reset")
         if self._refuse_reset is not None:
             raise self._refuse_reset
         return eval_api.ResetEvalRunApiResponse(isSuccess=True, message="ok", isReset=True)
 
-    def finish(
+    async def finish(
         self, run_id: str, request: eval_api.FinishEvalRunApiRequest
     ) -> eval_api.FinishEvalRunApiResponse:
         self.events.append("finish")
@@ -209,8 +210,10 @@ class FakeClient:
 
 
 def run(client: FakeClient, host: FakeHost | None = None, k: int = 3):
-    return EvalRunner(client, host or FakeHost(), out=client.out).run(
-        target=ConfigTarget(config_id="cfg_1"), k=k, trigger=eval_api.Trigger.number_2
+    return asyncio.run(
+        EvalRunner(client, host or FakeHost(), out=client.out).run(
+            target=ConfigTarget(config_id="cfg_1"), k=k, trigger=eval_api.Trigger.number_2
+        )
     )
 
 
@@ -225,8 +228,10 @@ def test_starts_on_the_named_config_or_on_a_chatbot_by_its_published_config() ->
     }
 
     nightly = FakeClient()
-    EvalRunner(nightly, FakeHost(), out=nightly.out).run(
-        target=ChatbotTarget(chatbot_id="bot_1"), k=1, trigger=eval_api.Trigger.number_3
+    asyncio.run(
+        EvalRunner(nightly, FakeHost(), out=nightly.out).run(
+            target=ChatbotTarget(chatbot_id="bot_1"), k=1, trigger=eval_api.Trigger.number_3
+        )
     )
     body = json.loads(nightly.started_with.model_dump_json())
     assert body["chatbotId"] == "bot_1"
@@ -238,11 +243,13 @@ def test_required_tool_cases_stop_a_run_that_has_none_after_resetting_and_ending
     expectations = {**CASE["expectations"], "toolCalls": [], "readbacks": [], "rubric": "Says hello"}
     client = FakeClient(case={**CASE, "expectations": expectations})
     with pytest.raises(MissingToolCasesError):
-        EvalRunner(client, FakeHost(), out=client.out).run(
-            target=ChatbotTarget(chatbot_id="bot_1"),
-            k=1,
-            trigger=eval_api.Trigger.number_3,
-            require_tool_cases=True,
+        asyncio.run(
+            EvalRunner(client, FakeHost(), out=client.out).run(
+                target=ChatbotTarget(chatbot_id="bot_1"),
+                k=1,
+                trigger=eval_api.Trigger.number_3,
+                require_tool_cases=True,
+            )
         )
     assert client.events == ["start", "reset", "finish"]
     assert client.finish_request.isComplete is False
@@ -361,7 +368,7 @@ def test_a_finish_that_fails_after_a_stop_never_hides_what_stopped_the_run() -> 
 def test_a_grader_output_the_contract_refuses_is_recorded_as_a_failed_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def too_long(*_args: object) -> GradedAttempt:
+    async def too_long(*_args: object) -> GradedAttempt:
         check = {"kind": "rubric", "hasPassed": True, "label": "x" * 500, "detail": None}
         return GradedAttempt(has_passed=True, grader_output={"schemaVersion": 1, "checks": [check], "error": None})
 
@@ -423,7 +430,7 @@ def test_any_other_judge_refusal_stops_the_run_with_its_own_reason() -> None:
 
 
 def test_a_stop_of_the_harness_own_is_never_blamed_on_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    def broken(*_args: object) -> GradedAttempt:
+    async def broken(*_args: object) -> GradedAttempt:
         raise TypeError("a harness bug")
 
     monkeypatch.setattr(runner_module, "grade_attempt", broken)

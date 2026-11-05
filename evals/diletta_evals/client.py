@@ -9,8 +9,8 @@ the model its own retries, and the run stops on it. Starting a run, an attempt (
 a repeat is refused) and the finish are sent once.
 """
 
-import time
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar
 
 import httpx
@@ -47,99 +47,102 @@ class EvalApiError(Exception):
 class EvalApi(Protocol):
     """What a run needs of the API (EvalApiClient; tests pass a fake)."""
 
-    def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse: ...
+    async def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse: ...
 
-    def run_attempt(
+    async def run_attempt(
         self, run_id: str, request: eval_api.RunEvalAttemptApiRequest, host_token: str
     ) -> eval_api.RunEvalAttemptApiResponse: ...
 
-    def read_back(
+    async def read_back(
         self, run_id: str, request: eval_api.EvalReadbackApiRequest, host_token: str
     ) -> eval_api.EvalReadbackApiResponse: ...
 
-    def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse: ...
+    async def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse: ...
 
-    def record_result(
+    async def record_result(
         self, run_id: str, request: eval_api.RecordEvalResultApiRequest
     ) -> eval_api.RecordEvalResultApiResponse: ...
 
-    def reset(self, run_id: str, host_token: str) -> eval_api.ResetEvalRunApiResponse: ...
+    async def reset(self, run_id: str, host_token: str) -> eval_api.ResetEvalRunApiResponse: ...
 
-    def finish(
+    async def finish(
         self, run_id: str, request: eval_api.FinishEvalRunApiRequest
     ) -> eval_api.FinishEvalRunApiResponse: ...
 
 
 class EvalApiClient:
     def __init__(
-        self, config: HarnessConfig, http: httpx.Client, sleep: Callable[[float], None] = time.sleep
+        self,
+        config: HarnessConfig,
+        http: httpx.AsyncClient,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._config = config
         self._http = http
         self._sleep = sleep
 
-    def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
-        return self._post("/runs", request, eval_api.CreateEvalRunApiResponse)
+    async def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
+        return await self._post("/runs", request, eval_api.CreateEvalRunApiResponse)
 
-    def run_attempt(
+    async def run_attempt(
         self, run_id: str, request: eval_api.RunEvalAttemptApiRequest, host_token: str
     ) -> eval_api.RunEvalAttemptApiResponse:
-        return self._post(f"/runs/{run_id}/attempts", request, eval_api.RunEvalAttemptApiResponse, host_token)
+        return await self._post(f"/runs/{run_id}/attempts", request, eval_api.RunEvalAttemptApiResponse, host_token)
 
-    def read_back(
+    async def read_back(
         self, run_id: str, request: eval_api.EvalReadbackApiRequest, host_token: str
     ) -> eval_api.EvalReadbackApiResponse:
-        return self._retried(
+        return await self._retried(
             lambda: self._post(
                 f"/runs/{run_id}/readbacks", request, eval_api.EvalReadbackApiResponse, host_token
             )
         )
 
-    def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse:
-        return self._retried(
+    async def judge(self, run_id: str, request: eval_api.EvalJudgeApiRequest) -> eval_api.EvalJudgeApiResponse:
+        return await self._retried(
             lambda: self._post(f"/runs/{run_id}/judge", request, eval_api.EvalJudgeApiResponse),
             final_failures=frozenset({eval_api.Failure.JudgeUnavailable}),
         )
 
-    def record_result(
+    async def record_result(
         self, run_id: str, request: eval_api.RecordEvalResultApiRequest
     ) -> eval_api.RecordEvalResultApiResponse:
         recorded = eval_api.RecordEvalResultApiResponse(isSuccess=True, message="Eval result recorded")
-        return self._retried(
+        return await self._retried(
             lambda: self._post(f"/runs/{run_id}/results", request, eval_api.RecordEvalResultApiResponse),
             # DEV_NOTE: A retry refused as Duplicate: the try whose answer was lost recorded it
             on_retry_duplicate=recorded,
         )
 
-    def reset(self, run_id: str, host_token: str) -> eval_api.ResetEvalRunApiResponse:
-        return self._retried(
+    async def reset(self, run_id: str, host_token: str) -> eval_api.ResetEvalRunApiResponse:
+        return await self._retried(
             lambda: self._post(f"/runs/{run_id}/reset", None, eval_api.ResetEvalRunApiResponse, host_token)
         )
 
-    def finish(
+    async def finish(
         self, run_id: str, request: eval_api.FinishEvalRunApiRequest
     ) -> eval_api.FinishEvalRunApiResponse:
-        return self._post(f"/runs/{run_id}/finish", request, eval_api.FinishEvalRunApiResponse)
+        return await self._post(f"/runs/{run_id}/finish", request, eval_api.FinishEvalRunApiResponse)
 
-    def _retried(
+    async def _retried(
         self,
-        send: Callable[[], Answer],
+        send: Callable[[], Awaitable[Answer]],
         on_retry_duplicate: Answer | None = None,
         final_failures: frozenset[eval_api.Failure] = frozenset(),
     ) -> Answer:
         attempt = 0
         while True:
             try:
-                return send()
+                return await send()
             except EvalApiError as error:
                 if attempt > 0 and on_retry_duplicate is not None and error.failure is eval_api.Failure.Duplicate:
                     return on_retry_duplicate
                 if not error.is_transient or error.failure in final_failures or attempt == RETRIES:
                     raise
                 attempt += 1
-                self._sleep(RETRY_BACKOFF_SECONDS * attempt)
+                await self._sleep(RETRY_BACKOFF_SECONDS * attempt)
 
-    def _post(
+    async def _post(
         self,
         path: str,
         body: BaseModel | None,
@@ -156,7 +159,7 @@ class EvalApiClient:
         if host_token is not None:
             headers[HOST_TOKEN_HEADER] = host_token
         try:
-            response = self._http.post(
+            response = await self._http.post(
                 f"{self._config.api_url}/eval{path}",
                 headers=headers,
                 content=body.model_dump_json() if body is not None else "{}",

@@ -1,6 +1,8 @@
 """Grading (diletta_evals.graders): every check kind (the judge's too), the matching, and when an attempt passes."""
 
+import asyncio
 import json
+from collections.abc import Callable, Mapping
 
 from diletta_evals.graders import (
     JUDGE_UNAVAILABLE_PREFIX,
@@ -9,12 +11,30 @@ from diletta_evals.graders import (
     JudgeUnavailable,
     JudgeVerdict,
     ReadbackOutcome,
+    GradedAttempt,
     failed_attempt,
     grade_attempt,
     json_equal,
     match_tool_calls,
 )
 from diletta_evals.types.eval_grader_output import EvalGraderOutput
+
+
+def grade(
+    expectations: Mapping[str, object],
+    attempt: Mapping[str, object],
+    read_back: Callable[[Mapping[str, object], Mapping[str, object]], ReadbackOutcome],
+    judge: Callable[[str], JudgeVerdict | JudgeUnavailable],
+) -> GradedAttempt:
+    """grade_attempt with plain callbacks (the backend's answers, made up), run to completion."""
+
+    async def read_back_async(call: Mapping[str, object], readback: Mapping[str, object]) -> ReadbackOutcome:
+        return read_back(call, readback)
+
+    async def judge_async(rubric: str) -> JudgeVerdict | JudgeUnavailable:
+        return judge(rubric)
+
+    return asyncio.run(grade_attempt(expectations, attempt, read_back_async, judge_async))
 
 
 def expectations(**overrides: object) -> dict[str, object]:
@@ -77,7 +97,7 @@ def test_a_call_that_didnt_run_never_matches() -> None:
 
 
 def test_passes_when_every_check_passes_and_the_output_fits_the_schema() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(
             rules=[{"kind": "contains", "text": "ALPHA"}, {"kind": "not_contains", "text": "error"}],
             toolCalls=[{"toolName": "update_record", "args": {"recordId": "rec_alpha", "amount": 300}}],
@@ -108,7 +128,7 @@ def test_passes_when_every_check_passes_and_the_output_fits_the_schema() -> None
 
 
 def test_fails_on_a_forbidden_call_a_missing_call_and_a_rule() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(
             rules=[{"kind": "not_contains", "text": "deleted"}],
             toolCalls=[{"toolName": "update_record", "args": {"amount": 300}}],
@@ -135,7 +155,7 @@ def test_a_readback_that_differs_or_is_unknown_fails_with_what_it_found() -> Non
         readbacks=[{"toolName": "update_record", "expect": {"status": "closed"}}],
     )
     run = attempt(call("update_record", {"status": "closed"}, "verified", "cr_1"))
-    differs = grade_attempt(
+    differs = grade(
         case,
         run,
         lambda c, r: ReadbackOutcome(
@@ -151,14 +171,14 @@ def test_a_readback_that_differs_or_is_unknown_fails_with_what_it_found() -> Non
     checks = differs.grader_output["checks"]
     assert isinstance(checks, list)
     assert checks[1]["detail"] == 'Read back: status: expected "closed", found "open".'
-    unknown = grade_attempt(
+    unknown = grade(
         case, run, lambda c, r: ReadbackOutcome(verdict="unknown", fields=[], reason="HTTP 404"), no_judge
     )
     assert not unknown.has_passed
 
 
 def test_a_readback_without_a_matched_change_fails_without_calling_the_backend() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(
             toolCalls=[{"toolName": "update_record", "args": {}}],
             readbacks=[{"toolName": "update_record", "expect": {"amount": 1}}],
@@ -181,7 +201,7 @@ def test_the_judge_grades_the_rubric_next_to_the_rules_and_names_itself() -> Non
             has_passed=True, reason="Says drills are quarterly.", model="claude-sonnet-5-5", prompt_version=1
         )
 
-    graded = grade_attempt(
+    graded = grade(
         expectations(rubric="Says drills are quarterly.", rules=[{"kind": "contains", "text": "quarterly"}]),
         attempt(reply="Quarterly."),
         no_readback,
@@ -200,7 +220,7 @@ def test_the_judge_grades_the_rubric_next_to_the_rules_and_names_itself() -> Non
         "detail": "Says drills are quarterly. (judge claude-sonnet-5-5, prompt v1)",
     }
 
-    failed = grade_attempt(
+    failed = grade(
         expectations(rubric="Says drills are monthly."),
         attempt(reply="Quarterly."),
         no_readback,
@@ -213,7 +233,7 @@ def test_the_judge_grades_the_rubric_next_to_the_rules_and_names_itself() -> Non
 
 
 def test_an_unreachable_judge_stops_grading_with_why_and_keeps_the_other_checks() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(rubric="Says drills are quarterly.", rules=[{"kind": "contains", "text": "quarterly"}]),
         attempt(reply="Quarterly."),
         no_readback,
@@ -230,7 +250,7 @@ def test_an_unreachable_judge_stops_grading_with_why_and_keeps_the_other_checks(
 
 
 def test_an_attempt_the_other_checks_already_failed_is_never_judged() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(rubric="Says drills are quarterly.", rules=[{"kind": "contains", "text": "monthly"}]),
         attempt(reply="Quarterly."),
         no_readback,
@@ -244,7 +264,7 @@ def test_an_attempt_the_other_checks_already_failed_is_never_judged() -> None:
 
 
 def test_an_unfinished_turn_stops_grading_with_an_error_and_is_never_judged() -> None:
-    cut = grade_attempt(
+    cut = grade(
         expectations(rubric="Says x.", rules=[{"kind": "contains", "text": "x"}]),
         attempt(reply="x", turn="error"),
         no_readback,
@@ -262,7 +282,7 @@ def test_an_attempt_that_never_ran_fails_with_its_reason() -> None:
 
 def test_a_forbidden_tool_fails_whatever_became_of_the_call() -> None:
     for status in ("error", "blocked", "undone", None):
-        graded = grade_attempt(
+        graded = grade(
             expectations(forbiddenTools=["delete_record"], rules=[{"kind": "contains", "text": "Done"}]),
             attempt(call("delete_record", {"recordId": "r1"}, status=status)),
             no_readback,
@@ -274,7 +294,7 @@ def test_a_forbidden_tool_fails_whatever_became_of_the_call() -> None:
 
 
 def test_an_unknown_rule_kind_stops_grading_instead_of_reading_as_doesnt_contain() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(rules=[{"kind": "starts_with", "text": "Done"}]), attempt(), no_readback, no_judge
     )
     assert not graded.has_passed
@@ -283,7 +303,7 @@ def test_an_unknown_rule_kind_stops_grading_instead_of_reading_as_doesnt_contain
 
 def test_cuts_text_by_utf16_units_as_the_backend_counts() -> None:
     label = "😀" * 150
-    graded = grade_attempt(expectations(rules=[{"kind": "contains", "text": label}]), attempt(), no_readback, no_judge)
+    graded = grade(expectations(rules=[{"kind": "contains", "text": label}]), attempt(), no_readback, no_judge)
     EvalGraderOutput.model_validate(graded.grader_output)
     [check] = graded.grader_output["checks"]
     assert len(str(check["label"]).encode("utf-16-le")) // 2 <= LABEL_MAX_CHARS
@@ -291,7 +311,7 @@ def test_cuts_text_by_utf16_units_as_the_backend_counts() -> None:
 
 
 def test_the_most_checks_a_valid_case_can_have_still_fit_the_grader_output() -> None:
-    graded = grade_attempt(
+    graded = grade(
         expectations(
             rules=[{"kind": "contains", "text": f"r{i}"} for i in range(20)],
             toolCalls=[{"toolName": f"tool_{i}", "args": {}} for i in range(10)],
@@ -308,7 +328,7 @@ def test_the_most_checks_a_valid_case_can_have_still_fit_the_grader_output() -> 
 
 def test_a_case_with_too_many_checks_fails_before_the_judge_is_asked() -> None:
     # DEV_NOTE: The other checks fill every slot, so the judge's would be one too many: no judge call, nothing cut off
-    graded = grade_attempt(
+    graded = grade(
         expectations(
             rubric="Says it saved.",
             rules=[{"kind": "contains", "text": "Saved"} for _ in range(MAX_CHECKS)],
