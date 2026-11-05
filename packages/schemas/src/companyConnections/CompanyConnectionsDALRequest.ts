@@ -10,9 +10,11 @@ export type FindCompanyConnectionDALRequest = Pick<CompanyConnection, "publicId"
 
 // DEV_NOTE: isForUpdate locks the row for the rest of the transaction (SELECT … FOR UPDATE), so an origins edit
 // compares against a list no concurrent edit can change in between
-export type GetCompanyConnectionDetailsDALRequest = FindCompanyConnectionDALRequest & {
-  isForUpdate?: boolean;
-};
+// DEV_NOTE: By public id (a route), or by internal id (an eval run's connection, M7-9)
+export type GetCompanyConnectionDetailsDALRequest = Pick<CompanyConnection, "companyId"> &
+  ({ publicId: string; id?: undefined } | { id: string; publicId?: undefined }) & {
+    isForUpdate?: boolean;
+  };
 
 // DEV_NOTE: Pre-tenant lookup (widget auth, withPlatform): the token's iss picks the row before any company is
 // known, so this is the one connection request without companyId

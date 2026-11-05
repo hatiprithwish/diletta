@@ -1,6 +1,7 @@
 import type { PageDALRequest } from "../common";
 import type {
   EvalRun,
+  EvalRunFailureIntEnum,
   EvalRunCaseSortColumn,
   EvalRunSortColumn,
   EvalRunStatusIntEnum,
@@ -63,6 +64,28 @@ export type CreateEvalRunDALRequest = Pick<
   EvalRun,
   "companyId" | "chatbotConfigId" | "trigger" | "harnessVersion" | "k"
 > & { companyConnectionId: string; evalCaseIds: string[] };
+
+// ─── The hosted eval runner (M7-9, ADR 0007) ────────────────────────────────
+
+// DEV_NOTE: A run the dashboard queued: Queued on the connection whose test sign-in the runner uses, its k from the
+// trigger, harness_version QUEUED_EVAL_RUN_HARNESS_VERSION until the runner starts it, and the admin who started it
+export type QueueEvalRunDALRequest = Pick<
+  EvalRun,
+  "companyId" | "chatbotConfigId" | "trigger" | "k"
+> & { companyConnectionId: string; startedBy: string };
+
+// DEV_NOTE: Queued → Running, once, with the cases the runner was handed and its harness version
+export type StartQueuedEvalRunDALRequest = Pick<EvalRun, "companyId" | "id" | "harnessVersion"> & {
+  evalCaseIds: string[];
+};
+
+// DEV_NOTE: Queued → Failed, once: the runner couldn't take the run, or couldn't start it
+export type FailQueuedEvalRunDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+  failure: EvalRunFailureIntEnum;
+};
+
+// DEV_NOTE: A config's run still Queued or Running (the dashboard starts one at a time per version)
+export type GetActiveEvalRunForConfigDALRequest = Pick<EvalRun, "companyId" | "chatbotConfigId">;
 
 // DEV_NOTE: A Running run ends (Done or Failed) once, with its tallies; a run that already ended is isNotFound. failure
 // = why the harness stopped it (a Failed run only, else null)

@@ -44,6 +44,15 @@ export type UpdateCompanySecretDALRequest = FindCompanySecretDALRequest &
     updatedBy?: string | null;
   };
 
+// DEV_NOTE: M7-9: a connection's Active test sign-in (one at most: UNQ_company_secrets_company_id_connection_id_type_active)
+export type FindConnectionEvalHostLoginDALRequest = Pick<CompanySecret, "companyId"> & {
+  connectionId: string;
+  isForUpdate?: boolean;
+};
+
+// DEV_NOTE: M7-9: the company's Active Staging connections that have an Active test sign-in (the hosted runner's pick)
+export type GetEvalHostLoginConnectionsDALRequest = Pick<CompanySecret, "companyId">;
+
 // Params to find a company's active model key for one provider (at most one: UNQ_company_secrets_company_id_provider_active)
 // DEV_NOTE: isForShare reads the row FOR SHARE (a publish, M4-10), so the key can't be invalidated, revoked or replaced
 // between the publish's check and its commit

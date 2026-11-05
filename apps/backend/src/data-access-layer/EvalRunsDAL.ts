@@ -76,6 +76,7 @@ export default class EvalRunsDAL {
         hasPassed: evalRuns.hasPassed,
         failure: evalRuns.failure,
         costUsd: evalRuns.costUsd,
+        startedBy: evalRuns.startedBy,
         finishedAt: evalRuns.finishedAt,
         createdAt: evalRuns.createdAt,
         updatedAt: evalRuns.updatedAt,
@@ -660,6 +661,242 @@ export default class EvalRunsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.CreateEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // ─── The hosted eval runner (M7-9, ADR 0007) ─────────────────────────────
+
+  // DEV_NOTE: A run the dashboard queued for the hosted runner: Queued, on the connection whose test sign-in the runner
+  // uses, with no case set yet (the runner's /eval/runs sets it as it starts the run). The config and the connection must
+  // be the company's (no DB foreign keys).
+  async queueEvalRun(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.QueueEvalRunDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const configConditions = [
+        eq(chatbotConfigs.id, params.chatbotConfigId),
+        eq(chatbotConfigs.companyId, params.companyId),
+      ];
+      const [config] = await tx
+        .select({ id: chatbotConfigs.id })
+        .from(chatbotConfigs)
+        .where(and(...configConditions))
+        .limit(1);
+      const connectionConditions = [
+        eq(companyConnections.id, params.companyConnectionId),
+        eq(companyConnections.companyId, params.companyId),
+      ];
+      const [connection] = await tx
+        .select({ id: companyConnections.id })
+        .from(companyConnections)
+        .where(and(...connectionConditions))
+        .limit(1);
+      if (!config || !connection) {
+        const message = config ? "Company connection not found" : "Chatbot config not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.QueueEvalRun,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const [evalRun] = await tx
+        .insert(evalRuns)
+        .values({
+          publicId: Utility.generatePublicId(),
+          companyId: params.companyId,
+          chatbotConfigId: params.chatbotConfigId,
+          companyConnectionId: params.companyConnectionId,
+          evalCaseIds: null,
+          trigger: params.trigger,
+          harnessVersion: Schemas.QUEUED_EVAL_RUN_HARNESS_VERSION,
+          k: params.k,
+          status: Schemas.EvalRunStatusIntEnum.Queued,
+          startedBy: params.startedBy,
+          // DEV_NOTE: After the Repo's lock on its config, as for createEvalRun: the clock a gate move compares with
+          createdAt: sql`clock_timestamp()`,
+        })
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Eval run queued successfully";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in queueing eval run";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.QueueEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Queued → Running, once (the status condition), with the case set the runner was handed: a run that isn't
+  // Queued any more is isNotFound
+  async startQueuedEvalRun(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.StartQueuedEvalRunDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalRuns.id, params.id),
+        eq(evalRuns.companyId, params.companyId),
+        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Queued),
+      ];
+      const [evalRun] = await tx
+        .update(evalRuns)
+        .set({
+          status: Schemas.EvalRunStatusIntEnum.Running,
+          evalCaseIds: params.evalCaseIds,
+          harnessVersion: params.harnessVersion,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!evalRun) {
+        const message = "Eval run not found or not queued";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.StartQueuedEvalRun,
+          message,
+          metadata: { companyId: params.companyId, id: params.id },
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Queued eval run started successfully";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in starting queued eval run";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.StartQueuedEvalRun,
+        message,
+        error,
+        metadata: { companyId: params.companyId, id: params.id },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Queued → Failed, once (the status condition), with why: a run that isn't Queued any more is isNotFound
+  async failQueuedEvalRun(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FailQueuedEvalRunDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalRuns.id, params.id),
+        eq(evalRuns.companyId, params.companyId),
+        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Queued),
+      ];
+      const [evalRun] = await tx
+        .update(evalRuns)
+        .set({
+          status: Schemas.EvalRunStatusIntEnum.Failed,
+          failure: params.failure,
+          finishedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!evalRun) {
+        const message = "Eval run not found or not queued";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.FailQueuedEvalRun,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Queued eval run failed";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in failing queued eval run";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.FailQueuedEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The config's newest run that is still Queued or Running; isNotFound when it has none
+  async getActiveEvalRunForConfig(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetActiveEvalRunForConfigDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalRuns.companyId, params.companyId),
+        eq(evalRuns.chatbotConfigId, params.chatbotConfigId),
+        inArray(evalRuns.status, [
+          Schemas.EvalRunStatusIntEnum.Queued,
+          Schemas.EvalRunStatusIntEnum.Running,
+        ]),
+      ];
+      const [evalRun] = await tx
+        .select()
+        .from(evalRuns)
+        .where(and(...conditions))
+        .orderBy(desc(evalRuns.createdAt), desc(evalRuns.id))
+        .limit(1);
+
+      if (!evalRun) {
+        response.message = "The config has no queued or running eval run";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Active eval run fetched successfully";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in fetching the config's active eval run";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetActiveEvalRunsForConfig,
         message,
         error,
         metadata: params,

@@ -56,6 +56,8 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Activated]: "Activated connection",
     [Schemas.AuditEntityActionEnum.Disabled]: "Disabled connection",
     [Schemas.AuditEntityActionEnum.OriginsChanged]: "Changed allowed origins",
+    [Schemas.AuditEntityActionEnum.TestLoginSet]: "Set the test sign-in",
+    [Schemas.AuditEntityActionEnum.TestLoginRemoved]: "Removed the test sign-in",
   },
   [Schemas.AuditEntityTypeEnum.CompanyEncryptionKey]: {
     [Schemas.AuditEntityActionEnum.Rotated]: "Rotated encryption key",
@@ -92,6 +94,8 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.PassedGate]: "Passed its tests, ready to publish",
     [Schemas.AuditEntityActionEnum.FailedGate]: "Failed its tests, back to draft",
     [Schemas.AuditEntityActionEnum.Published]: "Published a version",
+    [Schemas.AuditEntityActionEnum.GateRunStarted]: "Started a version's publish tests",
+    [Schemas.AuditEntityActionEnum.TestRunStarted]: "Ran a version's tests",
   },
 };
 

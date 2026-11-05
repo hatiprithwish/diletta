@@ -4,6 +4,7 @@ import Constants from "@/config/Constants";
 import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import CompanyConnectionsDAL from "@/data-access-layer/CompanyConnectionsDAL";
+import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
 import EvalCasesDAL from "@/data-access-layer/EvalCasesDAL";
 import EvalRunsDAL from "@/data-access-layer/EvalRunsDAL";
 import FilesDAL from "@/data-access-layer/FilesDAL";
@@ -33,6 +34,7 @@ export default class EvalRunsRepo {
   private chatbotsDal: ChatbotsDAL;
   private chatbotConfigsDal: ChatbotConfigsDAL;
   private companyConnectionsDal: CompanyConnectionsDAL;
+  private companySecretsDal: CompanySecretsDAL;
   private filesDal: FilesDAL;
 
   constructor(env: Env) {
@@ -43,6 +45,7 @@ export default class EvalRunsRepo {
     this.chatbotsDal = new ChatbotsDAL();
     this.chatbotConfigsDal = new ChatbotConfigsDAL();
     this.companyConnectionsDal = new CompanyConnectionsDAL();
+    this.companySecretsDal = new CompanySecretsDAL();
     this.filesDal = new FilesDAL();
   }
 
@@ -158,7 +161,12 @@ export default class EvalRunsRepo {
           companyId,
         });
         if (!connections.isSuccess) return { isSuccess: false, message: connections.message };
-        const staging = EvalRunsProvider.stagingHost(connections.companyConnections ?? []);
+        const logins = await this.companySecretsDal.getEvalHostLoginConnections(tx, { companyId });
+        if (!logins.isSuccess) return { isSuccess: false, message: logins.message };
+        const staging = EvalRunsProvider.stagingHost(
+          connections.companyConnections ?? [],
+          logins.connectionIds ?? [],
+        );
 
         const found =
           params.botId !== undefined
@@ -232,16 +240,29 @@ export default class EvalRunsRepo {
             caseCount: counted.caseCount ?? 0,
             safetyCaseCount: counted.safetyCaseCount ?? 0,
             live: published.chatbotConfig
-              ? { configVersion: published.chatbotConfig.configVersion, run: itemOf(liveRun.run) }
+              ? this.summaryConfig(published.chatbotConfig, itemOf(liveRun.run))
               : null,
             draft: draft.chatbotConfig
-              ? { configVersion: draft.chatbotConfig.configVersion, run: itemOf(draftRun.run) }
+              ? this.summaryConfig(draft.chatbotConfig, itemOf(draftRun.run))
               : null,
             staging,
           },
         };
       },
     );
+  }
+
+  private summaryConfig(
+    chatbotConfig: Pick<Schemas.ChatbotConfig, "publicId" | "configVersion" | "status">,
+    run: Schemas.EvalRunListItem | null,
+  ): Schemas.EvalRunsSummaryConfig {
+    return {
+      publicId: chatbotConfig.publicId,
+      configVersion: chatbotConfig.configVersion,
+      chatbotConfigStatus: chatbotConfig.status,
+      chatbotConfigStatusLabel: Schemas.CHATBOT_CONFIG_STATUS_LABEL_MAP[chatbotConfig.status],
+      run,
+    };
   }
 
   // DEV_NOTE: The run that stands for a config: its gate run (approved_by_run_id) when it has one, else its newest run;

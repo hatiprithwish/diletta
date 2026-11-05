@@ -138,6 +138,53 @@ pnpm evals:run --config <chatbotConfigPublicId> --k 3   # = uv run --project eva
 
 **On another host:** add a login for it under `evals/diletta_evals/hosts/` (a `HostLogin`: `prepare()` before the run, `host_token()` per call) and an `EVAL_HOST_KIND` value.
 
+## Hosted runner (M7-9)
+
+[ADR 0007](../adr/0007-hosted-eval-runner.md). A company admin starts a run from the dashboard: **Run gate** on a version sent to testing (k = 3; its finish makes it Ready or a draft again), or **Run tests** on any version (k = 1, moves nothing). The run is driven by `apps/eval-runner`, a Python Worker whose Workflow (`EvalRunWorkflow`) runs the same `diletta_evals` code as the CLI, one durable step per attempt. The CLI and the nightly suite on GitHub Actions are unchanged.
+
+How one run goes:
+
+1. `POST /dashboard/eval-runs` creates a **Queued** run (Tests page shows it) on the company's first Active Staging connection that has a test sign-in, and starts a Workflow instance named after the run (`{companyPublicId, runPublicId}` only).
+2. The runner asks the backend for the connection's test sign-in over its service binding (`EvalRunnerEntrypoint.getRunLogin`), signs the host test user in, and starts the run (`POST /eval/runs` with `{runId}`): Queued → Running with its case set.
+3. Each attempt is its own step and is sent once. A step cut short and replayed gets 409 `Duplicate` and is recorded as failed ("interrupted"), never run twice.
+4. Reset and finish, as for the CLI. If the runner can't start the run at all (the sign-in fails, the backend is unreachable), it fails the Queued run as "The test runner couldn't start the run".
+
+### Set up a company
+
+An operator sets the test sign-in on the company's **Staging** connection (operator pages › the company › Connections › the connection › **Test sign-in**, or the API):
+
+```http
+PUT /operator/companies/<companyPublicId>/connections/<connectionPublicId>/eval-login
+Content-Type: application/json
+
+{ "evalHostLogin": { "kind": "eregister", "hostUser": "<Firebase uid>", "firebaseApiKey": "<VITE_apiKey>", "email": "<test user>", "password": "<password>" } }
+```
+
+or `{ "kind": "test_host", "hostUser": "eval-test-user", "issuer": "<test host>", "adminSecret": "<admin secret>" }`. It is encrypted under the company key (a `company_secrets` row of type Test sign-in) and replaced whole on every save; the password is never read back. `DELETE …/eval-login` removes it. Each change is an audit row as the operator. Without one, the Run buttons say tests can't run yet.
+
+### Deploy the runner
+
+`apps/eval-runner` deploys on its own GitHub workflows (`deploy-eval-runner-staging.yml` on `staging`, `deploy-eval-runner-production.yml` on `main`, or **Run workflow**). Once per env, set its key: the harness's private JWK, the same one the CLI uses (vault):
+
+```bash
+cd apps/eval-runner && uv sync
+pnpm exec wrangler secret put EVAL_JWT_PRIVATE_KEY --env staging
+```
+
+The **first** deploy of an env goes runner first, then the backend: the backend's `EVAL_RUN_WORKFLOW` binds the runner's Workflow by script name (`diletta-eval-runner-<env>`). By hand: `pnpm --filter eval-runner run deploy:staging` (it clears uv's cached build of `evals/` first, so the bundle has the code you have). `DILETTA_API_URL` and the backend binding (`BACKEND` → `EvalRunnerEntrypoint`) are in its `wrangler.jsonc`.
+
+Limits it is built to (Workers Free): the bundle stays under 3 MB gzipped, so it signs the eval JWT with WebCrypto (`src/webcrypto_jwt.py`) and leaves `cryptography` and `websockets` out (`python_modules.exclude`); a dry run prints the size (`uv run pywrangler deploy --env staging --dry-run`). A Workflow step has 10 ms of CPU on Free (waiting on a call is free); a step that runs out is cut short, which shows as an interrupted attempt or a run that couldn't start. If that happens, the account needs Workers Paid (no code change). Python packages come from `apps/eval-runner/pyproject.toml` + `uv.lock` (`evals/` by path); the app pins `wrangler` 4.150 (Python Workers need ≥ 4.150; the backend keeps its own).
+
+### Troubleshooting the hosted runner
+
+| Symptom                                                                       | Likely cause                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run button: "the staging connection has no test sign-in" (409 `NoTestLogin`)  | No Active Staging connection has a test sign-in: an operator sets one                                                                                                                                                                                      |
+| Run button: "This version's tests are already running" (409 `AlreadyRunning`) | A run of this version is still Queued or Running; wait for it, or check the runner's Workflow instance                                                                                                                                                     |
+| Run fails at once, "The test runner couldn't start the run"                   | 503 at the button: the runner isn't deployed or bound (always so locally). Later: the test sign-in failed (wrong password, uid not the host user) or the backend was unreachable; see the instance in the dashboard's Workflows › `diletta-eval-run-<env>` |
+| Run stays Queued                                                              | The Workflow instance never started its first step: check its status. A Queued run older than 15 minutes is failed ("couldn't start") the next time anyone presses Run on that version                                                                     |
+| A run of the CLI isn't affected                                               | Expected: only runs the dashboard started (`started_by`) can read a test sign-in                                                                                                                                                                           |
+
 ## Changing the API
 
 The request and answer shapes are Zod schemas in `packages/schemas/src/evalHarness/`, exported to `evals/schemas/eval-api.schema.json`, with Python types generated in `evals/diletta_evals/types/eval_api.py`. The constants no message carries (the eval JWT's `iss` / `aud` / lifetime, the headers, the test host's token lifetime) are `ZEvalHarnessConstants`, exported as literals to `eval-constants.schema.json` and read by `diletta_evals/constants.py`; the grader's limits come from the generated grader output type. Nothing is copied into Python by hand. After a change:

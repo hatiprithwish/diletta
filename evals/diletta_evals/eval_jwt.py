@@ -2,13 +2,15 @@
 
 The claims mirror packages/schemas ZEvalJwtClaims: iss/aud are the platform constants, company and connection are the
 public ids of the company and its staging connection, sub is the host test user.
+
+The CLI signs with pyjwt (sign_eval_jwt). The hosted runner (M7-9) signs the same claims with the Worker's WebCrypto
+(apps/eval-runner), so it bundles neither pyjwt's crypto backend nor `cryptography`: eval_jwt_claims and
+signing_input are shared, and pyjwt is imported only where it signs or makes a key.
 """
 
+import base64
 import json
 import time
-
-import jwt
-from jwt.algorithms import ECAlgorithm
 
 # The worker refuses any other iss / aud
 from diletta_evals.constants import EVAL_JWT_AUDIENCE, EVAL_JWT_ISSUER, EVAL_JWT_MAX_LIFETIME_SECONDS
@@ -19,17 +21,9 @@ if EVAL_JWT_LIFETIME_SECONDS > EVAL_JWT_MAX_LIFETIME_SECONDS:
     raise RuntimeError("The eval JWT's lifetime is over the worker's maximum")
 
 
-def sign_eval_jwt(
-    private_jwk: dict[str, object],
-    *,
-    company_id: str,
-    connection_id: str,
-    host_user: str,
-    now: int | None = None,
-) -> str:
+def eval_jwt_claims(*, company_id: str, connection_id: str, host_user: str, now: int | None = None) -> dict[str, object]:
     issued_at = int(time.time()) if now is None else now
-    key = ECAlgorithm.from_jwk(json.dumps(private_jwk))
-    claims = {
+    return {
         "iss": EVAL_JWT_ISSUER,
         "aud": EVAL_JWT_AUDIENCE,
         "sub": host_user,
@@ -38,12 +32,43 @@ def sign_eval_jwt(
         "company": company_id,
         "connection": connection_id,
     }
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def signing_input(kid: str, claims: dict[str, object]) -> str:
+    """The compact JWS's header.payload for ES256 under kid: what a signer signs (its signature is raw r || s)."""
+    header = {"alg": "ES256", "kid": kid, "typ": "JWT"}
+    encode = lambda value: _b64url(json.dumps(value, separators=(",", ":")).encode("utf-8"))  # noqa: E731
+    return f"{encode(header)}.{encode(claims)}"
+
+
+def compact_jws(signing_input_text: str, signature: bytes) -> str:
+    return f"{signing_input_text}.{_b64url(signature)}"
+
+
+def sign_eval_jwt(
+    private_jwk: dict[str, object],
+    *,
+    company_id: str,
+    connection_id: str,
+    host_user: str,
+    now: int | None = None,
+) -> str:
+    import jwt
+    from jwt.algorithms import ECAlgorithm
+
+    key = ECAlgorithm.from_jwk(json.dumps(private_jwk))
+    claims = eval_jwt_claims(company_id=company_id, connection_id=connection_id, host_user=host_user, now=now)
     return jwt.encode(claims, key, algorithm="ES256", headers={"kid": str(private_jwk["kid"])})
 
 
 def generate_key_pair(kid: str) -> tuple[dict[str, object], dict[str, list[dict[str, object]]]]:
     """A new P-256 key: (private JWK for EVAL_JWT_PRIVATE_KEY, public JWKS for the worker's EVAL_JWT_PUBLIC_JWKS)."""
     from cryptography.hazmat.primitives.asymmetric import ec
+    from jwt.algorithms import ECAlgorithm
 
     private_key = ec.generate_private_key(ec.SECP256R1())
     private_jwk: dict[str, object] = {

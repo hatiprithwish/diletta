@@ -75,6 +75,8 @@
   // DEV_NOTE: Knowledge ingestion (M2-5, docs/runbooks/knowledge.md). AI: Workers AI for toMarkdown and bge-m3
   // embeddings (platform-paid; only providers/knowledgeExtract.ts and providers/knowledgeEmbed.ts call it; tests pass
   // a fake). FILES_BUCKET and KNOWLEDGE_SYNC_WORKFLOW run on miniflare's local simulation here; local-only names.
+  // EVAL_RUN_WORKFLOW (M7-9) is bound in staging and production only: miniflare can't start a Workflow of a script that
+  // isn't running, so locally a dashboard Run fails the run as RunnerUnavailable (tests pass a fake).
   "ai": { "binding": "AI" },
   "r2_buckets": [{ "binding": "FILES_BUCKET", "bucket_name": "diletta-files-local" }],
   "workflows": [
@@ -150,6 +152,14 @@
           "name": "diletta-knowledge-sync-staging",
           "binding": "KNOWLEDGE_SYNC_WORKFLOW",
           "class_name": "KnowledgeSyncWorkflow",
+        },
+        // DEV_NOTE: M7-9 (ADR 0007): the hosted eval runner's Workflow, defined in apps/eval-runner (a Python Worker)
+        // and bound here by script name; a dashboard Run button starts one instance per run (EvalRunWorkflowProvider)
+        {
+          "name": "diletta-eval-run-staging",
+          "binding": "EVAL_RUN_WORKFLOW",
+          "class_name": "EvalRunWorkflow",
+          "script_name": "diletta-eval-runner-staging",
         },
       ],
       "vars": {
@@ -229,6 +239,14 @@
           "name": "diletta-knowledge-sync-production",
           "binding": "KNOWLEDGE_SYNC_WORKFLOW",
           "class_name": "KnowledgeSyncWorkflow",
+        },
+        // DEV_NOTE: M7-9 (ADR 0007): the hosted eval runner's Workflow, defined in apps/eval-runner (a Python Worker)
+        // and bound here by script name; a dashboard Run button starts one instance per run (EvalRunWorkflowProvider)
+        {
+          "name": "diletta-eval-run-production",
+          "binding": "EVAL_RUN_WORKFLOW",
+          "class_name": "EvalRunWorkflow",
+          "script_name": "diletta-eval-runner-production",
         },
       ],
       "vars": {

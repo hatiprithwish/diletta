@@ -69,6 +69,9 @@
         },
         {
           "$ref": "#/$defs/CreateEvalRunByChatbotApiRequest"
+        },
+        {
+          "$ref": "#/$defs/StartQueuedEvalRunApiRequest"
         }
       ]
     },
@@ -138,6 +141,26 @@
         "k",
         "harnessVersion",
         "trigger"
+      ],
+      "additionalProperties": false
+    },
+    "StartQueuedEvalRunApiRequest": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "harnessVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "runId",
+        "harnessVersion"
       ],
       "additionalProperties": false
     },
@@ -912,7 +935,8 @@
         1,
         2,
         3,
-        4
+        4,
+        5
       ]
     },
     "FinishEvalRunApiResponse": {
