@@ -27,7 +27,10 @@ import {
   useCompanyConnection,
   useCompanyConnections,
   useCreateConnection,
+  useEvalHostLogin,
   useOperatorCompany,
+  useRemoveEvalHostLogin,
+  useSetEvalHostLogin,
   useUpdateConnection,
 } from "./-data";
 
@@ -175,6 +178,14 @@ function ConnectionCard({
           )}
         </ConnectionRow>
         {connection.companyConnectionEnvironment === Staging && (
+          <ConnectionRow label="Test sign-in">
+            <TestLoginSummary
+              companyPublicId={companyPublicId}
+              connectionPublicId={connection.publicId}
+            />
+          </ConnectionRow>
+        )}
+        {connection.companyConnectionEnvironment === Staging && (
           <ConnectionRow label="Clean-up after tests">
             {resetOp ? (
               <span className="font-mono text-mono-value">{resetOp}</span>
@@ -230,7 +241,210 @@ export function ConnectionPage({
         description={`How the assistant reaches ${company.name}'s API.`}
       />
       <ConnectionForm companyPublicId={companyPublicId} connection={connection} />
+      {connection?.companyConnectionEnvironment === Staging && (
+        <TestLoginSection
+          companyPublicId={companyPublicId}
+          connectionPublicId={connection.publicId}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Test sign-in for the hosted eval runner (M7-9, ADR 0007)
+
+const { Eregister, TestHost } = Schemas.EvalHostLoginKindEnum;
+
+// DEV_NOTE: Which host and as whom; "None" says what that blocks
+function TestLoginSummary({
+  companyPublicId,
+  connectionPublicId,
+}: Schemas.DashboardOperatorTestLoginProps) {
+  const query = useEvalHostLogin(companyPublicId, connectionPublicId);
+  if (query.isPending) return <Skeleton className="h-5 w-48" aria-label="Loading" />;
+  if (!query.data) return <span className="text-muted-foreground">Didn't load</span>;
+  const login = query.data.evalHostLogin;
+  if (!login) {
+    return <span className="text-muted-foreground">None. Admins can't run tests yet.</span>;
+  }
+  return (
+    <span>
+      {login.kindLabel} as{" "}
+      <span className="font-mono text-mono-value break-all">{login.hostUser}</span>
+    </span>
+  );
+}
+
+// DEV_NOTE: The staging connection's page: the current sign-in with Remove, and a form that sets or replaces it whole
+// (secrets are never read back, so a change re-enters them). Checked with the API's own ZEvalHostLogin before sending.
+function TestLoginSection({
+  companyPublicId,
+  connectionPublicId,
+}: Schemas.DashboardOperatorTestLoginProps) {
+  const query = useEvalHostLogin(companyPublicId, connectionPublicId);
+  const save = useSetEvalHostLogin(companyPublicId, connectionPublicId);
+  const remove = useRemoveEvalHostLogin(companyPublicId, connectionPublicId);
+  const current = query.data?.evalHostLogin ?? null;
+  const form = useForm({
+    defaultValues: {
+      kind: Eregister as Schemas.EvalHostLoginKindEnum,
+      hostUser: "",
+      firebaseApiKey: "",
+      email: "",
+      password: "",
+      issuer: "",
+      adminSecret: "",
+    },
+    onSubmit: async ({ value, formApi }) => {
+      const login = Schemas.ZEvalHostLogin.parse(
+        value.kind === Eregister
+          ? {
+              kind: Eregister,
+              hostUser: value.hostUser,
+              firebaseApiKey: value.firebaseApiKey,
+              email: value.email,
+              password: value.password,
+            }
+          : {
+              kind: TestHost,
+              hostUser: value.hostUser,
+              issuer: value.issuer,
+              adminSecret: value.adminSecret,
+            },
+      );
+      await save.mutateAsync({ evalHostLogin: login });
+      formApi.reset({ ...value, firebaseApiKey: "", password: "", adminSecret: "" });
+    },
+  });
+
+  // DEV_NOTE: One field's check against the login shape of the chosen host
+  const fieldIssue = (name: Schemas.DashboardTestLoginField, value: string) => {
+    const shape: Record<string, ZodType | undefined> =
+      form.state.values.kind === Eregister
+        ? Schemas.ZEregisterEvalLogin.shape
+        : Schemas.ZTestHostEvalLogin.shape;
+    const schema = shape[name];
+    return schema ? schemaIssue(schema, value) : undefined;
+  };
+
+  const textField = (
+    name: Schemas.DashboardTestLoginField,
+    label: string,
+    description: string,
+    isSecret = false,
+  ) => (
+    <form.Field name={name} validators={{ onChange: ({ value }) => fieldIssue(name, value) }}>
+      {(field) => (
+        <Field data-invalid={field.state.meta.errors.length > 0 || undefined}>
+          <FieldLabel htmlFor={`test-login-${name}`}>{label}</FieldLabel>
+          <Input
+            id={`test-login-${name}`}
+            type={isSecret ? "password" : "text"}
+            autoComplete="off"
+            className={isSecret ? undefined : "font-mono"}
+            value={field.state.value}
+            onChange={(event) => field.handleChange(event.target.value)}
+            onBlur={field.handleBlur}
+            aria-invalid={field.state.meta.errors.length > 0}
+          />
+          <FieldDescription>{description}</FieldDescription>
+          <FieldError>{field.state.meta.errors.join(", ")}</FieldError>
+        </Field>
+      )}
+    </form.Field>
+  );
+
+  return (
+    <section
+      className="flex flex-col gap-5 rounded-xl border px-[22px] py-5"
+      aria-label="Test sign-in"
+    >
+      <SectionHeader
+        title="Test sign-in"
+        description="The test user the hosted test runner signs in as when an admin presses Run tests. Saved encrypted; the password is never shown again."
+      >
+        {current && (
+          <Button variant="outline" disabled={remove.isPending} onClick={() => remove.mutate()}>
+            Remove
+          </Button>
+        )}
+      </SectionHeader>
+      <div className="text-body">
+        <TestLoginSummary
+          companyPublicId={companyPublicId}
+          connectionPublicId={connectionPublicId}
+        />
+      </div>
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void form.handleSubmit().catch(() => undefined);
+        }}
+      >
+        <form.Field name="kind">
+          {(field) => (
+            <Field>
+              <FieldLabel htmlFor="test-login-kind">Host</FieldLabel>
+              <Select
+                value={field.state.value}
+                onValueChange={(value) =>
+                  field.handleChange(value as Schemas.EvalHostLoginKindEnum)
+                }
+              >
+                <SelectTrigger id="test-login-kind" className="w-full sm:w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[Eregister, TestHost].map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      {Schemas.EVAL_HOST_LOGIN_KIND_LABEL_MAP[kind]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+        </form.Field>
+        <form.Subscribe selector={(state) => state.values.kind}>
+          {(kind) => (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {textField(
+                "hostUser",
+                "Test user",
+                kind === Eregister
+                  ? "The test user's Firebase uid."
+                  : "The test host user every test runs as.",
+              )}
+              {kind === Eregister ? (
+                <>
+                  {textField("email", "Email", "The test user's sign-in email.")}
+                  {textField("password", "Password", "Entered again on every change.", true)}
+                  {textField(
+                    "firebaseApiKey",
+                    "Firebase web API key",
+                    "The staging Firebase project's web API key.",
+                    true,
+                  )}
+                </>
+              ) : (
+                <>
+                  {textField("issuer", "Test host address", "https only.")}
+                  {textField("adminSecret", "Admin secret", "Entered again on every change.", true)}
+                </>
+              )}
+            </div>
+          )}
+        </form.Subscribe>
+        <form.Subscribe selector={(state) => state.isSubmitting}>
+          {(isSubmitting) => (
+            <Button type="submit" className="self-start" disabled={isSubmitting}>
+              {current ? "Replace test sign-in" : "Save test sign-in"}
+            </Button>
+          )}
+        </form.Subscribe>
+      </form>
+    </section>
   );
 }
 
