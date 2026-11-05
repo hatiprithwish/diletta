@@ -6,6 +6,8 @@ export enum CompanySecretTypeIntEnum {
   ApiKey = 2,
   ClientSecret = 3,
   HmacKey = 4,
+  // DEV_NOTE: M7-9 (ADR 0007): a Staging connection's eval test sign-in (Schemas.ZEvalHostLogin as JSON), set by operators
+  EvalHostLogin = 5,
 }
 
 export enum CompanySecretTypeLabelEnum {
@@ -13,6 +15,7 @@ export enum CompanySecretTypeLabelEnum {
   ApiKey = "API key",
   ClientSecret = "Client secret",
   HmacKey = "HMAC key",
+  EvalHostLogin = "Test sign-in",
 }
 
 export const COMPANY_SECRET_TYPE_LABEL_MAP: Record<
@@ -23,6 +26,7 @@ export const COMPANY_SECRET_TYPE_LABEL_MAP: Record<
   [CompanySecretTypeIntEnum.ApiKey]: CompanySecretTypeLabelEnum.ApiKey,
   [CompanySecretTypeIntEnum.ClientSecret]: CompanySecretTypeLabelEnum.ClientSecret,
   [CompanySecretTypeIntEnum.HmacKey]: CompanySecretTypeLabelEnum.HmacKey,
+  [CompanySecretTypeIntEnum.EvalHostLogin]: CompanySecretTypeLabelEnum.EvalHostLogin,
 };
 
 export enum CompanySecretStatusIntEnum {

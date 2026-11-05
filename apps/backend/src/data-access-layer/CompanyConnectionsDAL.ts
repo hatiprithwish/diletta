@@ -88,7 +88,9 @@ export default class CompanyConnectionsDAL {
 
     try {
       const conditions = [
-        eq(companyConnections.publicId, params.publicId),
+        params.id !== undefined
+          ? eq(companyConnections.id, params.id)
+          : eq(companyConnections.publicId, params.publicId),
         eq(companyConnections.companyId, params.companyId),
       ];
       const query = tx

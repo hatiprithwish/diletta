@@ -29,6 +29,10 @@ RETRY_BACKOFF_SECONDS = 2.0
 
 Answer = TypeVar("Answer", bound=BaseModel)
 
+# DEV_NOTE: Signs a fresh eval JWT for one request: pyjwt with the config's key (the CLI), or the hosted runner's
+# WebCrypto signer (M7-9)
+TokenSigner = Callable[[], Awaitable[str]]
+
 
 class EvalApiError(Exception):
     """A refusal from /eval/* (status 0 = unreachable; failure = the refusal's failure enum) or an unreadable answer."""
@@ -76,10 +80,20 @@ class EvalApiClient:
         config: HarnessConfig,
         http: httpx.AsyncClient,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        sign: TokenSigner | None = None,
     ) -> None:
         self._config = config
         self._http = http
         self._sleep = sleep
+        self._sign = sign or self._sign_with_config_key
+
+    async def _sign_with_config_key(self) -> str:
+        return sign_eval_jwt(
+            self._config.private_jwk,
+            company_id=self._config.company_id,
+            connection_id=self._config.connection_id,
+            host_user=self._config.host_user,
+        )
 
     async def start_run(self, request: eval_api.CreateEvalRunApiRequest) -> eval_api.CreateEvalRunApiResponse:
         return await self._post("/runs", request, eval_api.CreateEvalRunApiResponse)
@@ -149,12 +163,7 @@ class EvalApiClient:
         answer: type[Answer],
         host_token: str | None = None,
     ) -> Answer:
-        token = sign_eval_jwt(
-            self._config.private_jwk,
-            company_id=self._config.company_id,
-            connection_id=self._config.connection_id,
-            host_user=self._config.host_user,
-        )
+        token = await self._sign()
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         if host_token is not None:
             headers[HOST_TOKEN_HEADER] = host_token

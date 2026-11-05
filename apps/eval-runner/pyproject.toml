@@ -1,0 +1,15 @@
+[project]
+name = "diletta-eval-runner"
+version = "0.1.0"
+description = "Diletta's hosted eval runner (M7-9, ADR 0007): a Python Worker + Workflow running evals/diletta_evals"
+requires-python = ">=3.12"
+dependencies = ["diletta-evals"]
+
+[tool.uv.sources]
+diletta-evals = { path = "../../evals" }
+
+[dependency-groups]
+dev = [
+    "workers-py==1.17.9",
+    "workers-runtime-sdk==1.9.6",
+]

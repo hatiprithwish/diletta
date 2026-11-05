@@ -88,7 +88,25 @@ describe("EvalRunsProvider.stagingHost", () => {
         ),
         connection("3", Staging, "https://staging.example.com:8443/api"),
       ]),
-    ).toEqual({ host: "staging.example.com:8443" });
+    ).toEqual({ host: "staging.example.com:8443", hasTestLogin: false });
+  });
+
+  it("prefers the staging connection with a test sign-in, the one the hosted runner uses", () => {
+    expect(
+      EvalRunsProvider.stagingHost(
+        [
+          connection("3", Staging, "https://staging.example.com"),
+          connection(
+            "4",
+            Staging,
+            "https://login.example.com",
+            Active,
+            new Date("2026-10-05T00:00:00Z"),
+          ),
+        ],
+        ["4"],
+      ),
+    ).toEqual({ host: "login.example.com", hasTestLogin: true });
   });
 
   it("is null without an active staging connection with a base URL", () => {

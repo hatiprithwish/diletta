@@ -4,6 +4,9 @@ dist/
 .env
 .env.local
 .env.*.local
+# DEV_NOTE: Every env file but the committed examples (evals/.env.eregister holds the eval key)
+.env.*
+!.env.example
 *.tsbuildinfo
 routeTree.gen.ts
 .dev.vars

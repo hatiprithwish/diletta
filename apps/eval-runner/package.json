@@ -1,0 +1,14 @@
+{
+  "name": "eval-runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "uv run pywrangler dev",
+    "bundle:fresh": "uv cache clean diletta-evals && rm -rf python_modules .venv-workers",
+    "deploy:staging": "pnpm run bundle:fresh && uv run pywrangler deploy --env staging",
+    "deploy:production": "pnpm run bundle:fresh && uv run pywrangler deploy --env production"
+  },
+  "devDependencies": {
+    "wrangler": "4.150.0"
+  }
+}

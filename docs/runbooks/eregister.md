@@ -91,7 +91,9 @@ In eRegister staging (`ai-agent`, so the test DB), add a user to the eRegister t
 
 ### 5. Eval settings
 
-In `evals/.env`:
+**Hosted runner (M7-9):** set the test user as the Staging connection's **Test sign-in** on the operator pages (kind eRegister: the Firebase uid, the `digital-registers-test` web API key, the email and the password). Admins then run tests from the dashboard; no local file is needed (`docs/runbooks/evals.md` › Hosted runner).
+
+**CLI (local runs):** in `evals/.env`, or another env file passed with `uv run --project evals --env-file <file> python -m diletta_evals run …` (`pnpm evals:run` reads `evals/.env` only):
 
 | Variable                       | Value                                                      |
 | ------------------------------ | ---------------------------------------------------------- |

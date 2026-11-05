@@ -56,6 +56,8 @@ export enum AuthzActionEnum {
   // Tests page (company-scoped, M4-8): read runs, their results and transcripts, and cases; write and edit a case, or turn
   // one on or off (EvalCaseCreate above covers New case too). Running tests comes with the harness (M5-2).
   EvalRunRead = "eval_run.read",
+  // M7-9 (ADR 0007): run a version's tests (a gate run of a Testing version, or a manual run) on the hosted runner
+  EvalRunStart = "eval_run.start",
   EvalCaseRead = "eval_case.read",
   EvalCaseUpdate = "eval_case.update",
 

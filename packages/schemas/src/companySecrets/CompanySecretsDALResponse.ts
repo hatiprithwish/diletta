@@ -13,6 +13,11 @@ export interface CompanySecretsDALResponse extends ApiResponse {
   companySecrets?: CompanySecret[];
 }
 
+// DEV_NOTE: M7-9: internal connection ids, oldest first
+export interface EvalHostLoginConnectionsDALResponse extends ApiResponse {
+  connectionIds?: string[];
+}
+
 export interface ActiveModelKeyProvidersDALResponse extends ApiResponse {
   providers?: string[];
 }

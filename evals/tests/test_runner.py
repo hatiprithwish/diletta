@@ -23,6 +23,7 @@ from diletta_evals.runner import (
     EvalRunner,
     JudgeUnavailableError,
     MissingToolCasesError,
+    QueuedRunTarget,
 )
 from diletta_evals.types import eval_api
 
@@ -97,7 +98,12 @@ class FakeClient:
             {
                 "isSuccess": True,
                 "message": "ok",
-                "run": {"publicId": "run_1", "k": request.root.k, "harnessVersion": request.root.harnessVersion},
+                # DEV_NOTE: A queued run (M7-9) keeps the k it was queued with: 2 here
+                "run": {
+                    "publicId": "run_1",
+                    "k": getattr(request.root, "k", 2),
+                    "harnessVersion": request.root.harnessVersion,
+                },
                 "cases": [self._case],
             }
         )
@@ -237,6 +243,16 @@ def test_starts_on_the_named_config_or_on_a_chatbot_by_its_published_config() ->
     assert body["chatbotId"] == "bot_1"
     assert body["trigger"] == 3
     assert "chatbotConfigId" not in body
+
+
+def test_starts_a_queued_run_by_its_id_and_runs_the_k_it_was_queued_with() -> None:
+    client = FakeClient()
+    summary = asyncio.run(EvalRunner(client, FakeHost(), out=client.out).run(target=QueuedRunTarget(run_id="run_q")))
+    body = json.loads(client.started_with.model_dump_json())
+    assert body.keys() == {"runId", "harnessVersion"}
+    assert body["runId"] == "run_q"
+    assert [event for event in client.events if event.startswith("attempt")] == ["attempt 1", "attempt 2"]
+    assert summary.has_passed
 
 
 def test_required_tool_cases_stop_a_run_that_has_none_after_resetting_and_ending_it() -> None:

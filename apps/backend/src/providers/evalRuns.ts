@@ -32,14 +32,17 @@ export default class EvalRunsProvider {
     return tallies;
   }
 
-  // DEV_NOTE: The host the gate runs against: the oldest active staging connection with a usable base URL. null = none
-  // (or a host_exec connection with no base URL).
+  // DEV_NOTE: The host the gate runs against: the oldest active staging connection with a usable base URL, preferring one
+  // with a test sign-in (loginConnectionIds, M7-9: the one the hosted runner runs on). hasTestLogin = that connection
+  // has one, so the dashboard can run tests. null = none (or a host_exec connection with no base URL).
   static stagingHost(
     connections: Pick<
       Schemas.CompanyConnection,
       "environment" | "status" | "baseUrl" | "createdAt" | "id"
     >[],
-  ): { host: string } | null {
+    loginConnectionIds: readonly string[] = [],
+  ): { host: string; hasTestLogin: boolean } | null {
+    const hasLogin = (id: string) => loginConnectionIds.includes(id);
     const staging = connections
       .flatMap((connection) =>
         connection.environment === Schemas.CompanyConnectionEnvironmentIntEnum.Staging &&
@@ -51,10 +54,12 @@ export default class EvalRunsProvider {
       )
       .sort(
         (a, b) =>
-          a.createdAt.getTime() - b.createdAt.getTime() || Number(BigInt(a.id) - BigInt(b.id)),
+          Number(hasLogin(b.id)) - Number(hasLogin(a.id)) ||
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          Number(BigInt(a.id) - BigInt(b.id)),
       );
-    const [oldest] = staging;
-    return oldest ? { host: new URL(oldest.baseUrl).host } : null;
+    const [first] = staging;
+    return first ? { host: new URL(first.baseUrl).host, hasTestLogin: hasLogin(first.id) } : null;
   }
 
   // DEV_NOTE: Status Enum Pattern on each tool call; messages as they are

@@ -50,6 +50,8 @@ export { ConversationDO } from "@/durable-objects/ConversationDO";
 export { BudgetDO } from "@/durable-objects/BudgetDO";
 // DEV_NOTE: Workflow classes are exported from the main module too (wrangler.jsonc workflows)
 export { KnowledgeSyncWorkflow } from "@/workflows/KnowledgeSyncWorkflow";
+// DEV_NOTE: The hosted eval runner's service binding (M7-9, ADR 0007): a named WorkerEntrypoint, never a route
+export { EvalRunnerEntrypoint } from "@/entrypoints/EvalRunnerEntrypoint";
 
 // DEV_NOTE: What each cron job runs; a Record, so a new CronJobEnum value can't be left without one
 const CRON_JOBS: Record<Schemas.CronJobEnum, (env: Env) => Promise<void>> = {

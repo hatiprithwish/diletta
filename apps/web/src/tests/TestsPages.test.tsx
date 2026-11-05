@@ -96,9 +96,21 @@ const SUMMARY: Schemas.EvalRunsSummary = {
   chatbot: { publicId: "bot_1", name: "eRegister Assistant" },
   caseCount: 46,
   safetyCaseCount: 3,
-  live: { configVersion: 12, run: GATE_RUN },
-  draft: { configVersion: 13, run: DRAFT_RUN },
-  staging: { host: "staging.eregister.example" },
+  live: {
+    publicId: "cfg_12",
+    configVersion: 12,
+    chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Published,
+    chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Published,
+    run: GATE_RUN,
+  },
+  draft: {
+    publicId: "cfg_13",
+    configVersion: 13,
+    chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Testing,
+    chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Testing,
+    run: DRAFT_RUN,
+  },
+  staging: { host: "staging.eregister.example", hasTestLogin: true },
 };
 
 const OWN_CASE: Schemas.EvalCaseListItem = {
