@@ -912,6 +912,7 @@ describe("Eval run on the test host", { timeout: END_TO_END_TIMEOUT_MS }, () => 
       evalRunId: run?.id ?? "",
       evalCaseId: evalCase?.id ?? "",
       evalAttempt: 1,
+      evalTry: 0,
       chatbotConfigId: tenant.configId,
       chatbot: { id: tenant.chatbotId, publicId: tenant.chatbotPublicId, name: "Records bot" },
     });

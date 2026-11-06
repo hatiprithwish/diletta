@@ -1,6 +1,15 @@
 import { useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowClockwise, Check, DotsThree, FileText, Play, Plus, X } from "@phosphor-icons/react";
+import {
+  ArrowClockwise,
+  ArrowCounterClockwise,
+  Check,
+  DotsThree,
+  FileText,
+  Play,
+  Plus,
+  X,
+} from "@phosphor-icons/react";
 import * as Schemas from "@app/schemas";
 import { Button } from "@app/ui/components/button";
 import { Card } from "@app/ui/components/card";
@@ -46,6 +55,7 @@ import { ApiError } from "@/providers/apiClient";
 import Utilities from "@/utils";
 import {
   useCreateTestCase,
+  useResumeTestRun,
   useStartTestRun,
   useTestCase,
   useTestCases,
@@ -239,18 +249,21 @@ function RunTestsButton({
 function RunTestsDialog({ isOpen, onClose, target }: Schemas.DashboardRunTestsDialogProps) {
   const start = useStartTestRun();
   const isGate = target.trigger === Schemas.EvalRunTriggerIntEnum.Gate;
+  const isFailedOnly = target.failedCasesOfRunId !== undefined;
   const k = Schemas.DASHBOARD_EVAL_RUN_K[target.trigger];
   const version = `v${target.configVersion}`;
+  const which = isFailedOnly ? "failed cases" : "cases";
   const cases =
     target.caseCount === null
       ? `Each case runs ${Utilities.plural(k, "time")}`
-      : `Each of the ${Utilities.formatCount(target.caseCount)} cases runs ${Utilities.plural(k, "time")} (${Utilities.plural(target.caseCount * k, "conversation")})`;
+      : `Each of the ${Utilities.formatCount(target.caseCount)} ${which} runs ${Utilities.plural(k, "time")} (${Utilities.plural(target.caseCount * k, "conversation")})`;
 
   const onRun = async () => {
     try {
       await start.mutateAsync({
         chatbotConfigId: target.chatbotConfigPublicId,
         trigger: target.trigger,
+        ...(target.failedCasesOfRunId ? { failedCasesOfRunId: target.failedCasesOfRunId } : {}),
       });
       onClose();
     } catch {
@@ -263,12 +276,16 @@ function RunTestsDialog({ isOpen, onClose, target }: Schemas.DashboardRunTestsDi
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {isGate ? `Run the publish check for ${version}?` : `Run the tests of ${version}?`}
+            {isGate
+              ? `Run the publish check for ${version}?`
+              : isFailedOnly
+                ? `Run the failed cases of ${version}?`
+                : `Run the tests of ${version}?`}
           </DialogTitle>
           <DialogDescription>
             {cases} against your staging environment, on your model key.{" "}
             {isGate
-              ? `If they pass, ${version} is ready to publish. If not, it goes back to draft.`
+              ? `If they pass, ${version} is ready to publish. If not, it goes back to draft. If the run stops on the way, ${version} stays in testing and you can resume it.`
               : `Nothing about ${version} changes.`}
           </DialogDescription>
         </DialogHeader>
@@ -282,6 +299,53 @@ function RunTestsDialog({ isOpen, onClose, target }: Schemas.DashboardRunTestsDi
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// DEV_NOTE: Resume (ADR 0007 › Resume): only on a run that stopped on the way (runActions.canResume). The attempts that
+// have a result are kept; the rest run, the one cut off included.
+function ResumeRunButton({
+  runPublicId,
+  isGate,
+  hasTestLogin,
+}: Schemas.DashboardResumeRunButtonProps) {
+  const [isConfirming, setIsConfirming] = useState(false);
+  const resume = useResumeTestRun();
+  const onResume = async () => {
+    try {
+      await resume.mutateAsync(runPublicId);
+      setIsConfirming(false);
+    } catch {
+      // DEV_NOTE: useResumeTestRun's onError says why; the dialog stays open to try again or cancel
+    }
+  };
+  return (
+    <>
+      <Button variant="outline" disabled={!hasTestLogin} onClick={() => setIsConfirming(true)}>
+        <ArrowCounterClockwise aria-hidden />
+        Resume
+      </Button>
+      <Dialog open={isConfirming} onOpenChange={(open) => !open && setIsConfirming(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Resume this run?</DialogTitle>
+            <DialogDescription>
+              The attempts that already have a result are kept. Only the rest run, against your
+              staging environment, on your model key.
+              {isGate ? " If every case passes, the version is ready to publish." : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsConfirming(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void onResume()} disabled={resume.isPending}>
+              Resume
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -800,6 +864,8 @@ export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPagePr
 
   const chatbot = evalRun.config.chatbotName ? `${evalRun.config.chatbotName} ` : "";
   const hasTestLogin = summaryQuery.data?.summary?.staging?.hasTestLogin ?? false;
+  const runActions = query.data?.runActions;
+  const failedCaseCount = runActions?.failedCaseCount ?? 0;
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -809,6 +875,28 @@ export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPagePr
         <Button variant="outline" asChild>
           <Link to="/tests">All runs</Link>
         </Button>
+        {runActions?.canResume && (
+          <ResumeRunButton
+            runPublicId={evalRun.publicId}
+            isGate={evalRun.trigger === Schemas.EvalRunTriggerIntEnum.Gate}
+            hasTestLogin={hasTestLogin}
+          />
+        )}
+        {failedCaseCount > 0 && (
+          <RunTestsButton
+            target={{
+              chatbotConfigPublicId: evalRun.config.publicId,
+              configVersion: evalRun.config.configVersion,
+              trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+              caseCount: failedCaseCount,
+              failedCasesOfRunId: evalRun.publicId,
+            }}
+            isRunning={isRunGoing(evalRun)}
+            hasTestLogin={hasTestLogin}
+            label={`Run failed cases (${Utilities.formatCount(failedCaseCount)})`}
+            variant="outline"
+          />
+        )}
         <RunTestsButton
           target={testRunTarget(evalRun.config, evalRun.caseCount)}
           isRunning={isRunGoing(evalRun)}

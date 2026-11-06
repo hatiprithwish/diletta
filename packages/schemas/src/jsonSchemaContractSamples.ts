@@ -166,6 +166,7 @@ const evalApi = {
         expectations: fullExpectations,
       },
     ],
+    doneAttempts: [{ caseId: "case_1", attempt: 1 }],
   },
   runAttemptRequest: { caseId: "case_1", attempt: 1, messages: caseInput.messages },
   runAttemptResponse: {

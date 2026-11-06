@@ -58,6 +58,9 @@ export type GetRunnableEvalCasesDALRequest = {
   chatbotId: string;
   limit: number;
   isSafetyOnly?: boolean;
+  // DEV_NOTE: Only these cases (internal ids); isInactiveIncluded: also those turned off since (a run's held set)
+  evalCaseIds?: string[];
+  isInactiveIncluded?: boolean;
 };
 
 // DEV_NOTE: The platform suite's sync (M5-5), in withPlatform: a new keyed platform case (company and chatbot null), and

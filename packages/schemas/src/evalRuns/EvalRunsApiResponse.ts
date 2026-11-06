@@ -43,8 +43,17 @@ export interface GetEvalRunsApiResponse extends ApiResponse {
   totalRecords?: number;
 }
 
+// DEV_NOTE: What a run's page offers (ADR 0007 › Resume). canResume: isEvalRunResumable, and for a Gate its version is
+// still Testing. failedCaseCount: the run's cases that didn't pass every attempt (never run included), what "Run failed
+// cases" runs; 0 while the run is Queued or Running, or for a run with no case set.
+export interface EvalRunActions {
+  canResume: boolean;
+  failedCaseCount: number;
+}
+
 export interface GetEvalRunApiResponse extends ApiResponse {
   evalRun?: EvalRunListItem;
+  runActions?: EvalRunActions;
 }
 
 // DEV_NOTE: A config's latest test result for the metric strip: the live one's gate run (approved_by_run_id), else its

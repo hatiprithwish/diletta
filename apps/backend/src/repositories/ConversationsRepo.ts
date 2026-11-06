@@ -149,6 +149,7 @@ export default class ConversationsRepo {
     evalRunId: string;
     evalCaseId: string;
     evalAttempt: number;
+    evalTry: number;
     chatbotConfigId: string;
     chatbot: Pick<Schemas.Chatbot, "id" | "publicId" | "name">;
   }): Promise<Schemas.StartEvalConversationResponse> {
@@ -182,6 +183,7 @@ export default class ConversationsRepo {
               evalRunId: params.evalRunId,
               evalCaseId: params.evalCaseId,
               evalAttempt: params.evalAttempt,
+              evalTry: params.evalTry,
               chatbotConfigId: params.chatbotConfigId,
             },
           },

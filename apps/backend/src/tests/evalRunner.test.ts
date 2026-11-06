@@ -15,10 +15,12 @@ import {
   companyEncryptionKeys,
   companySecrets,
   evalCases,
+  evalResults,
   evalRuns,
   eventOutbox,
 } from "@/db/tables";
 import worker from "@/index";
+import { EvalRunnerEntrypoint } from "@/entrypoints/EvalRunnerEntrypoint";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import EvalRunnerRepo from "@/repositories/EvalRunnerRepo";
 import Utility from "@/utils/Utility";
@@ -209,11 +211,12 @@ async function createTenant(configStatus: Schemas.ChatbotConfigStatusIntEnum) {
 async function call(
   method: string,
   path: string,
-  options: { as?: string; body?: unknown; token?: string } = {},
+  options: { as?: string; body?: unknown; token?: string; hostToken?: string } = {},
 ): Promise<{ status: number; body: Record<string, unknown>; text: string }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options.as) headers["Authorization"] = `Bearer ${options.as}`;
   if (options.token) headers["Authorization"] = `Bearer ${options.token}`;
+  if (options.hostToken) headers[Schemas.EVAL_HOST_TOKEN_HEADER] = options.hostToken;
   const ctx = createExecutionContext();
   const response = await worker.fetch(
     new Request(`http://localhost${path}`, {
@@ -227,6 +230,20 @@ async function call(
   await waitOnExecutionContext(ctx);
   const text = await response.text();
   return { status: response.status, body: JSON.parse(text) as Record<string, unknown>, text };
+}
+
+// DEV_NOTE: An eval token for the tenant's staging connection, as the runner signs one
+async function runnerToken(tenant: Tenant) {
+  const now = Math.floor(Date.now() / 1000);
+  return await signToken(evalKey, {
+    iss: Schemas.EVAL_JWT_ISSUER,
+    sub: HOST_USER,
+    aud: Schemas.EVAL_JWT_AUDIENCE,
+    iat: now,
+    exp: now + 120,
+    company: tenant.companyPublicId,
+    connection: tenant.stagingPublicId,
+  });
 }
 
 const loginPath = (tenant: Tenant, connectionPublicId: string) =>
@@ -291,6 +308,7 @@ afterAll(async () => {
     await withOwnerDb(async (ownerDb) => {
       await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminA, adminB]));
       if (companyIds.length === 0) return;
+      await ownerDb.delete(evalResults).where(inArray(evalResults.companyId, companyIds));
       await ownerDb.delete(evalRuns).where(inArray(evalRuns.companyId, companyIds));
       await ownerDb.delete(evalCases).where(inArray(evalCases.companyId, companyIds));
       await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
@@ -428,7 +446,10 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
     expect(started.status).toBe(201);
     const runPublicId = (started.body.evalRun as { publicId: string }).publicId;
     expect(workflowCreates).toEqual([
-      { id: runPublicId, params: { companyPublicId: tenantA.companyPublicId, runPublicId } },
+      {
+        id: runPublicId,
+        params: { companyPublicId: tenantA.companyPublicId, runPublicId, resumedCount: 0 },
+      },
     ]);
     expect(await runRow(runPublicId)).toMatchObject({
       status: Schemas.EvalRunStatusIntEnum.Queued,
@@ -494,7 +515,11 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
     expect(repeat.status).toBe(409);
 
     // DEV_NOTE: A started run is the runner's own to finish: failQueuedRun leaves it Running
-    await repo.failQueuedRun({ companyPublicId: tenantA.companyPublicId, runPublicId });
+    await repo.failQueuedRun({
+      companyPublicId: tenantA.companyPublicId,
+      runPublicId,
+      failure: Schemas.EvalRunFailureIntEnum.HarnessError,
+    });
     expect((await runRow(runPublicId))?.status).toBe(Schemas.EvalRunStatusIntEnum.Running);
     await withOwnerDb(async (ownerDb) =>
       ownerDb
@@ -548,13 +573,19 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
       trigger: Schemas.EvalRunTriggerIntEnum.Manual,
     });
     const repo = new EvalRunnerRepo(runnerEnv);
+    // DEV_NOTE: The runner names the stop it hit (here the host test user's sign-in), so the run page says why
     expect(
-      (await repo.failQueuedRun({ companyPublicId: tenantA.companyPublicId, runPublicId }))
-        .isSuccess,
+      (
+        await repo.failQueuedRun({
+          companyPublicId: tenantA.companyPublicId,
+          runPublicId,
+          failure: Schemas.EvalRunFailureIntEnum.HostUnavailable,
+        })
+      ).isSuccess,
     ).toBe(true);
     expect(await runRow(runPublicId)).toMatchObject({
       status: Schemas.EvalRunStatusIntEnum.Failed,
-      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+      failure: Schemas.EvalRunFailureIntEnum.HostUnavailable,
     });
     // DEV_NOTE: An ended run's sign-in is never handed out again
     expect(
@@ -580,7 +611,10 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
 
     const staleAt = new Date(Date.now() - (Schemas.EVAL_RUN_QUEUED_STALE_MINUTES + 1) * 60_000);
     await withOwnerDb(async (ownerDb) =>
-      ownerDb.update(evalRuns).set({ createdAt: staleAt }).where(eq(evalRuns.publicId, firstId)),
+      ownerDb
+        .update(evalRuns)
+        .set({ createdAt: staleAt, updatedAt: staleAt })
+        .where(eq(evalRuns.publicId, firstId)),
     );
     const second = await start();
     expect(second.status).toBe(201);
@@ -589,10 +623,201 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
       failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
     });
     const secondId = (second.body.evalRun as { publicId: string }).publicId;
+
+    // DEV_NOTE: A Running run counts from its last change (each model call's cost moves updated_at), not its start
+    const runningSince = (minutes: number) =>
+      withOwnerDb(async (ownerDb) =>
+        ownerDb
+          .update(evalRuns)
+          .set({
+            status: Schemas.EvalRunStatusIntEnum.Running,
+            createdAt: new Date(Date.now() - 2 * Schemas.EVAL_RUN_RUNNING_STALE_MINUTES * 60_000),
+            updatedAt: new Date(Date.now() - minutes * 60_000),
+          })
+          .where(eq(evalRuns.publicId, secondId)),
+      );
+    await runningSince(Schemas.EVAL_RUN_RUNNING_STALE_MINUTES - 1);
+    expect((await start()).body.failure).toBe(Schemas.EvalRunStartFailureEnum.AlreadyRunning);
+    await runningSince(Schemas.EVAL_RUN_RUNNING_STALE_MINUTES + 1);
+    const third = await start();
+    expect(third.status).toBe(201);
+    expect(await runRow(secondId)).toMatchObject({
+      status: Schemas.EvalRunStatusIntEnum.Failed,
+      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+    });
     await new EvalRunnerRepo(runnerEnv).failQueuedRun({
       companyPublicId: tenantA.companyPublicId,
-      runPublicId: secondId,
+      runPublicId: (third.body.evalRun as { publicId: string }).publicId,
+      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
     });
+  });
+
+  it("serves the runner's /eval/runs calls over the binding, and nothing else", async () => {
+    const ctx = createExecutionContext();
+    const entrypoint = new EvalRunnerEntrypoint(ctx, runnerEnv);
+    const unsigned = await entrypoint.fetch(
+      new Request("https://backend.internal/eval/runs", { method: "POST", body: "{}" }),
+    );
+    expect(unsigned.status).toBe(401);
+    for (const path of ["/dashboard/me", "/eval/load/start", "/eval/runsx"]) {
+      const refused = await entrypoint.fetch(new Request(`https://backend.internal${path}`));
+      expect(refused.status).toBe(404);
+    }
+    await waitOnExecutionContext(ctx);
+  });
+
+  it("resumes a run that stopped on the way, keeping its results, and leaves its version in testing", async () => {
+    const started = await call("POST", "/dashboard/eval-runs", {
+      as: adminA,
+      body: {
+        chatbotConfigId: tenantA.configPublicId,
+        trigger: Schemas.EvalRunTriggerIntEnum.Gate,
+      },
+    });
+    expect(started.status).toBe(201);
+    const runPublicId = (started.body.evalRun as { publicId: string }).publicId;
+    const token = await runnerToken(tenantA);
+    const first = await call("POST", "/eval/runs", {
+      token,
+      body: { runId: runPublicId, harnessVersion: "runner-1" },
+    });
+    expect(first.status).toBe(201);
+    expect(first.body.doneAttempts).toEqual([]);
+    const cases = first.body.cases as { publicId: string }[];
+    const [firstCase] = cases;
+    if (!firstCase) throw new Error("The run has no case");
+    const run = await runRow(runPublicId);
+    const [caseRow] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ id: evalCases.id })
+        .from(evalCases)
+        .where(eq(evalCases.publicId, firstCase.publicId)),
+    );
+    // DEV_NOTE: One attempt got its result before the run stopped (no transcript: none is needed here)
+    await withOwnerDb((ownerDb) =>
+      ownerDb.insert(evalResults).values({
+        companyId: tenantA.companyId,
+        evalRunId: run?.id ?? "",
+        evalCaseId: caseRow?.id ?? "",
+        attempt: 1,
+        hasPassed: true,
+      }),
+    );
+    const stopped = await call("POST", `/eval/runs/${runPublicId}/finish`, {
+      token,
+      body: { isComplete: false, failure: Schemas.EvalRunFailureIntEnum.HostUnavailable },
+    });
+    expect(stopped.status).toBe(200);
+    // DEV_NOTE: A gate run that stopped on the way isn't a verdict: the version stays in testing
+    const [config] = await withOwnerDb((ownerDb) =>
+      ownerDb.select().from(chatbotConfigs).where(eq(chatbotConfigs.id, tenantA.configId)),
+    );
+    expect(config?.status).toBe(Schemas.ChatbotConfigStatusIntEnum.Testing);
+
+    const page = await call("GET", `/dashboard/eval-runs/${runPublicId}`, { as: adminA });
+    expect(page.body.runActions).toEqual({ canResume: true, failedCaseCount: cases.length });
+
+    workflowCreates.length = 0;
+    const resumed = await call("POST", `/dashboard/eval-runs/${runPublicId}/resume`, {
+      as: adminA,
+    });
+    expect(resumed.status).toBe(200);
+    expect(workflowCreates).toEqual([
+      {
+        id: `${runPublicId}-r1`,
+        params: { companyPublicId: tenantA.companyPublicId, runPublicId, resumedCount: 1 },
+      },
+    ]);
+    expect(await runRow(runPublicId)).toMatchObject({
+      status: Schemas.EvalRunStatusIntEnum.Queued,
+      failure: null,
+      resumedCount: 1,
+      evalCaseIds: run?.evalCaseIds,
+    });
+    const audits = await auditActions(tenantA.companyId, Schemas.AuditEntityTypeEnum.ChatbotConfig);
+    expect(audits).toContainEqual({
+      entityAction: Schemas.AuditEntityActionEnum.RunResumed,
+      actorType: Schemas.ActivityLogActorTypeIntEnum.Admin,
+    });
+    const twice = await call("POST", `/dashboard/eval-runs/${runPublicId}/resume`, { as: adminA });
+    expect(twice.status).toBe(409);
+    expect(twice.body.failure).toBe(Schemas.EvalRunStartFailureEnum.NotResumable);
+
+    // DEV_NOTE: The runner starts it again: the same cases, the attempt with a result handed back and never run again
+    const again = await call("POST", "/eval/runs", {
+      token,
+      body: { runId: runPublicId, harnessVersion: "runner-1" },
+    });
+    expect(again.status).toBe(201);
+    expect((again.body.cases as { publicId: string }[]).map((c) => c.publicId)).toEqual(
+      cases.map((c) => c.publicId),
+    );
+    expect(again.body.doneAttempts).toEqual([{ caseId: firstCase.publicId, attempt: 1 }]);
+    expect((await runRow(runPublicId))?.evalCaseIds).toEqual(run?.evalCaseIds);
+    const rerun = await call("POST", `/eval/runs/${runPublicId}/attempts`, {
+      token,
+      hostToken: "host-token",
+      body: { caseId: firstCase.publicId, attempt: 1, messages: [{ role: "user", text: "Hi" }] },
+    });
+    expect(rerun.status).toBe(409);
+    expect(rerun.body.failure).toBe(Schemas.EvalRunStepFailureEnum.Duplicate);
+
+    await call("POST", `/eval/runs/${runPublicId}/finish`, { token, body: { isComplete: false } });
+  });
+
+  it("runs only a run's failed cases, as a manual run that holds them", async () => {
+    const [stoppedRun] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select()
+        .from(evalRuns)
+        .where(and(eq(evalRuns.companyId, tenantA.companyId), eq(evalRuns.resumedCount, 1))),
+    );
+    if (!stoppedRun) throw new Error("No resumed run");
+    const gate = await call("POST", "/dashboard/eval-runs", {
+      as: adminA,
+      body: {
+        chatbotConfigId: tenantA.configPublicId,
+        trigger: Schemas.EvalRunTriggerIntEnum.Gate,
+        failedCasesOfRunId: stoppedRun.publicId,
+      },
+    });
+    expect(gate.status).toBe(400);
+
+    const started = await call("POST", "/dashboard/eval-runs", {
+      as: adminA,
+      body: {
+        chatbotConfigId: tenantA.configPublicId,
+        trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+        failedCasesOfRunId: stoppedRun.publicId,
+      },
+    });
+    expect(started.status).toBe(201);
+    const runPublicId = (started.body.evalRun as { publicId: string }).publicId;
+    const queued = await runRow(runPublicId);
+    // DEV_NOTE: k = 3 for the gate and one pass recorded: every case of the set still failed, so all of them run
+    expect([...(queued?.evalCaseIds ?? [])].sort()).toEqual(
+      [...(stoppedRun.evalCaseIds ?? [])].sort(),
+    );
+    const token = await runnerToken(tenantA);
+    const first = await call("POST", "/eval/runs", {
+      token,
+      body: { runId: runPublicId, harnessVersion: "runner-1" },
+    });
+    expect(first.status).toBe(201);
+    expect((first.body.cases as unknown[]).length).toBe(stoppedRun.evalCaseIds?.length);
+    expect(first.body.doneAttempts).toEqual([]);
+    await call("POST", `/eval/runs/${runPublicId}/finish`, { token, body: { isComplete: false } });
+
+    // DEV_NOTE: Another chatbot's run, or one with nothing that failed, starts nothing
+    const crossCompany = await call("POST", "/dashboard/eval-runs", {
+      as: adminB,
+      body: {
+        chatbotConfigId: tenantB.configPublicId,
+        trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+        failedCasesOfRunId: stoppedRun.publicId,
+      },
+    });
+    expect(crossCompany.status).toBe(404);
   });
 
   it("removes the test sign-in, after which no run can start", async () => {

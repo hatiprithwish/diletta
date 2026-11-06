@@ -68,19 +68,30 @@ export type CreateEvalRunDALRequest = Pick<
 // ─── The hosted eval runner (M7-9, ADR 0007) ────────────────────────────────
 
 // DEV_NOTE: A run the dashboard queued: Queued on the connection whose test sign-in the runner uses, its k from the
-// trigger, harness_version QUEUED_EVAL_RUN_HARNESS_VERSION until the runner starts it, and the admin who started it
+// trigger, harness_version QUEUED_EVAL_RUN_HARNESS_VERSION until the runner starts it, and the admin who started it.
+// evalCaseIds: a run of chosen cases only (a run's failed cases), held from the start; null = the chatbot's cases
 export type QueueEvalRunDALRequest = Pick<
   EvalRun,
   "companyId" | "chatbotConfigId" | "trigger" | "k"
-> & { companyConnectionId: string; startedBy: string };
+> & { companyConnectionId: string; startedBy: string; evalCaseIds: string[] | null };
 
-// DEV_NOTE: Queued → Running, once, with the cases the runner was handed and its harness version
+// DEV_NOTE: Queued → Running, once, with its harness version and the cases the runner was handed (null = keep the set
+// the run already holds: chosen cases, or a resumed run's)
 export type StartQueuedEvalRunDALRequest = Pick<EvalRun, "companyId" | "id" | "harnessVersion"> & {
-  evalCaseIds: string[];
+  evalCaseIds: string[] | null;
 };
 
-// DEV_NOTE: Queued → Failed, once: the runner couldn't take the run, or couldn't start it
-export type FailQueuedEvalRunDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+// DEV_NOTE: Failed → Queued, once (ADR 0007 › Resume): the run's verdict fields, reset and finish cleared, its
+// resumed_count one up; its case set, results and created_at kept
+export type ReopenEvalRunDALRequest = Pick<EvalRun, "companyId" | "id">;
+
+// DEV_NOTE: The attempts of a run that have a result (a resumed run skips them)
+export type GetEvalRunResultAttemptsDALRequest = Pick<EvalRun, "companyId"> & { evalRunId: string };
+
+// DEV_NOTE: Queued or Running → Failed, once, from the status the caller read (the update's condition): the runner
+// couldn't take or start the run, or a stale run is failed by the next Run press
+export type FailOpenEvalRunDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+  status: EvalRunStatusIntEnum.Queued | EvalRunStatusIntEnum.Running;
   failure: EvalRunFailureIntEnum;
 };
 

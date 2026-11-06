@@ -11,10 +11,23 @@ test sign-in, a host token or an eval JWT.
 
 A step never raises: what would stop the CLI's run comes back as {"stop": {"failure", "message"}}, so the Workflow
 still resets and finishes the run.
+
+The steps run in a chain of Workflow instances (ADR 0007 › Chained instances), each one fresh invocation with its own
+subrequest budget (Workers Free: 50 to the internet per invocation, which one long instance runs out of): the backend
+creates the first (stage "start", id = the run's public id), and each link creates the next one, named by link_id so
+a repeated create finds it instead of running a step twice. A link's params carry ids, cases, k, where it is, the
+attempts already done and a stop, never a sign-in or a token.
+
+  start              start                          → the first attempt, or end when there are no cases
+  attempt c{i} a{j}  one attempt                    → the next attempt (j < k) or case, or end; a stop → end
+  end                reset, then finish             (a stop at start ends there: the run never left Queued)
+
+A resumed run (ADR 0007 › Resume) is the same chain again, named <run>-r<n>…, which skips every attempt the backend
+says already has a result (start's doneAttempts).
 """
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from diletta_evals.client import EvalApi, EvalApiError
 from diletta_evals.config import ConfigError, ERegisterSettings, HarnessConfig, HostKind, TestHostSettings
@@ -27,6 +40,114 @@ from diletta_evals.types import eval_api
 Json = dict[str, Any]
 
 INTERRUPTED_ATTEMPT = "The attempt was interrupted and is not run again"
+
+Stage = Literal["start", "attempt", "end"]
+
+
+class Link(TypedDict, total=False):
+    """One chained instance's params. The backend's first link holds the two ids only (stage defaults to start)."""
+
+    companyPublicId: str
+    runPublicId: str
+    stage: Stage
+    k: int
+    cases: list[Json]
+    caseIndex: int
+    attemptNo: int
+    resumedCount: int
+    done: list[str]
+    stop: Json | None
+
+
+def _done_key(case_id: str, attempt_no: int) -> str:
+    return f"{case_id}#{attempt_no}"
+
+
+def run_ids(link: Mapping[str, Any]) -> Json:
+    """What the backend's binding takes (ZEvalRunWorkflowParams is strict): the two public ids only."""
+    return {"companyPublicId": str(link["companyPublicId"]), "runPublicId": str(link["runPublicId"])}
+
+
+def stage_of(link: Mapping[str, Any]) -> Stage:
+    stage = link.get("stage", "start")
+    if stage not in ("start", "attempt", "end"):
+        raise ConfigError(f"Unknown chain stage {stage!r}")
+    return stage
+
+
+def link_id(link: Link) -> str:
+    """The instance id of a link: the first is the run's public id (the backend's), so a run starts once; the others
+    are named by where they are, so a link created twice is found, not run twice."""
+    resumed_count = int(link.get("resumedCount", 0))
+    run_id = link["runPublicId"] if resumed_count == 0 else f"{link['runPublicId']}-r{resumed_count}"
+    stage = stage_of(link)
+    if stage == "start":
+        return run_id
+    if stage == "end":
+        return f"{run_id}-end"
+    return f"{run_id}-c{link['caseIndex'] + 1}-a{link['attemptNo']}"
+
+
+def _base(link: Mapping[str, Any]) -> Link:
+    ids = run_ids(link)
+    return Link(
+        companyPublicId=ids["companyPublicId"],
+        runPublicId=ids["runPublicId"],
+        resumedCount=int(link.get("resumedCount", 0)),
+    )
+
+
+def _end(link: Mapping[str, Any], stop: Json | None) -> Link:
+    return Link(**_base(link), stage="end", stop=stop)
+
+
+def _next_attempt(
+    link: Mapping[str, Any], k: int, cases: list[Json], done: list[str], case_index: int, attempt_no: int
+) -> Link:
+    """The first attempt from (case_index, attempt_no) on that has no result yet, else end."""
+    done_keys = set(done)
+    while case_index < len(cases):
+        if attempt_no > k:
+            case_index, attempt_no = case_index + 1, 1
+            continue
+        if _done_key(str(cases[case_index]["publicId"]), attempt_no) not in done_keys:
+            return Link(
+                **_base(link),
+                stage="attempt",
+                k=k,
+                cases=cases,
+                done=done,
+                caseIndex=case_index,
+                attemptNo=attempt_no,
+            )
+        attempt_no += 1
+    return _end(link, None)
+
+
+def after_start(link: Mapping[str, Any], started: Json) -> Link | None:
+    """The link after start: None when start stopped (the run is failed while still Queued, nothing to reset)."""
+    if "stop" in started:
+        return None
+    cases: list[Json] = list(started["cases"])
+    k = int(started["k"])
+    done = [_done_key(str(item["caseId"]), int(item["attempt"])) for item in started.get("doneAttempts", [])]
+    if not cases or k < 1:
+        return _end(link, None)
+    return _next_attempt(link, k, cases, done, 0, 1)
+
+
+def after_attempt(link: Mapping[str, Any], answer: Json) -> Link:
+    """The link after an attempt: the next attempt of this case, the next case, or end (at once on a stop)."""
+    if "stop" in answer:
+        return _end(link, answer["stop"])
+    return _next_attempt(
+        link,
+        int(link["k"]),
+        list(link["cases"]),
+        list(link.get("done", [])),
+        int(link["caseIndex"]),
+        int(link["attemptNo"]) + 1,
+    )
 
 
 def harness_config(run_login: Mapping[str, Any], *, api_url: str, private_jwk: dict[str, object]) -> HarnessConfig:
@@ -83,6 +204,7 @@ async def start(runner: EvalRunner, host: HostLogin, run_id: str) -> Json:
         "runId": started.run.publicId,
         "k": started.run.k,
         "cases": [case.model_dump(mode="json") for case in started.cases],
+        "doneAttempts": [attempt.model_dump(mode="json") for attempt in started.doneAttempts],
     }
 
 

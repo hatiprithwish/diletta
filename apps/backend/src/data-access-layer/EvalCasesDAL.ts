@@ -420,8 +420,8 @@ export default class EvalCasesDAL {
     return response;
   }
 
-  // DEV_NOTE: The active cases one chatbot's eval run runs (M5-2): its own and every platform case, safety cases first,
-  // then by name (a fixed order, so a run's attempts go in the same order every time). Case text stays out of the log.
+  // DEV_NOTE: The active cases one chatbot's eval run runs (M5-2): its own and every platform case (only evalCaseIds of
+  // them when set: a run's chosen or held cases), safety cases first, then by name (a fixed order, so a run's attempts go in the same order every time). Case text stays out of the log.
   async getRunnableEvalCases(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.GetRunnableEvalCasesDALRequest,
@@ -432,10 +432,12 @@ export default class EvalCasesDAL {
       // DEV_NOTE: The company's case of this chatbot, or a platform case: company_id and chatbot_id are null together
       // (CHK_eval_cases_platform_chatbot_id), so each column is matched or null on its own
       const conditions = [
-        eq(evalCases.isActive, true),
         or(eq(evalCases.companyId, params.companyId), isNull(evalCases.companyId)),
         or(eq(evalCases.chatbotId, params.chatbotId), isNull(evalCases.chatbotId)),
       ];
+      // DEV_NOTE: A run's held set (ADR 0007 › Resume) is run as it was handed out, a case turned off since included
+      if (!params.isInactiveIncluded) conditions.push(eq(evalCases.isActive, true));
+      if (params.evalCaseIds) conditions.push(inArray(evalCases.id, params.evalCaseIds));
       if (params.isSafetyOnly) conditions.push(eq(evalCases.isSafety, true));
       const selected = await tx
         .select()

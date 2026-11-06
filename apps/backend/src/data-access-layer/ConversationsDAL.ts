@@ -37,7 +37,7 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
-const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt";
+const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt_eval_try";
 
 // DEV_NOTE: What purging one chat needs (M6-1); erasedAt set = its user was erased (M6-2)
 const PURGE_ROW_COLUMNS = {
@@ -187,6 +187,7 @@ export default class ConversationsDAL {
           evalRunId: evalAttempt?.evalRunId ?? null,
           evalCaseId: evalAttempt?.evalCaseId ?? null,
           evalAttempt: evalAttempt?.evalAttempt ?? null,
+          evalTry: evalAttempt?.evalTry ?? null,
           chatbotConfigId: evalAttempt?.chatbotConfigId ?? null,
         })
         .returning();
@@ -282,6 +283,7 @@ export default class ConversationsDAL {
         eq(conversations.evalRunId, params.evalRunId),
         eq(conversations.evalCaseId, params.evalCaseId),
         eq(conversations.evalAttempt, params.evalAttempt),
+        eq(conversations.evalTry, params.evalTry),
       ];
       const [conversation] = await tx
         .select()

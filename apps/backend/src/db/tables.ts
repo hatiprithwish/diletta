@@ -471,6 +471,7 @@ export const evalRuns = table(
     failure: t.smallint().$type<Schemas.EvalRunFailureIntEnum>(), // why the harness stopped a Failed run (M5-3)
     costUsd: t.numeric("cost_usd", { precision: 12, scale: 6 }).notNull().default("0"),
     startedBy: t.bigint("started_by", { mode: "string" }), // → admins.id, the dashboard's Run button (M7-9); null = CLI/CI
+    resumedCount: t.smallint("resumed_count").notNull().default(0), // Resume presses (ADR 0007): its attempts' try
     finishedAt: t.timestamp("finished_at", { withTimezone: true }),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -616,7 +617,9 @@ export const qualityIssues = table(
 // DEV_NOTE: Index of one chat. The live transcript lives in the Think session; public_id = the DO name.
 // Content expiry = last_activity_at + companies.content_retention_days. eval_run_id set = an eval attempt's chat
 // (M5-2): it runs that run's config on the staging connection and never shows on the dashboard; eval_case_id +
-// eval_attempt name the attempt, once per run (the unique index refuses a repeat before anything runs).
+// eval_attempt name the attempt, once per run and try (the unique index refuses a repeat before anything runs).
+// eval_try = the run's resumed_count when it started (ADR 0007 › Resume): a resumed run may send an attempt again
+// that never got a result, as a new chat, after its reset.
 export const conversations = table(
   "conversations",
   {
@@ -629,6 +632,7 @@ export const conversations = table(
     evalRunId: t.bigint("eval_run_id", { mode: "string" }), // → eval_runs.id, null = a widget chat
     evalCaseId: t.bigint("eval_case_id", { mode: "string" }), // → eval_cases.id
     evalAttempt: t.smallint("eval_attempt"), // 1..k
+    evalTry: t.smallint("eval_try"), // 0 = the run's first go, n = its n-th resume
     status: t
       .smallint()
       .$type<Schemas.ConversationStatusIntEnum>()
@@ -661,11 +665,11 @@ export const conversations = table(
     t.index("IDX_conversations_eval_run_id").on(table.evalRunId),
     t.index("IDX_conversations_eval_case_id").on(table.evalCaseId),
     t
-      .uniqueIndex("UNQ_conversations_eval_run_id_eval_case_id_eval_attempt")
-      .on(table.evalRunId, table.evalCaseId, table.evalAttempt),
+      .uniqueIndex("UNQ_conversations_eval_run_id_eval_case_id_eval_attempt_eval_try")
+      .on(table.evalRunId, table.evalCaseId, table.evalAttempt, table.evalTry),
     t.check(
       "CHK_conversations_eval_attempt",
-      sql`(${table.evalRunId} IS NULL) = (${table.evalCaseId} IS NULL) AND (${table.evalRunId} IS NULL) = (${table.evalAttempt} IS NULL)`,
+      sql`(${table.evalRunId} IS NULL) = (${table.evalCaseId} IS NULL) AND (${table.evalRunId} IS NULL) = (${table.evalAttempt} IS NULL) AND (${table.evalRunId} IS NULL) = (${table.evalTry} IS NULL)`,
     ),
   ],
 );

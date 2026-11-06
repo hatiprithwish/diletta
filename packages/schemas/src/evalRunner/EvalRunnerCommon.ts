@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { EVAL_GATE_MIN_K, EvalRunTriggerIntEnum } from "../evalRuns/EvalRunsCommon";
+import {
+  EVAL_GATE_MIN_K,
+  EvalRunFailureIntEnum,
+  EvalRunTriggerIntEnum,
+} from "../evalRuns/EvalRunsCommon";
 
 // ─── The hosted eval runner (M7-9, ADR 0007) ────────────────────────────────
 
@@ -70,28 +74,49 @@ export const DASHBOARD_EVAL_RUN_K: Record<DashboardEvalRunTrigger, number> = {
 // never scheduled): the next Run press fails it (RunnerUnavailable) instead of answering AlreadyRunning forever
 export const EVAL_RUN_QUEUED_STALE_MINUTES = 15;
 
+// DEV_NOTE: A Running run whose eval_runs row hasn't moved this long (every model call of its attempts adds its cost, a
+// reset or finish sets it) lost its runner mid-run (a chained instance that never ran): the next Run press fails it
+// (RunnerUnavailable) the same way. An attempt is one chatbot turn, minutes at most.
+export const EVAL_RUN_RUNNING_STALE_MINUTES = 30;
+
 // DEV_NOTE: The harness version a queued run holds until the runner starts it (eval_runs.harness_version is not null);
 // /eval/runs replaces it with the runner's own
 export const QUEUED_EVAL_RUN_HARNESS_VERSION = "queued";
 
 // DEV_NOTE: The Workflow instance's params: public ids only (instance params are persisted, so never a login or a
-// token). The instance id is the run's public id, so a run is started once.
+// token). The first instance's id is the run's public id, so a run is started once; the runner chains the rest (ADR
+// 0007 › Chained instances) and sends the backend these two ids only.
 export const ZEvalRunWorkflowParams = z.strictObject({
   companyPublicId: z.string().min(1).max(64),
   runPublicId: z.string().min(1).max(64),
 });
 export type EvalRunWorkflowParams = z.infer<typeof ZEvalRunWorkflowParams>;
 
+// DEV_NOTE: What the backend starts a chain with: the ids and how many times the run was resumed, which names the
+// chain's instances (a resumed run's first instance is <run>-r<n>, since <run> already ran)
+export type EvalRunWorkflowStartParams = EvalRunWorkflowParams & { resumedCount: number };
+
+// DEV_NOTE: The runner couldn't start a run (failQueuedRun): which stop it hit, so the run page names it (a host
+// sign-in that failed is HostUnavailable, a refused eval token HarnessError…)
+export const ZFailQueuedEvalRunParams = ZEvalRunWorkflowParams.extend({
+  failure: z.enum(EvalRunFailureIntEnum),
+});
+export type FailQueuedEvalRunParams = z.infer<typeof ZFailQueuedEvalRunParams>;
+
 // DEV_NOTE: Why the dashboard couldn't start a run
 //   NotTesting: a Gate run of a version that isn't Testing
 //   AlreadyRunning: the version already has a Queued or Running run
 //   NoTestLogin: no active Staging connection of the company has a test sign-in (an operator sets one)
 //   RunnerUnavailable: the runner couldn't take the run (it was marked Failed)
+//   NotResumable: Resume of a run that isn't a Failed one the dashboard started and the runner reached (isEvalRunResumable)
+//   NothingToRun: a run of a run's failed cases when none failed, or none is still active
 export enum EvalRunStartFailureEnum {
   NotTesting = "NotTesting",
   AlreadyRunning = "AlreadyRunning",
   NoTestLogin = "NoTestLogin",
   RunnerUnavailable = "RunnerUnavailable",
+  NotResumable = "NotResumable",
+  NothingToRun = "NothingToRun",
 }
 
 export const EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP: Record<EvalRunStartFailureEnum, 409 | 503> = {
@@ -99,4 +124,6 @@ export const EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP: Record<EvalRunStartFailureE
   [EvalRunStartFailureEnum.AlreadyRunning]: 409,
   [EvalRunStartFailureEnum.NoTestLogin]: 409,
   [EvalRunStartFailureEnum.RunnerUnavailable]: 503,
+  [EvalRunStartFailureEnum.NotResumable]: 409,
+  [EvalRunStartFailureEnum.NothingToRun]: 409,
 };

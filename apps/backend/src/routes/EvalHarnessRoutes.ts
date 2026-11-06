@@ -53,6 +53,7 @@ EvalHarnessRoutes.post(
       message: result.message ?? "Eval run started",
       run: result.run,
       cases: result.cases,
+      doneAttempts: result.doneAttempts ?? [],
     };
     return c.json(response, 201);
   },

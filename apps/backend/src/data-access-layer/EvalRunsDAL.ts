@@ -77,6 +77,7 @@ export default class EvalRunsDAL {
         failure: evalRuns.failure,
         costUsd: evalRuns.costUsd,
         startedBy: evalRuns.startedBy,
+        resumedCount: evalRuns.resumedCount,
         finishedAt: evalRuns.finishedAt,
         createdAt: evalRuns.createdAt,
         updatedAt: evalRuns.updatedAt,
@@ -674,8 +675,8 @@ export default class EvalRunsDAL {
   // ─── The hosted eval runner (M7-9, ADR 0007) ─────────────────────────────
 
   // DEV_NOTE: A run the dashboard queued for the hosted runner: Queued, on the connection whose test sign-in the runner
-  // uses, with no case set yet (the runner's /eval/runs sets it as it starts the run). The config and the connection must
-  // be the company's (no DB foreign keys).
+  // uses, with no case set yet (the runner's /eval/runs sets it as it starts the run), or the chosen cases it holds from
+  // the start (a run's failed cases). The config and the connection must be the company's (no DB foreign keys).
   async queueEvalRun(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.QueueEvalRunDALRequest,
@@ -720,7 +721,7 @@ export default class EvalRunsDAL {
           companyId: params.companyId,
           chatbotConfigId: params.chatbotConfigId,
           companyConnectionId: params.companyConnectionId,
-          evalCaseIds: null,
+          evalCaseIds: params.evalCaseIds,
           trigger: params.trigger,
           harnessVersion: Schemas.QUEUED_EVAL_RUN_HARNESS_VERSION,
           k: params.k,
@@ -749,8 +750,8 @@ export default class EvalRunsDAL {
     return response;
   }
 
-  // DEV_NOTE: Queued → Running, once (the status condition), with the case set the runner was handed: a run that isn't
-  // Queued any more is isNotFound
+  // DEV_NOTE: Queued → Running, once (the status condition), with the case set the runner was handed (null: the one it
+  // already holds stays): a run that isn't Queued any more is isNotFound
   async startQueuedEvalRun(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.StartQueuedEvalRunDALRequest,
@@ -767,7 +768,7 @@ export default class EvalRunsDAL {
         .update(evalRuns)
         .set({
           status: Schemas.EvalRunStatusIntEnum.Running,
-          evalCaseIds: params.evalCaseIds,
+          ...(params.evalCaseIds === null ? {} : { evalCaseIds: params.evalCaseIds }),
           harnessVersion: params.harnessVersion,
           updatedAt: new Date(),
         })
@@ -805,10 +806,12 @@ export default class EvalRunsDAL {
     return response;
   }
 
-  // DEV_NOTE: Queued → Failed, once (the status condition), with why: a run that isn't Queued any more is isNotFound
-  async failQueuedEvalRun(
+  // DEV_NOTE: Failed → Queued, once (the status condition: a run that isn't Failed any more is isNotFound), for a Resume
+  // (ADR 0007 › Resume): the verdict, failure, reset and finish cleared, resumed_count one up (its next attempts' try).
+  // The case set, the results and created_at (the clock a gate move compares with) stay.
+  async reopenEvalRun(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FailQueuedEvalRunDALRequest,
+    params: Schemas.ReopenEvalRunDALRequest,
   ) {
     const response: Schemas.EvalRunDALResponse = { isSuccess: false };
 
@@ -816,7 +819,105 @@ export default class EvalRunsDAL {
       const conditions = [
         eq(evalRuns.id, params.id),
         eq(evalRuns.companyId, params.companyId),
-        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Queued),
+        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Failed),
+      ];
+      const [evalRun] = await tx
+        .update(evalRuns)
+        .set({
+          status: Schemas.EvalRunStatusIntEnum.Queued,
+          failure: null,
+          hasPassed: null,
+          caseCount: null,
+          passAllKCount: null,
+          resetAt: null,
+          finishedAt: null,
+          harnessVersion: Schemas.QUEUED_EVAL_RUN_HARNESS_VERSION,
+          resumedCount: sql`${evalRuns.resumedCount} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(and(...conditions))
+        .returning();
+
+      if (!evalRun) {
+        const message = "Eval run not found or not failed";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.ReopenEvalRun,
+          message,
+          metadata: params,
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Eval run reopened";
+      response.evalRun = evalRun;
+    } catch (error) {
+      const message = "Unknown error in reopening eval run";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ReopenEvalRun,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The (case, attempt) pairs of a run that have a result, by internal case id: a resumed run skips them
+  async getEvalRunResultAttempts(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetEvalRunResultAttemptsDALRequest,
+  ) {
+    const response: Schemas.EvalRunResultAttemptsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalResults.companyId, params.companyId),
+        eq(evalResults.evalRunId, params.evalRunId),
+      ];
+      const selected = await tx
+        .select({ evalCaseId: evalResults.evalCaseId, attempt: evalResults.attempt })
+        .from(evalResults)
+        .where(and(...conditions))
+        .orderBy(asc(evalResults.evalCaseId), asc(evalResults.attempt));
+
+      response.isSuccess = true;
+      response.message = "Eval run result attempts fetched successfully";
+      response.attempts = selected;
+    } catch (error) {
+      const message = "Unknown error in fetching eval run result attempts";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetEvalRunResultAttempts,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: Queued or Running → Failed, once (the status condition: the status the caller read), with why: a run that
+  // moved on since is isNotFound
+  async failOpenEvalRun(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FailOpenEvalRunDALRequest,
+  ) {
+    const response: Schemas.EvalRunDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(evalRuns.id, params.id),
+        eq(evalRuns.companyId, params.companyId),
+        eq(evalRuns.status, params.status),
       ];
       const [evalRun] = await tx
         .update(evalRuns)
@@ -830,10 +931,10 @@ export default class EvalRunsDAL {
         .returning();
 
       if (!evalRun) {
-        const message = "Eval run not found or not queued";
+        const message = "Eval run not found or no longer in that status";
         AppLogger.warn({
           category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.FailQueuedEvalRun,
+          action: Schemas.LogAction.FailOpenEvalRun,
           message,
           metadata: params,
         });
@@ -843,13 +944,13 @@ export default class EvalRunsDAL {
       }
 
       response.isSuccess = true;
-      response.message = "Queued eval run failed";
+      response.message = "Open eval run failed";
       response.evalRun = evalRun;
     } catch (error) {
-      const message = "Unknown error in failing queued eval run";
+      const message = "Unknown error in failing open eval run";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.FailQueuedEvalRun,
+        action: Schemas.LogAction.FailOpenEvalRun,
         message,
         error,
         metadata: params,

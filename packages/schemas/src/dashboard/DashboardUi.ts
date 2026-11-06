@@ -1050,11 +1050,13 @@ export interface DashboardOpenDashboardButtonProps extends DashboardOperatorComp
 
 // DEV_NOTE: What a Run button runs: one version, as a gate run (a version sent to testing) or a quick one-attempt run,
 // with how many attempts that makes (cases × k) for the confirm dialog; caseCount null = not known here
+// DEV_NOTE: failedCasesOfRunId (ADR 0007 › Resume): a manual run of that run's failed cases only; caseCount = how many
 export interface DashboardTestRunTarget {
   chatbotConfigPublicId: string;
   configVersion: number;
   trigger: DashboardEvalRunTrigger;
   caseCount: number | null;
+  failedCasesOfRunId?: string;
 }
 
 // DEV_NOTE: Run tests (the Tests page header) and Run again (a run's page): one button, disabled with why when the
@@ -1069,6 +1071,13 @@ export interface DashboardRunTestsButtonProps {
 
 export interface DashboardRunTestsDialogProps extends DashboardDialogProps {
   target: DashboardTestRunTarget;
+}
+
+// DEV_NOTE: Resume on a run's page (ADR 0007 › Resume): a run that stopped on the way, picked up where it stopped
+export interface DashboardResumeRunButtonProps {
+  runPublicId: string;
+  isGate: boolean;
+  hasTestLogin: boolean;
 }
 
 // DEV_NOTE: A staging connection's test sign-in on the operator pages: shown on its card, set or removed on its page

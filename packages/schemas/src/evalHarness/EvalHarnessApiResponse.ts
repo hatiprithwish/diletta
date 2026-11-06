@@ -24,6 +24,7 @@ import type { EvalTranscript } from "../evalResults/EvalResultsCommon";
 import {
   type EvalAttemptRecord,
   EVAL_JUDGE_REASON_MAX_CHARS,
+  EVAL_RUN_MAX_K,
   EvalReadbackVerdictEnum,
   EvalTurnStatusEnum,
   ZEvalAttemptToolCall,
@@ -51,7 +52,15 @@ export const ZCreateEvalRunApiResponse = z
     message: z.string(),
     run: ZEvalHarnessRun,
     // DEV_NOTE: The run's cases: the config's chatbot's active cases and every active platform case, in a fixed order
+    // (a queued run that holds its own set, M7-9: exactly those)
     cases: z.array(ZEvalHarnessCase),
+    // DEV_NOTE: Attempts of this run that already have a result (a resumed run, ADR 0007 › Resume): not run again.
+    // Always [] for a new run.
+    doneAttempts: z.array(
+      z
+        .object({ caseId: z.string().min(1), attempt: z.number().int().min(1).max(EVAL_RUN_MAX_K) })
+        .meta({ id: "EvalDoneAttempt" }),
+    ),
   })
   .meta({ id: "CreateEvalRunApiResponse" });
 export type CreateEvalRunApiResponse = z.infer<typeof ZCreateEvalRunApiResponse>;
@@ -160,6 +169,7 @@ export interface CreateEvalRunResponse extends ApiResponse {
   failure?: EvalRunStepFailureEnum;
   run?: EvalHarnessRun;
   cases?: EvalHarnessCase[];
+  doneAttempts?: CreateEvalRunApiResponse["doneAttempts"];
 }
 
 // DEV_NOTE: An attempt's conversation, ready for the DO: the session (with its eval context). outboxId = its
@@ -261,6 +271,8 @@ export interface EvalRunConfigTargetResponse extends EvalRunStepResponse {
   trigger?: EvalRunTriggerIntEnum;
   k?: number;
   queuedRunId?: string;
+  // DEV_NOTE: The case set a queued run already holds (chosen cases, or a resumed run's), run as it is; null = none yet
+  queuedRunCaseIds?: string[] | null;
 }
 
 export interface EvalRunConversationResponse extends EvalRunStepResponse {

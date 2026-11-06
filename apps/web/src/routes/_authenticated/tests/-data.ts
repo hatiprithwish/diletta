@@ -341,8 +341,59 @@ export function useStartTestRun() {
         case Schemas.EvalRunStartFailureEnum.RunnerUnavailable:
           toast.error("The test runner couldn't take the run. Try again in a minute.");
           return;
+        case Schemas.EvalRunStartFailureEnum.NothingToRun:
+          toast.error("That run has no failed case left to run.");
+          return;
         default:
           toast.error("The tests didn't start. Try again.");
+      }
+    },
+  });
+}
+
+// DEV_NOTE: Resume (ADR 0007 › Resume): the same run, its results kept, picked up by the runner where it stopped
+export function useResumeTestRun() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (runPublicId: string) =>
+      apiClient<Schemas.StartEvalRunApiResponse>(
+        `/dashboard/eval-runs/${encodeURIComponent(runPublicId)}/resume`,
+        getToken,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TestsQueries.keys.all() });
+      toast.success("Tests resumed. Only the attempts without a result run.");
+    },
+    onError: (error) => {
+      void queryClient.invalidateQueries({ queryKey: TestsQueries.keys.all() });
+      const failure =
+        error instanceof ApiError
+          ? (error.body as Schemas.StartEvalRunApiResponse | undefined)?.failure
+          : undefined;
+      switch (failure) {
+        case Schemas.EvalRunStartFailureEnum.AlreadyRunning:
+          toast.error("This version's tests are already running.");
+          return;
+        case Schemas.EvalRunStartFailureEnum.NotResumable:
+          toast.error("This run can't be resumed. Run the tests again instead.");
+          return;
+        case Schemas.EvalRunStartFailureEnum.NotTesting:
+          toast.error(
+            "This version isn't in testing any more. Send it to testing and run its tests again.",
+          );
+          return;
+        case Schemas.EvalRunStartFailureEnum.NoTestLogin:
+          toast.error(
+            "Tests can't run yet: your staging environment has no test sign-in. Ask Diletta to set one up.",
+          );
+          return;
+        case Schemas.EvalRunStartFailureEnum.RunnerUnavailable:
+          toast.error("The test runner couldn't take the run. Try again in a minute.");
+          return;
+        default:
+          toast.error("The run didn't resume. Try again.");
       }
     },
   });

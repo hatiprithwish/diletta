@@ -12,8 +12,8 @@ import * as Schemas from "@app/schemas";
 // DEV_NOTE: The Tests page's runs (M4-8), mounted at /dashboard/eval-runs. Chain: checkAuth → authorizeCompany(EvalRunRead)
 // → zValidator → handler. For the admin's company (c.get("companyId")); a run is addressed by publicId, a case by its
 // publicId, a transcript by its file's publicId. Runs start with the harness (M5-2) or, since M7-9 (ADR 0007), from POST /
-// (authorizeCompany(EvalRunStart)): a Queued run handed to the hosted runner, refused with its
-// EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP status. /summary is declared before /:publicId so it isn't read as a run id.
+// (authorizeCompany(EvalRunStart)): a Queued run handed to the hosted runner, or POST /:publicId/resume (a Failed run
+// reopened), refused with its EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP status. /summary is declared before /:publicId so it isn't read as a run id.
 const EvalRunsRoutes = new Hono<AppContext>();
 
 EvalRunsRoutes.post(
@@ -34,6 +34,29 @@ EvalRunsRoutes.post(
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     if (response.isSuccess) return c.json(response, 201);
+    if (response.failure) {
+      return c.json(response, Schemas.EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP[response.failure]);
+    }
+    return c.json(response, response.isNotFound ? 404 : 500);
+  },
+);
+
+// DEV_NOTE: Resume a Failed run (ADR 0007 › Resume): the same run, its recorded results kept, handed to the runner again
+EvalRunsRoutes.post(
+  "/:publicId/resume",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.EvalRunStart),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new EvalRunnerRepo(c.env);
+    const { outboxIds, ...response } = await repo.resumeRun({
+      companyId,
+      publicId: c.req.param("publicId"),
+      actor: auditActorFor(c.get("admin")),
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    if (response.isSuccess) return c.json(response, 200);
     if (response.failure) {
       return c.json(response, Schemas.EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP[response.failure]);
     }

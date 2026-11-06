@@ -182,13 +182,20 @@
           "items": {
             "$ref": "#/$defs/EvalHarnessCase"
           }
+        },
+        "doneAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvalDoneAttempt"
+          }
         }
       },
       "required": [
         "isSuccess",
         "message",
         "run",
-        "cases"
+        "cases",
+        "doneAttempts"
       ]
     },
     "EvalHarnessRun": {
@@ -422,6 +429,24 @@
             "$ref": "#/$defs/EvalCaseJsonValue"
           }
         }
+      ]
+    },
+    "EvalDoneAttempt": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "caseId",
+        "attempt"
       ]
     },
     "RunEvalAttemptApiRequest": {
