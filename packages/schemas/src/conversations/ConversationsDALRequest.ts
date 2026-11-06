@@ -9,8 +9,8 @@ import type {
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 // The DAL generates publicId and checks the chatbot and chatbot user exist in the company.
-// DEV_NOTE: eval only for an eval attempt's conversation (M5-2): its run, case and attempt (a second conversation of
-// the same attempt is isConflict) and the run's config it is pinned to
+// DEV_NOTE: eval only for an eval attempt's conversation (M5-2): its run, case, attempt and try (a second conversation
+// of the same attempt in the same try is isConflict) and the run's config it is pinned to
 export type CreateConversationDALRequest = Pick<
   Conversation,
   "companyId" | "chatbotId" | "chatbotUserId"
@@ -19,17 +19,20 @@ export type CreateConversationDALRequest = Pick<
     evalRunId: string;
     evalCaseId: string;
     evalAttempt: number;
+    evalTry: number;
   };
 };
 
 // Params to find a conversation by its public ID within one company
 export type FindConversationDALRequest = Pick<Conversation, "publicId" | "companyId">;
 
-// DEV_NOTE: An eval attempt's conversation (M5-3), by its unique (run, case, attempt); none = the attempt never started
+// DEV_NOTE: An eval attempt's conversation (M5-3), by its unique (run, case, attempt, try); none = the attempt never
+// started one in that try
 export type FindEvalAttemptConversationDALRequest = Pick<Conversation, "companyId"> & {
   evalRunId: string;
   evalCaseId: string;
   evalAttempt: number;
+  evalTry: number;
 };
 
 // DEV_NOTE: The activity root, set once right after create (the critical event needs the conversation's id first)

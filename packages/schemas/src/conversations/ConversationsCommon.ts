@@ -50,7 +50,8 @@ export const CONVERSATION_OUTCOME_LABEL_MAP: Record<
 // DEV_NOTE: publicId is also the Conversation DO's name. id, companyId, chatbotUserId, chatbotId, chatbotConfigId,
 // evalRunId (set = an eval attempt's conversation, M5-2: never on the dashboard), evalCaseId and rootLogId are
 // internal bigint ids — used by DAL/Repo only, NEVER sent to a client. evalCaseId + evalAttempt = which attempt of the
-// run it is (unique per run, so an attempt runs once). title comes from the first user message (chat content: purged
+// run it is (unique per run and try, so an attempt runs once a try); evalTry = the run's resumed_count when it started
+// (ADR 0007 › Resume). title comes from the first user message (chat content: purged
 // with it).
 export const ZConversation = z.object({
   id: z.string(),
@@ -62,6 +63,7 @@ export const ZConversation = z.object({
   evalRunId: z.string().nullable(),
   evalCaseId: z.string().nullable(),
   evalAttempt: z.number().int().nullable(),
+  evalTry: z.number().int().nullable(),
   status: z.enum(ConversationStatusIntEnum),
   outcome: z.enum(ConversationOutcomeIntEnum).nullable(),
   title: z.string().nullable(),

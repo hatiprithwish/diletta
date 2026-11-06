@@ -92,6 +92,10 @@ export const ZEvalRunWorkflowParams = z.strictObject({
 });
 export type EvalRunWorkflowParams = z.infer<typeof ZEvalRunWorkflowParams>;
 
+// DEV_NOTE: What the backend starts a chain with: the ids and how many times the run was resumed, which names the
+// chain's instances (a resumed run's first instance is <run>-r<n>, since <run> already ran)
+export type EvalRunWorkflowStartParams = EvalRunWorkflowParams & { resumedCount: number };
+
 // DEV_NOTE: The runner couldn't start a run (failQueuedRun): which stop it hit, so the run page names it (a host
 // sign-in that failed is HostUnavailable, a refused eval token HarnessError…)
 export const ZFailQueuedEvalRunParams = ZEvalRunWorkflowParams.extend({
@@ -104,11 +108,15 @@ export type FailQueuedEvalRunParams = z.infer<typeof ZFailQueuedEvalRunParams>;
 //   AlreadyRunning: the version already has a Queued or Running run
 //   NoTestLogin: no active Staging connection of the company has a test sign-in (an operator sets one)
 //   RunnerUnavailable: the runner couldn't take the run (it was marked Failed)
+//   NotResumable: Resume of a run that isn't a Failed one the dashboard started and the runner reached (isEvalRunResumable)
+//   NothingToRun: a run of a run's failed cases when none failed, or none is still active
 export enum EvalRunStartFailureEnum {
   NotTesting = "NotTesting",
   AlreadyRunning = "AlreadyRunning",
   NoTestLogin = "NoTestLogin",
   RunnerUnavailable = "RunnerUnavailable",
+  NotResumable = "NotResumable",
+  NothingToRun = "NothingToRun",
 }
 
 export const EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP: Record<EvalRunStartFailureEnum, 409 | 503> = {
@@ -116,4 +124,6 @@ export const EVAL_RUN_START_FAILURE_HTTP_STATUS_MAP: Record<EvalRunStartFailureE
   [EvalRunStartFailureEnum.AlreadyRunning]: 409,
   [EvalRunStartFailureEnum.NoTestLogin]: 409,
   [EvalRunStartFailureEnum.RunnerUnavailable]: 503,
+  [EvalRunStartFailureEnum.NotResumable]: 409,
+  [EvalRunStartFailureEnum.NothingToRun]: 409,
 };

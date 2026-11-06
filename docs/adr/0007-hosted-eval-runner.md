@@ -40,3 +40,14 @@ The first production run stopped at its 10th attempt with "Too many subrequests"
 4. **A run that couldn't start says why.** `failQueuedRun` takes the stop's failure (a failed host sign-in is `HostUnavailable`, a refused eval token `HarnessError`), not always `RunnerUnavailable`; the stop's message is logged by the runner (Workers Logs) and kept in the instance's output.
 
 Cost on Free: about two Workflow steps per attempt (Free allows 3,000 steps a day), so a gate run of 9 cases × 3 is about 60 steps.
+
+## Amendment: resume, and run the failed cases (2026-11-06)
+
+A run that stops on the way (the judge or host down, a runner fault) had to be run again from the first case, spending the company's model key on attempts that already had a result. Two changes cut that.
+
+1. **Resume a Failed run.** `POST /dashboard/eval-runs/:publicId/resume` (`EvalRunStart`) reopens a run that `Schemas.isEvalRunResumable` (Failed, started from the dashboard, holding its case set): Failed → Queued in one `withTenant` (the version locked, the same one-run-per-version and test sign-in checks as a new run, audited `RunResumed`), its results, case set and `created_at` kept, its verdict, failure, reset and finish cleared, `resumed_count` one up. The runner starts its chain again as `<run>-r<n>`; `/eval/runs {runId}` hands back the run's own set and `doneAttempts`, the attempts that already have a result, and the chain skips them. Done still means k results for every case of the set and a reset, in one run: a resumed gate is as strict as a fresh one.
+2. **An attempt without a result may be sent again in a resumed run.** This changes M5-2's "an attempt runs once". An eval conversation is now unique per (run, case, attempt, **try**), `conversations.eval_try` = the run's `resumed_count` when it started, so the attempt that was cut off gets a new chat in the next try. It is safe because the run was reset before it finished Failed (the host's test data is clean again), and an attempt that has a result is never run again in any try (`/attempts` answers `Duplicate`). Inside one try nothing changes: a replayed step still finds its chat and is recorded as interrupted.
+3. **A gate run that stopped isn't a verdict.** This changes M5-4. Only a **Done** gate run moves its version (Ready on a pass, Draft on a fail). A Failed one leaves it Testing, so it can be resumed or run again; the safety rule and `evalRunGateDecision` are unchanged.
+4. **Run failed cases.** `POST /dashboard/eval-runs` takes `failedCasesOfRunId` on a Manual run only: the run holds, from the moment it is queued, the cases of that run (same chatbot) that didn't pass every attempt (`Schemas.failedEvalCaseIds`, a case never run included) and are still active. A Gate always runs every case.
+
+The run page shows **Resume** when `runActions.canResume` and **Run failed cases (n)** when `runActions.failedCaseCount` > 0.

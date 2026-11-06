@@ -94,11 +94,40 @@ export const ZEvalRun = z.object({
   costUsd: z.string(),
   // DEV_NOTE: M7-9: the admin who started it from the dashboard (→ admins.id); null for a run the CLI or CI started
   startedBy: z.string().nullable(),
+  // DEV_NOTE: How many times the dashboard resumed it (ADR 0007 › Resume): its attempts' conversations are this try's
+  resumedCount: z.number().int().min(0),
   finishedAt: z.date().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
 export type EvalRun = z.infer<typeof ZEvalRun>;
+
+// DEV_NOTE: The cases of a run's set that didn't pass all k attempts, a case with no result included (internal ids, in
+// the set's order): what "Run failed cases" runs (ADR 0007 › Resume)
+export function failedEvalCaseIds(params: {
+  caseIds: string[];
+  k: number;
+  tallies: { evalCaseId: string; passedAttemptCount: number }[];
+}): string[] {
+  const passed = new Map(
+    params.tallies.map((tally) => [tally.evalCaseId, tally.passedAttemptCount]),
+  );
+  return params.caseIds.filter((caseId) => (passed.get(caseId) ?? 0) < params.k);
+}
+
+// DEV_NOTE: A Failed run the dashboard can resume (ADR 0007 › Resume): it stopped on the way, never on a verdict (a
+// Failed run always stopped early: only Done holds one), the dashboard started it (the runner reads its sign-in) and it
+// has its case set (it reached the runner). Resuming keeps its recorded results and runs only the missing attempts.
+export function isEvalRunResumable(
+  run: Pick<EvalRun, "status" | "startedBy" | "evalCaseIds">,
+): boolean {
+  return (
+    run.status === EvalRunStatusIntEnum.Failed &&
+    run.startedBy !== null &&
+    run.evalCaseIds !== null &&
+    run.evalCaseIds.length > 0
+  );
+}
 
 export enum EvalRunSortColumn {
   CreatedAt = "createdAt",

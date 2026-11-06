@@ -139,11 +139,14 @@ export default class EvalHarnessRepo {
         const chatbot = await this.activeChatbot(tx, companyId, chatbotConfig.chatbotId);
         if (!chatbot.isSuccess || !chatbot.chatbot) return chatbot;
 
-        // DEV_NOTE: One over the limit, so a run with too many cases is refused instead of cut short
+        // DEV_NOTE: One over the limit, so a run with too many cases is refused instead of cut short. A queued run that
+        // holds its set (chosen cases, or a resumed run's: ADR 0007 › Resume) runs exactly that set, as it was handed out
+        const heldCaseIds = target.queuedRunCaseIds ?? null;
         const runnable = await this.evalCasesDal.getRunnableEvalCases(tx, {
           companyId,
           chatbotId: chatbotConfig.chatbotId,
           limit: Schemas.EVAL_RUN_MAX_CASES + 1,
+          ...(heldCaseIds ? { evalCaseIds: heldCaseIds, isInactiveIncluded: true } : {}),
         });
         if (!runnable.isSuccess || !runnable.evalCases) {
           return this.stepFailure(false, runnable.message);
@@ -187,12 +190,28 @@ export default class EvalHarnessRepo {
           };
         }
 
-        // DEV_NOTE: A queued run (M7-9) becomes Running with its case set; any other request creates the run
+        // DEV_NOTE: A resumed run's attempts that have a result are handed back, so the runner skips them
+        const doneAttempts: Schemas.CreateEvalRunApiResponse["doneAttempts"] = [];
+        if (heldCaseIds && target.queuedRunId) {
+          const done = await this.evalRunsDal.getEvalRunResultAttempts(tx, {
+            companyId,
+            evalRunId: target.queuedRunId,
+          });
+          if (!done.isSuccess || !done.attempts) return this.stepFailure(false, done.message);
+          const publicIdOf = new Map(runnable.evalCases.map((row) => [row.id, row.publicId]));
+          for (const attempt of done.attempts) {
+            const caseId = publicIdOf.get(attempt.evalCaseId);
+            if (caseId) doneAttempts.push({ caseId, attempt: attempt.attempt });
+          }
+        }
+
+        // DEV_NOTE: A queued run (M7-9) becomes Running with its case set (one it holds stays); any other request
+        // creates the run
         const created = target.queuedRunId
           ? await this.evalRunsDal.startQueuedEvalRun(tx, {
               companyId,
               id: target.queuedRunId,
-              evalCaseIds,
+              evalCaseIds: heldCaseIds ? null : evalCaseIds,
               harnessVersion: request.harnessVersion,
             })
           : await this.evalRunsDal.createEvalRun(tx, {
@@ -211,6 +230,7 @@ export default class EvalHarnessRepo {
           message: "Eval run started",
           run: { publicId: evalRun.publicId, k: evalRun.k, harnessVersion: evalRun.harnessVersion },
           cases,
+          doneAttempts,
         };
       },
     );
@@ -228,7 +248,8 @@ export default class EvalHarnessRepo {
 
   // DEV_NOTE: The run, case and attempt are checked first (one withTenant, the run row locked so a finish can't slip
   // in), then the conversation is started (ConversationsRepo.startEvalConversation) and run by its DO. The attempt's
-  // conversation is unique per run: a repeat is Duplicate before any model call. The DO answers the turn's outcome; a
+  // conversation is unique per run and try (ADR 0007 › Resume), and an attempt with a result never runs again: a repeat
+  // is Duplicate before any model call. The DO answers the turn's outcome; a
   // turn that couldn't start (paused chatbot, no model key, a budget) is an attempt failure. An attempt that started
   // runs to its end even if the run is finished meanwhile; its result can't be recorded then. outboxIds are relayed by
   // the route.
@@ -257,6 +278,15 @@ export default class EvalHarnessRepo {
         }
         const evalCase = await this.runCase(tx, companyId, running.run, request.caseId);
         if (!evalCase.isSuccess || !evalCase.evalCaseId) return evalCase;
+        // DEV_NOTE: An attempt that has its result never runs again (a resumed run re-sends only those without one)
+        const existing = await this.evalRunsDal.hasEvalResult(tx, {
+          companyId,
+          evalRunId: running.run.id,
+          evalCaseId: evalCase.evalCaseId,
+          attempt: request.attempt,
+        });
+        if (!existing.isSuccess) return this.stepFailure(false, existing.message);
+        if (existing.hasResult) return this.duplicateResult();
         const chatbot = await this.activeChatbot(tx, companyId, running.chatbotId);
         if (!chatbot.isSuccess || !chatbot.chatbot) return chatbot;
         return {
@@ -280,6 +310,7 @@ export default class EvalHarnessRepo {
       evalRunId: checked.run.id,
       evalCaseId: checked.evalCaseId,
       evalAttempt: request.attempt,
+      evalTry: checked.run.resumedCount,
       chatbotConfigId: checked.run.chatbotConfigId,
       chatbot: checked.chatbot,
     });
@@ -533,6 +564,7 @@ export default class EvalHarnessRepo {
           evalRunId: checked.run.id,
           evalCaseId: checked.evalCaseId,
           evalAttempt: request.attempt,
+          evalTry: checked.run.resumedCount,
         });
         if (conversation.isNotFound) return { isSuccess: true, hasConversation: false };
         if (!conversation.isSuccess || !conversation.conversation) {
@@ -703,7 +735,7 @@ export default class EvalHarnessRepo {
   // run's set has all k attempts and the reset went through (else Incomplete, nothing written) → Done; otherwise
   // Failed, with why the harness stopped it when it says (failure, M5-3). pass^k: a case passes when all k attempts
   // did; the run passes by Schemas.evalRunGateDecision (Done, EVAL_GATE_PASS_PERCENT of the set, and every safety case:
-  // the safety hard gate, M5-4). case_count = the set's size. A Gate run then has its config moved
+  // the safety hard gate, M5-4). case_count = the set's size. A Done Gate run then has its config moved
   // (ChatbotConfigsRepo.applyGateResult) in the same transaction, with its audit row's outbox id for the route to relay. cost_usd is already the run's (every model call adds to it, ModelCallsRepo) and keeps settling
   // after the finish.
   async finish(params: {
@@ -780,8 +812,10 @@ export default class EvalHarnessRepo {
             : this.stepFailure(false, finished.message);
         }
         const { evalRun } = finished;
+        // DEV_NOTE: Only a Done gate run is a verdict. One that stopped on the way (Failed) leaves its version Testing,
+        // so it can be resumed or run again (ADR 0007 › Resume)
         const moved =
-          run.trigger === Schemas.EvalRunTriggerIntEnum.Gate
+          run.trigger === Schemas.EvalRunTriggerIntEnum.Gate && request.isComplete
             ? await this.chatbotConfigsRepo.applyGateResult(tx, {
                 companyId,
                 run,
@@ -865,6 +899,7 @@ export default class EvalHarnessRepo {
         trigger: evalRun.trigger,
         k: evalRun.k,
         queuedRunId: evalRun.id,
+        queuedRunCaseIds: evalRun.evalCaseIds,
       };
     }
     if ("chatbotConfigId" in request) {

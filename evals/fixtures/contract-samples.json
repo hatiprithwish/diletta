@@ -782,6 +782,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -1002,6 +1008,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -1220,6 +1232,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -1443,6 +1461,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -1663,6 +1687,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -1881,6 +1911,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -2103,6 +2139,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -2323,6 +2365,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -2543,6 +2591,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -2749,6 +2803,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -2970,6 +3030,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -3187,6 +3253,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -3408,6 +3480,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -3616,6 +3694,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -3837,6 +3921,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -4052,6 +4142,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -4273,6 +4369,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -4492,6 +4594,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },
@@ -4713,6 +4821,12 @@
                 ]
               }
             }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
+            }
           ]
         },
         "runAttemptRequest": {
@@ -4932,6 +5046,12 @@
                   }
                 ]
               }
+            }
+          ],
+          "doneAttempts": [
+            {
+              "caseId": "case_1",
+              "attempt": 1
             }
           ]
         },

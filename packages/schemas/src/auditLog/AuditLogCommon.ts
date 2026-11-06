@@ -67,6 +67,8 @@ export enum AuditEntityActionEnum {
   // DEV_NOTE: M7-9: a version's tests started from the dashboard (a gate run, or a manual run)
   GateRunStarted = "gate_run_started",
   TestRunStarted = "test_run_started",
+  // DEV_NOTE: ADR 0007 › Resume: a Failed run of the version resumed from the dashboard
+  RunResumed = "run_resumed",
   // DEV_NOTE: Operator only (M7-9): a Staging connection's test sign-in for the hosted eval runner
   TestLoginSet = "test_login_set",
   TestLoginRemoved = "test_login_removed",
@@ -152,6 +154,7 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Published,
     AuditEntityActionEnum.GateRunStarted,
     AuditEntityActionEnum.TestRunStarted,
+    AuditEntityActionEnum.RunResumed,
   ],
 } as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;
 

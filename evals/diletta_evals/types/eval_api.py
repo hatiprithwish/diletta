@@ -110,6 +110,11 @@ class EvalCaseJsonValue(
     ]
 
 
+class EvalDoneAttempt(BaseModel):
+    caseId: Annotated[str, Field(min_length=1)]
+    attempt: Annotated[int, Field(ge=1, le=10)]
+
+
 class Message1(BaseModel):
     role: Role
     text: Annotated[str, Field(max_length=4000, min_length=1)]
@@ -374,6 +379,7 @@ class CreateEvalRunApiResponse(BaseModel):
     message: str
     run: EvalHarnessRun
     cases: list[EvalHarnessCase]
+    doneAttempts: list[EvalDoneAttempt]
 
 
 class EvalApi(BaseModel):

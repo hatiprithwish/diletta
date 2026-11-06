@@ -858,6 +858,82 @@ describe("Running tests (M7-9)", () => {
     });
   });
 
+  it("resumes a run that stopped on the way, keeping its results", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi((url, init) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/eval-runs/run_stopped/resume") && init?.method === "POST") {
+        return { status: 200, body: { isSuccess: true, evalRun: { publicId: "run_stopped" } } };
+      }
+      if (path.endsWith("/eval-runs/run_stopped")) {
+        return {
+          status: 200,
+          body: {
+            isSuccess: true,
+            evalRun: STOPPED_RUN,
+            runActions: { canResume: true, failedCaseCount: 0 },
+          },
+        };
+      }
+      if (path.endsWith("/eval-runs/run_stopped/cases")) {
+        return { status: 200, body: { ...RUN_CASES, cases: [], totalRecords: 0 } };
+      }
+      return defaultApi(url, init);
+    });
+    renderPage("/tests/run_stopped");
+
+    expect(screen.queryByRole("button", { name: /Run failed cases/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Resume" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/already have a result are kept/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Resume" }));
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "Tests resumed. Only the attempts without a result run.",
+      ),
+    );
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(String(post?.[0])).toContain("/dashboard/eval-runs/run_stopped/resume");
+  });
+
+  it("runs only a run's failed cases, once each", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi((url, init) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/eval-runs") && init?.method === "POST") return started;
+      if (path.endsWith("/eval-runs/run_draft")) {
+        return {
+          status: 200,
+          body: {
+            isSuccess: true,
+            evalRun: DRAFT_RUN,
+            runActions: { canResume: false, failedCaseCount: 4 },
+          },
+        };
+      }
+      return defaultApi(url, init);
+    });
+    renderPage("/tests/run_draft");
+
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Run failed cases (4)" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Run the failed cases of v13?")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/Each of the 4 failed cases runs 1 time \(4 conversations\)/),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Run tests" }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Tests started."));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      chatbotConfigId: "cfg_13",
+      trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+      failedCasesOfRunId: "run_draft",
+    });
+  });
+
   it("shows a run still going as running, with Run tests off", async () => {
     mockApi((url, init) => {
       const path = new URL(url, "http://localhost").pathname;

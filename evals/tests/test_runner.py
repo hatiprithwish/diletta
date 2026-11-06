@@ -105,6 +105,7 @@ class FakeClient:
                     "harnessVersion": request.root.harnessVersion,
                 },
                 "cases": [self._case],
+                "doneAttempts": [],
             }
         )
 

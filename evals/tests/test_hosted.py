@@ -164,7 +164,7 @@ def test_walks_every_attempt_of_every_case_then_ends() -> None:
         seen.append(hosted.link_id(link))
         link = hosted.after_attempt(link, {"hasPassed": True, "error": None})
     assert seen == ["run_q-c1-a1", "run_q-c1-a2", "run_q-c2-a1", "run_q-c2-a2"]
-    assert link == {"companyPublicId": "co_1", "runPublicId": "run_q", "stage": "end", "stop": None}
+    assert link == {"companyPublicId": "co_1", "runPublicId": "run_q", "resumedCount": 0, "stage": "end", "stop": None}
     assert hosted.link_id(link) == "run_q-end"
 
 
@@ -186,6 +186,46 @@ def test_a_start_that_stopped_has_no_next_link_and_no_cases_go_straight_to_the_e
 def test_a_link_holds_ids_cases_and_where_it_is_only_and_the_binding_gets_the_ids() -> None:
     link = hosted.after_start(FIRST_LINK, {"runId": "run_q", "k": 1, "cases": CASES})
     assert link is not None
-    assert set(link) == {"companyPublicId", "runPublicId", "stage", "k", "cases", "caseIndex", "attemptNo"}
+    assert set(link) == {
+        "companyPublicId",
+        "runPublicId",
+        "resumedCount",
+        "stage",
+        "k",
+        "cases",
+        "done",
+        "caseIndex",
+        "attemptNo",
+    }
     assert hosted.run_ids(link) == FIRST_LINK
     json.dumps(link)
+
+
+def test_a_resumed_run_is_its_own_chain_and_skips_the_attempts_with_a_result() -> None:
+    resumed = {**FIRST_LINK, "resumedCount": 2}
+    assert hosted.link_id(hosted.Link(**resumed)) == "run_q-r2"
+    started = {
+        "runId": "run_q",
+        "k": 2,
+        "cases": CASES,
+        "doneAttempts": [{"caseId": "case_1", "attempt": 1}, {"caseId": "case_1", "attempt": 2}],
+    }
+    link = hosted.after_start(resumed, started)
+    seen: list[str] = []
+    while link is not None and link["stage"] == "attempt":
+        seen.append(hosted.link_id(link))
+        link = hosted.after_attempt(link, {"hasPassed": True, "error": None})
+    assert seen == ["run_q-r2-c2-a1", "run_q-r2-c2-a2"]
+    assert link is not None and hosted.link_id(link) == "run_q-r2-end"
+    assert hosted.run_ids(link) == FIRST_LINK
+
+
+def test_a_resumed_run_with_every_attempt_done_goes_straight_to_its_end() -> None:
+    started = {
+        "runId": "run_q",
+        "k": 1,
+        "cases": CASES,
+        "doneAttempts": [{"caseId": "case_1", "attempt": 1}, {"caseId": "case_2", "attempt": 1}],
+    }
+    ended = hosted.after_start({**FIRST_LINK, "resumedCount": 1}, started)
+    assert ended is not None and ended["stage"] == "end" and ended["stop"] is None

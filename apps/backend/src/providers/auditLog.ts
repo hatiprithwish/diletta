@@ -96,6 +96,7 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Published]: "Published a version",
     [Schemas.AuditEntityActionEnum.GateRunStarted]: "Started a version's publish tests",
     [Schemas.AuditEntityActionEnum.TestRunStarted]: "Ran a version's tests",
+    [Schemas.AuditEntityActionEnum.RunResumed]: "Resumed a version's tests",
   },
 };
 

@@ -149,6 +149,18 @@ How one run goes:
 3. Each attempt is its own instance (`<run>-c<case>-a<attempt>`), sent once, and creates the next one. A step cut short and replayed gets 409 `Duplicate` and is recorded as failed ("interrupted"), never run twice. The backend calls go over the `BACKEND` binding (`EvalRunnerEntrypoint.fetch`, `/eval/runs*` only); only the host's sign-in and read-backs go over the internet.
 4. The `<run>-end` instance resets and finishes, as for the CLI; a stop at any attempt skips straight to it. If the runner can't start the run at all, it fails the Queued run with the stop it hit: "The staging host couldn't be reached" for a failed sign-in, a harness error for a refused eval token. The stop's message is in Workers Logs (`Run <id> stopped: …`) and in the instance's output.
 
+### Resume, or run the failed cases
+
+A run that stopped on the way (Failed: the judge or the host down, a runner fault) shows **Resume** on its page. It reopens the same run: the attempts that have a result are kept, the rest run, the attempt that was cut off included (as a new chat: the run was reset before it stopped). The runner's chain for it is `<run>-r<n>-…`. A gate run that stopped leaves its version in testing, so Resume can still make it Ready; only a run that reached Done moves the version.
+
+**Run failed cases (n)** starts a new manual run (k = 1) of the cases that didn't pass every attempt of that run, still active. It's for checking a fix cheaply; the publish check is always the whole gate.
+
+| Refusal                    | Why                                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 409 `NotResumable`         | The run isn't Failed, wasn't started from the dashboard, or never reached the runner (no case set): run the tests again |
+| 409 `NotTesting` on Resume | A gate run whose version was moved back to draft since: send it to testing and run the gate again                       |
+| 409 `NothingToRun`         | Every case of that run passed, or none of its failed cases is still active                                              |
+
 ### Set up a company
 
 An operator sets the test sign-in on the company's **Staging** connection (operator pages › the company › Connections › the connection › **Test sign-in**, or the API):

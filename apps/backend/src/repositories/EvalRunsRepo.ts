@@ -304,13 +304,46 @@ export default class EvalRunsRepo {
         }
         const listed = await this.toListItems(tx, companyId, [found.evalRun]);
         if (!("items" in listed)) return listed;
+        const actions = await this.runActions(tx, companyId, found.evalRun);
+        if (!("runActions" in actions)) return actions;
         return {
           isSuccess: true,
           message: "Eval run fetched successfully",
           evalRun: listed.items[0],
+          runActions: actions.runActions,
         };
       },
     );
+  }
+
+  // DEV_NOTE: What the run's page offers (ADR 0007 › Resume): Resume when isEvalRunResumable (a Gate's version still
+  // Testing), and how many of its cases didn't pass every attempt once it ended
+  private async runActions(
+    tx: Tx,
+    companyId: string,
+    run: Schemas.DashboardEvalRunRow,
+  ): Promise<{ runActions: Schemas.EvalRunActions } | Schemas.ApiResponse> {
+    const canResume =
+      Schemas.isEvalRunResumable(run) &&
+      (run.trigger !== Schemas.EvalRunTriggerIntEnum.Gate ||
+        run.configStatus === Schemas.ChatbotConfigStatusIntEnum.Testing);
+    const isEnded =
+      run.status === Schemas.EvalRunStatusIntEnum.Done ||
+      run.status === Schemas.EvalRunStatusIntEnum.Failed;
+    const caseIds = run.evalCaseIds ?? [];
+    if (!isEnded || caseIds.length === 0) {
+      return { runActions: { canResume, failedCaseCount: 0 } };
+    }
+    const tallied = await this.evalRunsDal.getEvalRunTallies(tx, {
+      companyId,
+      evalRunId: run.id,
+      evalCaseIds: caseIds,
+    });
+    if (!tallied.isSuccess || !tallied.tallies) {
+      return { isSuccess: false, message: tallied.message };
+    }
+    const failed = Schemas.failedEvalCaseIds({ caseIds, k: run.k, tallies: tallied.tallies });
+    return { runActions: { canResume, failedCaseCount: failed.length } };
   }
 
   // DEV_NOTE: One run's cases with how many attempts passed (failed first by default), paged

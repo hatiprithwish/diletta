@@ -100,3 +100,8 @@ export interface EvalRunCaseTallyRow {
 export interface EvalRunTalliesDALResponse extends ApiResponse {
   tallies?: EvalRunCaseTallyRow[];
 }
+
+// DEV_NOTE: A run's attempts that have a result (ADR 0007 › Resume), by internal case id
+export interface EvalRunResultAttemptsDALResponse extends ApiResponse {
+  attempts?: { evalCaseId: string; attempt: number }[];
+}
