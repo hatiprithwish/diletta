@@ -94,7 +94,14 @@ class ChatbotTarget:
     chatbot_id: str
 
 
-RunTarget = ConfigTarget | ChatbotTarget
+@dataclass(frozen=True)
+class QueuedRunTarget:
+    """A run the dashboard queued for the hosted runner (M7-9): its config, trigger and k are the run's own."""
+
+    run_id: str
+
+
+RunTarget = ConfigTarget | ChatbotTarget | QueuedRunTarget
 
 
 class EvalRunner:
@@ -103,28 +110,25 @@ class EvalRunner:
         self._host = host
         self._out = out
 
-    def run(
-        self, *, target: RunTarget, k: int, trigger: eval_api.Trigger, require_tool_cases: bool = False
+    async def run(
+        self,
+        *,
+        target: RunTarget,
+        k: int = 1,
+        trigger: eval_api.Trigger = eval_api.Trigger.number_2,
+        require_tool_cases: bool = False,
     ) -> RunSummary:
-        """target: the config to run, or a chatbot whose published config the backend picks at the start (M5-5).
+        """target: the config to run, a chatbot whose published config the backend picks at the start (M5-5), or a run
+        the dashboard queued (M7-9), which keeps its own trigger and k (the k and trigger given here are ignored). Each
+        case runs the k the backend answers with.
 
         require_tool_cases: stop the run when no case expects a tool call. Platform cases never name a tool, so the
         nightly suite would otherwise pass on them alone when the chatbot lacks the test host's cases.
         """
-        self._host.prepare()
-        if isinstance(target, ChatbotTarget):
-            request = eval_api.CreateEvalRunByChatbotApiRequest(
-                chatbotId=target.chatbot_id,
-                k=k,
-                harnessVersion=HARNESS_VERSION,
-                trigger=eval_api.Trigger1(trigger.value),
-            )
-        else:
-            request = eval_api.CreateEvalRunByConfigApiRequest(
-                chatbotConfigId=target.config_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
-            )
-        started = self._client.start_run(eval_api.CreateEvalRunApiRequest(root=request))
+        await self._host.prepare()
+        started = await self.start(target, k=k, trigger=trigger)
         run_id = started.run.publicId
+        k = started.run.k
         self._say(f"Run {run_id}: {len(started.cases)} cases × {k} attempts")
 
         failed_cases: list[str] = []
@@ -135,7 +139,7 @@ class EvalRunner:
             for case in started.cases:
                 has_case_passed = True
                 for attempt in range(1, k + 1):
-                    graded = self._run_attempt(run_id, case, attempt)
+                    graded = await self.run_attempt(run_id, case, attempt)
                     has_case_passed = has_case_passed and graded.has_passed
                     error = graded.grader_output.get("error")
                     self._say(
@@ -154,10 +158,10 @@ class EvalRunner:
         # Running. A reset that fails doesn't fail the results already graded, but the run can't count as Done: the
         # next run would start from data this one left behind. If ending the run fails too, the error that stopped the
         # run is the one raised (the other is printed), so the first cause is never hidden.
-        reset_error = self._reset(run_id)
+        reset_error = await self.reset(run_id)
         is_complete = stopped_by is None and reset_error is None
         try:
-            finished = self._client.finish(
+            finished = await self._client.finish(
                 run_id,
                 eval_api.FinishEvalRunApiRequest(
                     isComplete=is_complete,
@@ -192,7 +196,35 @@ class EvalRunner:
             self._say(f"  Failed: {name}")
         return summary
 
-    def _run_attempt(self, run_id: str, case: eval_api.EvalHarnessCase, attempt: int) -> GradedAttempt:
+    async def start(
+        self,
+        target: RunTarget,
+        *,
+        k: int = 1,
+        trigger: eval_api.Trigger = eval_api.Trigger.number_2,
+    ) -> eval_api.CreateEvalRunApiResponse:
+        """Starts the run on the backend (the host already prepared): its run and the cases it hands out."""
+        request: (
+            eval_api.CreateEvalRunByChatbotApiRequest
+            | eval_api.CreateEvalRunByConfigApiRequest
+            | eval_api.StartQueuedEvalRunApiRequest
+        )
+        if isinstance(target, QueuedRunTarget):
+            request = eval_api.StartQueuedEvalRunApiRequest(runId=target.run_id, harnessVersion=HARNESS_VERSION)
+        elif isinstance(target, ChatbotTarget):
+            request = eval_api.CreateEvalRunByChatbotApiRequest(
+                chatbotId=target.chatbot_id,
+                k=k,
+                harnessVersion=HARNESS_VERSION,
+                trigger=eval_api.Trigger1(trigger.value),
+            )
+        else:
+            request = eval_api.CreateEvalRunByConfigApiRequest(
+                chatbotConfigId=target.config_id, k=k, harnessVersion=HARNESS_VERSION, trigger=trigger
+            )
+        return await self._client.start_run(eval_api.CreateEvalRunApiRequest(root=request))
+
+    async def run_attempt(self, run_id: str, case: eval_api.EvalHarnessCase, attempt: int) -> GradedAttempt:
         tag = new_case_tag()
         messages = fill_case_tag(case.input.model_dump(mode="json")["messages"], tag)
         expectations = fill_case_tag(case.expectations.model_dump(mode="json"), tag)
@@ -200,25 +232,25 @@ class EvalRunner:
             raise TypeError("A case's expectations are a JSON object")
 
         try:
-            answered = self._client.run_attempt(
+            answered = await self._client.run_attempt(
                 run_id,
                 eval_api.RunEvalAttemptApiRequest.model_validate(
                     {"caseId": case.publicId, "attempt": attempt, "messages": messages}
                 ),
-                self._host.host_token(),
+                await self._host.host_token(),
             )
         except EvalApiError as error:
             if error.failure not in ATTEMPT_REFUSED_FAILURES:
                 raise
             graded = failed_attempt(f"The attempt didn't run: {error}")
-            self._record(run_id, case.publicId, attempt, graded, None)
+            await self.record(run_id, case.publicId, attempt, graded, None)
             return graded
 
         attempt_json = answered.model_dump(mode="json")
 
-        def read_back(call: Mapping[str, object], readback: Mapping[str, object]) -> ReadbackOutcome:
+        async def read_back(call: Mapping[str, object], readback: Mapping[str, object]) -> ReadbackOutcome:
             try:
-                checked = self._client.read_back(
+                checked = await self._client.read_back(
                     run_id,
                     eval_api.EvalReadbackApiRequest.model_validate(
                         {
@@ -227,7 +259,7 @@ class EvalRunner:
                             "readback": readback,
                         }
                     ),
-                    self._host.host_token(),
+                    await self._host.host_token(),
                 )
             except EvalApiError as error:
                 # DEV_NOTE: The backend refused this readback (the tool has no readback, the change isn't the run's):
@@ -242,9 +274,9 @@ class EvalRunner:
                 reason=checked.reason,
             )
 
-        def judge(rubric: str) -> JudgeVerdict | JudgeUnavailable:
+        async def judge(rubric: str) -> JudgeVerdict | JudgeUnavailable:
             try:
-                judged = self._client.judge(
+                judged = await self._client.judge(
                     run_id,
                     eval_api.EvalJudgeApiRequest(conversationId=answered.conversationId, rubric=rubric),
                 )
@@ -261,11 +293,11 @@ class EvalRunner:
                 prompt_version=judged.promptVersion,
             )
 
-        graded = grade_attempt(expectations, attempt_json, read_back, judge)
-        self._record(run_id, case.publicId, attempt, graded, answered.latencyMs)
+        graded = await grade_attempt(expectations, attempt_json, read_back, judge)
+        await self.record(run_id, case.publicId, attempt, graded, answered.latencyMs)
         return graded
 
-    def _record(
+    async def record(
         self, run_id: str, case_id: str, attempt: int, graded: GradedAttempt, latency_ms: int | None
     ) -> None:
         body = {
@@ -284,12 +316,12 @@ class EvalRunner:
             request = eval_api.RecordEvalResultApiRequest.model_validate(
                 {**body, "hasPassed": False, "graderOutput": failed_attempt(reason).grader_output}
             )
-        self._client.record_result(run_id, request)
+        await self._client.record_result(run_id, request)
 
-    def _reset(self, run_id: str) -> Exception | None:
+    async def reset(self, run_id: str) -> Exception | None:
         """The connection's reset_op, once; the error (printed) when it didn't go through, None when it did."""
         try:
-            reset = self._client.reset(run_id, self._host.host_token())
+            reset = await self._client.reset(run_id, await self._host.host_token())
         except Exception as error:
             self._say(f"The staging reset failed: {error}")
             return error

@@ -1,7 +1,9 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import CompanyConnectionsDAL from "@/data-access-layer/CompanyConnectionsDAL";
+import CompanySecretsDAL from "@/data-access-layer/CompanySecretsDAL";
 import getDbClient from "@/db/dbClient";
-import withTenant from "@/db/withTenant";
+import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import CompanyKeyProvider from "@/providers/companyKey";
 import JwksProvider from "@/providers/jwks";
 import { operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
 import Utility from "@/utils/Utility";
@@ -14,11 +16,13 @@ export default class CompanyConnectionsRepo {
   private env: Env;
   private db: NodePgDatabase;
   private dal: CompanyConnectionsDAL;
+  private companySecretsDal: CompanySecretsDAL;
 
   constructor(env: Env) {
     this.env = env;
     this.db = getDbClient(env);
     this.dal = new CompanyConnectionsDAL();
+    this.companySecretsDal = new CompanySecretsDAL();
   }
 
   private withStatusLabel(
@@ -375,5 +379,242 @@ export default class CompanyConnectionsRepo {
       connection: await this.toSecurityConnection(updated.companyConnection),
       outboxIds: updated.outboxIds,
     };
+  }
+
+  // ─── The test sign-in for the hosted eval runner (M7-9, ADR 0007) ──────────
+
+  // DEV_NOTE: Operator only. Which host and as whom (never a password, API key or admin secret): the stored login is
+  // decrypted here, server side, and only kind and hostUser leave. null = the connection has none.
+  async getEvalHostLogin(params: {
+    companyId: string;
+    publicId: string;
+  }): Promise<Schemas.GetEvalHostLoginApiResponse> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.GetEvalHostLoginApiResponse> => {
+        const connection = await this.dal.getCompanyConnectionDetails(tx, params);
+        if (!connection.isSuccess || !connection.companyConnection) {
+          return {
+            isSuccess: false,
+            message: connection.message,
+            isNotFound: connection.isNotFound,
+          };
+        }
+        const secret = await this.companySecretsDal.getConnectionEvalHostLogin(tx, {
+          companyId: params.companyId,
+          connectionId: connection.companyConnection.id,
+        });
+        if (!secret.isSuccess || !secret.companySecret) {
+          return secret.isNotFound
+            ? {
+                isSuccess: true,
+                message: "The connection has no test sign-in",
+                evalHostLogin: null,
+              }
+            : { isSuccess: false, message: secret.message };
+        }
+        const decrypted = await CompanyKeyProvider.decryptCompanySecret(
+          this.env,
+          tx,
+          secret.companySecret,
+        );
+        const login =
+          decrypted.isSuccess && decrypted.secret !== undefined
+            ? Schemas.ZEvalHostLogin.safeParse(Utility.parseJson(decrypted.secret))
+            : null;
+        if (!login?.success)
+          return { isSuccess: false, message: "The stored test sign-in can't be read" };
+        return {
+          isSuccess: true,
+          message: "Test sign-in fetched",
+          evalHostLogin: {
+            kind: login.data.kind,
+            kindLabel: Schemas.EVAL_HOST_LOGIN_KIND_LABEL_MAP[login.data.kind],
+            hostUser: login.data.hostUser,
+            updatedAt: secret.companySecret.updatedAt.toISOString(),
+          },
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Operator only, a Staging connection only (the DAL checks it too). The whole login is encrypted under the
+  // company key and replaces the Active one in place (row locked), or creates it; one TestLoginSet audit row (actor
+  // Operator, labelled with the host kind). The login is never logged or returned.
+  async setEvalHostLogin(
+    params: Schemas.SetEvalHostLoginApiRequest & {
+      companyId: string;
+      publicId: string;
+      adminId: string;
+    },
+  ): Promise<Schemas.WithOutboxIds<Schemas.GetEvalHostLoginApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.GetEvalHostLoginApiResponse>> => {
+        const { companyId } = params;
+        const login = params.evalHostLogin;
+        const connection = await this.dal.getCompanyConnectionDetails(tx, {
+          companyId,
+          publicId: params.publicId,
+          isForUpdate: true,
+        });
+        if (!connection.isSuccess || !connection.companyConnection) {
+          return {
+            isSuccess: false,
+            message: connection.message,
+            isNotFound: connection.isNotFound,
+            outboxIds: [],
+          };
+        }
+        const { companyConnection } = connection;
+        if (companyConnection.environment !== Schemas.CompanyConnectionEnvironmentIntEnum.Staging) {
+          return {
+            ...this.refuse("Only a staging connection takes a test sign-in"),
+            outboxIds: [],
+          };
+        }
+
+        const encrypted = await CompanyKeyProvider.encryptValue(this.env, tx, {
+          companyId,
+          column: Schemas.EncryptedColumnEnum.CompanySecret,
+          plaintext: JSON.stringify(login),
+        });
+        if (!encrypted.isSuccess)
+          return { isSuccess: false, message: encrypted.message, outboxIds: [] };
+        const lastFourChars = login.hostUser.slice(-4);
+
+        const existing = await this.companySecretsDal.getConnectionEvalHostLogin(tx, {
+          companyId,
+          connectionId: companyConnection.id,
+          isForUpdate: true,
+        });
+        if (!existing.isSuccess && !existing.isNotFound) {
+          return { isSuccess: false, message: existing.message, outboxIds: [] };
+        }
+        const saved = existing.companySecret
+          ? await this.companySecretsDal.updateCompanySecret(tx, {
+              companyId,
+              publicId: existing.companySecret.publicId,
+              encryptedSecret: encrypted.encryptedValue.ciphertext,
+              iv: encrypted.encryptedValue.iv,
+              encryptionKeyVersion: encrypted.encryptionKeyVersion,
+              lastFourChars,
+              expiresAt: null,
+              status: null,
+              updatedBy: params.adminId,
+            })
+          : await this.companySecretsDal.createCompanySecret(tx, {
+              companyId,
+              type: Schemas.CompanySecretTypeIntEnum.EvalHostLogin,
+              provider: null,
+              connectionId: companyConnection.id,
+              encryptedSecret: encrypted.encryptedValue.ciphertext,
+              iv: encrypted.encryptedValue.iv,
+              encryptionKeyVersion: encrypted.encryptionKeyVersion,
+              lastFourChars,
+              expiresAt: null,
+              createdBy: params.adminId,
+            });
+        if (!saved.isSuccess || !saved.companySecret) {
+          throw new TenantRollbackError(saved.message ?? "Test sign-in not saved");
+        }
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId,
+          actor: operatorAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.CompanyConnection,
+          entityAction: Schemas.AuditEntityActionEnum.TestLoginSet,
+          entity: companyConnection,
+          label: Schemas.EVAL_HOST_LOGIN_KIND_LABEL_MAP[login.kind],
+        });
+        return {
+          isSuccess: true,
+          message: "Test sign-in saved",
+          evalHostLogin: {
+            kind: login.kind,
+            kindLabel: Schemas.EVAL_HOST_LOGIN_KIND_LABEL_MAP[login.kind],
+            hostUser: login.hostUser,
+            updatedAt: saved.companySecret.updatedAt.toISOString(),
+          },
+          outboxIds: [outboxId],
+        };
+      },
+    );
+  }
+
+  // DEV_NOTE: Operator only: the Active test sign-in is Revoked (the row stays, its value unusable), with a
+  // TestLoginRemoved audit row. None to remove is a no-op success that records nothing.
+  async removeEvalHostLogin(params: {
+    companyId: string;
+    publicId: string;
+    adminId: string;
+  }): Promise<Schemas.WithOutboxIds<Schemas.GetEvalHostLoginApiResponse>> {
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.GetEvalHostLoginApiResponse>> => {
+        const { companyId } = params;
+        const connection = await this.dal.getCompanyConnectionDetails(tx, {
+          companyId,
+          publicId: params.publicId,
+          isForUpdate: true,
+        });
+        if (!connection.isSuccess || !connection.companyConnection) {
+          return {
+            isSuccess: false,
+            message: connection.message,
+            isNotFound: connection.isNotFound,
+            outboxIds: [],
+          };
+        }
+        const { companyConnection } = connection;
+        const existing = await this.companySecretsDal.getConnectionEvalHostLogin(tx, {
+          companyId,
+          connectionId: companyConnection.id,
+          isForUpdate: true,
+        });
+        if (existing.isNotFound) {
+          return {
+            isSuccess: true,
+            message: "The connection has no test sign-in",
+            evalHostLogin: null,
+            outboxIds: [],
+          };
+        }
+        if (!existing.isSuccess || !existing.companySecret) {
+          return { isSuccess: false, message: existing.message, outboxIds: [] };
+        }
+        const revoked = await this.companySecretsDal.updateCompanySecret(tx, {
+          companyId,
+          publicId: existing.companySecret.publicId,
+          encryptedSecret: null,
+          iv: null,
+          encryptionKeyVersion: null,
+          lastFourChars: null,
+          expiresAt: null,
+          status: Schemas.CompanySecretStatusIntEnum.Revoked,
+          updatedBy: params.adminId,
+        });
+        if (!revoked.isSuccess)
+          throw new TenantRollbackError(revoked.message ?? "Test sign-in not removed");
+
+        const outboxId = await recordAuditOrRollback(tx, {
+          companyId,
+          actor: operatorAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.CompanyConnection,
+          entityAction: Schemas.AuditEntityActionEnum.TestLoginRemoved,
+          entity: companyConnection,
+          label: Schemas.COMPANY_CONNECTION_ENVIRONMENT_LABEL_MAP[companyConnection.environment],
+        });
+        return {
+          isSuccess: true,
+          message: "Test sign-in removed",
+          evalHostLogin: null,
+          outboxIds: [outboxId],
+        };
+      },
+    );
   }
 }

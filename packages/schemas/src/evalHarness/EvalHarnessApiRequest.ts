@@ -42,8 +42,22 @@ export const ZCreateEvalRunByChatbotApiRequest = z
   })
   .meta({ id: "CreateEvalRunByChatbotApiRequest" });
 
+// DEV_NOTE: M7-9 (ADR 0007): the hosted runner starts a run the dashboard queued, by its public id. Its config, trigger
+// and k are the queued run's own (never the runner's); it must be Queued, on the token's connection, else NotFound /
+// NotRunning. The run then goes on exactly as one the harness created.
+export const ZStartQueuedEvalRunApiRequest = z
+  .strictObject({
+    runId: z.string().min(1).max(64),
+    harnessVersion: CREATE_EVAL_RUN_FIELDS.harnessVersion,
+  })
+  .meta({ id: "StartQueuedEvalRunApiRequest" });
+
 export const ZCreateEvalRunApiRequest = z
-  .union([ZCreateEvalRunByConfigApiRequest, ZCreateEvalRunByChatbotApiRequest])
+  .union([
+    ZCreateEvalRunByConfigApiRequest,
+    ZCreateEvalRunByChatbotApiRequest,
+    ZStartQueuedEvalRunApiRequest,
+  ])
   .meta({ id: "CreateEvalRunApiRequest" });
 export type CreateEvalRunApiRequest = z.infer<typeof ZCreateEvalRunApiRequest>;
 

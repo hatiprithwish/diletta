@@ -1,0 +1,69 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // DEV_NOTE: M7-9 (ADR 0007). The hosted eval runner: a Python Worker whose Workflow (EvalRunWorkflow) runs one run the
+  // dashboard queued, with the CLI's own code (evals/diletta_evals, vendored by pywrangler from pyproject.toml). The
+  // backend binds the Workflow by script name (its EVAL_RUN_WORKFLOW) and this Worker binds the backend's
+  // EvalRunnerEntrypoint (BACKEND) to read a run's test sign-in. Staging and production only: nothing runs locally
+  // (miniflare can't start the backend's binding to it), so `pnpm dev` here is for the Worker alone.
+  // Python Workers need wrangler >= 4.150 (this app pins its own) and a compatibility date it supports.
+  "name": "diletta-eval-runner-local",
+  "main": "src/entry.py",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["python_workers", "python_workflows"],
+  // DEV_NOTE: The Workers Free plan caps a Worker at 3 MB gzipped. The runner signs with WebCrypto (src/webcrypto_jwt.py)
+  // and never opens a socket client, so the CLI's `cryptography` (with cffi) and the load test's websockets stay out.
+  "python_modules": {
+    "exclude": [
+      "**/*.pyc",
+      "**/__pycache__",
+      "cryptography/**",
+      "cryptography-*.dist-info/**",
+      "cffi/**",
+      "cffi-*.dist-info/**",
+      "_cffi_backend*",
+      "pycparser/**",
+      "pycparser-*.dist-info/**",
+      "websockets/**",
+      "websockets-*.dist-info/**",
+    ],
+  },
+  "observability": { "logs": { "enabled": true, "invocation_logs": true } },
+  "env": {
+    "staging": {
+      "name": "diletta-eval-runner-staging",
+      "workflows": [
+        {
+          "name": "diletta-eval-run-staging",
+          "binding": "EVAL_RUN_WORKFLOW",
+          "class_name": "EvalRunWorkflow",
+        },
+      ],
+      "services": [
+        {
+          "binding": "BACKEND",
+          "service": "diletta-worker-staging",
+          "entrypoint": "EvalRunnerEntrypoint",
+        },
+      ],
+      "vars": {
+        "DILETTA_API_URL": "https://diletta-worker-staging.hatiprithwish.workers.dev",
+      },
+    },
+    "production": {
+      "name": "diletta-eval-runner-production",
+      "workflows": [
+        {
+          "name": "diletta-eval-run-production",
+          "binding": "EVAL_RUN_WORKFLOW",
+          "class_name": "EvalRunWorkflow",
+        },
+      ],
+      "services": [
+        { "binding": "BACKEND", "service": "diletta-worker", "entrypoint": "EvalRunnerEntrypoint" },
+      ],
+      "vars": {
+        "DILETTA_API_URL": "https://diletta-worker.hatiprithwish.workers.dev",
+      },
+    },
+  },
+}

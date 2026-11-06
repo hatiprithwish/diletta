@@ -96,9 +96,21 @@ const SUMMARY: Schemas.EvalRunsSummary = {
   chatbot: { publicId: "bot_1", name: "eRegister Assistant" },
   caseCount: 46,
   safetyCaseCount: 3,
-  live: { configVersion: 12, run: GATE_RUN },
-  draft: { configVersion: 13, run: DRAFT_RUN },
-  staging: { host: "staging.eregister.example" },
+  live: {
+    publicId: "cfg_12",
+    configVersion: 12,
+    chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Published,
+    chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Published,
+    run: GATE_RUN,
+  },
+  draft: {
+    publicId: "cfg_13",
+    configVersion: 13,
+    chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Testing,
+    chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Testing,
+    run: DRAFT_RUN,
+  },
+  staging: { host: "staging.eregister.example", hasTestLogin: true },
 };
 
 const OWN_CASE: Schemas.EvalCaseListItem = {
@@ -416,7 +428,7 @@ afterEach(() => {
 });
 
 describe("Tests page", () => {
-  it("shows the strip, the runs and no Run tests button (runs start with the harness)", async () => {
+  it("shows the strip and the runs", async () => {
     const fetchMock = mockApi(defaultApi);
     renderPage("/tests");
 
@@ -438,7 +450,6 @@ describe("Tests page", () => {
     expect(within(rows[3]!).getByText("Publish check")).toBeInTheDocument();
     expect(within(rows[3]!).getByText("$6.40")).toBeInTheDocument();
 
-    expect(screen.queryByRole("button", { name: /Run tests/ })).not.toBeInTheDocument();
     const runsCall = fetchMock.mock.calls.find(([url]) =>
       String(url).includes("/dashboard/eval-runs?"),
     );
@@ -746,5 +757,128 @@ describe("Test run page", () => {
     expect(
       await screen.findByText("This run isn't available. It may have been removed."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("Running tests (M7-9)", () => {
+  // DEV_NOTE: The summary's draft v13 is in testing, so Run tests runs its publish check
+  const startApi =
+    (answer: { status: number; body: unknown }) => (url: string, init?: RequestInit) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/eval-runs") && init?.method === "POST") return answer;
+      return defaultApi(url, init);
+    };
+  const started = { status: 201, body: { isSuccess: true, evalRun: { publicId: "run_new" } } };
+
+  it("runs the version in testing's publish check after confirming what it costs", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi(startApi(started));
+    renderPage("/tests");
+
+    await user.click(await screen.findByRole("button", { name: "Run tests" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Run the publish check for v13?")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/Each of the 46 cases runs 3 times \(138 conversations\)/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/If they pass, v13 is ready to publish/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Run publish check" }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      chatbotConfigId: "cfg_13",
+      trigger: Schemas.EvalRunTriggerIntEnum.Gate,
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("says why when the version's tests are already running, and keeps the dialog open", async () => {
+    const user = userEvent.setup();
+    mockApi(
+      startApi({
+        status: 409,
+        body: { isSuccess: false, failure: Schemas.EvalRunStartFailureEnum.AlreadyRunning },
+      }),
+    );
+    renderPage("/tests");
+
+    await user.click(await screen.findByRole("button", { name: "Run tests" }));
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Run publish check" }),
+    );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("This version's tests are already running."),
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps Run tests off without a test sign-in, and says so in the strip", async () => {
+    mockApi((url, init) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/eval-runs/summary")) {
+        return {
+          status: 200,
+          body: {
+            isSuccess: true,
+            summary: {
+              ...SUMMARY,
+              staging: { host: "staging.eregister.example", hasTestLogin: false },
+            },
+          },
+        };
+      }
+      return defaultApi(url, init);
+    });
+    renderPage("/tests");
+
+    expect(await screen.findByText(/No test sign-in yet/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run tests" })).toBeDisabled();
+  });
+
+  it("runs a draft's tests once each from its run page, changing nothing", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi(startApi(started));
+    renderPage("/tests/run_draft");
+
+    await user.click(await screen.findByRole("button", { name: "Run again" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Run the tests of v13?")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/Each of the 46 cases runs 1 time \(46 conversations\)/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Nothing about v13 changes/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Run tests" }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Tests started."));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      chatbotConfigId: "cfg_13",
+      trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+    });
+  });
+
+  it("shows a run still going as running, with Run tests off", async () => {
+    mockApi((url, init) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/eval-runs/summary")) {
+        const queued = {
+          ...DRAFT_RUN,
+          evalRunStatus: Schemas.EvalRunStatusIntEnum.Queued,
+          evalRunStatusLabel: Schemas.EvalRunStatusLabelEnum.Queued,
+        };
+        return {
+          status: 200,
+          body: {
+            isSuccess: true,
+            summary: { ...SUMMARY, draft: { ...SUMMARY.draft!, run: queued } },
+          },
+        };
+      }
+      return defaultApi(url, init);
+    });
+    renderPage("/tests");
+
+    expect(await screen.findByRole("button", { name: "Tests running" })).toBeDisabled();
   });
 });

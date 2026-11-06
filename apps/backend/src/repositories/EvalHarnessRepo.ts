@@ -97,16 +97,17 @@ export default class EvalHarnessRepo {
       this.db,
       companyId,
       async (tx) => {
-        const isGate = request.trigger === Schemas.EvalRunTriggerIntEnum.Gate;
-        if (isGate && request.k < Schemas.EVAL_GATE_MIN_K) {
+        const target = await this.runConfigTarget(tx, identity, request);
+        if (!target.isSuccess || !target.target || !target.trigger || !target.k) return target;
+        const { trigger, k } = target;
+        const isGate = trigger === Schemas.EvalRunTriggerIntEnum.Gate;
+        if (isGate && k < Schemas.EVAL_GATE_MIN_K) {
           return {
             isSuccess: false,
             message: `A gate run needs at least ${Schemas.EVAL_GATE_MIN_K} attempts per case`,
             failure: Schemas.EvalRunStepFailureEnum.Invalid,
           };
         }
-        const target = await this.runConfigTarget(tx, companyId, request);
-        if (!target.isSuccess || !target.target) return target;
         const config = await this.chatbotConfigsDal.getChatbotConfigDetails(tx, {
           companyId,
           ...target.target,
@@ -186,15 +187,23 @@ export default class EvalHarnessRepo {
           };
         }
 
-        const created = await this.evalRunsDal.createEvalRun(tx, {
-          companyId,
-          chatbotConfigId: chatbotConfig.id,
-          companyConnectionId: identity.connectionId,
-          evalCaseIds,
-          trigger: request.trigger,
-          harnessVersion: request.harnessVersion,
-          k: request.k,
-        });
+        // DEV_NOTE: A queued run (M7-9) becomes Running with its case set; any other request creates the run
+        const created = target.queuedRunId
+          ? await this.evalRunsDal.startQueuedEvalRun(tx, {
+              companyId,
+              id: target.queuedRunId,
+              evalCaseIds,
+              harnessVersion: request.harnessVersion,
+            })
+          : await this.evalRunsDal.createEvalRun(tx, {
+              companyId,
+              chatbotConfigId: chatbotConfig.id,
+              companyConnectionId: identity.connectionId,
+              evalCaseIds,
+              trigger,
+              harnessVersion: request.harnessVersion,
+              k,
+            });
         if (!created.isSuccess || !created.evalRun) return this.stepFailure(false, created.message);
         const { evalRun } = created;
         return {
@@ -820,19 +829,51 @@ export default class EvalHarnessRepo {
     return result;
   }
 
-  // DEV_NOTE: Which config a run starts on: the one the request names, or (by chatbot, M5-5) the chatbot's published
-  // config at this moment, by internal id. A chatbot with no published config is NoPublishedConfig; one that isn't the
-  // company's is NotFound.
+  // DEV_NOTE: Which config a run starts on, with its trigger and k: the one the request names, or (by chatbot, M5-5) the
+  // chatbot's published config at this moment, by internal id, or (M7-9) a queued run's own config, trigger and k (the
+  // run locked: Queued, on the token's connection). A chatbot with no published config is NoPublishedConfig; one that
+  // isn't the company's is NotFound, and so is a queued run of another connection.
   private async runConfigTarget(
     tx: Tx,
-    companyId: string,
+    identity: Schemas.EvalIdentity,
     request: Schemas.CreateEvalRunApiRequest,
   ): Promise<Schemas.EvalRunConfigTargetResponse> {
+    const { companyId } = identity;
+    if ("runId" in request) {
+      const found = await this.evalRunsDal.getEvalRun(tx, {
+        companyId,
+        publicId: request.runId,
+        isLocked: true,
+      });
+      if (!found.isSuccess || !found.evalRun)
+        return this.stepFailure(found.isNotFound, found.message);
+      const { evalRun } = found;
+      if (evalRun.companyConnectionId !== identity.connectionId) {
+        return this.stepFailure(true, "Eval run is another connection's");
+      }
+      if (evalRun.status !== Schemas.EvalRunStatusIntEnum.Queued) {
+        return {
+          isSuccess: false,
+          message: "Eval run is not queued",
+          failure: Schemas.EvalRunStepFailureEnum.NotRunning,
+        };
+      }
+      return {
+        isSuccess: true,
+        message: "Queued run found",
+        target: { id: evalRun.chatbotConfigId },
+        trigger: evalRun.trigger,
+        k: evalRun.k,
+        queuedRunId: evalRun.id,
+      };
+    }
     if ("chatbotConfigId" in request) {
       return {
         isSuccess: true,
         message: "Config named",
         target: { publicId: request.chatbotConfigId },
+        trigger: request.trigger,
+        k: request.k,
       };
     }
     const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
@@ -859,6 +900,8 @@ export default class EvalHarnessRepo {
       isSuccess: true,
       message: "Published config found",
       target: { id: published.chatbotConfig.id },
+      trigger: request.trigger,
+      k: request.k,
     };
   }
 

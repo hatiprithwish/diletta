@@ -16,6 +16,7 @@ import {
   EvalRunStatusIntEnum,
   EvalRunStatusLabelEnum,
   type EvalRun,
+  type EvalRunTriggerIntEnum,
 } from "../evalRuns/EvalRunsCommon";
 import type { DashboardEvalRunRow } from "../evalRuns/EvalRunsDALResponse";
 import { ModelProviderEnum } from "../companySecrets/CompanySecretsCommon";
@@ -254,8 +255,12 @@ export interface EvalRunChatbotResponse extends EvalRunStepResponse {
 
 // DEV_NOTE: The config a run starts on (M5-5): by the public id the request named, or by the internal id of the chatbot's
 // published config
+// DEV_NOTE: queuedRunId (M7-9) = the Queued run (internal id) the request starts, locked; its trigger and k win
 export interface EvalRunConfigTargetResponse extends EvalRunStepResponse {
   target?: ChatbotConfigLookup;
+  trigger?: EvalRunTriggerIntEnum;
+  k?: number;
+  queuedRunId?: string;
 }
 
 export interface EvalRunConversationResponse extends EvalRunStepResponse {

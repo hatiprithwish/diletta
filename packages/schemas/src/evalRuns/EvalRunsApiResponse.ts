@@ -49,22 +49,27 @@ export interface GetEvalRunApiResponse extends ApiResponse {
 
 // DEV_NOTE: A config's latest test result for the metric strip: the live one's gate run (approved_by_run_id), else its
 // newest run; a draft's newest run. run null = never tested.
+// publicId and status (M7-9): what the Run gate / Run tests buttons start a run of
 export interface EvalRunsSummaryConfig {
+  publicId: string;
   configVersion: number;
+  chatbotConfigStatus: ChatbotConfigStatusIntEnum;
+  chatbotConfigStatusLabel: ChatbotConfigStatusLabelEnum;
   run: EvalRunListItem | null;
 }
 
 // DEV_NOTE: GET /dashboard/eval-runs/summary. chatbot = the one shown (botId's, else the default; null = the company has
 // none). Case counts are the active cases that run against it: its own and the platform's. live null = nothing
 // published; draft null = no config being worked on. staging = the host the tests run against (an active staging
-// connection's base URL host); null = none set up.
+// connection's base URL host); null = none set up. hasTestLogin (M7-9) = that connection has a test sign-in, so the
+// dashboard can run tests on the hosted runner; activeRun = a run of the shown version still Queued or Running.
 export interface EvalRunsSummary {
   chatbot: { publicId: string; name: string } | null;
   caseCount: number;
   safetyCaseCount: number;
   live: EvalRunsSummaryConfig | null;
   draft: EvalRunsSummaryConfig | null;
-  staging: { host: string } | null;
+  staging: { host: string; hasTestLogin: boolean } | null;
 }
 
 export interface GetEvalRunsSummaryApiResponse extends ApiResponse {

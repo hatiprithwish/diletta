@@ -4,6 +4,7 @@ import time
 
 import httpx
 import pytest
+from blocking import Blocking
 
 from diletta_evals import config
 from diletta_evals.constants import TEST_HOST_ADMIN_HEADER
@@ -14,15 +15,15 @@ from diletta_evals.hosts.base import HostLoginError
 SETTINGS = config.TestHostSettings(issuer="https://test-host.example", admin_secret="admin-secret")
 
 
-def login_for(handle) -> tuple[testhost.TestHostLogin, list[httpx.Request]]:
+def login_for(handle) -> tuple[Blocking, list[httpx.Request]]:
     sent: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return handle(request)
 
-    http = httpx.Client(transport=httpx.MockTransport(record))
-    return testhost.TestHostLogin(SETTINGS, user="eval-user", http=http), sent
+    http = httpx.AsyncClient(transport=httpx.MockTransport(record))
+    return Blocking(testhost.TestHostLogin(SETTINGS, user="eval-user", http=http)), sent
 
 
 def minted(expires_in: int):

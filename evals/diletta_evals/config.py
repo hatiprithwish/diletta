@@ -8,10 +8,6 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 
-from cryptography.hazmat.primitives.asymmetric import ec
-from jwt.algorithms import ECAlgorithm
-from jwt.exceptions import InvalidKeyError
-
 
 class ConfigError(Exception):
     """A setting is missing or unreadable."""
@@ -69,12 +65,27 @@ def required_setting(name: str) -> str:
 
 def load_private_jwk() -> dict[str, object]:
     """EVAL_JWT_PRIVATE_KEY, checked: a private P-256 JWK with a kid (the worker verifies ES256 only)."""
+    return load_private_jwk_from(_required("EVAL_JWT_PRIVATE_KEY"))
+
+
+def load_private_jwk_from(raw: str, *, is_curve_checked: bool = True) -> dict[str, object]:
+    """The eval key from its JSON (the CLI's environment, or the hosted runner's Worker secret), checked as above.
+    is_curve_checked=False skips the P-256 check (it needs `cryptography`, which the hosted runner doesn't bundle:
+    its WebCrypto import refuses any other key)."""
+    if not raw.strip():
+        raise ConfigError("EVAL_JWT_PRIVATE_KEY is not set")
     try:
-        private_jwk = json.loads(_required("EVAL_JWT_PRIVATE_KEY"))
+        private_jwk = json.loads(raw)
     except json.JSONDecodeError as error:
         raise ConfigError("EVAL_JWT_PRIVATE_KEY is not a JWK (JSON)") from error
     if not isinstance(private_jwk, dict) or not private_jwk.get("kid") or "d" not in private_jwk:
         raise ConfigError("EVAL_JWT_PRIVATE_KEY must be a private JWK with a kid")
+    if not is_curve_checked:
+        return private_jwk
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from jwt.algorithms import ECAlgorithm
+    from jwt.exceptions import InvalidKeyError
+
     # DEV_NOTE: The worker verifies ES256 only: the key must be a P-256 private key, checked here, not at the first call
     try:
         key = ECAlgorithm.from_jwk(json.dumps(private_jwk))

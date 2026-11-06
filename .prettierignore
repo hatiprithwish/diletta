@@ -8,3 +8,6 @@ docs/design/pages
 evals/schemas
 evals/fixtures
 evals/.venv
+apps/eval-runner/python_modules
+apps/eval-runner/.venv-workers
+apps/eval-runner/.venv

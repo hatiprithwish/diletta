@@ -1,5 +1,6 @@
 import type { ToolDefinitionFailureEnum, ToolDefinitionWithStatus } from "./ToolDefinitionsCommon";
 import type { ToolOps } from "./ToolOpsRegistry";
+import type { ToolSetChangeEnum } from "./ToolSets";
 import type { ApiResponse, TotalRecordsResponse } from "../common";
 
 // DEV_NOTE: failure is set (with isSuccess false) when the request was refused for the tool's state or references;
@@ -32,6 +33,18 @@ export type CreateToolDefinitionVersionApiResponse = ToolDefinitionMutationRespo
 export type SetToolDefinitionStatusApiResponse = ToolDefinitionMutationResponse;
 
 export type DeleteToolDefinitionApiResponse = ToolDefinitionStateResponse;
+
+// DEV_NOTE: M7-8. One tool of a loaded set: the version a bot config pins, and what the load did to it
+export interface ToolSetTool {
+  name: string;
+  version: number;
+  change: ToolSetChangeEnum;
+}
+
+// DEV_NOTE: Every tool of the set, in the set's order; nothing is stored when the load is refused
+export interface LoadToolSetApiResponse extends ToolDefinitionStateResponse {
+  tools?: ToolSetTool[];
+}
 
 // DEV_NOTE: Server-side only (ToolDefinitionsRepo steps, never a route response): a connection that can serve tool
 // calls, or the refusal to answer with

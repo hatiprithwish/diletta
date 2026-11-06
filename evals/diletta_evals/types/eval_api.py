@@ -39,6 +39,14 @@ class CreateEvalRunByChatbotApiRequest(BaseModel):
     trigger: Trigger1
 
 
+class StartQueuedEvalRunApiRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    runId: Annotated[str, Field(max_length=64, min_length=1)]
+    harnessVersion: Annotated[str, Field(max_length=64, min_length=1)]
+
+
 class EvalHarnessRun(BaseModel):
     publicId: Annotated[str, Field(min_length=1)]
     k: Annotated[int, Field(ge=1, le=10)]
@@ -247,6 +255,7 @@ class EvalRunFailure(Enum):
     number_2 = 2
     number_3 = 3
     number_4 = 4
+    number_5 = 5
 
 
 class Status1(Enum):
@@ -299,9 +308,17 @@ class EvalRefusalApiResponse(BaseModel):
 
 
 class CreateEvalRunApiRequest(
-    RootModel[CreateEvalRunByConfigApiRequest | CreateEvalRunByChatbotApiRequest]
+    RootModel[
+        CreateEvalRunByConfigApiRequest
+        | CreateEvalRunByChatbotApiRequest
+        | StartQueuedEvalRunApiRequest
+    ]
 ):
-    root: CreateEvalRunByConfigApiRequest | CreateEvalRunByChatbotApiRequest
+    root: (
+        CreateEvalRunByConfigApiRequest
+        | CreateEvalRunByChatbotApiRequest
+        | StartQueuedEvalRunApiRequest
+    )
 
 
 class ToolCall(BaseModel):

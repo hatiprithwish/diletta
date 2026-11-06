@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Check, DotsThree, FileText, Plus, X } from "@phosphor-icons/react";
+import { ArrowClockwise, Check, DotsThree, FileText, Play, Plus, X } from "@phosphor-icons/react";
 import * as Schemas from "@app/schemas";
 import { Button } from "@app/ui/components/button";
 import { Card } from "@app/ui/components/card";
@@ -46,6 +46,7 @@ import { ApiError } from "@/providers/apiClient";
 import Utilities from "@/utils";
 import {
   useCreateTestCase,
+  useStartTestRun,
   useTestCase,
   useTestCases,
   useTestRun,
@@ -186,6 +187,104 @@ function configNote(run: Schemas.EvalRunListItem): {
   };
 }
 
+// ─── Run tests (M7-9, ADR 0007)
+
+// DEV_NOTE: How a version is run from the dashboard: a version in testing gets its publish check (the gate: k from
+// DASHBOARD_EVAL_RUN_K, its result makes it ready or a draft again); any other version a quick run that changes nothing
+function testRunTarget(
+  config: Pick<Schemas.EvalRunsSummaryConfig, "publicId" | "configVersion" | "chatbotConfigStatus">,
+  caseCount: number | null,
+): Schemas.DashboardTestRunTarget {
+  return {
+    chatbotConfigPublicId: config.publicId,
+    configVersion: config.configVersion,
+    trigger:
+      config.chatbotConfigStatus === Schemas.ChatbotConfigStatusIntEnum.Testing
+        ? Schemas.EvalRunTriggerIntEnum.Gate
+        : Schemas.EvalRunTriggerIntEnum.Manual,
+    caseCount,
+  };
+}
+
+const isRunGoing = (run: Pick<Schemas.EvalRunListItem, "evalRunStatus"> | null | undefined) =>
+  run?.evalRunStatus === Queued || run?.evalRunStatus === Running;
+
+// DEV_NOTE: Disabled while there's nothing to run, no test sign-in (the strip says so) or a run of the version going
+function RunTestsButton({
+  target,
+  isRunning,
+  hasTestLogin,
+  label,
+  variant,
+}: Schemas.DashboardRunTestsButtonProps) {
+  const [isConfirming, setIsConfirming] = useState(false);
+  const isDisabled = target === null || !hasTestLogin || isRunning;
+  return (
+    <>
+      <Button variant={variant} disabled={isDisabled} onClick={() => setIsConfirming(true)}>
+        {variant === "default" ? <Play aria-hidden /> : <ArrowClockwise aria-hidden />}
+        {isRunning ? "Tests running" : label}
+      </Button>
+      {target && (
+        <RunTestsDialog
+          isOpen={isConfirming}
+          onClose={() => setIsConfirming(false)}
+          target={target}
+        />
+      )}
+    </>
+  );
+}
+
+function RunTestsDialog({ isOpen, onClose, target }: Schemas.DashboardRunTestsDialogProps) {
+  const start = useStartTestRun();
+  const isGate = target.trigger === Schemas.EvalRunTriggerIntEnum.Gate;
+  const k = Schemas.DASHBOARD_EVAL_RUN_K[target.trigger];
+  const version = `v${target.configVersion}`;
+  const cases =
+    target.caseCount === null
+      ? `Each case runs ${Utilities.plural(k, "time")}`
+      : `Each of the ${Utilities.formatCount(target.caseCount)} cases runs ${Utilities.plural(k, "time")} (${Utilities.plural(target.caseCount * k, "conversation")})`;
+
+  const onRun = async () => {
+    try {
+      await start.mutateAsync({
+        chatbotConfigId: target.chatbotConfigPublicId,
+        trigger: target.trigger,
+      });
+      onClose();
+    } catch {
+      // DEV_NOTE: useStartTestRun's onError says why; the dialog stays open to try again or cancel
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {isGate ? `Run the publish check for ${version}?` : `Run the tests of ${version}?`}
+          </DialogTitle>
+          <DialogDescription>
+            {cases} against your staging environment, on your model key.{" "}
+            {isGate
+              ? `If they pass, ${version} is ready to publish. If not, it goes back to draft.`
+              : `Nothing about ${version} changes.`}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => void onRun()} disabled={start.isPending}>
+            {isGate ? "Run publish check" : "Run tests"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // DEV_NOTE: Keys for rows with no id (grader checks, transcript entries): the row's text plus how many times that text
 // came before, so repeats ("Yes.") stay unique. Both lists are fixed once written, so the keys never move.
 function contentKeys<T>(items: T[], textOf: (item: T) => string): string[] {
@@ -212,10 +311,13 @@ function EmptyBox({ text }: Schemas.DashboardTestsEmptyProps) {
   );
 }
 
-// DEV_NOTE: The whole /tests body (DESIGN.md dashboard-Tests): header with New case, the metric strip, then Runs or
-// Cases. Running tests comes with the harness (M5-2), so there is no Run tests button yet.
+// DEV_NOTE: The whole /tests body (DESIGN.md dashboard-Tests): header with New case and Run tests (M7-9), the metric
+// strip, then Runs or Cases
 export function TestsPage({ search }: Schemas.DashboardTestsPageProps) {
   const navigate = useNavigate();
+  const summary = useTestsSummary().data?.summary;
+  // DEV_NOTE: Run tests runs the version being worked on, else the live one
+  const runConfig = summary?.draft ?? summary?.live ?? null;
   const tab = search.tab ?? Runs;
   const page = search.page ?? 1;
   const [isCreating, setIsCreating] = useState(false);
@@ -236,6 +338,13 @@ export function TestsPage({ search }: Schemas.DashboardTestsPageProps) {
           <Plus aria-hidden />
           New case
         </Button>
+        <RunTestsButton
+          target={runConfig ? testRunTarget(runConfig, summary?.caseCount ?? null) : null}
+          isRunning={isRunGoing(runConfig?.run)}
+          hasTestLogin={summary?.staging?.hasTestLogin ?? false}
+          label="Run tests"
+          variant="default"
+        />
       </PageHeader>
 
       <TestsSummary />
@@ -309,8 +418,15 @@ function TestsSummaryStrip({ summary }: Schemas.DashboardTestsSummaryProps) {
       />
       {configCell("Live", summary.live, "Nothing published yet")}
       {configCell("Draft", summary.draft, "No draft in progress")}
-      {summary.staging ? (
+      {summary.staging?.hasTestLogin ? (
         <MetricCell label="Runs on" value="Staging" note={summary.staging.host} />
+      ) : summary.staging ? (
+        <MetricCell
+          label="Runs on"
+          value="Staging"
+          note="No test sign-in yet: ask Diletta to set one up"
+          noteTone={Schemas.DashboardToneEnum.Negative}
+        />
       ) : (
         <MetricCell
           label="Runs on"
@@ -657,6 +773,7 @@ function TestCaseEditForm({ evalCase, onClose }: Schemas.DashboardTestCaseEditFo
 export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPageProps) {
   const navigate = useNavigate();
   const query = useTestRun(publicId);
+  const summaryQuery = useTestsSummary();
   const evalRun = query.data?.evalRun;
   const isNotFound = query.error instanceof ApiError && query.error.status === 404;
 
@@ -682,6 +799,7 @@ export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPagePr
   }
 
   const chatbot = evalRun.config.chatbotName ? `${evalRun.config.chatbotName} ` : "";
+  const hasTestLogin = summaryQuery.data?.summary?.staging?.hasTestLogin ?? false;
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -691,6 +809,13 @@ export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPagePr
         <Button variant="outline" asChild>
           <Link to="/tests">All runs</Link>
         </Button>
+        <RunTestsButton
+          target={testRunTarget(evalRun.config, evalRun.caseCount)}
+          isRunning={isRunGoing(evalRun)}
+          hasTestLogin={hasTestLogin}
+          label="Run again"
+          variant="outline"
+        />
       </PageHeader>
 
       <MetricStrip>
@@ -741,7 +866,8 @@ export function TestRunPage({ publicId, search }: Schemas.DashboardTestRunPagePr
 
 function TestRunCases({ publicId, search, onPage }: Schemas.DashboardTestRunCasesProps) {
   const page = search.page ?? 1;
-  const query = useTestRunCases(publicId, page);
+  const isRunning = isRunGoing(useTestRun(publicId).data?.evalRun);
+  const query = useTestRunCases(publicId, page, isRunning);
   const cases = query.data?.cases;
 
   if (query.isPending) return <Skeleton className="h-48 rounded-xl" aria-label="Loading" />;

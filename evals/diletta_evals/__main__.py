@@ -27,7 +27,7 @@ from diletta_evals.config import ConfigError, load_config
 from diletta_evals.eval_jwt import generate_key_pair
 from diletta_evals.hosts import host_login_for
 from diletta_evals.load.constants import TARGET_CONCURRENT_CHATS
-from diletta_evals.runner import ChatbotTarget, ConfigTarget, EvalRunner
+from diletta_evals.runner import ChatbotTarget, ConfigTarget, EvalRunner, RunSummary
 from diletta_evals.types import eval_api
 
 EXIT_PASSED = 0
@@ -51,18 +51,22 @@ def _run(args: argparse.Namespace) -> int:
     except ConfigError as error:
         sys.stderr.write(f"{error}\n")
         return EXIT_COULD_NOT_RUN
-    with httpx.Client() as http:
-        try:
+    target = ChatbotTarget(chatbot_id=args.chatbot) if args.chatbot else ConfigTarget(config_id=args.config)
+
+    async def run() -> RunSummary:
+        async with httpx.AsyncClient() as http:
             runner = EvalRunner(EvalApiClient(config, http), host_login_for(config, http))
-            target = ChatbotTarget(chatbot_id=args.chatbot) if args.chatbot else ConfigTarget(config_id=args.config)
-            summary = runner.run(
+            return await runner.run(
                 target=target, k=args.k, trigger=TRIGGERS[args.trigger], require_tool_cases=args.require_tool_cases
             )
-        except Exception as error:
-            # DEV_NOTE: Every error that stops a run is "couldn't run" (CI must never read it as a regression); the
-            # expected ones (settings, backend, host) say why, anything else names its type
-            sys.stderr.write(f"The run couldn't finish: {type(error).__name__}: {error}\n")
-            return EXIT_COULD_NOT_RUN
+
+    try:
+        summary = asyncio.run(run())
+    except Exception as error:
+        # DEV_NOTE: Every error that stops a run is "couldn't run" (CI must never read it as a regression); the
+        # expected ones (settings, backend, host) say why, anything else names its type
+        sys.stderr.write(f"The run couldn't finish: {type(error).__name__}: {error}\n")
+        return EXIT_COULD_NOT_RUN
     return EXIT_PASSED if summary.has_passed else EXIT_FAILED
 
 

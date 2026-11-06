@@ -322,6 +322,37 @@ describe("Settings › Bots › version", () => {
     expect(toast.success).toHaveBeenCalledWith("Draft saved.");
   });
 
+  it("turns every tool on or off with Select all", async () => {
+    const tool = (name: string, version: number) => ({ ...OPTIONS.tools[0]!, name, version });
+    const options = {
+      ...OPTIONS,
+      tools: [tool("get_record", 1), tool("update_record", 1), tool("update_record", 2)],
+    };
+    const fetchMock = mockApi((url) =>
+      url.endsWith("/config-options") ? { status: 200, body: { isSuccess: true, options } } : null,
+    );
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+
+    const all = await screen.findByRole("checkbox", { name: "Select all" });
+    expect(all).toHaveAttribute("aria-checked", "mixed");
+    await userEvent.click(all);
+    expect(all).toBeChecked();
+    await userEvent.click(all);
+    expect(all).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /get_record/ })).not.toBeChecked();
+    await userEvent.click(all);
+    expect(all).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Save draft" }));
+
+    await waitFor(() => expect(calls(fetchMock, "PUT", "/configs/cfg_13")).toHaveLength(1));
+    const [, init] = calls(fetchMock, "PUT", "/configs/cfg_13")[0]!;
+    const { body } = JSON.parse(String(init?.body)) as { body: Schemas.ConfigSpecBody };
+    expect(body.tools).toEqual([
+      { name: "get_record", version: 1 },
+      { name: "update_record", version: 2 },
+    ]);
+  });
+
   it("warns that publishing needs a model key, and shows the send to testing refusal", async () => {
     mockApi();
     renderPage("/settings/bots/bot_1/versions/cfg_13");

@@ -167,6 +167,13 @@ const COUNTS: Schemas.CompanyStatusCounts = {
   [Schemas.CompanyStatusIntEnum.Churned]: 1,
 };
 
+const TEST_LOGIN: Schemas.EvalHostLoginSummary = {
+  kind: Schemas.EvalHostLoginKindEnum.Eregister,
+  kindLabel: Schemas.EvalHostLoginKindLabelEnum.Eregister,
+  hostUser: "uid-eval",
+  updatedAt: "2026-11-05T09:00:00.000Z",
+};
+
 type Handler = (url: string, init?: RequestInit) => { status: number; body: unknown } | null;
 
 function mockApi(handler: Handler = () => null) {
@@ -216,6 +223,9 @@ function defaultApi(url: string, init: RequestInit | undefined): { status: numbe
   }
   if (path.endsWith("/operator/companies/cmp_1/connections") && method === "POST") {
     return { status: 201, body: { isSuccess: true, companyConnection: PRODUCTION } };
+  }
+  if (path.endsWith("/connections/con_stg/eval-login") && method === "GET") {
+    return { status: 200, body: { isSuccess: true, evalHostLogin: null } };
   }
   if (path.endsWith("/operator/companies/cmp_1/connections/con_stg")) {
     return { status: 200, body: { isSuccess: true, companyConnection: STAGING } };
@@ -637,6 +647,81 @@ describe("Connections", () => {
       },
     });
   });
+
+  it("shows a staging connection's test sign-in on its card, never a secret", async () => {
+    mockApi((url, init) =>
+      url.endsWith("/eval-login") && (init?.method ?? "GET") === "GET"
+        ? { status: 200, body: { isSuccess: true, evalHostLogin: TEST_LOGIN } }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1");
+
+    const staging = await screen.findByRole("group", { name: "Staging connection" });
+    expect(await within(staging).findByText("uid-eval")).toBeInTheDocument();
+    expect(within(staging).getByText(/eRegister as/)).toBeInTheDocument();
+    const production = screen.getByRole("group", { name: "Production connection" });
+    expect(within(production).queryByText("Test sign-in")).not.toBeInTheDocument();
+  });
+
+  it("sets a staging connection's test sign-in, then clears the secrets it never reads back", async () => {
+    const fetchMock = mockApi((url, init) =>
+      url.endsWith("/eval-login") && init?.method === "PUT"
+        ? { status: 200, body: { isSuccess: true, evalHostLogin: TEST_LOGIN } }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1/connections/con_stg");
+
+    const section = await screen.findByRole("region", { name: "Test sign-in" });
+    expect(
+      await within(section).findByText("None. Admins can't run tests yet."),
+    ).toBeInTheDocument();
+    await userEvent.type(within(section).getByLabelText("Test user"), "uid-eval");
+    await userEvent.type(within(section).getByLabelText("Email"), "eval@example.com");
+    await userEvent.type(within(section).getByLabelText("Password"), "secret-pw");
+    await userEvent.type(within(section).getByLabelText("Firebase web API key"), "web-key");
+    await userEvent.click(within(section).getByRole("button", { name: "Save test sign-in" }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Test sign-in saved."));
+    const [[, init]] = calls(fetchMock, "PUT", "/connections/con_stg/eval-login");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      evalHostLogin: {
+        kind: Schemas.EvalHostLoginKindEnum.Eregister,
+        hostUser: "uid-eval",
+        firebaseApiKey: "web-key",
+        email: "eval@example.com",
+        password: "secret-pw",
+      },
+    });
+    expect(await within(section).findByText("uid-eval")).toBeInTheDocument();
+    expect(within(section).getByLabelText("Password")).toHaveValue("");
+    expect(within(section).getByLabelText("Firebase web API key")).toHaveValue("");
+    expect(
+      within(section).getByRole("button", { name: "Replace test sign-in" }),
+    ).toBeInTheDocument();
+  });
+
+  it("refuses an email that isn't one before sending, and removes a sign-in", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (!url.endsWith("/eval-login")) return null;
+      if (init?.method === "DELETE") {
+        return { status: 200, body: { isSuccess: true, evalHostLogin: null } };
+      }
+      return { status: 200, body: { isSuccess: true, evalHostLogin: TEST_LOGIN } };
+    });
+    renderPage("/operator/companies/cmp_1/connections/con_stg");
+
+    const section = await screen.findByRole("region", { name: "Test sign-in" });
+    await userEvent.type(within(section).getByLabelText("Email"), "not-an-email");
+    await userEvent.click(within(section).getByRole("button", { name: "Replace test sign-in" }));
+    expect(calls(fetchMock, "PUT", "/eval-login")).toHaveLength(0);
+
+    await userEvent.click(within(section).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Test sign-in removed."));
+    expect(calls(fetchMock, "DELETE", "/connections/con_stg/eval-login")).toHaveLength(1);
+    expect(
+      await within(section).findByText("None. Admins can't run tests yet."),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("Tools", () => {
@@ -724,6 +809,65 @@ describe("Tools", () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe("/operator/companies/cmp_1/tools/tool_2"),
     );
+  });
+
+  it("loads a tool set onto the chosen connection and shows what changed and the pins", async () => {
+    const tools: Schemas.ToolSetTool[] = [
+      { name: "eregister_list_companies", version: 1, change: Schemas.ToolSetChangeEnum.Created },
+      { name: "eregister_get_register", version: 2, change: Schemas.ToolSetChangeEnum.Unchanged },
+    ];
+    const fetchMock = mockApi((url, init) =>
+      init?.method === "POST" && url.endsWith("/tool-definitions/tool-sets")
+        ? { status: 200, body: { isSuccess: true, tools } }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1?tab=tools");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Load tool set" }));
+    expect(screen.getByRole("button", { name: "Load tools" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("combobox", { name: "Connection" }));
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Production · https://api.eregister.example/v1" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Load tools" }));
+
+    expect(await screen.findByText("Tools loaded")).toBeInTheDocument();
+    const [[, init]] = calls(fetchMock, "POST", "/tool-definitions/tool-sets");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      toolSet: Schemas.ToolSetEnum.Eregister,
+      connectionPublicId: "con_prd",
+    });
+    expect(screen.getByText(/2 tools: 1 new, 1 unchanged/)).toBeInTheDocument();
+    expect(JSON.parse((screen.getByLabelText("Pins") as HTMLTextAreaElement).value)).toEqual([
+      { name: "eregister_list_companies", version: 1 },
+      { name: "eregister_get_register", version: 2 },
+    ]);
+  });
+
+  it("names the tools whose drafts refuse a tool set load", async () => {
+    const message =
+      "These tools have a draft version; make it active or delete it first: eregister_get_register";
+    mockApi((url, init) =>
+      init?.method === "POST" && url.endsWith("/tool-definitions/tool-sets")
+        ? {
+            status: 409,
+            body: {
+              isSuccess: false,
+              message,
+              failure: Schemas.ToolDefinitionFailureEnum.DraftExists,
+            },
+          }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1?tab=tools");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Load tool set" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Connection" }));
+    await userEvent.click(await screen.findByRole("option", { name: /^Staging/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Load tools" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
+    expect(screen.queryByText("Tools loaded")).not.toBeInTheDocument();
   });
 
   it("says why a version can't be disabled", async () => {

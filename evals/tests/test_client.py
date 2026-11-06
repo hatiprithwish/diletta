@@ -6,6 +6,7 @@ import json
 import httpx
 import jwt
 import pytest
+from blocking import Blocking
 
 from diletta_evals.client import RETRIES, EvalApiClient, EvalApiError
 from diletta_evals.config import HarnessConfig, HostKind
@@ -29,7 +30,11 @@ RESULT = eval_api.RecordEvalResultApiRequest.model_validate(
 )
 
 
-def client_for(answers: list[httpx.Response | Exception]) -> tuple[EvalApiClient, list[httpx.Request]]:
+async def no_sleep(_seconds: float) -> None:
+    return None
+
+
+def client_for(answers: list[httpx.Response | Exception]) -> tuple[Blocking, list[httpx.Request]]:
     sent: list[httpx.Request] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -39,8 +44,8 @@ def client_for(answers: list[httpx.Response | Exception]) -> tuple[EvalApiClient
             raise answer
         return answer
 
-    http = httpx.Client(transport=httpx.MockTransport(handle))
-    return EvalApiClient(CONFIG, http, sleep=lambda _seconds: None), sent
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    return Blocking(EvalApiClient(CONFIG, http, sleep=no_sleep)), sent
 
 
 def refusal(status: int, failure: str) -> httpx.Response:

@@ -6,7 +6,11 @@ import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import AppLogger from "@/providers/logger";
-import { operatorAuditActor, recordAuditOrRollback } from "@/repositories/audit";
+import {
+  operatorAuditActor,
+  recordAuditOrRollback,
+  recordAuditsOrRollback,
+} from "@/repositories/audit";
 import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
@@ -624,6 +628,176 @@ export default class ToolDefinitionsRepo {
             ? Schemas.AuditEntityActionEnum.Activated
             : Schemas.AuditEntityActionEnum.Disabled,
         );
+      },
+    );
+  }
+
+  // DEV_NOTE: M7-8. Loads a tool set (Schemas.TOOL_SETS) onto one of the company's connections in one transaction, the
+  // way the eregister:tools script does, but through the DAL and audited as the operator. Every name is locked and
+  // read first (one statement each); a set tool that doesn't fit its own risk, or any name with a Draft (an operator
+  // is editing it), refuses the whole load before anything is written. Then each tool ends Active at its newest
+  // version: unchanged, made Active again, or a new version (Created / VersionCreated, then Activated audit rows).
+  // Older Active versions stay Active, so a bot version pinned to one keeps it. The writes and audit rows go in
+  // batches (a few statements for the whole set, not a few per tool); one that fails rolls everything back.
+  async loadToolSet(
+    params: Schemas.LoadToolSetApiRequest & { companyId: string; adminId: string },
+  ): Promise<Schemas.WithOutboxIds<Schemas.LoadToolSetApiResponse>> {
+    const planned: {
+      tool: Schemas.ToolDefinitionSeed;
+      ops: Schemas.ToolOps;
+      schemaVersion: number;
+    }[] = [];
+    for (const tool of Schemas.TOOL_SETS[params.toolSet]) {
+      const ops = this.normalizeOps(tool, tool.ops);
+      if (!ops.isSuccess) {
+        return this.refuse(
+          Schemas.ToolDefinitionFailureEnum.InvalidOps,
+          `${tool.name}: ${ops.response.message ?? "Invalid tool ops"}`,
+        );
+      }
+      planned.push({ tool, ops: ops.ops, schemaVersion: ops.schemaVersion });
+    }
+
+    return await withTenant(
+      this.db,
+      params.companyId,
+      async (tx): Promise<Schemas.WithOutboxIds<Schemas.LoadToolSetApiResponse>> => {
+        const connection = await this.resolveConnection(tx, {
+          companyId: params.companyId,
+          connectionPublicId: params.connectionPublicId,
+        });
+        if (!connection.isSuccess) return connection.response;
+
+        const nameParams = {
+          companyId: params.companyId,
+          names: planned.map(({ tool }) => tool.name),
+        };
+        const locked = await this.dal.lockToolDefinitionNames(tx, nameParams);
+        if (!locked.isSuccess) return locked;
+        const latestRows = await this.dal.getLatestToolDefinitions(tx, nameParams);
+        if (!latestRows.isSuccess || !latestRows.toolDefinitions) {
+          return { isSuccess: false, message: latestRows.message };
+        }
+        const latestByName = new Map(latestRows.toolDefinitions.map((row) => [row.name, row]));
+        // DEV_NOTE: A Draft is always a name's highest version: a new version starts at the highest + 1 and is refused
+        // while a Draft exists, so the latest row tells whether one does
+        const drafts = latestRows.toolDefinitions
+          .filter((row) => row.status === Schemas.ToolDefinitionStatusIntEnum.Draft)
+          .map((row) => row.name);
+        if (drafts.length > 0) {
+          return this.refuse(
+            Schemas.ToolDefinitionFailureEnum.DraftExists,
+            `These tools have a draft version; make it active or delete it first: ${drafts.join(", ")}`,
+          );
+        }
+        // DEV_NOTE: Decide each tool against its newest version, then write in batches: new versions inserted Active,
+        // Disabled ones made Active, and every audit row, each in one statement
+        const tools: Schemas.ToolSetTool[] = [];
+        const newVersions: Schemas.CreateToolDefinitionsDALRequest["toolDefinitions"] = [];
+        const reactivate: string[] = [];
+        for (const { tool, ops, schemaVersion } of planned) {
+          const latest = latestByName.get(tool.name);
+          const content = {
+            connectionId: connection.connectionId,
+            description: tool.description,
+            risk: tool.risk,
+            idempotencyMode: tool.idempotencyMode,
+            approval: tool.approval,
+            source: tool.source,
+            ...this.toOpsColumns(ops, schemaVersion),
+          };
+          const isSame =
+            latest !== undefined &&
+            Utility.stableStringify(content) ===
+              Utility.stableStringify({
+                connectionId: latest.connectionId,
+                description: latest.description,
+                risk: latest.risk,
+                idempotencyMode: latest.idempotencyMode,
+                approval: latest.approval,
+                source: latest.source,
+                schemaVersion: latest.schemaVersion,
+                inputSchema: latest.inputSchema,
+                callOp: latest.callOp,
+                readbackOp: latest.readbackOp,
+                inverseOp: latest.inverseOp,
+              });
+
+          if (latest && isSame) {
+            const isActive = latest.status === Schemas.ToolDefinitionStatusIntEnum.Active;
+            if (!isActive) reactivate.push(latest.publicId);
+            tools.push({
+              name: tool.name,
+              version: latest.version,
+              change: isActive
+                ? Schemas.ToolSetChangeEnum.Unchanged
+                : Schemas.ToolSetChangeEnum.Reactivated,
+            });
+            continue;
+          }
+          const version = (latest?.version ?? 0) + 1;
+          newVersions.push({ name: tool.name, version, ...content });
+          tools.push({
+            name: tool.name,
+            version,
+            change: latest
+              ? Schemas.ToolSetChangeEnum.NewVersion
+              : Schemas.ToolSetChangeEnum.Created,
+          });
+        }
+
+        const audits: Parameters<
+          typeof recordAuditsOrRollback<Schemas.AuditEntityTypeEnum.ToolDefinition>
+        >[1]["events"] = [];
+        const auditRow = (
+          row: Pick<Schemas.ToolDefinition, "id" | "publicId" | "name" | "version">,
+          entityAction: Schemas.AuditEntityActionFor<Schemas.AuditEntityTypeEnum.ToolDefinition>,
+        ) =>
+          audits.push({ entityAction, entity: row, entityVersion: row.version, label: row.name });
+
+        if (newVersions.length > 0) {
+          const created = await this.dal.createToolDefinitions(tx, {
+            companyId: params.companyId,
+            createdBy: params.adminId,
+            status: Schemas.ToolDefinitionStatusIntEnum.Active,
+            toolDefinitions: newVersions,
+          });
+          if (!created.isSuccess || !created.toolDefinitions) {
+            throw new TenantRollbackError(created.message ?? "Tool definitions weren't created");
+          }
+          for (const row of created.toolDefinitions) {
+            auditRow(
+              row,
+              row.version === 1
+                ? Schemas.AuditEntityActionEnum.Created
+                : Schemas.AuditEntityActionEnum.VersionCreated,
+            );
+            auditRow(row, Schemas.AuditEntityActionEnum.Activated);
+          }
+        }
+        if (reactivate.length > 0) {
+          const activated = await this.dal.activateToolDefinitions(tx, {
+            companyId: params.companyId,
+            updatedBy: params.adminId,
+            publicIds: reactivate,
+          });
+          if (!activated.isSuccess || !activated.toolDefinitions) {
+            throw new TenantRollbackError(
+              activated.message ?? "Tool definitions weren't activated",
+            );
+          }
+          for (const row of activated.toolDefinitions) {
+            auditRow(row, Schemas.AuditEntityActionEnum.Activated);
+          }
+        }
+
+        const outboxIds = await recordAuditsOrRollback(tx, {
+          companyId: params.companyId,
+          actor: operatorAuditActor(params.adminId),
+          entityType: Schemas.AuditEntityTypeEnum.ToolDefinition,
+          events: audits,
+        });
+        return { isSuccess: true, message: "Tool set loaded", tools, outboxIds };
       },
     );
   }

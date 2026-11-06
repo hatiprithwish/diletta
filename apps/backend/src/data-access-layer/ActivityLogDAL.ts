@@ -106,6 +106,88 @@ export default class ActivityLogDAL {
     return response;
   }
 
+  // DEV_NOTE: M7-8. createActivityLog for many rows of one company in one insert (CriticalEventProvider.recordMany).
+  // The same reference checks, each once for the whole batch. The rows come back in no promised order: the caller
+  // pairs them by entity.
+  async createActivityLogs(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.CreateActivityLogsDALRequest,
+  ) {
+    const response: Schemas.ActivityLogsDALResponse = { isSuccess: false };
+    const metadata = { companyId: params.companyId, logCount: params.logs.length };
+
+    try {
+      const [company] = await tx
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, params.companyId))
+        .limit(1);
+
+      if (!company) {
+        const message = "Company not found";
+        AppLogger.error({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.CreateActivityLogs,
+          message,
+          metadata,
+        });
+        response.message = message;
+        return response;
+      }
+
+      const referencedIds = [
+        ...new Set(
+          params.logs
+            .flatMap((log) => [log.parentLogId, log.rootLogId])
+            .filter((logId) => logId !== null),
+        ),
+      ];
+      if (referencedIds.length > 0) {
+        const conditions = [
+          inArray(activityLog.id, referencedIds),
+          eq(activityLog.companyId, params.companyId),
+        ];
+        const [found] = await tx
+          .select({ total: count() })
+          .from(activityLog)
+          .where(and(...conditions));
+
+        if ((found?.total ?? 0) !== referencedIds.length) {
+          const message = "Parent or root activity log not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateActivityLogs,
+            message,
+            metadata,
+          });
+          response.message = message;
+          return response;
+        }
+      }
+
+      const activityLogs = await tx
+        .insert(activityLog)
+        .values(params.logs.map((log) => ({ ...log, companyId: params.companyId })))
+        .returning();
+
+      response.isSuccess = true;
+      response.message = "Activity logs created successfully";
+      response.activityLogs = activityLogs;
+    } catch (error) {
+      const message = "Unknown error in creating activity logs";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.CreateActivityLogs,
+        message,
+        error,
+        metadata,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: The log rows of one entity, oldest first (IDX_activity_log_entity_id), at most params.limit: an entity
   // gathers a handful of events (an issue: opened, a provider added per failing key, triage)
   // DEV_NOTE: Whether the quality issue has an event naming this day (M5-5, the health check's rerun): looked up directly,

@@ -24,7 +24,7 @@ def runs(monkeypatch: pytest.MonkeyPatch, outcome: object) -> None:
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, **_kwargs: object) -> RunSummary:
+        async def run(self, **_kwargs: object) -> RunSummary:
             if isinstance(outcome, BaseException):
                 raise outcome
             return RunSummary(run_id="run_1", has_passed=bool(outcome))
@@ -65,7 +65,7 @@ def test_runs_a_chatbot_by_its_published_config_but_never_a_gate(argv: pytest.Mo
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, **kwargs: object) -> RunSummary:
+        async def run(self, **kwargs: object) -> RunSummary:
             targets.append(kwargs["target"])
             return RunSummary(run_id="run_1", has_passed=True)
 

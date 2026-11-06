@@ -57,7 +57,10 @@ export default class CompanySecretsDAL {
           eq(companyConnections.companyId, params.companyId),
         ];
         const [connection] = await tx
-          .select({ credentialScope: companyConnections.credentialScope })
+          .select({
+            credentialScope: companyConnections.credentialScope,
+            environment: companyConnections.environment,
+          })
           .from(companyConnections)
           .where(and(...connectionConditions))
           .limit(1);
@@ -74,11 +77,16 @@ export default class CompanySecretsDAL {
           return response;
         }
 
-        // DEV_NOTE: Only a company-scoped connection takes a company credential (credential_scope)
-        if (
-          connection.credentialScope !== Schemas.CompanyConnectionCredentialScopeIntEnum.Company
-        ) {
-          const message = "Connection doesn't take company secrets";
+        // DEV_NOTE: Only a company-scoped connection takes a company credential (credential_scope); a test sign-in
+        // (M7-9) only a Staging one, whatever its scope: the hosted eval runner never signs in to a production host
+        const isEvalHostLogin = params.type === Schemas.CompanySecretTypeIntEnum.EvalHostLogin;
+        const isAccepted = isEvalHostLogin
+          ? connection.environment === Schemas.CompanyConnectionEnvironmentIntEnum.Staging
+          : connection.credentialScope === Schemas.CompanyConnectionCredentialScopeIntEnum.Company;
+        if (!isAccepted) {
+          const message = isEvalHostLogin
+            ? "Only a staging connection takes a test sign-in"
+            : "Connection doesn't take company secrets";
           AppLogger.error({
             category: Schemas.LogCategory.DAL,
             action: Schemas.LogAction.CreateCompanySecret,
@@ -170,6 +178,94 @@ export default class CompanySecretsDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetCompanySecretDetails,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-9: a connection's Active test sign-in (ciphertext; the Repo decrypts). isNotFound when it has none, an
+  // expected state. isForUpdate locks the row, so two saves of one connection's sign-in run one after the other.
+  async getConnectionEvalHostLogin(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindConnectionEvalHostLoginDALRequest,
+  ) {
+    const response: Schemas.CompanySecretDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.connectionId, params.connectionId),
+        eq(companySecrets.type, Schemas.CompanySecretTypeIntEnum.EvalHostLogin),
+        eq(companySecrets.status, Schemas.CompanySecretStatusIntEnum.Active),
+      ];
+      const query = tx
+        .select()
+        .from(companySecrets)
+        .where(and(...conditions))
+        .limit(1);
+      const [companySecret] = params.isForUpdate ? await query.for("update") : await query;
+
+      if (!companySecret) {
+        response.message = "The connection has no test sign-in";
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Test sign-in fetched successfully";
+      response.companySecret = companySecret;
+    } catch (error) {
+      const message = "Unknown error in fetching the connection's test sign-in";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetConnectionEvalHostLoginSecret,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: M7-9: the company's Active Staging connections with an Active test sign-in, oldest first (the hosted
+  // runner runs on the first). Ids only: no ciphertext is read.
+  async getEvalHostLoginConnections(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetEvalHostLoginConnectionsDALRequest,
+  ) {
+    const response: Schemas.EvalHostLoginConnectionsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companySecrets.companyId, params.companyId),
+        eq(companySecrets.type, Schemas.CompanySecretTypeIntEnum.EvalHostLogin),
+        eq(companySecrets.status, Schemas.CompanySecretStatusIntEnum.Active),
+        eq(companyConnections.companyId, params.companyId),
+        eq(companyConnections.environment, Schemas.CompanyConnectionEnvironmentIntEnum.Staging),
+        eq(companyConnections.status, Schemas.CompanyConnectionStatusIntEnum.Active),
+      ];
+      const rows = await tx
+        .select({ connectionId: companyConnections.id })
+        .from(companySecrets)
+        .innerJoin(companyConnections, eq(companyConnections.id, companySecrets.connectionId))
+        .where(and(...conditions))
+        .orderBy(asc(companyConnections.id));
+
+      response.isSuccess = true;
+      response.message = "Test sign-in connections fetched successfully";
+      response.connectionIds = rows.map((row) => row.connectionId);
+    } catch (error) {
+      const message = "Unknown error in fetching test sign-in connections";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetStagingConnectionsWithEvalLogin,
         message,
         error,
         metadata: params,

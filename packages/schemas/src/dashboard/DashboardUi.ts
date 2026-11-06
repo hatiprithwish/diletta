@@ -5,6 +5,7 @@ import type {
   ToolDefinitionIdempotencyModeIntEnum,
   ToolDefinitionRiskIntEnum,
   ToolDefinitionWithStatus,
+  ToolSetTool,
   ToolOps,
 } from "../toolDefinitions";
 import type {
@@ -38,6 +39,7 @@ import type {
 } from "../docGapClusters";
 import type { EvalCaseChecks, EvalCaseDetail, EvalCaseDraft, EvalCaseListItem } from "../evalCases";
 import type { EvalAttempt, EvalTranscriptEntryView } from "../evalResults";
+import type { DashboardEvalRunTrigger } from "../evalRunner";
 import type {
   EvalRunCaseItem,
   EvalRunListItem,
@@ -1005,6 +1007,16 @@ export interface DashboardOperatorToolTabCountProps {
   tab: OperatorToolStatusTabEnum;
 }
 
+// DEV_NOTE: M7-8. The Tools section's Load tool set dialog, and what a load answered
+export interface DashboardOperatorLoadToolSetDialogProps extends DashboardDialogProps {
+  company: CompanyWithStatus;
+}
+
+export interface DashboardOperatorToolSetResultProps {
+  tools: ToolSetTool[];
+  onClose: () => void;
+}
+
 // DEV_NOTE: The tool form's values: enums as select strings, the ops as JSON text (a blank readback or undo is none)
 export interface DashboardOperatorToolFormValues {
   name: string;
@@ -1032,4 +1044,44 @@ export type DashboardOperatorToolCheck =
 // DEV_NOTE: Open dashboard on the operator pages: a row's outline button or the company page's primary one
 export interface DashboardOpenDashboardButtonProps extends DashboardOperatorCompanySectionProps {
   variant: "default" | "outline";
+}
+
+// ─── The hosted eval runner (M7-9, ADR 0007)
+
+// DEV_NOTE: What a Run button runs: one version, as a gate run (a version sent to testing) or a quick one-attempt run,
+// with how many attempts that makes (cases × k) for the confirm dialog; caseCount null = not known here
+export interface DashboardTestRunTarget {
+  chatbotConfigPublicId: string;
+  configVersion: number;
+  trigger: DashboardEvalRunTrigger;
+  caseCount: number | null;
+}
+
+// DEV_NOTE: Run tests (the Tests page header) and Run again (a run's page): one button, disabled with why when the
+// version can't run (no test sign-in, a run of it still going)
+export interface DashboardRunTestsButtonProps {
+  target: DashboardTestRunTarget | null;
+  isRunning: boolean;
+  hasTestLogin: boolean;
+  label: string;
+  variant: "default" | "outline";
+}
+
+export interface DashboardRunTestsDialogProps extends DashboardDialogProps {
+  target: DashboardTestRunTarget;
+}
+
+// DEV_NOTE: A staging connection's test sign-in on the operator pages: shown on its card, set or removed on its page
+// DEV_NOTE: The test sign-in form's text fields: every field of either host's login but its kind
+export type DashboardTestLoginField =
+  | "hostUser"
+  | "firebaseApiKey"
+  | "email"
+  | "password"
+  | "issuer"
+  | "adminSecret";
+
+export interface DashboardOperatorTestLoginProps {
+  companyPublicId: string;
+  connectionPublicId: string;
 }

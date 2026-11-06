@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from blocking import Blocking
 
 from diletta_evals.config import ERegisterSettings
 from diletta_evals.hosts import eregister
@@ -12,15 +13,15 @@ from diletta_evals.hosts.base import HostLoginError
 SETTINGS = ERegisterSettings(firebase_api_key="web-key", email="eval@example.com", password="secret")
 
 
-def login_for(handle) -> tuple[eregister.ERegisterLogin, list[httpx.Request]]:
+def login_for(handle) -> tuple[Blocking, list[httpx.Request]]:
     sent: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return handle(request)
 
-    http = httpx.Client(transport=httpx.MockTransport(record))
-    return eregister.ERegisterLogin(SETTINGS, user="uid-eval", http=http), sent
+    http = httpx.AsyncClient(transport=httpx.MockTransport(record))
+    return Blocking(eregister.ERegisterLogin(SETTINGS, user="uid-eval", http=http)), sent
 
 
 def signed_in(expires_in: int, uid: str = "uid-eval"):

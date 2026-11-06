@@ -622,3 +622,135 @@ describe("ToolDefinitionsRepo", () => {
     );
   });
 });
+
+// DEV_NOTE: A load writes every tool of the set (47 for eRegister), so these run longer than the default timeout
+describe("ToolDefinitionsRepo.loadToolSet", { timeout: 180_000 }, () => {
+  const setTools = Schemas.TOOL_SETS[Schemas.ToolSetEnum.Eregister];
+  const load = (companyId: string, connectionPublicId: string) =>
+    new ToolDefinitionsRepo(env).loadToolSet({
+      companyId,
+      adminId: "1",
+      toolSet: Schemas.ToolSetEnum.Eregister,
+      connectionPublicId,
+    });
+
+  it("creates every tool Active, then changes nothing on a second load", async () => {
+    const first = await load(companyA, connectionA);
+    expect(first.isSuccess).toBe(true);
+    expect(first.tools?.map((tool) => tool.name)).toEqual(setTools.map((tool) => tool.name));
+    expect(
+      first.tools?.every(
+        (tool) => tool.version === 1 && tool.change === Schemas.ToolSetChangeEnum.Created,
+      ),
+    ).toBe(true);
+    // DEV_NOTE: Created + Activated audit rows per tool
+    expect(first.outboxIds).toHaveLength(setTools.length * 2);
+
+    const repo = new ToolDefinitionsRepo(env);
+    const active = await repo.getToolDefinitionsCount({
+      companyId: companyA,
+      status: Schemas.ToolDefinitionStatusIntEnum.Active,
+    });
+    expect(active.totalRecords).toBeGreaterThanOrEqual(setTools.length);
+
+    const second = await load(companyA, connectionA);
+    expect(second.isSuccess).toBe(true);
+    expect(
+      second.tools?.every(
+        (tool) => tool.version === 1 && tool.change === Schemas.ToolSetChangeEnum.Unchanged,
+      ),
+    ).toBe(true);
+    expect(second.outboxIds).toEqual([]);
+  });
+
+  it("re-activates a disabled tool and refuses the whole load while a tool has a draft", async () => {
+    const repo = new ToolDefinitionsRepo(env);
+    const name = setTools[0]!.name;
+    const [listed] =
+      (await repo.getToolDefinitions({ companyId: companyA, name })).toolDefinitions ?? [];
+    expect(listed?.version).toBe(1);
+    await repo.setToolDefinitionStatus({
+      companyId: companyA,
+      publicId: listed!.publicId,
+      adminId: "1",
+      status: Schemas.ToolDefinitionStatusIntEnum.Disabled,
+    });
+
+    const reloaded = await load(companyA, connectionA);
+    expect(reloaded.tools?.[0]).toEqual({
+      name,
+      version: 1,
+      change: Schemas.ToolSetChangeEnum.Reactivated,
+    });
+    expect(reloaded.outboxIds).toHaveLength(1);
+
+    const draft = await repo.createToolDefinitionVersion({
+      companyId: companyA,
+      publicId: listed!.publicId,
+      adminId: "1",
+    });
+    expect(draft.toolDefinition?.version).toBe(2);
+    const before = await repo.getToolDefinitionsCount({ companyId: companyA });
+
+    const refused = await load(companyA, connectionA);
+    expect(refused).toMatchObject({
+      isSuccess: false,
+      failure: Schemas.ToolDefinitionFailureEnum.DraftExists,
+    });
+    expect(refused.message).toContain(name);
+    expect(refused.tools).toBeUndefined();
+    expect((await repo.getToolDefinitionsCount({ companyId: companyA })).totalRecords).toBe(
+      before.totalRecords,
+    );
+
+    await repo.deleteToolDefinition({
+      companyId: companyA,
+      publicId: draft.toolDefinition!.publicId,
+      adminId: "1",
+    });
+  });
+
+  it("adds a new Active version on another connection and keeps the old one Active", async () => {
+    let otherConnection = "";
+    await withOwnerDb(async (ownerDb) => {
+      const [created] = await ownerDb
+        .insert(companyConnections)
+        .values({
+          ...connectionValues(companyA),
+          environment: Schemas.CompanyConnectionEnvironmentIntEnum.Production,
+        })
+        .returning({ publicId: companyConnections.publicId });
+      otherConnection = created!.publicId;
+    });
+
+    const moved = await load(companyA, otherConnection);
+    expect(moved).toMatchObject({ isSuccess: true });
+    expect(
+      moved.tools?.every(
+        (tool) => tool.version === 2 && tool.change === Schemas.ToolSetChangeEnum.NewVersion,
+      ),
+    ).toBe(true);
+
+    const repo = new ToolDefinitionsRepo(env);
+    const versions =
+      (await repo.getToolDefinitions({ companyId: companyA, name: setTools[0]!.name }))
+        .toolDefinitions ?? [];
+    expect(
+      versions.map((tool) => [tool.version, tool.toolDefinitionStatus, tool.connectionPublicId]),
+    ).toEqual([
+      [2, Schemas.ToolDefinitionStatusIntEnum.Active, otherConnection],
+      [1, Schemas.ToolDefinitionStatusIntEnum.Active, connectionA],
+    ]);
+  });
+
+  it("refuses another company's connection and writes nothing", async () => {
+    const refused = await load(companyB, connectionA);
+    expect(refused.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionNotFound);
+    const repo = new ToolDefinitionsRepo(env);
+    const counted = await repo.getToolDefinitionsCount({
+      companyId: companyB,
+      name: setTools[0]!.name,
+    });
+    expect(counted.totalRecords).toBe(0);
+  });
+});

@@ -64,6 +64,12 @@ export enum AuditEntityActionEnum {
   OperatorActed = "operator_acted",
   // DEV_NOTE: Operator only (M7-8): the company was churned (Paused / Resumed are its other status moves)
   Churned = "churned",
+  // DEV_NOTE: M7-9: a version's tests started from the dashboard (a gate run, or a manual run)
+  GateRunStarted = "gate_run_started",
+  TestRunStarted = "test_run_started",
+  // DEV_NOTE: Operator only (M7-9): a Staging connection's test sign-in for the hosted eval runner
+  TestLoginSet = "test_login_set",
+  TestLoginRemoved = "test_login_removed",
 }
 
 // DEV_NOTE: The actions each entity type records, the one list both sides are checked against: a Repo's
@@ -114,6 +120,8 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.Activated,
     AuditEntityActionEnum.Disabled,
     AuditEntityActionEnum.OriginsChanged,
+    AuditEntityActionEnum.TestLoginSet,
+    AuditEntityActionEnum.TestLoginRemoved,
   ],
   [AuditEntityTypeEnum.CompanyEncryptionKey]: [
     AuditEntityActionEnum.Rotated,
@@ -142,6 +150,8 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.PassedGate,
     AuditEntityActionEnum.FailedGate,
     AuditEntityActionEnum.Published,
+    AuditEntityActionEnum.GateRunStarted,
+    AuditEntityActionEnum.TestRunStarted,
   ],
 } as const satisfies Record<AuditEntityTypeEnum, readonly AuditEntityActionEnum[]>;
 
@@ -166,6 +176,17 @@ export type AuditActor =
       actorId: string;
     }
   | { actorType: ActivityLogActorTypeIntEnum.System; actorId: null };
+
+// DEV_NOTE: One audit write as AuditEventProvider takes it (record, recordMany): server-side only
+export interface AuditEventRecord {
+  actor: AuditActor;
+  entityType: AuditEntityTypeEnum;
+  entityAction: AuditEntityActionEnum;
+  entityId: string;
+  entityPublicId: string;
+  entityVersion?: number | null;
+  label: string | null;
+}
 
 // DEV_NOTE: The entity types whose System rows are audit rows (the audit log reads them, the partial index
 // IDX_activity_log_company_id_created_at_audit covers them); every other System row is a runtime event, never shown.

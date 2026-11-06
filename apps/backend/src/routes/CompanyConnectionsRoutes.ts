@@ -95,4 +95,69 @@ CompanyConnectionsRoutes.patch(
   },
 );
 
+// DEV_NOTE: M7-9 (ADR 0007): a Staging connection's test sign-in for the hosted eval runner. GET answers which host and
+// as whom (never the password or secret); PUT sets or replaces it whole (400 Invalid off Staging); DELETE revokes it.
+// Each write records one audit row as the operator.
+function loginStatus(response: Schemas.GetEvalHostLoginApiResponse) {
+  if (response.isSuccess) return 200;
+  if (response.failure) return Schemas.COMPANY_CONNECTION_FAILURE_HTTP_STATUS_MAP[response.failure];
+  return response.isNotFound ? 404 : 500;
+}
+
+CompanyConnectionsRoutes.get(
+  "/:publicId/eval-login",
+  checkAuth,
+  authorizePlatform(Schemas.AuthzActionEnum.CompanyConnectionRead),
+  resolveOperatorCompany(),
+  async (c) => {
+    const repo = new CompanyConnectionsRepo(c.env);
+    const response = await repo.getEvalHostLogin({
+      companyId: c.get("companyId"),
+      publicId: c.req.param("publicId"),
+    });
+
+    return c.json(response, loginStatus(response));
+  },
+);
+
+CompanyConnectionsRoutes.put(
+  "/:publicId/eval-login",
+  checkAuth,
+  authorizePlatform(Schemas.AuthzActionEnum.CompanyConnectionUpdate),
+  resolveOperatorCompany(),
+  zValidator("json", Schemas.ZSetEvalHostLoginApiRequest),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new CompanyConnectionsRepo(c.env);
+    const { outboxIds, ...response } = await repo.setEvalHostLogin({
+      ...c.req.valid("json"),
+      companyId,
+      publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, loginStatus(response));
+  },
+);
+
+CompanyConnectionsRoutes.delete(
+  "/:publicId/eval-login",
+  checkAuth,
+  authorizePlatform(Schemas.AuthzActionEnum.CompanyConnectionUpdate),
+  resolveOperatorCompany(),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new CompanyConnectionsRepo(c.env);
+    const { outboxIds, ...response } = await repo.removeEvalHostLogin({
+      companyId,
+      publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, loginStatus(response));
+  },
+);
+
 export default CompanyConnectionsRoutes;

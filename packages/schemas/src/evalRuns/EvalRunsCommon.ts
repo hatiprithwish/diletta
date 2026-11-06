@@ -49,6 +49,8 @@ export enum EvalRunFailureIntEnum {
   HostUnavailable = 2,
   ServerError = 3,
   HarnessError = 4,
+  // DEV_NOTE: M7-9: the hosted runner couldn't take or start a run the dashboard queued
+  RunnerUnavailable = 5,
 }
 
 export enum EvalRunFailureLabelEnum {
@@ -56,6 +58,7 @@ export enum EvalRunFailureLabelEnum {
   HostUnavailable = "The staging host couldn't be reached",
   ServerError = "A server error stopped the run",
   HarnessError = "The test harness stopped the run",
+  RunnerUnavailable = "The test runner couldn't start the run",
 }
 
 export const EVAL_RUN_FAILURE_LABEL_MAP: Record<EvalRunFailureIntEnum, EvalRunFailureLabelEnum> = {
@@ -63,6 +66,7 @@ export const EVAL_RUN_FAILURE_LABEL_MAP: Record<EvalRunFailureIntEnum, EvalRunFa
   [EvalRunFailureIntEnum.HostUnavailable]: EvalRunFailureLabelEnum.HostUnavailable,
   [EvalRunFailureIntEnum.ServerError]: EvalRunFailureLabelEnum.ServerError,
   [EvalRunFailureIntEnum.HarnessError]: EvalRunFailureLabelEnum.HarnessError,
+  [EvalRunFailureIntEnum.RunnerUnavailable]: EvalRunFailureLabelEnum.RunnerUnavailable,
 };
 
 // Whole Eval Run Body — DB shape
@@ -88,6 +92,8 @@ export const ZEvalRun = z.object({
   hasPassed: z.boolean().nullable(),
   failure: z.enum(EvalRunFailureIntEnum).nullable(),
   costUsd: z.string(),
+  // DEV_NOTE: M7-9: the admin who started it from the dashboard (→ admins.id); null for a run the CLI or CI started
+  startedBy: z.string().nullable(),
   finishedAt: z.date().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),

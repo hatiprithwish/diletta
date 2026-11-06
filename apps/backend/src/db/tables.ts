@@ -470,6 +470,7 @@ export const evalRuns = table(
     hasPassed: t.boolean("has_passed"), // null until done
     failure: t.smallint().$type<Schemas.EvalRunFailureIntEnum>(), // why the harness stopped a Failed run (M5-3)
     costUsd: t.numeric("cost_usd", { precision: 12, scale: 6 }).notNull().default("0"),
+    startedBy: t.bigint("started_by", { mode: "string" }), // → admins.id, the dashboard's Run button (M7-9); null = CLI/CI
     finishedAt: t.timestamp("finished_at", { withTimezone: true }),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -479,6 +480,7 @@ export const evalRuns = table(
     t.index("IDX_eval_runs_company_id").on(table.companyId),
     t.index("IDX_eval_runs_chatbot_config_id").on(table.chatbotConfigId),
     t.index("IDX_eval_runs_company_connection_id").on(table.companyConnectionId),
+    t.index("IDX_eval_runs_started_by").on(table.startedBy),
   ],
 );
 

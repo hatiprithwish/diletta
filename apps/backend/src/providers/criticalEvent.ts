@@ -70,4 +70,78 @@ export default class CriticalEventProvider {
       wasDuplicate: false,
     };
   }
+
+  // DEV_NOTE: M7-8. record for many events of one company, with the same dedupe (every key locked, then checked) in a
+  // fixed number of statements, for a write that changes many rows at once (a tool set's load). The inserted log rows
+  // come back in no promised order, so each is paired with its event by (entityType, entityId, entityAction), which
+  // must be unique in the batch. Returns one outbox id per event, in order.
+  static async recordMany(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: { companyId: string; events: Schemas.CriticalEventBase[] },
+  ): Promise<Schemas.RecordCriticalEventsResponse> {
+    if (params.events.length === 0) {
+      return { isSuccess: true, message: "No events to record", outboxIds: [] };
+    }
+    const entityKey = (
+      event: Pick<Schemas.CriticalEventBase, "entityType" | "entityId" | "entityAction">,
+    ) => `${event.entityType}:${event.entityId ?? ""}:${event.entityAction}`;
+    const dedupeKeys = params.events.map((event) => event.dedupeKey);
+    if (
+      new Set(dedupeKeys).size !== dedupeKeys.length ||
+      new Set(params.events.map(entityKey)).size !== params.events.length
+    ) {
+      return { isSuccess: false, message: "A batch repeats an event" };
+    }
+
+    const keyParams = { companyId: params.companyId, dedupeKeys };
+    const keyLock = await CriticalEventProvider.eventOutboxDAL.lockEventOutboxDedupeKeys(
+      tx,
+      keyParams,
+    );
+    if (!keyLock.isSuccess) return { isSuccess: false, message: keyLock.message };
+
+    const existing = await CriticalEventProvider.eventOutboxDAL.findEventOutboxesByDedupeKeys(
+      tx,
+      keyParams,
+    );
+    if (!existing.isSuccess || !existing.eventOutboxes) {
+      return { isSuccess: false, message: existing.message };
+    }
+    const outboxIdByKey = new Map(existing.eventOutboxes.map((row) => [row.dedupeKey, row.id]));
+
+    const fresh = params.events.filter((event) => !outboxIdByKey.has(event.dedupeKey));
+    if (fresh.length > 0) {
+      const logged = await CriticalEventProvider.activityLogDAL.createActivityLogs(tx, {
+        companyId: params.companyId,
+        logs: fresh.map(({ eventType: _eventType, dedupeKey: _dedupeKey, ...log }) => log),
+      });
+      if (!logged.isSuccess || !logged.activityLogs) {
+        return { isSuccess: false, message: logged.message };
+      }
+      const logIdByEntity = new Map(logged.activityLogs.map((row) => [entityKey(row), row.id]));
+
+      const events: Schemas.CreateEventOutboxesDALRequest["events"] = [];
+      for (const event of fresh) {
+        const activityLogId = logIdByEntity.get(entityKey(event));
+        if (!activityLogId) return { isSuccess: false, message: "Activity log not recorded" };
+        events.push({ activityLogId, eventType: event.eventType, dedupeKey: event.dedupeKey });
+      }
+      const outboxes = await CriticalEventProvider.eventOutboxDAL.createEventOutboxes(tx, {
+        companyId: params.companyId,
+        events,
+      });
+      if (!outboxes.isSuccess || !outboxes.eventOutboxes) {
+        return { isSuccess: false, message: outboxes.message };
+      }
+      for (const row of outboxes.eventOutboxes) outboxIdByKey.set(row.dedupeKey, row.id);
+    }
+
+    const outboxIds: string[] = [];
+    for (const key of dedupeKeys) {
+      const outboxId = outboxIdByKey.get(key);
+      if (!outboxId) return { isSuccess: false, message: "Event outbox not recorded" };
+      outboxIds.push(outboxId);
+    }
+    return { isSuccess: true, message: "Events recorded successfully", outboxIds };
+  }
 }

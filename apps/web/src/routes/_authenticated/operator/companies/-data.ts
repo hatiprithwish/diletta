@@ -29,6 +29,11 @@ export class OperatorCompaniesQueries {
       [...OperatorCompaniesQueries.keys.detail(publicId), "connections"] as const,
     connection: (publicId: string, connectionPublicId: string) =>
       [...OperatorCompaniesQueries.keys.connections(publicId), connectionPublicId] as const,
+    evalLogin: (publicId: string, connectionPublicId: string) =>
+      [
+        ...OperatorCompaniesQueries.keys.connection(publicId, connectionPublicId),
+        "eval-login",
+      ] as const,
     tools: (publicId: string) =>
       [...OperatorCompaniesQueries.keys.detail(publicId), "tools"] as const,
     toolList: (
@@ -188,6 +193,23 @@ export class OperatorCompaniesQueries {
       queryFn: ({ signal }) =>
         apiClient<Schemas.GetCompanyConnectionApiResponse>(
           `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}`,
+          getToken,
+          { signal },
+        ),
+    });
+  }
+
+  // DEV_NOTE: M7-9. A staging connection's test sign-in: kind and host user only (never a password or secret)
+  static evalLogin(
+    publicId: string,
+    connectionPublicId: string,
+    getToken: Parameters<typeof apiClient>[1],
+  ) {
+    return queryOptions({
+      queryKey: OperatorCompaniesQueries.keys.evalLogin(publicId, connectionPublicId),
+      queryFn: ({ signal }) =>
+        apiClient<Schemas.GetEvalHostLoginApiResponse>(
+          `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}/eval-login`,
           getToken,
           { signal },
         ),
@@ -374,6 +396,67 @@ export function useUpdateConnection(publicId: string, connectionPublicId: string
   });
 }
 
+// ─── Test sign-in for the hosted eval runner (M7-9)
+
+export function useEvalHostLogin(publicId: string, connectionPublicId: string) {
+  const { getToken } = useAuth();
+  return useQuery(OperatorCompaniesQueries.evalLogin(publicId, connectionPublicId, getToken));
+}
+
+// DEV_NOTE: Set or replace a staging connection's test sign-in (the whole login: the password is never read back). The
+// form awaits it (mutateAsync) to clear its secret fields.
+export function useSetEvalHostLogin(publicId: string, connectionPublicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.SetEvalHostLoginApiRequest) =>
+      apiClient<Schemas.GetEvalHostLoginApiResponse>(
+        `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}/eval-login`,
+        getToken,
+        { method: "PUT", body: JSON.stringify(body) },
+      ),
+    onSuccess: (response) => {
+      queryClient.setQueryData<Schemas.GetEvalHostLoginApiResponse>(
+        OperatorCompaniesQueries.keys.evalLogin(publicId, connectionPublicId),
+        {
+          isSuccess: true,
+          message: response.message,
+          evalHostLogin: response.evalHostLogin ?? null,
+        },
+      );
+      toast.success("Test sign-in saved.");
+    },
+    onError: (error) => {
+      toast.error(
+        connectionFailure(error) === Schemas.CompanyConnectionFailureEnum.Invalid
+          ? "Only a staging connection takes a test sign-in. Nothing was saved."
+          : "The test sign-in wasn't saved. Try again.",
+      );
+    },
+  });
+}
+
+export function useRemoveEvalHostLogin(publicId: string, connectionPublicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiClient<Schemas.GetEvalHostLoginApiResponse>(
+        `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}/eval-login`,
+        getToken,
+        { method: "DELETE" },
+      ),
+    onSuccess: (response) => {
+      queryClient.setQueryData<Schemas.GetEvalHostLoginApiResponse>(
+        OperatorCompaniesQueries.keys.evalLogin(publicId, connectionPublicId),
+        { isSuccess: true, message: response.message, evalHostLogin: null },
+      );
+      toast.success("Test sign-in removed.");
+    },
+    onError: () => toast.error("The test sign-in wasn't removed. Try again."),
+  });
+}
+
 // ─── Tools
 
 export function useCompanyTools(
@@ -554,5 +637,34 @@ export function useDeleteTool(publicId: string, toolPublicId: string) {
       toast.success("Draft deleted.");
     },
     onError: toastToolError("The draft wasn't deleted. Try again."),
+  });
+}
+
+// DEV_NOTE: M7-8. Loads a whole tool set onto a connection; the caller awaits it (mutateAsync) to show what changed and
+// the pins. A draft refusal names its tools, so its toast is the server's message.
+export function useLoadToolSet(publicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  const fallback = toastToolError("The tools weren't loaded. Nothing changed, try again.");
+  return useMutation({
+    mutationFn: (body: Schemas.LoadToolSetApiRequest) =>
+      apiClient<Schemas.LoadToolSetApiResponse>(`${toolsPath(publicId)}/tool-sets`, getToken, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: OperatorCompaniesQueries.keys.tools(publicId),
+      });
+    },
+    onError: (error) => {
+      const body =
+        error instanceof ApiError ? (error.body as Schemas.LoadToolSetApiResponse) : undefined;
+      if (body?.failure === Schemas.ToolDefinitionFailureEnum.DraftExists && body.message) {
+        toast.error(body.message);
+        return;
+      }
+      fallback(error);
+    },
   });
 }
