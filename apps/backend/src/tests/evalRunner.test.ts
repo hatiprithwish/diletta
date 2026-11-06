@@ -19,6 +19,7 @@ import {
   eventOutbox,
 } from "@/db/tables";
 import worker from "@/index";
+import { EvalRunnerEntrypoint } from "@/entrypoints/EvalRunnerEntrypoint";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import EvalRunnerRepo from "@/repositories/EvalRunnerRepo";
 import Utility from "@/utils/Utility";
@@ -494,7 +495,11 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
     expect(repeat.status).toBe(409);
 
     // DEV_NOTE: A started run is the runner's own to finish: failQueuedRun leaves it Running
-    await repo.failQueuedRun({ companyPublicId: tenantA.companyPublicId, runPublicId });
+    await repo.failQueuedRun({
+      companyPublicId: tenantA.companyPublicId,
+      runPublicId,
+      failure: Schemas.EvalRunFailureIntEnum.HarnessError,
+    });
     expect((await runRow(runPublicId))?.status).toBe(Schemas.EvalRunStatusIntEnum.Running);
     await withOwnerDb(async (ownerDb) =>
       ownerDb
@@ -548,13 +553,19 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
       trigger: Schemas.EvalRunTriggerIntEnum.Manual,
     });
     const repo = new EvalRunnerRepo(runnerEnv);
+    // DEV_NOTE: The runner names the stop it hit (here the host test user's sign-in), so the run page says why
     expect(
-      (await repo.failQueuedRun({ companyPublicId: tenantA.companyPublicId, runPublicId }))
-        .isSuccess,
+      (
+        await repo.failQueuedRun({
+          companyPublicId: tenantA.companyPublicId,
+          runPublicId,
+          failure: Schemas.EvalRunFailureIntEnum.HostUnavailable,
+        })
+      ).isSuccess,
     ).toBe(true);
     expect(await runRow(runPublicId)).toMatchObject({
       status: Schemas.EvalRunStatusIntEnum.Failed,
-      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+      failure: Schemas.EvalRunFailureIntEnum.HostUnavailable,
     });
     // DEV_NOTE: An ended run's sign-in is never handed out again
     expect(
@@ -589,10 +600,47 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
       failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
     });
     const secondId = (second.body.evalRun as { publicId: string }).publicId;
+
+    // DEV_NOTE: A Running run counts from its last change (each model call's cost moves updated_at), not its start
+    const runningSince = (minutes: number) =>
+      withOwnerDb(async (ownerDb) =>
+        ownerDb
+          .update(evalRuns)
+          .set({
+            status: Schemas.EvalRunStatusIntEnum.Running,
+            createdAt: new Date(Date.now() - 2 * Schemas.EVAL_RUN_RUNNING_STALE_MINUTES * 60_000),
+            updatedAt: new Date(Date.now() - minutes * 60_000),
+          })
+          .where(eq(evalRuns.publicId, secondId)),
+      );
+    await runningSince(Schemas.EVAL_RUN_RUNNING_STALE_MINUTES - 1);
+    expect((await start()).body.failure).toBe(Schemas.EvalRunStartFailureEnum.AlreadyRunning);
+    await runningSince(Schemas.EVAL_RUN_RUNNING_STALE_MINUTES + 1);
+    const third = await start();
+    expect(third.status).toBe(201);
+    expect(await runRow(secondId)).toMatchObject({
+      status: Schemas.EvalRunStatusIntEnum.Failed,
+      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+    });
     await new EvalRunnerRepo(runnerEnv).failQueuedRun({
       companyPublicId: tenantA.companyPublicId,
-      runPublicId: secondId,
+      runPublicId: (third.body.evalRun as { publicId: string }).publicId,
+      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
     });
+  });
+
+  it("serves the runner's /eval/runs calls over the binding, and nothing else", async () => {
+    const ctx = createExecutionContext();
+    const entrypoint = new EvalRunnerEntrypoint(ctx, runnerEnv);
+    const unsigned = await entrypoint.fetch(
+      new Request("https://backend.internal/eval/runs", { method: "POST", body: "{}" }),
+    );
+    expect(unsigned.status).toBe(401);
+    for (const path of ["/dashboard/me", "/eval/load/start", "/eval/runsx"]) {
+      const refused = await entrypoint.fetch(new Request(`https://backend.internal${path}`));
+      expect(refused.status).toBe(404);
+    }
+    await waitOnExecutionContext(ctx);
   });
 
   it("removes the test sign-in, after which no run can start", async () => {

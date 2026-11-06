@@ -499,7 +499,7 @@ export enum LogAction {
   QueueEvalRun = "QueueEvalRun",
   StartEvalRunWorkflow = "StartEvalRunWorkflow",
   StartQueuedEvalRun = "StartQueuedEvalRun",
-  FailQueuedEvalRun = "FailQueuedEvalRun",
+  FailOpenEvalRun = "FailOpenEvalRun",
   GetEvalRunLogin = "GetEvalRunLogin",
   GetActiveEvalRunsForConfig = "GetActiveEvalRunsForConfig",
   GetEvalHostLogin = "GetEvalHostLogin",

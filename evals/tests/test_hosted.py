@@ -142,3 +142,50 @@ def test_reset_and_finish() -> None:
     assert stopped["status"] == "Failed"
     assert refused.finish_request is not None
     assert refused.finish_request.failure is RUN_FAILURE_SERVER_ERROR
+
+
+# ─── The chain of Workflow instances (ADR 0007 › Chained instances)
+
+FIRST_LINK = {"companyPublicId": "co_1", "runPublicId": "run_q"}
+CASES = [{"publicId": "case_1"}, {"publicId": "case_2"}]
+
+
+def test_the_backends_first_link_is_start_and_named_by_the_run() -> None:
+    assert hosted.stage_of(FIRST_LINK) == "start"
+    assert hosted.link_id(hosted.Link(**FIRST_LINK)) == "run_q"
+    with pytest.raises(ConfigError):
+        hosted.stage_of({**FIRST_LINK, "stage": "later"})
+
+
+def test_walks_every_attempt_of_every_case_then_ends() -> None:
+    link = hosted.after_start(FIRST_LINK, {"runId": "run_q", "k": 2, "cases": CASES})
+    seen: list[str] = []
+    while link is not None and link["stage"] == "attempt":
+        seen.append(hosted.link_id(link))
+        link = hosted.after_attempt(link, {"hasPassed": True, "error": None})
+    assert seen == ["run_q-c1-a1", "run_q-c1-a2", "run_q-c2-a1", "run_q-c2-a2"]
+    assert link == {"companyPublicId": "co_1", "runPublicId": "run_q", "stage": "end", "stop": None}
+    assert hosted.link_id(link) == "run_q-end"
+
+
+def test_a_stop_at_an_attempt_skips_to_the_end_with_it() -> None:
+    first = hosted.after_start(FIRST_LINK, {"runId": "run_q", "k": 3, "cases": CASES})
+    assert first is not None
+    stop = {"failure": RUN_FAILURE_SERVER_ERROR.value, "message": "EvalApiError: HTTP 500"}
+    ended = hosted.after_attempt(first, {"hasPassed": False, "error": None, "stop": stop})
+    assert ended["stage"] == "end" and ended["stop"] == stop
+
+
+def test_a_start_that_stopped_has_no_next_link_and_no_cases_go_straight_to_the_end() -> None:
+    stop = {"failure": RUN_FAILURE_HOST_UNAVAILABLE.value, "message": "HostLoginError: INVALID_LOGIN_CREDENTIALS"}
+    assert hosted.after_start(FIRST_LINK, {"stop": stop}) is None
+    ended = hosted.after_start(FIRST_LINK, {"runId": "run_q", "k": 3, "cases": []})
+    assert ended is not None and ended["stage"] == "end" and ended["stop"] is None
+
+
+def test_a_link_holds_ids_cases_and_where_it_is_only_and_the_binding_gets_the_ids() -> None:
+    link = hosted.after_start(FIRST_LINK, {"runId": "run_q", "k": 1, "cases": CASES})
+    assert link is not None
+    assert set(link) == {"companyPublicId", "runPublicId", "stage", "k", "cases", "caseIndex", "attemptNo"}
+    assert hosted.run_ids(link) == FIRST_LINK
+    json.dumps(link)

@@ -1,9 +1,10 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  // DEV_NOTE: M7-9 (ADR 0007). The hosted eval runner: a Python Worker whose Workflow (EvalRunWorkflow) runs one run the
-  // dashboard queued, with the CLI's own code (evals/diletta_evals, vendored by pywrangler from pyproject.toml). The
-  // backend binds the Workflow by script name (its EVAL_RUN_WORKFLOW) and this Worker binds the backend's
-  // EvalRunnerEntrypoint (BACKEND) to read a run's test sign-in. Staging and production only: nothing runs locally
+  // DEV_NOTE: M7-9 (ADR 0007). The hosted eval runner: a Python Worker whose Workflow (EvalRunWorkflow) runs the runs the
+  // dashboard queued, with the CLI's own code (evals/diletta_evals, vendored by pywrangler from pyproject.toml), one
+  // chained instance per attempt (its own EVAL_RUN_WORKFLOW creates the next). The backend binds the Workflow by script
+  // name (its EVAL_RUN_WORKFLOW) and this Worker binds the backend's EvalRunnerEntrypoint (BACKEND) to read a run's test
+  // sign-in and send its /eval/runs* calls. Staging and production only: nothing runs locally
   // (miniflare can't start the backend's binding to it), so `pnpm dev` here is for the Worker alone.
   // Python Workers need wrangler >= 4.150 (this app pins its own) and a compatibility date it supports.
   "name": "diletta-eval-runner-local",

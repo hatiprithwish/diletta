@@ -24,8 +24,9 @@ type QueuedRun = Schemas.WithOutboxIds<Schemas.StartEvalRunApiResponse> & {
 
 // DEV_NOTE: The hosted eval runner (M7-9, ADR 0007), the backend's side:
 //   startRun: the dashboard's Run gate / Run tests. One withTenant: the version locked, a Gate run only of a Testing
-//     version, one Queued or Running run per version at a time (a Queued one older than EVAL_RUN_QUEUED_STALE_MINUTES
-//     is failed instead: it never reached the runner), the company's first Active Staging connection with a
+//     version, one Queued or Running run per version at a time (a stale one is failed instead: Queued for longer than
+//     EVAL_RUN_QUEUED_STALE_MINUTES never reached the runner, Running with no change for EVAL_RUN_RUNNING_STALE_MINUTES
+//     lost it), the company's first Active Staging connection with a
 //     test sign-in, a Queued eval_runs row (startedBy) and its audit row. After the commit the runner's Workflow is
 //     started; if it can't be, the run is failed (RunnerUnavailable), never left Queued.
 //   getRunLogin / failQueuedRun: the runner's service binding (EvalRunnerEntrypoint), never a route. getRunLogin hands
@@ -98,19 +99,24 @@ export default class EvalRunnerRepo {
           chatbotConfigId: chatbotConfig.id,
         });
         if (active.isSuccess && active.evalRun) {
-          const staleBefore = Date.now() - Schemas.EVAL_RUN_QUEUED_STALE_MINUTES * 60_000;
-          const isStaleQueued =
-            active.evalRun.status === Schemas.EvalRunStatusIntEnum.Queued &&
-            active.evalRun.createdAt.getTime() < staleBefore;
-          if (!isStaleQueued) {
+          const { evalRun } = active;
+          const isQueued = evalRun.status === Schemas.EvalRunStatusIntEnum.Queued;
+          const lastMovedAt = isQueued ? evalRun.createdAt : evalRun.updatedAt;
+          const staleMinutes = isQueued
+            ? Schemas.EVAL_RUN_QUEUED_STALE_MINUTES
+            : Schemas.EVAL_RUN_RUNNING_STALE_MINUTES;
+          if (lastMovedAt.getTime() >= Date.now() - staleMinutes * 60_000) {
             return this.refuse(
               Schemas.EvalRunStartFailureEnum.AlreadyRunning,
               "This version's tests are already running",
             );
           }
-          const failed = await this.evalRunsDal.failQueuedEvalRun(tx, {
+          const failed = await this.evalRunsDal.failOpenEvalRun(tx, {
             companyId,
-            id: active.evalRun.id,
+            id: evalRun.id,
+            status: isQueued
+              ? Schemas.EvalRunStatusIntEnum.Queued
+              : Schemas.EvalRunStatusIntEnum.Running,
             failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
           });
           if (!failed.isSuccess)
@@ -183,7 +189,7 @@ export default class EvalRunnerRepo {
     const runPublicId = answer.evalRun.publicId;
     const started = await EvalRunWorkflowProvider.start(this.env, { companyPublicId, runPublicId });
     if (!started.isSuccess) {
-      await this.failRun(companyId, runPublicId);
+      await this.failRun(companyId, runPublicId, Schemas.EvalRunFailureIntEnum.RunnerUnavailable);
       return {
         ...this.refuse(
           Schemas.EvalRunStartFailureEnum.RunnerUnavailable,
@@ -305,14 +311,18 @@ export default class EvalRunnerRepo {
   }
 
   // DEV_NOTE: The runner couldn't start a run (its sign-in or its first step failed before /eval/runs): Queued → Failed
-  // with RunnerUnavailable. A run that already started is left to the runner's own finish.
-  async failQueuedRun(params: Schemas.EvalRunWorkflowParams): Promise<Schemas.ApiResponse> {
+  // with the stop it hit. A run that already started is left to the runner's own finish.
+  async failQueuedRun(params: Schemas.FailQueuedEvalRunParams): Promise<Schemas.ApiResponse> {
     const companyId = await this.companyIdOf(params.companyPublicId);
     if (!companyId) return { isSuccess: false, message: "Eval run not found", isNotFound: true };
-    return await this.failRun(companyId, params.runPublicId);
+    return await this.failRun(companyId, params.runPublicId, params.failure);
   }
 
-  private async failRun(companyId: string, runPublicId: string): Promise<Schemas.ApiResponse> {
+  private async failRun(
+    companyId: string,
+    runPublicId: string,
+    failure: Schemas.EvalRunFailureIntEnum,
+  ): Promise<Schemas.ApiResponse> {
     return await withTenant(this.db, companyId, async (tx): Promise<Schemas.ApiResponse> => {
       const run = await this.evalRunsDal.getEvalRun(tx, {
         companyId,
@@ -324,10 +334,11 @@ export default class EvalRunnerRepo {
       if (run.evalRun.status !== Schemas.EvalRunStatusIntEnum.Queued) {
         return { isSuccess: true, message: "Eval run already started" };
       }
-      const failed = await this.evalRunsDal.failQueuedEvalRun(tx, {
+      const failed = await this.evalRunsDal.failOpenEvalRun(tx, {
         companyId,
         id: run.evalRun.id,
-        failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+        status: Schemas.EvalRunStatusIntEnum.Queued,
+        failure,
       });
       return { isSuccess: failed.isSuccess, message: failed.message };
     });

@@ -79,8 +79,10 @@ export type StartQueuedEvalRunDALRequest = Pick<EvalRun, "companyId" | "id" | "h
   evalCaseIds: string[];
 };
 
-// DEV_NOTE: Queued → Failed, once: the runner couldn't take the run, or couldn't start it
-export type FailQueuedEvalRunDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+// DEV_NOTE: Queued or Running → Failed, once, from the status the caller read (the update's condition): the runner
+// couldn't take or start the run, or a stale run is failed by the next Run press
+export type FailOpenEvalRunDALRequest = Pick<EvalRun, "companyId" | "id"> & {
+  status: EvalRunStatusIntEnum.Queued | EvalRunStatusIntEnum.Running;
   failure: EvalRunFailureIntEnum;
 };
 

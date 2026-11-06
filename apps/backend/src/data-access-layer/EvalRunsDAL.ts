@@ -805,10 +805,11 @@ export default class EvalRunsDAL {
     return response;
   }
 
-  // DEV_NOTE: Queued → Failed, once (the status condition), with why: a run that isn't Queued any more is isNotFound
-  async failQueuedEvalRun(
+  // DEV_NOTE: Queued or Running → Failed, once (the status condition: the status the caller read), with why: a run that
+  // moved on since is isNotFound
+  async failOpenEvalRun(
     tx: NodePgTransaction<EmptyRelations>,
-    params: Schemas.FailQueuedEvalRunDALRequest,
+    params: Schemas.FailOpenEvalRunDALRequest,
   ) {
     const response: Schemas.EvalRunDALResponse = { isSuccess: false };
 
@@ -816,7 +817,7 @@ export default class EvalRunsDAL {
       const conditions = [
         eq(evalRuns.id, params.id),
         eq(evalRuns.companyId, params.companyId),
-        eq(evalRuns.status, Schemas.EvalRunStatusIntEnum.Queued),
+        eq(evalRuns.status, params.status),
       ];
       const [evalRun] = await tx
         .update(evalRuns)
@@ -830,10 +831,10 @@ export default class EvalRunsDAL {
         .returning();
 
       if (!evalRun) {
-        const message = "Eval run not found or not queued";
+        const message = "Eval run not found or no longer in that status";
         AppLogger.warn({
           category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.FailQueuedEvalRun,
+          action: Schemas.LogAction.FailOpenEvalRun,
           message,
           metadata: params,
         });
@@ -843,13 +844,13 @@ export default class EvalRunsDAL {
       }
 
       response.isSuccess = true;
-      response.message = "Queued eval run failed";
+      response.message = "Open eval run failed";
       response.evalRun = evalRun;
     } catch (error) {
-      const message = "Unknown error in failing queued eval run";
+      const message = "Unknown error in failing open eval run";
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
-        action: Schemas.LogAction.FailQueuedEvalRun,
+        action: Schemas.LogAction.FailOpenEvalRun,
         message,
         error,
         metadata: params,
