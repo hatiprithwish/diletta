@@ -1182,6 +1182,154 @@ export default class ConversationsDAL {
     return response;
   }
 
+  // DEV_NOTE: The widget's history: one host user's chats with one chatbot, joined through chatbot_users so a user who
+  // has never chatted (no row yet) simply has none, and an erased user (host id scrubbed, M6-2) has none of their old
+  // ones. Live chats only, with a first message (title) and content not purged. Last activity first, id breaks ties.
+  async getWidgetConversations(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetWidgetConversationsDALRequest,
+  ) {
+    const response: Schemas.WidgetConversationsDALResponse = { isSuccess: false };
+
+    try {
+      const rows = await this.widgetQuery(tx, params.companyId)
+        .where(and(...this.widgetConditions(params)))
+        .orderBy(desc(conversations.lastActivityAt), desc(conversations.id))
+        .limit(params.pageSize)
+        .offset((params.pageNo - 1) * params.pageSize);
+
+      response.isSuccess = true;
+      response.message = "Widget conversations fetched successfully";
+      response.conversations = rows.map((row) => ({ ...row, title: row.title ?? "" }));
+    } catch (error) {
+      const message = "Unknown error in listing widget conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetWidgetConversations,
+        message,
+        error,
+        metadata: this.widgetLogMetadata(params),
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getWidgetConversationsCount(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetWidgetConversationsCountDALRequest,
+  ) {
+    const response: Schemas.TotalRecordsResponse = { isSuccess: false };
+
+    try {
+      const joinConditions = [
+        eq(chatbotUsers.id, conversations.chatbotUserId),
+        eq(chatbotUsers.companyId, conversations.companyId),
+      ];
+      const [result] = await tx
+        .select({ total: count() })
+        .from(conversations)
+        .innerJoin(chatbotUsers, and(...joinConditions))
+        .where(and(...this.widgetConditions(params)));
+
+      response.isSuccess = true;
+      response.message = "Widget conversations counted successfully";
+      response.totalRecords = result?.total ?? 0;
+    } catch (error) {
+      const message = "Unknown error in counting widget conversations";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetWidgetConversationsCount,
+        message,
+        error,
+        metadata: this.widgetLogMetadata(params),
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: One chat of the widget's history, under the same conditions: isNotFound whether it is someone else's,
+  // another chatbot's, purged or never existed, so the answer gives none of that away
+  async getWidgetConversation(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetWidgetConversationDALRequest,
+  ) {
+    const response: Schemas.WidgetConversationDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = this.widgetConditions(params);
+      conditions.push(eq(conversations.publicId, params.publicId));
+      const [row] = await this.widgetQuery(tx, params.companyId)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (!row) {
+        const message = "Widget conversation not found";
+        AppLogger.warn({
+          category: Schemas.LogCategory.DAL,
+          action: Schemas.LogAction.GetWidgetConversation,
+          message,
+          metadata: { ...this.widgetLogMetadata(params), publicId: params.publicId },
+        });
+        response.message = message;
+        response.isNotFound = true;
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Widget conversation fetched successfully";
+      response.conversation = { ...row, title: row.title ?? "" };
+    } catch (error) {
+      const message = "Unknown error in fetching widget conversation";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetWidgetConversation,
+        message,
+        error,
+        metadata: { ...this.widgetLogMetadata(params), publicId: params.publicId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  private widgetQuery(tx: NodePgTransaction<EmptyRelations>, companyId: string) {
+    const joinConditions = [
+      eq(chatbotUsers.id, conversations.chatbotUserId),
+      eq(chatbotUsers.companyId, companyId),
+    ];
+    return tx
+      .select({
+        id: conversations.id,
+        publicId: conversations.publicId,
+        status: conversations.status,
+        lastActivityAt: conversations.lastActivityAt,
+        title: conversations.title,
+      })
+      .from(conversations)
+      .innerJoin(chatbotUsers, and(...joinConditions));
+  }
+
+  private widgetConditions(params: Schemas.GetWidgetConversationsCountDALRequest): SQL[] {
+    return [
+      eq(conversations.companyId, params.companyId),
+      eq(conversations.chatbotId, params.chatbotId),
+      eq(chatbotUsers.hostUserId, params.hostUserId),
+      isNull(conversations.evalRunId),
+      isNotNull(conversations.title),
+      isNull(conversations.contentPurgedAt),
+    ];
+  }
+
+  // DEV_NOTE: The host user id is personal: logs carry the company and chatbot only
+  private widgetLogMetadata(params: Schemas.GetWidgetConversationsCountDALRequest) {
+    return { companyId: params.companyId, chatbotId: params.chatbotId };
+  }
+
   // DEV_NOTE: The Bots table's Conversations column (M4-10): started since, per chatbot, one grouped read
   async getChatbotConversationCounts(
     tx: NodePgTransaction<EmptyRelations>,

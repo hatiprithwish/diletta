@@ -117,3 +117,20 @@ export type CloseConversationPastRetentionDALRequest = Pick<
 export type ClearConversationContentDALRequest = Pick<Conversation, "companyId"> & {
   conversationId: string;
 };
+
+// DEV_NOTE: The widget's history: one host user's chats with one chatbot (through chatbot_users.host_user_id), live
+// chats only (no eval), with a message (title set) and content not purged
+export type GetWidgetConversationsCountDALRequest = Pick<
+  Conversation,
+  "companyId" | "chatbotId"
+> & {
+  hostUserId: string;
+};
+
+export type GetWidgetConversationsDALRequest = GetWidgetConversationsCountDALRequest & {
+  pageNo: number;
+  pageSize: number;
+};
+
+export type GetWidgetConversationDALRequest = GetWidgetConversationsCountDALRequest &
+  Pick<Conversation, "publicId">;

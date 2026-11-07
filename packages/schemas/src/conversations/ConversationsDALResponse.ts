@@ -60,3 +60,18 @@ export interface OldestErasedUserPendingDALResponse extends ApiResponse {
 export interface OldestConversationPastRetentionDALResponse extends ApiResponse {
   lastActivityAt?: Date | null;
 }
+
+// DEV_NOTE: One chat of the widget's history (id is internal: the Repo reads its messages with it). title is never null
+// here (the read requires it).
+export type WidgetConversationRow = Pick<
+  Conversation,
+  "id" | "publicId" | "status" | "lastActivityAt"
+> & { title: string };
+
+export interface WidgetConversationsDALResponse extends ApiResponse {
+  conversations?: WidgetConversationRow[];
+}
+
+export interface WidgetConversationDALResponse extends ApiResponse {
+  conversation?: WidgetConversationRow;
+}
