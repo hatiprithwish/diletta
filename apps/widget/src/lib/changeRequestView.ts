@@ -118,10 +118,41 @@ const formatDate = (date: Date): string => {
   return `${part("day")} ${part("month")} ${part("year")}`;
 };
 
-// DEV_NOTE: A host value as the card shows it: null = empty; a plain date (YYYY-MM-DD) as "22 Sep 2026"
+// DEV_NOTE: An object or array (or a string holding one) as indented JSON, one level per line, so the diff line can
+// show it as a block instead of one run of text. Anything else is null.
+function prettyJson(raw: unknown): string | null {
+  let parsed = raw;
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text.startsWith("{") && !text.startsWith("[")) return null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  return typeof parsed === "object" && parsed !== null ? JSON.stringify(parsed, null, 2) : null;
+}
+
+// DEV_NOTE: A value too long or too broken into lines to sit beside its field name: it gets a block of its own. Code
+// (JSON, HTML, JS, a stylesheet) reads in mono; plain prose keeps the body font, both with their line breaks and
+// indentation kept.
+const BLOCK_VALUE_MIN_LENGTH = 80;
+export const isBlockValue = (text: string | null): text is string =>
+  text !== null && (text.includes("\n") || text.length > BLOCK_VALUE_MIN_LENGTH);
+export const isCodeValue = (text: string): boolean =>
+  /^\s*[{[<]/.test(text) ||
+  /[;{}]\s*\n/.test(text) ||
+  /^ {2,}\S/m.test(text) ||
+  /^\t+\S/m.test(text);
+
+// DEV_NOTE: A host value as the card shows it: null = empty; a plain date (YYYY-MM-DD) as "22 Sep 2026"; structured
+// JSON indented over several lines
 export function displayValue(value: Schemas.ChangeRequestValue): string | null {
   if (!value.isFound || value.value === null) return null;
   const raw = value.value;
+  const pretty = prettyJson(raw);
+  if (pretty !== null) return pretty;
   if (typeof raw === "string") {
     if (ISO_DATE.test(raw)) {
       const date = new Date(`${raw}T00:00:00Z`);

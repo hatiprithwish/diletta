@@ -3,6 +3,8 @@ import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
 import {
   displayValue,
+  isBlockValue,
+  isCodeValue,
   groupChangeRequests,
   parseEditText,
   readStepLabel,
@@ -363,6 +365,24 @@ describe("displayValue and parseEditText", () => {
     expect(displayValue({ isFound: true, value: "2026-09-22" })).toBe("22 Sep 2026");
     expect(displayValue({ isFound: false })).toBeNull();
     expect(displayValue({ isFound: true, value: null })).toBeNull();
+  });
+
+  it("indents structured JSON, whether it arrives as an object or as a string holding one", () => {
+    const object = { steps: [{ id: "a" }] };
+    const expected = JSON.stringify(object, null, 2);
+    expect(displayValue({ isFound: true, value: object })).toBe(expected);
+    expect(displayValue({ isFound: true, value: JSON.stringify(object) })).toBe(expected);
+    expect(displayValue({ isFound: true, value: "{not json" })).toBe("{not json");
+  });
+
+  it("gives long or multi-line text a block, and reads code apart from prose", () => {
+    expect(isBlockValue(null)).toBe(false);
+    expect(isBlockValue("Gold")).toBe(false);
+    expect(isBlockValue("<p>a</p>\n<p>b</p>")).toBe(true);
+    expect(isBlockValue("word ".repeat(20))).toBe(true);
+    expect(isCodeValue("<div>\n  <p>Hi</p>\n</div>")).toBe(true);
+    expect(isCodeValue("const a = 1;\nconst b = 2;")).toBe(true);
+    expect(isCodeValue("12 High Street\nLondon")).toBe(false);
   });
 
   it("parses the editor's text to the field's type, refusing what can't fit", () => {
