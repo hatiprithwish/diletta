@@ -1,5 +1,6 @@
 import type { ActingCompany, AdminProfile } from "../admins";
 import type { CompanyConnectionWithStatus } from "../companyConnections";
+import type { SyncToolContractApiResponse } from "../toolContracts";
 import type {
   OperatorToolStatusTabEnum,
   ToolDefinitionIdempotencyModeIntEnum,
@@ -1070,6 +1071,19 @@ export interface DashboardOperatorLoadToolSetDialogProps extends DashboardDialog
 
 export interface DashboardOperatorToolSetResultProps {
   tools: ToolSetTool[];
+  onClose: () => void;
+}
+
+// DEV_NOTE: ADR 0009. A connection's contract sync: the card's row with Check changes / Sync now, and the dialog that
+// shows what the spec read found (isDryRun: nothing was written)
+export interface DashboardOperatorContractSyncRowProps {
+  companyPublicId: string;
+  connection: CompanyConnectionWithStatus;
+}
+
+export interface DashboardOperatorContractSyncResultProps {
+  isDryRun: boolean;
+  response: SyncToolContractApiResponse | null;
   onClose: () => void;
 }
 

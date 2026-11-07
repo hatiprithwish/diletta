@@ -151,7 +151,100 @@ A field eRegister reshapes when it is read isn't compared. That covers a registe
 
 One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md`): open it, **New version**, edit the draft, save, **Make active**. The steps below change them all from code, so the next seed keeps them:
 
-1. A change to an eRegister request body needs nothing here: the schema syncs from the spec (`docs/runbooks/tool-contracts.md`). Change a binding (the fields a tool sends, its readback, undo or approval) in `packages/schemas/src/eregister/EregisterTools.ts` and `EregisterCommon.ts` (`EREGISTER_BODY_FIELDS`). One-time per eRegister connection, set its spec URL and shaping (`PATCH /operator/companies/<companyPublicId>/connections/<connectionPublicId>` with `{ "companyConnection": { "openapiUrl": "<eRegister API>/api/openapi.json", "openapiShaping": <Schemas.EREGISTER_OPENAPI_SHAPING> } }`).
+1. A change to an eRegister request body needs nothing here: the schema syncs from the spec (`docs/runbooks/tool-contracts.md`). Change a binding (the fields a tool sends, its readback, undo or approval) in `packages/schemas/src/eregister/EregisterTools.ts` and `EregisterCommon.ts` (`EREGISTER_BODY_FIELDS`). One-time per eRegister connection, set its spec URL (`<eRegister API>/api/openapi.json`) and shaping on the operator pages (Company › Connections › Edit › **OpenAPI spec**), then press **Sync now** on the Connections card. The shaping is `Schemas.EREGISTER_OPENAPI_SHAPING`; paste:
+
+```json
+{
+  "isDefaultRequired": true,
+  "replaceComponents": {
+    "FormField": {
+      "type": "object",
+      "description": "One form field: { id, label, type, isRequired, ... }. Call eregister_get_field_types with the type for its exact shape.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "label", "type"],
+      "additionalProperties": true
+    },
+    "TableFormField": {
+      "type": "object",
+      "description": "One form field: { id, label, type, isRequired, ... }. Call eregister_get_field_types with the type for its exact shape.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "label", "type"],
+      "additionalProperties": true
+    },
+    "ExtendedFormField": {
+      "type": "object",
+      "description": "One form field: { id, label, type, isRequired, ... }. Call eregister_get_field_types with the type for its exact shape.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "label", "type"],
+      "additionalProperties": true
+    },
+    "ReviewFormField": {
+      "type": "object",
+      "description": "One form field: { id, label, type, isRequired, ... }. Call eregister_get_field_types with the type for its exact shape.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "label", "type"],
+      "additionalProperties": true
+    },
+    "LayoutFormField": {
+      "type": "object",
+      "description": "One form field: { id, label, type, isRequired, ... }. Call eregister_get_field_types with the type for its exact shape.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "label", "type"],
+      "additionalProperties": true
+    }
+  }
+}
+```
 
 2. Store the tools on the connection. On the company's page › **Tools › Load tool set**, pick eRegister and the connection. It loads the set the deployed backend was built with, so deploy the change first. Each tool ends active at its newest version, and each change records an audit row as you. The dialog shows the `{name, version}` pins. The API is `POST /operator/companies/<companyPublicId>/tool-definitions/tool-sets` with `{ "toolSet": "eregister", "connectionPublicId": "<connectionPublicId>" }`.
 

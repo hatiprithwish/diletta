@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -581,6 +581,8 @@ describe("Connections", () => {
         jwtIssuer: "https://staging-api.harbor.example",
         allowedOrigins: ["https://app.harbor.example"],
         resetOp: null,
+        openapiUrl: null,
+        openapiShaping: null,
       },
     });
     expect(toast.success).toHaveBeenCalledWith("Connection added.");
@@ -649,6 +651,8 @@ describe("Connections", () => {
         jwtIssuer: "https://staging-api.eregister.example",
         authConfig: {},
         allowedOrigins: ["https://app.eregister.example", "http://localhost:5173"],
+        openapiUrl: null,
+        openapiShaping: null,
         status: Schemas.CompanyConnectionStatusIntEnum.Disabled,
         resetOp: { method: "POST", path: "/test-data/reset" },
       },
@@ -728,6 +732,226 @@ describe("Connections", () => {
     expect(
       await within(section).findByText("None. Admins can't run tests yet."),
     ).toBeInTheDocument();
+  });
+});
+
+const SPEC_URL = "https://api.eregister.example/api/openapi.json";
+const WITH_SPEC: Schemas.CompanyConnectionWithStatus = {
+  ...STAGING,
+  openapiUrl: SPEC_URL,
+  openapiSpecHash: "abc",
+  openapiSyncedAt: new Date(Date.now() - 5 * 60_000),
+};
+
+// DEV_NOTE: The company's connections with the staging one reading a spec; every other call as usual
+const withSpecApi =
+  (contractSync?: { status: number; body: unknown }): Handler =>
+  (url, init) => {
+    const path = new URL(url, "http://api.test").pathname;
+    if (path.endsWith("/cmp_1/connections") && (init?.method ?? "GET") === "GET") {
+      return {
+        status: 200,
+        body: { isSuccess: true, companyConnections: [WITH_SPEC, PRODUCTION] },
+      };
+    }
+    if (path.endsWith("/con_stg/contract-sync") && contractSync) return contractSync;
+    return null;
+  };
+
+describe("Connection OpenAPI spec", () => {
+  it("says tools keep their schemas when a connection has no spec", async () => {
+    mockApi();
+    renderPage("/operator/companies/cmp_1");
+
+    const staging = await screen.findByRole("group", { name: "Staging connection" });
+    expect(
+      within(staging).getByText("None. Tools keep the schemas they were loaded with."),
+    ).toBeInTheDocument();
+    expect(within(staging).queryByRole("button", { name: "Sync now" })).not.toBeInTheDocument();
+  });
+
+  it("shows the spec address, when it was synced and why the last sync failed", async () => {
+    mockApi((url, init) => {
+      const path = new URL(url, "http://api.test").pathname;
+      if (path.endsWith("/cmp_1/connections") && (init?.method ?? "GET") === "GET") {
+        return {
+          status: 200,
+          body: {
+            isSuccess: true,
+            companyConnections: [
+              {
+                ...WITH_SPEC,
+                openapiFailure: Schemas.ToolContractSyncFailureIntEnum.FetchFailed,
+              },
+            ],
+          },
+        };
+      }
+      return null;
+    });
+    renderPage("/operator/companies/cmp_1");
+
+    const staging = await screen.findByRole("group", { name: "Staging connection" });
+    expect(within(staging).getByText(SPEC_URL)).toBeInTheDocument();
+    expect(within(staging).getByText("Synced 5 minutes ago")).toBeInTheDocument();
+    expect(within(staging).getByText("Couldn't fetch the spec")).toBeInTheDocument();
+  });
+
+  it("checks what would change without writing, then lists each tool's change", async () => {
+    const fetchMock = mockApi(
+      withSpecApi({
+        status: 200,
+        body: {
+          isSuccess: true,
+          isDryRun: true,
+          changes: [
+            {
+              name: "eregister_create_action",
+              fromVersion: 1,
+              toVersion: null,
+              change: Schemas.ToolSchemaChangeEnum.Breaking,
+              notes: ["flowSchema.steps.dependencies: now required"],
+            },
+          ],
+        },
+      }),
+    );
+    renderPage("/operator/companies/cmp_1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Check changes" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Checked the spec")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/would get a new version\. Nothing was written/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("eregister_create_action")).toBeInTheDocument();
+    expect(within(dialog).getByText("Breaking")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("flowSchema.steps.dependencies: now required"),
+    ).toBeInTheDocument();
+    const [[, init]] = calls(fetchMock, "POST", "/connections/con_stg/contract-sync");
+    expect(JSON.parse(String(init?.body))).toEqual({ isDryRun: true });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("syncs for real, says the new versions are active and refreshes the connections", async () => {
+    const fetchMock = mockApi(
+      withSpecApi({
+        status: 200,
+        body: {
+          isSuccess: true,
+          isDryRun: false,
+          changes: [
+            {
+              name: "eregister_get_register",
+              fromVersion: 1,
+              toVersion: 2,
+              change: Schemas.ToolSchemaChangeEnum.Additive,
+              notes: ["note: new optional field"],
+            },
+          ],
+          skipped: ["eregister_update_register"],
+        },
+      }),
+    );
+    renderPage("/operator/companies/cmp_1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Synced the spec")).toBeInTheDocument();
+    expect(within(dialog).getByText(/got a new active version/)).toBeInTheDocument();
+    expect(within(dialog).getByText("v1 → v2")).toBeInTheDocument();
+    expect(within(dialog).getByText("Adds only")).toBeInTheDocument();
+    expect(within(dialog).getByText("eregister_update_register")).toBeInTheDocument();
+    const [[, init]] = calls(fetchMock, "POST", "/connections/con_stg/contract-sync");
+    expect(JSON.parse(String(init?.body))).toEqual({ isDryRun: false });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Tools updated from the spec."));
+    await waitFor(() =>
+      expect(calls(fetchMock, "GET", "/cmp_1/connections").length).toBeGreaterThan(1),
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("says when every tool already matches", async () => {
+    mockApi(
+      withSpecApi({ status: 200, body: { isSuccess: true, isUnchanged: true, changes: [] } }),
+    );
+    renderPage("/operator/companies/cmp_1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+
+    expect(
+      await within(await screen.findByRole("dialog")).findByText(
+        "The spec hasn't changed since the last sync.",
+      ),
+    ).toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledWith("Every tool already matches.");
+  });
+
+  it("names why the spec couldn't be read, in the dialog and a toast", async () => {
+    mockApi(
+      withSpecApi({
+        status: 502,
+        body: {
+          isSuccess: false,
+          failure: Schemas.ToolContractSyncFailureIntEnum.FetchFailed,
+          problems: [],
+        },
+      }),
+    );
+    renderPage("/operator/companies/cmp_1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("Couldn't fetch the spec")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Tools keep the schemas they have/)).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith("Couldn't fetch the spec.");
+  });
+
+  it("saves the spec address and shaping with the connection", async () => {
+    const fetchMock = mockApi((url, init) =>
+      init?.method === "PATCH"
+        ? { status: 200, body: { isSuccess: true, companyConnection: STAGING } }
+        : null,
+    );
+    renderPage("/operator/companies/cmp_1/connections/con_stg");
+
+    await userEvent.type(await screen.findByLabelText("Spec address"), SPEC_URL);
+    fireEvent.change(screen.getByLabelText("How schemas are shaped"), {
+      target: { value: '{"isDefaultRequired":true,"replaceComponents":{}}' },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(calls(fetchMock, "PATCH", "/connections/con_stg")).toHaveLength(1));
+    const [[, init]] = calls(fetchMock, "PATCH", "/connections/con_stg");
+    const { companyConnection } = JSON.parse(String(init?.body)) as {
+      companyConnection: Record<string, unknown>;
+    };
+    expect(companyConnection.openapiUrl).toBe(SPEC_URL);
+    expect(companyConnection.openapiShaping).toEqual({
+      isDefaultRequired: true,
+      replaceComponents: {},
+    });
+  });
+
+  it("refuses an address that isn't https and shaping that isn't valid, before sending", async () => {
+    const fetchMock = mockApi();
+    renderPage("/operator/companies/cmp_1/connections/con_stg");
+
+    await userEvent.type(await screen.findByLabelText("Spec address"), "http://api.example/spec");
+    fireEvent.change(screen.getByLabelText("How schemas are shaped"), {
+      target: { value: '{"isDefaultRequired":"yes"}' },
+    });
+
+    expect(screen.getByLabelText("Spec address")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("How schemas are shaped")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(calls(fetchMock, "PATCH", "/connections")).toHaveLength(0);
   });
 });
 

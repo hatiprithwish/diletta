@@ -22,6 +22,7 @@ import { PageError } from "@/components/page-state";
 import { SectionHeader } from "@/components/section-header";
 import { StatusChip } from "@/components/status-chip";
 import Utilities from "@/utils";
+import { ContractSyncRow } from "./-ContractSync";
 import {
   connectionFailure,
   useCompanyConnection,
@@ -176,6 +177,9 @@ function ConnectionCard({
           ) : (
             <span className="text-muted-foreground">None: the widget opens nowhere yet</span>
           )}
+        </ConnectionRow>
+        <ConnectionRow label="OpenAPI spec">
+          <ContractSyncRow companyPublicId={companyPublicId} connection={connection} />
         </ConnectionRow>
         {connection.companyConnectionEnvironment === Staging && (
           <ConnectionRow label="Test sign-in">
@@ -492,6 +496,22 @@ function originsIssue(text: string) {
   return undefined;
 }
 
+function openapiUrlIssue(text: string) {
+  return text.trim() === "" ? undefined : schemaIssue(Schemas.ZToolContractUrl, text.trim());
+}
+
+// DEV_NOTE: Empty = the default shaping (nothing replaced, a default doesn't make a field required)
+function openapiShapingIssue(text: string) {
+  if (text.trim() === "") return undefined;
+  const parsed = parseJson(text);
+  if (!parsed.isValid) return "Must be JSON";
+  return schemaIssue(Schemas.ZOpenApiShaping, parsed.value);
+}
+
+function toOpenapiShaping(text: string): Schemas.OpenApiShaping | null {
+  return text.trim() === "" ? null : Schemas.ZOpenApiShaping.parse(JSON.parse(text));
+}
+
 function resetOpIssue(text: string) {
   const parsed = parseJson(text);
   if (!parsed.isValid) return "Must be JSON";
@@ -529,6 +549,10 @@ function ConnectionForm({
       resetOp: connection?.resetOp
         ? JSON.stringify(connection.resetOp, null, 2)
         : '{\n  "method": "POST",\n  "path": "/"\n}',
+      openapiUrl: connection?.openapiUrl ?? "",
+      openapiShaping: connection?.openapiShaping
+        ? JSON.stringify(connection.openapiShaping, null, 2)
+        : "",
       isActive:
         (connection?.companyConnectionStatus ?? Schemas.CompanyConnectionStatusIntEnum.Active) ===
         Schemas.CompanyConnectionStatusIntEnum.Active,
@@ -550,6 +574,8 @@ function ConnectionForm({
               jwtIssuer: value.jwtIssuer,
               authConfig,
               allowedOrigins: toOrigins(value.origins),
+              openapiUrl: value.openapiUrl.trim() || null,
+              openapiShaping: toOpenapiShaping(value.openapiShaping),
               status: value.isActive
                 ? Schemas.CompanyConnectionStatusIntEnum.Active
                 : Schemas.CompanyConnectionStatusIntEnum.Disabled,
@@ -568,6 +594,8 @@ function ConnectionForm({
               jwtIssuer: value.jwtIssuer,
               allowedOrigins: toOrigins(value.origins),
               resetOp,
+              openapiUrl: value.openapiUrl.trim() || null,
+              openapiShaping: toOpenapiShaping(value.openapiShaping),
             },
           });
         }
@@ -781,6 +809,64 @@ function ConnectionForm({
               />
               <FieldDescription>
                 One per line. The widget only opens on these sites. Exact origins, no paths.
+              </FieldDescription>
+              <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
+            </Field>
+          )}
+        </form.Field>
+      </section>
+
+      <section className="flex flex-col gap-5" aria-label="OpenAPI spec">
+        <SectionHeader
+          title="OpenAPI spec"
+          description="The app's own description of its API. Tools take their input schemas from it, so a change in the app reaches the tools without anyone editing them."
+        />
+        <form.Field
+          name="openapiUrl"
+          validators={{ onChange: ({ value }) => openapiUrlIssue(value) }}
+        >
+          {(field) => (
+            <Field data-invalid={field.state.meta.errors.length > 0}>
+              <FieldLabel htmlFor="connection-openapi-url">Spec address</FieldLabel>
+              <Input
+                id="connection-openapi-url"
+                className="font-mono text-mono-value"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(event) => field.handleChange(event.target.value)}
+                placeholder="https://api.example.com/openapi.json"
+                aria-invalid={field.state.meta.errors.length > 0}
+              />
+              <FieldDescription>
+                A public https address that serves the spec as JSON, no sign-in. Leave empty to keep
+                tools as they are. After saving, Sync now on the company&apos;s Connections reads
+                it.
+              </FieldDescription>
+              <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
+            </Field>
+          )}
+        </form.Field>
+        <form.Field
+          name="openapiShaping"
+          validators={{ onChange: ({ value }) => openapiShapingIssue(value) }}
+        >
+          {(field) => (
+            <Field data-invalid={field.state.meta.errors.length > 0}>
+              <FieldLabel htmlFor="connection-openapi-shaping">How schemas are shaped</FieldLabel>
+              <Textarea
+                id="connection-openapi-shaping"
+                className="font-mono text-mono-value"
+                rows={5}
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(event) => field.handleChange(event.target.value)}
+                placeholder={JSON.stringify(Schemas.DEFAULT_OPENAPI_SHAPING, null, 2)}
+                aria-invalid={field.state.meta.errors.length > 0}
+              />
+              <FieldDescription>
+                Optional JSON. isDefaultRequired: a field with a default must be sent.
+                replaceComponents: a large shared shape swapped for a short one. Empty = the
+                placeholder above.
               </FieldDescription>
               <FieldError errors={Utilities.toFieldErrors(field.state.meta.errors)} />
             </Field>
