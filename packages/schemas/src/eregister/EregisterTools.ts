@@ -86,6 +86,9 @@ interface EregisterArea {
   createdId: string;
   readQuery?: Record<string, string>;
   createBody: EregisterBodyName;
+  // The create takes a list of records (eRegister's widget create is bulk): the body's fields go in one item of this
+  // array field, and createExtra (the owner) stays at the root
+  createCollection?: string;
   createExtra?: Record<string, Record<string, unknown>>;
   createRequired?: string[];
   createConstants?: Record<string, number | string>;
@@ -135,10 +138,19 @@ function areaTools(area: EregisterArea): EregisterToolDefinition[] {
         callOp: {
           method: ToolOpMethodEnum.Post,
           path: area.path,
-          bodyMap: {
-            ...area.createConstants,
-            ...argsBodyMap([...Object.keys(area.createExtra ?? {}), ...bodyNames(area.createBody)]),
-          },
+          bodyMap: area.createCollection
+            ? {
+                ...area.createConstants,
+                ...argsBodyMap(Object.keys(area.createExtra ?? {})),
+                [area.createCollection]: [argsBodyMap(bodyNames(area.createBody))],
+              }
+            : {
+                ...area.createConstants,
+                ...argsBodyMap([
+                  ...Object.keys(area.createExtra ?? {}),
+                  ...bodyNames(area.createBody),
+                ]),
+              },
         },
         readbackOp: {
           method: ToolOpMethodEnum.Get,
@@ -416,8 +428,10 @@ const AREAS: EregisterArea[] = [
     idDescription: "The widget's id",
     root: "data",
     idField: "id",
-    createdId: "data.id",
+    // eRegister's widget create is bulk: { entityType, entityId, widgets: [..] } answers { data: { created, failed } }
+    createdId: "data.created.0.id",
     createBody: "createWidgetBody",
+    createCollection: "widgets",
     createExtra: {
       entityType: {
         type: "integer",
