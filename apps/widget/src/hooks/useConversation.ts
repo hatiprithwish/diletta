@@ -311,6 +311,18 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     storeApi.getState().startOver(null);
   }, [chat.isStreaming, chat.status, resetReview, setConversation, setMessages, stop, storeApi]);
 
+  // DEV_NOTE: Your chats (history): pick up another of the user's open chats. It is saved like a new one and the
+  // session remounts on it; the socket opens on the open panel and the server checks the resume as for a reload.
+  const openConversation = useCallback(
+    (publicId: string) => {
+      if (chat.isStreaming || chat.status === "submitted") void stop();
+      setConversation(publicId);
+      resetReview();
+      storeApi.getState().startOver(publicId);
+    },
+    [chat.isStreaming, chat.status, resetReview, setConversation, stop, storeApi],
+  );
+
   const rate = useCallback(
     (messageId: string, rating: Schemas.FeedbackRatingIntEnum) => {
       if (!isReady) return;
@@ -326,6 +338,7 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     isStreaming: chat.isStreaming,
     isSubmitted: chat.status === "submitted",
     send,
+    openConversation,
     stop: () => void stop(),
     retry,
     newChat,

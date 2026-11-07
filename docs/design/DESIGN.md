@@ -237,8 +237,9 @@ Anatomy (`widget-Welcome` … `widget-Unavailable`):
   them, its brand-as-text colour for links and the focus ring, and a brand tint mixed from the fill.
   Diffs and success keep their green. Without it the widget is lime. The host passes the values for
   its current mode and updates them when the mode or the brand colour changes.
-- Header: bot name (14/600), status dot + word (Online, Working, Unavailable), New chat, Close
-  (icon buttons in `text-subtle-foreground`).
+- Header: bot name (14/600), status dot + word (Online, Working, Unavailable), Your chats, New chat,
+  Close (icon buttons in `text-subtle-foreground`).
+- Your chats and a past chat use a sub-header instead: Back, title (and its line under it), Close.
 - Messages: user = right-aligned `bubble` pill; assistant = plain text, no bubble.
 - Cards (approval, verified, mismatch): 1px border, radius 12; header with icon + title + one line;
   record rows with mono ID; footer actions.
@@ -249,19 +250,22 @@ Anatomy (`widget-Welcome` … `widget-Unavailable`):
 
 States:
 
-| State                   | File                        | Shown when                   | Key UI                                                                     |
-| ----------------------- | --------------------------- | ---------------------------- | -------------------------------------------------------------------------- |
-| Closed                  | `host-Launcher`             | widget not open              | launcher only                                                              |
-| Welcome                 | `widget-Welcome`            | new chat                     | greeting, 3 suggestion buttons                                             |
-| Streaming               | `widget-Streaming`          | turn running                 | tool steps (done ✓ / running spinner), text with caret, Stop               |
-| Answer with citations   | `host-Main`                 | answer used knowledge        | numbered markers, Sources list, thumbs                                     |
-| Approval                | `widget-Approval`           | change request `proposed`    | diff per record, Approve N changes / Edit / Reject, expiry note            |
-| Editing                 | `widget-Editing`            | user chose Edit              | inputs per field, remove record, Save edits / Cancel, "checked again" note |
-| Bulk review             | `widget-Bulk`               | many records                 | table with checkboxes, "N of M", Approve N                                 |
-| Verified                | `widget-Verified`           | `verified`                   | per-record ✓, Undo + "available until"                                     |
-| Changes undone          | `widget-MismatchAutoUndone` | `mismatch` → auto-undo done  | expected vs found, Try again, Open record                                  |
-| Needs a person          | `widget-MismatchNeedsHuman` | `needs_human`                | which records saved, which is flagged, Open record                         |
-| Temporarily unavailable | `widget-Unavailable`        | model key / provider failure | status card, Try again, composer disabled                                  |
+| State                     | File                               | Shown when                   | Key UI                                                                                |
+| ------------------------- | ---------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
+| Closed                    | `host-Launcher`                    | widget not open              | launcher only                                                                         |
+| Welcome                   | `widget-Welcome`                   | new chat                     | greeting, 3 suggestion buttons                                                        |
+| Streaming                 | `widget-Streaming`                 | turn running                 | tool steps (done ✓ / running spinner), text with caret, Stop                          |
+| Answer with citations     | `host-Main`                        | answer used knowledge        | numbered markers, Sources list, thumbs                                                |
+| Approval                  | `widget-Approval`                  | change request `proposed`    | diff per record, Approve N changes / Edit / Reject, expiry note                       |
+| Editing                   | `widget-Editing`                   | user chose Edit              | inputs per field, remove record, Save edits / Cancel, "checked again" note            |
+| Bulk review               | `widget-Bulk`                      | many records                 | table with checkboxes, "N of M", Approve N                                            |
+| Verified                  | `widget-Verified`                  | `verified`                   | per-record ✓, Undo + "available until"                                                |
+| Changes undone            | `widget-MismatchAutoUndone`        | `mismatch` → auto-undo done  | expected vs found, Try again, Open record                                             |
+| Needs a person            | `widget-MismatchNeedsHuman`        | `needs_human`                | which records saved, which is flagged, Open record                                    |
+| Temporarily unavailable   | `widget-Unavailable`               | model key / provider failure | status card, Try again, composer disabled                                             |
+| Your chats                | `?gallery` › Your chats            | user opened Your chats       | New chat, rows grouped Today / Yesterday / Earlier, brand dot on open ones, Show more |
+| Your chats: empty / error | `?gallery` › Your chats: …         | no chats yet / read failed   | "No past chats yet" + Back to chat; "Your chats didn't load" + Try again              |
+| A chat that has ended     | `?gallery` › A chat that has ended | user picked an ended chat    | messages + sources read-only, no composer, Start a new chat                           |
 
 Silent token refresh has no UI by design.
 

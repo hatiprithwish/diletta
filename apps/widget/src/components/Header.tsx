@@ -1,18 +1,19 @@
-import { Plus, X } from "@phosphor-icons/react";
+import { ClockCounterClockwise, Plus, X } from "@phosphor-icons/react";
 import { Button } from "@app/ui/components/button";
 import { cn } from "@app/ui/lib/utils";
 import * as Schemas from "@app/schemas";
 
-// DEV_NOTE: Bot name, status dot + word (Online, Working, Unavailable), New chat and Close (DESIGN.md §7)
+// DEV_NOTE: Bot name, status dot + word (Online, Working, Unavailable), Your chats, New chat and Close (DESIGN.md §7)
 export default function Header({
   chatbotName,
   status,
+  onHistory,
   onNewChat,
   onClose,
 }: Schemas.WidgetHeaderProps) {
   return (
-    <div className="flex items-center gap-2.5 py-3.5 pr-3.5 pl-4.5">
-      <span className="flex min-w-0 grow flex-col">
+    <div className="flex items-center gap-1 py-3.5 pr-3.5 pl-4.5">
+      <span className="mr-1.5 flex min-w-0 grow flex-col">
         <span className="truncate text-sm font-semibold tracking-tight">{chatbotName}</span>
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
           <span
@@ -26,6 +27,15 @@ export default function Header({
           {status}
         </span>
       </span>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Your chats"
+        onClick={onHistory}
+        className="text-subtle-foreground"
+      >
+        <ClockCounterClockwise />
+      </Button>
       <Button
         variant="ghost"
         size="icon"

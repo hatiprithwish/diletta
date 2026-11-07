@@ -582,3 +582,111 @@ describe("<DilettaWidget />", () => {
     view.unmount();
   });
 });
+
+// DEV_NOTE: Your chats (history) end to end: the list read with a bearer token, an ended chat shown read-only from its
+// own read, an open one picked up over the socket and saved
+describe("Your chats", () => {
+  const LIST: Schemas.WidgetConversationsApiResponse = {
+    isSuccess: true,
+    conversations: [
+      {
+        publicId: "conv-open",
+        title: "How do I export the visitor log?",
+        isOpen: true,
+        lastActivityAt: new Date().toISOString(),
+      },
+      {
+        publicId: "conv-old",
+        title: "Add a fire drill for Hall B on Friday",
+        isOpen: false,
+        lastActivityAt: new Date().toISOString(),
+      },
+    ],
+    totalRecords: 2,
+  };
+  const PAST: Schemas.WidgetConversationApiResponse = {
+    isSuccess: true,
+    conversation: {
+      ...LIST.conversations![1]!,
+      messages: [
+        { publicId: "m1", role: "user", text: "Add a fire drill for Hall B", citations: [] },
+        { publicId: "m2", role: "assistant", text: "Booked for Friday at 14:00.", citations: [] },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    fetchMock.mockImplementation(async (input: URL) => {
+      const url = input.toString();
+      if (url.includes("/widget/conversations/conv-old")) return new Response(JSON.stringify(PAST));
+      if (url.includes("/widget/conversations")) return new Response(JSON.stringify(LIST));
+      return new Response(JSON.stringify({ isSuccess: true, bootstrap: BOOTSTRAP }));
+    });
+  });
+
+  it("lists the user's chats, shows an ended one read-only, and starts a new chat from it", async () => {
+    act(() => {
+      diletta().init({ apiBase: API_BASE, chatbot: "bot-1", getToken });
+      diletta().open();
+    });
+    const panel = shadow();
+    await userEvent.click(await panel.findByRole("button", { name: "Your chats" }));
+    const ended = await panel.findByRole("button", {
+      name: /Add a fire drill for Hall B on Friday/,
+    });
+    const listCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/widget/conversations?"),
+    ) as [URL, RequestInit];
+    expect(listCall[0].toString()).toBe(`${API_BASE}/widget/conversations?pageNo=1&chatbot=bot-1`);
+    expect(listCall[1].headers).toEqual({ Authorization: `Bearer ${TOKEN}` });
+    expect(panel.getByText(/^Ongoing · /)).toBeInTheDocument();
+
+    await userEvent.click(ended);
+    expect(await panel.findByText("Booked for Friday at 14:00.")).toBeInTheDocument();
+    expect(
+      panel.getByText("This chat has ended. You can read it but not reply."),
+    ).toBeInTheDocument();
+    expect(panel.queryByLabelText("Message")).not.toBeInTheDocument();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    await userEvent.click(panel.getByRole("button", { name: "Start a new chat" }));
+    expect(
+      await panel.findByRole("heading", { name: "Hi, what do you need?" }),
+    ).toBeInTheDocument();
+  });
+
+  it("picks up an open chat over the socket and saves it", async () => {
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    const panel = shadow();
+    await userEvent.click(await panel.findByRole("button", { name: "Your chats" }));
+    await userEvent.click(
+      await panel.findByRole("button", { name: /How do I export the visitor log\?/ }),
+    );
+    const socket = await nextSocket(0);
+    expect(socket.url).toContain("conversation=conv-open");
+    expect(storage.getItem(await savedKeyFor("host-user-1"))).toBe("conv-open");
+    expect(panel.getByLabelText("Message")).toBeInTheDocument();
+  });
+
+  it("goes back to the chat from Your chats, and offers a retry when the list doesn't load", async () => {
+    fetchMock.mockImplementation(async (input: URL) =>
+      input.toString().includes("/widget/conversations")
+        ? new Response("{}", { status: 500 })
+        : new Response(JSON.stringify({ isSuccess: true, bootstrap: BOOTSTRAP })),
+    );
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    const panel = shadow();
+    await userEvent.click(await panel.findByRole("button", { name: "Your chats" }));
+    expect(await panel.findByText("Your chats didn't load")).toBeInTheDocument();
+    await userEvent.click(panel.getByRole("button", { name: "Back to chat" }));
+    expect(
+      await panel.findByRole("heading", { name: "Hi, what do you need?" }),
+    ).toBeInTheDocument();
+  });
+});

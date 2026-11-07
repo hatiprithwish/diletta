@@ -12,6 +12,9 @@ export const EMPTY_REVIEW: Schemas.WidgetChangeReviewState = {
   notices: {},
 };
 
+// DEV_NOTE: The panel shows the chat unless the visitor opened Your chats or a past chat
+const CHAT_SCREEN: Schemas.WidgetScreen = { kind: "chat" };
+
 // DEV_NOTE: One store per embedded widget (not a module singleton), so two widgets on a page, or a test, never share
 // state. The script-tag controller and the React component both drive it.
 export function createWidgetStore(
@@ -32,6 +35,7 @@ export function createWidgetStore(
     ratings: {},
     pendingRatings: {},
     review: EMPTY_REVIEW,
+    screen: CHAT_SCREEN,
     setOpen: (isOpen) => set({ isOpen }),
     setTheme: (nextTheme) => set({ theme: nextTheme }),
     setAccent: (nextAccent) => set({ accent: nextAccent }),
@@ -47,7 +51,9 @@ export function createWidgetStore(
         ratings: {},
         pendingRatings: {},
         review: EMPTY_REVIEW,
+        screen: CHAT_SCREEN,
       }),
+    setScreen: (screen) => set({ screen }),
     patch: (patch) => set(patch),
   }));
 }

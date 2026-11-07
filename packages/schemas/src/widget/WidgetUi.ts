@@ -6,7 +6,11 @@ import type {
 } from "../changeRequests/ChangeRequestsCommon";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type { KnowledgeCitation } from "../knowledgeSearch";
-import type { WidgetBootstrap } from "./WidgetApiResponse";
+import type {
+  WidgetBootstrap,
+  WidgetConversationListItem,
+  WidgetPastConversation,
+} from "./WidgetApiResponse";
 import type {
   WidgetAccent,
   WidgetInitOptions,
@@ -236,6 +240,7 @@ export type WidgetPanelActions = WidgetChangeCardActions & {
   onStop: () => void;
   onRetry: () => void;
   onNewChat: () => void;
+  onHistory: () => void;
   onClose: () => void;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
   onDraftChange: (draft: string) => void;
@@ -277,17 +282,19 @@ export interface WidgetStoreState {
   ratings: Record<string, FeedbackRatingIntEnum>;
   pendingRatings: Record<string, FeedbackRatingIntEnum>;
   review: WidgetChangeReviewState;
+  screen: WidgetScreen;
 }
 
 // DEV_NOTE: startOver switches to another conversation (or none) and clears everything that belonged to the old one:
-// socket off, ratings, review, unsent text, notice, unavailable. The theme, the accent, the panel and the host user
-// stay.
+// socket off, ratings, review, unsent text, notice, unavailable, and back to the chat screen. The theme, the accent,
+// the panel and the host user stay.
 export interface WidgetStoreActions {
   setOpen: (isOpen: boolean) => void;
   setTheme: (theme: WidgetThemeEnum) => void;
   setAccent: (accent: WidgetAccent | null) => void;
   setConversation: (conversationPublicId: string | null) => void;
   startOver: (conversationPublicId: string | null) => void;
+  setScreen: (screen: WidgetScreen) => void;
   patch: (patch: Partial<WidgetStoreState>) => void;
 }
 
@@ -390,6 +397,7 @@ export interface WidgetShadowHostProps {
 export interface WidgetHeaderProps {
   chatbotName: string;
   status: WidgetStatusEnum;
+  onHistory: () => void;
   onNewChat: () => void;
   onClose: () => void;
 }
@@ -478,3 +486,107 @@ export type WidgetMarkdownBlock = { key: string } & (
   | { kind: "list"; isOrdered: boolean; start: number; items: WidgetMarkdownListItem[] }
   | { kind: "code"; text: string }
 );
+
+// DEV_NOTE: What the open panel shows: the chat, the user's chats (Your chats), or one chat that has ended, read-only.
+// A past chat carries the list row it was picked from, so its title shows while its messages load.
+export type WidgetScreen =
+  | { kind: "chat" }
+  | { kind: "history" }
+  | { kind: "past"; item: WidgetConversationListItem };
+
+// DEV_NOTE: A history read's outcome (lib/historyApi.ts): notFound only for one chat (404: not this user's, or gone)
+export type WidgetHistoryFetchResult<T> =
+  | { status: "ok"; data: T }
+  | { status: "notFound" }
+  | { status: "failed" };
+
+export interface WidgetHistoryFetchParams {
+  apiBase: string;
+  chatbot: string | null;
+  token: string;
+  signal: AbortSignal;
+}
+
+export type WidgetConversationsFetchParams = WidgetHistoryFetchParams & { pageNo: number };
+
+export type WidgetPastConversationFetchParams = WidgetHistoryFetchParams & { publicId: string };
+
+// DEV_NOTE: Your chats as read so far (hooks/useHistory.ts): pages appended in order; moreFailed = the last Show more
+// didn't load (the rows already shown stay)
+export type WidgetHistoryState =
+  | { status: "loading" }
+  | { status: "failed" }
+  | {
+      status: "ready";
+      items: WidgetConversationListItem[];
+      totalRecords: number;
+      isLoadingMore: boolean;
+      moreFailed: boolean;
+    };
+
+export type WidgetPastChatState =
+  | { status: "loading" }
+  | { status: "failed" }
+  | { status: "notFound" }
+  | { status: "ready"; conversation: WidgetPastConversation };
+
+// DEV_NOTE: One row of Your chats: the chat on screen right now (current), one that can still be picked up (open), or
+// one that has ended (read-only). meta is its line under the title ("Ended · 09:14").
+export enum WidgetHistoryToneEnum {
+  Current = "current",
+  Open = "open",
+  Ended = "ended",
+}
+
+export interface WidgetHistoryRowView {
+  item: WidgetConversationListItem;
+  tone: WidgetHistoryToneEnum;
+  meta: string;
+}
+
+export interface WidgetHistoryGroupView {
+  label: string;
+  rows: WidgetHistoryRowView[];
+}
+
+export type WidgetHistoryView =
+  | { status: "loading" }
+  | { status: "failed" }
+  | {
+      status: "ready";
+      groups: WidgetHistoryGroupView[];
+      hasMore: boolean;
+      isLoadingMore: boolean;
+      moreFailed: boolean;
+    };
+
+export interface WidgetHistoryProps {
+  chatbotName: string;
+  view: WidgetHistoryView;
+  onBack: () => void;
+  onNewChat: () => void;
+  onClose: () => void;
+  onPick: (item: WidgetConversationListItem) => void;
+  onMore: () => void;
+  onRetry: () => void;
+}
+
+export interface WidgetPastChatProps {
+  item: WidgetConversationListItem;
+  meta: string;
+  state: WidgetPastChatState;
+  linkOrigins: string[];
+  onBack: () => void;
+  onNewChat: () => void;
+  onClose: () => void;
+  onRetry: () => void;
+}
+
+// DEV_NOTE: The header of Your chats and of a past chat: Back, a title (and the line under it), Close
+export interface WidgetSubHeaderProps {
+  title: string;
+  subtitle: string | null;
+  backLabel: string;
+  onBack: () => void;
+  onClose: () => void;
+}
