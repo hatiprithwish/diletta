@@ -49,6 +49,12 @@ import type {
 } from "../evalRuns";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type {
+  FeedbackThemeDetail,
+  FeedbackThemeListItem,
+  FeedbackThemesPageSearch,
+  GetFeedbackThemesApiResponse,
+} from "../feedbackThemes";
+import type {
   GetKnowledgeDocumentsApiResponse,
   KnowledgeDocumentWithStatus,
 } from "../knowledgeDocuments";
@@ -334,8 +340,48 @@ export interface DashboardQualityListProps {
   onPage: (page: number) => void;
 }
 
+// DEV_NOTE: The user's own note on a rating (M7-10), with the theme it was grouped into (null while not grouped)
 export interface DashboardFeedbackNoteProps {
   note: string;
+  theme: { publicId: string; label: string } | null;
+}
+
+// DEV_NOTE: Quality's two views (M7-10): the issue inbox and User feedback
+export enum DashboardQualityViewEnum {
+  Issues = "issues",
+  Feedback = "feedback",
+}
+
+export interface DashboardQualityViewsProps {
+  current: DashboardQualityViewEnum;
+}
+
+// DEV_NOTE: Quality › User feedback (M7-10), shared by /quality/feedback and /quality/feedback/$id (selectedId)
+export interface DashboardFeedbackThemesPageProps {
+  search: FeedbackThemesPageSearch;
+  selectedId: string | null;
+}
+
+export interface DashboardFeedbackThemesListProps {
+  response: GetFeedbackThemesApiResponse;
+  search: FeedbackThemesPageSearch;
+  selectedId: string | null;
+  onPage: (page: number) => void;
+}
+
+export interface DashboardFeedbackThemeRowProps {
+  feedbackTheme: FeedbackThemeListItem;
+  search: FeedbackThemesPageSearch;
+  isSelected: boolean;
+}
+
+export interface DashboardFeedbackThemeDetailCardProps {
+  publicId: string;
+  search: FeedbackThemesPageSearch;
+}
+
+export interface DashboardFeedbackThemeDetailProps {
+  feedbackTheme: FeedbackThemeDetail;
 }
 
 export interface DashboardQualityRowProps {

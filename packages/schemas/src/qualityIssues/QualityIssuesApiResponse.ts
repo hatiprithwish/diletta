@@ -32,6 +32,8 @@ export interface QualityIssueListItem {
   note: string | null;
   ratedReply: string | null;
   feedbackNote: string | null;
+  // DEV_NOTE: The feedback theme the user's note was grouped into (M7-10), null while not grouped
+  feedbackNoteTheme: { publicId: string; label: string } | null;
   chatbotName: string | null;
   isChatbotWide: boolean;
   // DEV_NOTE: Set on the item a growing group of unanswered questions opened (M5-6), so the page names it

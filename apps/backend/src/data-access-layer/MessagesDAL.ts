@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, getColumns, inArray, lte, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
-import { conversations, feedback, messages } from "@/db/tables";
+import { conversations, feedback, feedbackNotes, feedbackThemes, messages } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -167,14 +167,26 @@ export default class MessagesDAL {
         eq(feedback.messageId, messages.id),
         eq(feedback.companyId, messages.companyId),
       ];
+      const noteJoinConditions = [
+        eq(feedbackNotes.feedbackId, feedback.id),
+        eq(feedbackNotes.companyId, feedback.companyId),
+      ];
+      const themeJoinConditions = [
+        eq(feedbackThemes.id, feedbackNotes.themeId),
+        eq(feedbackThemes.companyId, feedbackNotes.companyId),
+      ];
       const rows = await tx
         .select({
           ...getColumns(messages),
           rating: feedback.rating,
           feedbackNote: feedback.comment,
+          feedbackThemePublicId: feedbackThemes.publicId,
+          feedbackThemeLabel: feedbackThemes.label,
         })
         .from(messages)
         .leftJoin(feedback, and(...feedbackJoinConditions))
+        .leftJoin(feedbackNotes, and(...noteJoinConditions))
+        .leftJoin(feedbackThemes, and(...themeJoinConditions))
         .where(and(...conditions))
         .orderBy(asc(messages.id));
 

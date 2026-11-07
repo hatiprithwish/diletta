@@ -347,6 +347,13 @@ export enum LogAction {
   ProcessFeedbackNote = "ProcessFeedbackNote",
   RewriteFeedbackNote = "RewriteFeedbackNote",
   GetQualityIssueByFeedbackTheme = "GetQualityIssueByFeedbackTheme",
+  GetFeedbackThemes = "GetFeedbackThemes",
+  CountFeedbackThemes = "CountFeedbackThemes",
+  GetFeedbackTheme = "GetFeedbackTheme",
+  GetFeedbackThemeNotes = "GetFeedbackThemeNotes",
+  CloseFeedbackTheme = "CloseFeedbackTheme",
+  ResolveFeedbackTheme = "ResolveFeedbackTheme",
+  DismissFeedbackTheme = "DismissFeedbackTheme",
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",

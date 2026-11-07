@@ -16,6 +16,9 @@ export interface MessageDALResponse extends ApiResponse {
 export type TranscriptMessageRow = Message & {
   rating: FeedbackRatingIntEnum | null;
   feedbackNote: string | null;
+  // DEV_NOTE: The theme the note was grouped into (M7-10)
+  feedbackThemePublicId: string | null;
+  feedbackThemeLabel: string | null;
 };
 
 // DEV_NOTE: One message's text only (content->>'text'; null once purged or when it has none), for a quality issue's

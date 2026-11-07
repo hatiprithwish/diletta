@@ -120,6 +120,10 @@ export default class ConversationTranscriptProvider {
       ratingLabel:
         message.rating === null ? null : Schemas.FEEDBACK_RATING_LABEL_MAP[message.rating],
       feedbackNote: message.feedbackNote,
+      feedbackTheme:
+        message.feedbackThemePublicId !== null && message.feedbackThemeLabel !== null
+          ? { publicId: message.feedbackThemePublicId, label: message.feedbackThemeLabel }
+          : null,
     };
   }
 

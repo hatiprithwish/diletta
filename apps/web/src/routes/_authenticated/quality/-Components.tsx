@@ -35,6 +35,7 @@ import {
   useDraftQualityTest,
   useQualityIssue,
   useQualityIssues,
+  useQualityOpenCount,
   useTriageQualityIssue,
 } from "./-data";
 
@@ -106,6 +107,58 @@ function TypeChip({ issueTypeLabel }: Pick<Schemas.QualityIssueListItem, "issueT
   );
 }
 
+// DEV_NOTE: The page header both Quality views share
+export function QualityHeader() {
+  return (
+    <PageHeader
+      title="Quality"
+      description="Problems found in real conversations, and what users tell us about the answers"
+    >
+      <Button variant="outline" asChild>
+        <Link to="/conversations">
+          <Flag aria-hidden />
+          Flag a conversation
+        </Link>
+      </Button>
+    </PageHeader>
+  );
+}
+
+// DEV_NOTE: Quality's two views (M7-10): the issue inbox (with its open count) and User feedback, each its own route
+export function QualityViews({ current }: Schemas.DashboardQualityViewsProps) {
+  const openCount = useQualityOpenCount().data?.openCount ?? null;
+  const tabClass = (isCurrent: boolean) =>
+    cn(
+      "-mb-px border-b-2 py-2.5 text-body",
+      isCurrent
+        ? "border-foreground font-medium text-foreground"
+        : "border-transparent text-subtle-foreground hover:text-foreground",
+    );
+  return (
+    <nav aria-label="Quality views" className="flex gap-6 border-b">
+      <Link
+        to="/quality"
+        className={tabClass(current === Schemas.DashboardQualityViewEnum.Issues)}
+        aria-current={current === Schemas.DashboardQualityViewEnum.Issues ? "page" : undefined}
+      >
+        Issues
+        {openCount !== null && (
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            {Utilities.formatCount(openCount)}
+          </span>
+        )}
+      </Link>
+      <Link
+        to="/quality/feedback"
+        className={tabClass(current === Schemas.DashboardQualityViewEnum.Feedback)}
+        aria-current={current === Schemas.DashboardQualityViewEnum.Feedback ? "page" : undefined}
+      >
+        User feedback
+      </Link>
+    </nav>
+  );
+}
+
 // DEV_NOTE: The whole page body, shared by /quality and /quality/$id (selectedId). The tab and the page live in the URL;
 // a tab change goes back to page 1 and keeps the open issue.
 export function QualityPage({ search, selectedId }: Schemas.DashboardQualityPageProps) {
@@ -128,17 +181,8 @@ export function QualityPage({ search, selectedId }: Schemas.DashboardQualityPage
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Quality"
-        description="Problems found in real conversations, from users, admins and automatic checks"
-      >
-        <Button variant="outline" asChild>
-          <Link to="/conversations">
-            <Flag aria-hidden />
-            Flag a conversation
-          </Link>
-        </Button>
-      </PageHeader>
+      <QualityHeader />
+      <QualityViews current={Schemas.DashboardQualityViewEnum.Issues} />
 
       <ToggleGroup
         type="single"
@@ -296,12 +340,24 @@ function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQuali
   );
 }
 
-// DEV_NOTE: The user's own note on their rating (M7-10), quoted as they wrote it
-function FeedbackNote({ note }: Schemas.DashboardFeedbackNoteProps) {
+// DEV_NOTE: The user's own note on their rating (M7-10), quoted as they wrote it, with the theme it was grouped into
+function FeedbackNote({ note, theme }: Schemas.DashboardFeedbackNoteProps) {
   return (
     <figure className="flex flex-col gap-1 rounded-lg border bg-card px-3 py-2.5">
       <figcaption className="text-caption text-muted-foreground">Their note</figcaption>
       <blockquote className="text-body break-words text-subtle-foreground">{note}</blockquote>
+      {theme && (
+        <p className="text-caption text-muted-foreground">
+          Part of{" "}
+          <Link
+            to="/quality/feedback/$id"
+            params={{ id: theme.publicId }}
+            className="text-brand-text hover:text-foreground"
+          >
+            {theme.label}
+          </Link>
+        </p>
+      )}
     </figure>
   );
 }
@@ -421,7 +477,9 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
           qualityIssue.rating === Schemas.FeedbackRatingIntEnum.Up && (
             <p className="text-body text-muted-foreground">Later rated helpful</p>
           )}
-        {qualityIssue.feedbackNote && <FeedbackNote note={qualityIssue.feedbackNote} />}
+        {qualityIssue.feedbackNote && (
+          <FeedbackNote note={qualityIssue.feedbackNote} theme={qualityIssue.feedbackNoteTheme} />
+        )}
       </div>
 
       {isOpen ? (
@@ -461,6 +519,16 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
             {qualityIssue.docGapCluster && (
               <Button asChild>
                 <Link to="/knowledge">Open Knowledge</Link>
+              </Button>
+            )}
+            {qualityIssue.feedbackTheme && (
+              <Button asChild>
+                <Link
+                  to="/quality/feedback/$id"
+                  params={{ id: qualityIssue.feedbackTheme.publicId }}
+                >
+                  See the notes
+                </Link>
               </Button>
             )}
             {!qualityIssue.isChatbotWide && (

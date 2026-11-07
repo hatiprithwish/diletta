@@ -68,6 +68,8 @@ export interface ConversationTurnMessage {
   rating: FeedbackRatingIntEnum | null;
   ratingLabel: FeedbackRatingLabelEnum | null;
   feedbackNote: string | null;
+  // DEV_NOTE: The feedback theme the note was grouped into (M7-10), null while not grouped
+  feedbackTheme: { publicId: string; label: string } | null;
 }
 
 // DEV_NOTE: The change a write tool call proposed. summary holds no values (tool, kind, field count).

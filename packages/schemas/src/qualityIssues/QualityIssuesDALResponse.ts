@@ -58,6 +58,8 @@ export interface DashboardQualityIssueRow {
   ratedReplyText: string | null;
   rating: FeedbackRatingIntEnum | null;
   feedbackNote: string | null;
+  noteThemePublicId: string | null;
+  noteThemeLabel: string | null;
 }
 
 export interface DashboardQualityIssueDALResponse extends ApiResponse {

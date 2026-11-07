@@ -7,6 +7,7 @@ export const QUERY_KEY_ROOTS = {
   overview: ["insights", "overview"],
   conversations: ["conversations"],
   quality: ["quality"],
+  feedbackThemes: ["feedback-themes"],
   changes: ["changes"],
   tests: ["tests"],
   security: ["security"],
@@ -45,6 +46,15 @@ export function invalidateOpenIssueViews(queryClient: QueryClient) {
       predicate: (query) => query.queryKey[root.length] !== DETAIL_KEY_SEGMENT,
     });
   }
+}
+
+// DEV_NOTE: A feedback theme was resolved or dismissed (Quality › User feedback, M7-10): the Quality item it opened closed
+// with it, so every view counting open issues refetches, and the Quality details too (that item's among them)
+export function invalidateClosedThemeViews(queryClient: QueryClient) {
+  invalidateOpenIssueViews(queryClient);
+  void queryClient.invalidateQueries({
+    queryKey: [...QUERY_KEY_ROOTS.quality, DETAIL_KEY_SEGMENT],
+  });
 }
 
 // DEV_NOTE: A user was erased (Security, M6-2): every view that may hold their name or the notes on their chats refetches,

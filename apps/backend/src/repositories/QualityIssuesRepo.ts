@@ -81,6 +81,10 @@ export default class QualityIssuesRepo {
       note: row.note,
       ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedReplyText),
       feedbackNote: isPurged ? null : row.feedbackNote,
+      feedbackNoteTheme:
+        row.noteThemePublicId !== null && row.noteThemeLabel !== null
+          ? { publicId: row.noteThemePublicId, label: row.noteThemeLabel }
+          : null,
       chatbotName: row.chatbotName,
       isChatbotWide:
         row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
