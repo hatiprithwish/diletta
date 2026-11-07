@@ -28,6 +28,7 @@ export default function ChatSession({
   const pendingText = useWidgetStore((state) => state.pendingText);
   const ratings = useWidgetStore((state) => state.ratings);
   const pendingRatings = useWidgetStore((state) => state.pendingRatings);
+  const notes = useWidgetStore((state) => state.notes);
   const review = useWidgetStore((state) => state.review);
 
   // DEV_NOTE: Focus goes back to the launcher only when the visitor closed the panel, never on page load
@@ -47,6 +48,7 @@ export default function ChatSession({
     isStreaming: conversation.isStreaming,
     ratings,
     pendingRatings,
+    notes,
     review,
   });
   if (pendingText !== null) {
@@ -97,6 +99,7 @@ export default function ChatSession({
             storeApi.getState().setOpen(false);
           }}
           onRate={conversation.rate}
+          {...conversation.noteActions}
           {...conversation.changeActions}
           onDraftChange={(value) => storeApi.getState().patch({ draft: value })}
         />

@@ -101,6 +101,7 @@ export default function Panel({ view, ...actions }: Schemas.WidgetPanelProps) {
               canStop={view.canStop}
               onStop={actions.onStop}
               onRate={actions.onRate}
+              noteActions={actions}
               changeActions={actions}
             />
           ),

@@ -9,7 +9,7 @@ import type {
   SearchHelpDocsStatusEnum,
 } from "../knowledgeSearch";
 import type { DocGapSignalIntEnum } from "../docGaps";
-import { ZWidgetFeedbackRating } from "../feedback";
+import { ZWidgetFeedbackNote, ZWidgetFeedbackRating } from "../feedback";
 import type { FeedbackRatingIntEnum } from "../feedback";
 import {
   CHANGE_REQUEST_MAX_PENDING,
@@ -84,6 +84,15 @@ export const ZWidgetFeedbackFrame = ZWidgetFeedbackRating.extend({
   type: z.literal(WIDGET_FEEDBACK_FRAME_TYPE),
 });
 export type WidgetFeedbackFrame = z.infer<typeof ZWidgetFeedbackFrame>;
+
+// DEV_NOTE: The widget's note on its rating of one reply (M7-10), sent after the rating was saved. Handled by the
+// Conversation DO itself (checked for prompt injection first), never handed to Think.
+export const WIDGET_FEEDBACK_NOTE_FRAME_TYPE = "feedback_note";
+
+export const ZWidgetFeedbackNoteFrame = ZWidgetFeedbackNote.extend({
+  type: z.literal(WIDGET_FEEDBACK_NOTE_FRAME_TYPE),
+});
+export type WidgetFeedbackNoteFrame = z.infer<typeof ZWidgetFeedbackNoteFrame>;
 
 // DEV_NOTE: The widget's host bearer token (M3-4; fetched again whenever the DO asks with token_needed, M3-8). The DO keeps it
 // in memory only, for jwt_forward host calls made as this user: never logged, persisted or sent back. A bearer token is
@@ -179,13 +188,14 @@ export type WidgetChangeRequestUndosFrame = z.infer<typeof ZWidgetChangeRequestU
 
 // DEV_NOTE: Server-side only — what the widget frame allowlist decided (WidgetFrameProvider.admit). pass: hand the
 // frame on unchanged. chat: a new user turn; frame is the rebuilt request carrying only that message. feedback: a
-// rating for the DO to store. hostToken: the user's host token for the DO's memory. decisions: answers to proposals
+// rating for the DO to store; feedbackNote: the note on one (M7-10, trimmed). hostToken: the user's host token for the DO's memory. decisions: answers to proposals
 // (the single decision frame is a list of one). edits: new values for proposals (M3-5). undos: the user's undo of
 // Verified changes (M3-7). refuse: drop it and tell the widget (reason is logged only, and never holds the frame's content).
 export type WidgetFrameAdmission =
   | { kind: "pass"; frame: string }
   | { kind: "chat"; requestId: string; message: { id: string; text: string }; frame: string }
   | { kind: "feedback"; messageId: string; rating: FeedbackRatingIntEnum }
+  | { kind: "feedbackNote"; messageId: string; note: string }
   | { kind: "hostToken"; token: string }
   | {
       kind: "decisions";

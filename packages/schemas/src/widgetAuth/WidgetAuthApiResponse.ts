@@ -54,6 +54,15 @@ export const ZWidgetFeedbackMessage = z.object({
 });
 export type WidgetFeedbackMessage = z.infer<typeof ZWidgetFeedbackMessage>;
 
+// DEV_NOTE: The answer to a feedback_note frame (M7-10): whether the note was stored. Not stored (no rating to attach
+// it to, a closed chat, a failure, or text the DO wouldn't keep) says nothing more: the rating stays as it was.
+export const ZWidgetFeedbackNoteMessage = z.object({
+  type: z.literal("feedback_note"),
+  messageId: z.string(),
+  isSaved: z.boolean(),
+});
+export type WidgetFeedbackNoteMessage = z.infer<typeof ZWidgetFeedbackNoteMessage>;
+
 // DEV_NOTE: One change request as it now stands (M3-4): sent to every socket when a write is proposed and at each
 // status change after it, and on connect for the ones still open. Carries the diff's values (the user's own host data,
 // to their own widget only); the widget's review card (M3-5) draws from it.
@@ -108,6 +117,7 @@ export const ZWidgetServerMessage = z.discriminatedUnion("type", [
   ZWidgetUnavailableMessage,
   ZWidgetConversationClosedMessage,
   ZWidgetFeedbackMessage,
+  ZWidgetFeedbackNoteMessage,
   ZWidgetChangeRequestMessage,
   ZWidgetTokenNeededMessage,
   ZWidgetChangeRequestEditMessage,

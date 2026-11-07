@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { chatbotUsers, conversations, feedback, messages } from "@/db/tables";
@@ -11,7 +11,7 @@ import Utility from "@/utils/Utility";
 // (M2-7): one row per (message, chatbot user), UNQ_feedback_message_id_chatbot_user_id.
 export default class FeedbackDAL {
   // DEV_NOTE: The rating for one reply by one chatbot user: inserted, or the stored one replaced (a visitor switching
-  // thumbs). The comment is kept as it is.
+  // thumbs). A note belongs to the rating it was left on (M7-10): switching thumbs clears it, the same thumb again keeps it.
   async upsertFeedback(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.UpsertFeedbackDALRequest,
@@ -62,7 +62,11 @@ export default class FeedbackDAL {
         })
         .onConflictDoUpdate({
           target: [feedback.messageId, feedback.chatbotUserId],
-          set: { rating: params.rating, updatedAt: new Date() },
+          set: {
+            rating: params.rating,
+            comment: sql`case when ${feedback.rating} = ${params.rating} then ${feedback.comment} end`,
+            updatedAt: new Date(),
+          },
         })
         .returning();
 
@@ -77,6 +81,51 @@ export default class FeedbackDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: The note on one chatbot user's rating of one message (M7-10), replacing any earlier one. No rating row =
+  // isNotFound (a note is only ever left on a rating). The note is raw user text: it stays out of every log.
+  async setFeedbackComment(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.SetFeedbackCommentDALRequest,
+  ) {
+    const response: Schemas.FeedbackDALResponse = { isSuccess: false };
+    const { comment: _comment, ...loggable } = params;
+
+    try {
+      const conditions = [
+        eq(feedback.companyId, params.companyId),
+        eq(feedback.messageId, params.messageId),
+        eq(feedback.chatbotUserId, params.chatbotUserId),
+      ];
+      const [feedbackResponse] = await tx
+        .update(feedback)
+        .set({ comment: params.comment, updatedAt: new Date() })
+        .where(and(...conditions))
+        .returning();
+
+      if (!feedbackResponse) {
+        response.isNotFound = true;
+        response.message = "Feedback not found";
+        return response;
+      }
+
+      response.isSuccess = true;
+      response.message = "Feedback note saved successfully";
+      response.feedback = feedbackResponse;
+    } catch (error) {
+      const message = "Unknown error in saving the feedback note";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.SetFeedbackComment,
+        message,
+        error,
+        metadata: loggable,
       });
       response.message = message;
     }
@@ -100,7 +149,11 @@ export default class FeedbackDAL {
         eq(messages.conversationId, params.conversationId),
       ];
       const rows = await tx
-        .select({ messageId: messages.sessionMessageId, rating: feedback.rating })
+        .select({
+          messageId: messages.sessionMessageId,
+          rating: feedback.rating,
+          hasNote: sql<boolean>`${feedback.comment} is not null`,
+        })
         .from(feedback)
         .innerJoin(messages, eq(messages.id, feedback.messageId))
         .where(and(...conditions))

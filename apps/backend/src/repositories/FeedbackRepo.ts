@@ -1,4 +1,5 @@
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { EmptyRelations } from "drizzle-orm";
+import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
@@ -43,80 +44,20 @@ export default class FeedbackRepo {
     rating: Schemas.FeedbackRatingIntEnum;
   }): Promise<Schemas.RecordFeedbackResponse> {
     const { session } = params;
-    const refuse = (failure: Schemas.RecordFeedbackFailureEnum, message?: string) => ({
-      isSuccess: false,
-      isNotFound: failure === Schemas.RecordFeedbackFailureEnum.NotFound,
-      message,
-      failure,
-    });
 
     return await withTenant(this.db, session.companyId, async (tx) => {
-      const conversation = await this.conversationsDal.getConversationDetails(tx, {
-        companyId: session.companyId,
-        publicId: session.conversationPublicId,
-      });
-      if (!conversation.isSuccess || !conversation.conversation) {
-        return refuse(
-          conversation.isNotFound
-            ? Schemas.RecordFeedbackFailureEnum.NotFound
-            : Schemas.RecordFeedbackFailureEnum.ServerError,
-          conversation.message,
-        );
-      }
-      if (conversation.conversation.status !== Schemas.ConversationStatusIntEnum.Open) {
-        return refuse(
-          Schemas.RecordFeedbackFailureEnum.ConversationClosed,
-          "Conversation is closed",
-        );
-      }
-
-      const company = await this.companiesDal.getCompanyDetails(tx, {
-        companyId: session.companyId,
-      });
-      const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
-        companyId: session.companyId,
-        publicId: session.chatbotPublicId,
-      });
-      if (!company.isSuccess || !chatbot.isSuccess) {
-        return chatbot.isNotFound
-          ? refuse(Schemas.RecordFeedbackFailureEnum.ChatbotUnavailable, chatbot.message)
-          : refuse(
-              Schemas.RecordFeedbackFailureEnum.ServerError,
-              company.message ?? chatbot.message,
-            );
-      }
-      if (
-        company.company?.status !== Schemas.CompanyStatusIntEnum.Active ||
-        chatbot.chatbot?.status !== Schemas.ChatbotStatusIntEnum.Active
-      ) {
-        return refuse(
-          Schemas.RecordFeedbackFailureEnum.ChatbotUnavailable,
-          "Chatbot or company is not active",
-        );
-      }
-
-      const found = await this.messagesDal.getAssistantMessage(tx, {
-        companyId: session.companyId,
-        conversationId: session.conversationId,
-        sessionMessageId: params.sessionMessageId,
-      });
-      if (!found.isSuccess || !found.chatMessage) {
-        return refuse(
-          found.isNotFound
-            ? Schemas.RecordFeedbackFailureEnum.NotFound
-            : Schemas.RecordFeedbackFailureEnum.ServerError,
-          found.message,
-        );
-      }
+      const checked = await this.findRatableReply(tx, session, params.sessionMessageId);
+      if (!checked.reply) return FeedbackRepo.refuse(checked.failure, checked.message);
+      const { conversation, reply } = checked;
 
       const saved = await this.feedbackDal.upsertFeedback(tx, {
         companyId: session.companyId,
-        messageId: found.chatMessage.id,
+        messageId: reply.id,
         chatbotUserId: session.chatbotUserId,
         rating: params.rating,
       });
       if (!saved.isSuccess || !saved.feedback) {
-        return refuse(Schemas.RecordFeedbackFailureEnum.ServerError, saved.message);
+        return FeedbackRepo.refuse(Schemas.RecordFeedbackFailureEnum.ServerError, saved.message);
       }
       const rating = { messageId: params.sessionMessageId, rating: saved.feedback.rating };
       if (saved.feedback.rating !== Schemas.FeedbackRatingIntEnum.Down) {
@@ -126,9 +67,9 @@ export default class FeedbackRepo {
       const opened = await UserQualityIssueProvider.open(tx, {
         companyId: session.companyId,
         conversationId: session.conversationId,
-        conversationRootLogId: conversation.conversation.rootLogId,
+        conversationRootLogId: conversation.rootLogId,
         chatbotUserId: session.chatbotUserId,
-        messageId: found.chatMessage.id,
+        messageId: reply.id,
         feedbackId: saved.feedback.id,
       });
       if (!opened.isSuccess) {
@@ -137,6 +78,121 @@ export default class FeedbackRepo {
 
       return { isSuccess: true, message: saved.message, rating, outboxId: opened.outboxId };
     });
+  }
+
+  // DEV_NOTE: The visitor's note on their rating of a reply (M7-10), replacing an earlier one. Same checks as a rating
+  // (conversation open, company and chatbot active, a synced reply of this conversation), and the user must have rated
+  // it (else NotFound). The DO has already checked the text for prompt injection. Nothing is logged with the text.
+  async recordFeedbackNote(params: {
+    session: Schemas.ConversationSession;
+    sessionMessageId: string;
+    note: string;
+  }): Promise<Schemas.RecordFeedbackNoteResponse> {
+    const { session } = params;
+
+    return await withTenant(this.db, session.companyId, async (tx) => {
+      const checked = await this.findRatableReply(tx, session, params.sessionMessageId);
+      if (!checked.reply) return FeedbackRepo.refuse(checked.failure, checked.message);
+
+      const saved = await this.feedbackDal.setFeedbackComment(tx, {
+        companyId: session.companyId,
+        messageId: checked.reply.id,
+        chatbotUserId: session.chatbotUserId,
+        comment: params.note,
+      });
+      if (!saved.isSuccess) {
+        return FeedbackRepo.refuse(
+          saved.isNotFound
+            ? Schemas.RecordFeedbackFailureEnum.NotFound
+            : Schemas.RecordFeedbackFailureEnum.ServerError,
+          saved.message,
+        );
+      }
+      return { isSuccess: true, message: saved.message };
+    });
+  }
+
+  private static refuse(failure: Schemas.RecordFeedbackFailureEnum, message?: string) {
+    return {
+      isSuccess: false,
+      isNotFound: failure === Schemas.RecordFeedbackFailureEnum.NotFound,
+      message,
+      failure,
+    };
+  }
+
+  // DEV_NOTE: What a rating or a note needs, re-checked every time (never only at connect): the conversation still open,
+  // the company and chatbot active, and the reply a synced assistant message of this very conversation. failure says
+  // why not.
+  private async findRatableReply(
+    tx: NodePgTransaction<EmptyRelations>,
+    session: Schemas.ConversationSession,
+    sessionMessageId: string,
+  ): Promise<
+    | { reply: Schemas.Message; conversation: Schemas.Conversation }
+    | { reply?: undefined; failure: Schemas.RecordFeedbackFailureEnum; message?: string }
+  > {
+    const conversation = await this.conversationsDal.getConversationDetails(tx, {
+      companyId: session.companyId,
+      publicId: session.conversationPublicId,
+    });
+    if (!conversation.isSuccess || !conversation.conversation) {
+      return {
+        failure: conversation.isNotFound
+          ? Schemas.RecordFeedbackFailureEnum.NotFound
+          : Schemas.RecordFeedbackFailureEnum.ServerError,
+        message: conversation.message,
+      };
+    }
+    if (conversation.conversation.status !== Schemas.ConversationStatusIntEnum.Open) {
+      return {
+        failure: Schemas.RecordFeedbackFailureEnum.ConversationClosed,
+        message: "Conversation is closed",
+      };
+    }
+
+    const company = await this.companiesDal.getCompanyDetails(tx, {
+      companyId: session.companyId,
+    });
+    const chatbot = await this.chatbotsDal.getChatbotDetails(tx, {
+      companyId: session.companyId,
+      publicId: session.chatbotPublicId,
+    });
+    if (!company.isSuccess || !chatbot.isSuccess) {
+      return chatbot.isNotFound
+        ? {
+            failure: Schemas.RecordFeedbackFailureEnum.ChatbotUnavailable,
+            message: chatbot.message,
+          }
+        : {
+            failure: Schemas.RecordFeedbackFailureEnum.ServerError,
+            message: company.message ?? chatbot.message,
+          };
+    }
+    if (
+      company.company?.status !== Schemas.CompanyStatusIntEnum.Active ||
+      chatbot.chatbot?.status !== Schemas.ChatbotStatusIntEnum.Active
+    ) {
+      return {
+        failure: Schemas.RecordFeedbackFailureEnum.ChatbotUnavailable,
+        message: "Chatbot or company is not active",
+      };
+    }
+
+    const found = await this.messagesDal.getAssistantMessage(tx, {
+      companyId: session.companyId,
+      conversationId: session.conversationId,
+      sessionMessageId,
+    });
+    if (!found.isSuccess || !found.chatMessage) {
+      return {
+        failure: found.isNotFound
+          ? Schemas.RecordFeedbackFailureEnum.NotFound
+          : Schemas.RecordFeedbackFailureEnum.ServerError,
+        message: found.message,
+      };
+    }
+    return { reply: found.chatMessage, conversation: conversation.conversation };
   }
 
   // DEV_NOTE: The ratings the session's user gave this conversation's replies, sent to the widget on connect (the

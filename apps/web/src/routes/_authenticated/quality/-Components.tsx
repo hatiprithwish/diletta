@@ -262,11 +262,11 @@ function QualityList({ response, search, selectedId, onPage }: Schemas.Dashboard
 }
 
 // DEV_NOTE: One issue (DESIGN.md §6): source icon, title (the conversation's) with its type chip, what it is about (the
-// admin's note, else the rated reply) and where it came from, when
+// admin's note, else the user's own note on their rating, else the rated reply) and where it came from, when
 function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQualityRowProps) {
   const Icon = SOURCE_ICON[qualityIssue.source];
-  const summary =
-    qualityIssue.note ?? (qualityIssue.ratedReply ? `"${qualityIssue.ratedReply}"` : null);
+  const quoted = qualityIssue.feedbackNote ?? qualityIssue.ratedReply;
+  const summary = qualityIssue.note ?? (quoted ? `"${quoted}"` : null);
   return (
     <li className={cn("relative flex gap-3 px-[22px] py-4", isSelected && "bg-surface-subtle")}>
       <Icon className="mt-0.5 size-4 shrink-0 text-subtle-foreground" aria-hidden />
@@ -289,6 +289,16 @@ function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQuali
         </p>
       </div>
     </li>
+  );
+}
+
+// DEV_NOTE: The user's own note on their rating (M7-10), quoted as they wrote it
+function FeedbackNote({ note }: Schemas.DashboardFeedbackNoteProps) {
+  return (
+    <figure className="flex flex-col gap-1 rounded-lg border bg-card px-3 py-2.5">
+      <figcaption className="text-caption text-muted-foreground">Their note</figcaption>
+      <blockquote className="text-body break-words text-subtle-foreground">{note}</blockquote>
+    </figure>
   );
 }
 
@@ -405,6 +415,7 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
           qualityIssue.rating === Schemas.FeedbackRatingIntEnum.Up && (
             <p className="text-body text-muted-foreground">Later rated helpful</p>
           )}
+        {qualityIssue.feedbackNote && <FeedbackNote note={qualityIssue.feedbackNote} />}
       </div>
 
       {isOpen ? (

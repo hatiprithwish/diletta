@@ -198,8 +198,26 @@ export interface WidgetUserMessageView {
   text: string;
 }
 
+// DEV_NOTE: Where the visitor's note on a rating stands (M7-10). Open: the box is showing; Sending: sent, not answered;
+// Sent: stored ("Thanks for the note", Edit note); NotSent: the DO didn't store it (Try again; the rating is saved).
+export enum WidgetFeedbackNoteStatusEnum {
+  Open = "open",
+  Sending = "sending",
+  Sent = "sent",
+  NotSent = "not_sent",
+}
+
+// DEV_NOTE: One reply's note: text is the box's text (empty for a note stored before this page load: the text never
+// comes back from the server); hasSaved says a note is stored, so closing the box goes back to Sent, not to nothing.
+export interface WidgetFeedbackNoteState {
+  status: WidgetFeedbackNoteStatusEnum;
+  text: string;
+  hasSaved: boolean;
+}
+
 // DEV_NOTE: One reply. citations are the sources its [n] markers cite (the Sources list); rating is the visitor's
-// thumb (pending or saved), null when none. canRate: the reply is finished and stored, so feedback may be sent.
+// thumb (pending or saved), null when none; note the note box under it (null = none showing). canRate: the reply is
+// finished and stored, so feedback may be sent.
 export interface WidgetAssistantMessageView {
   role: "assistant";
   id: string;
@@ -209,6 +227,7 @@ export interface WidgetAssistantMessageView {
   isStreaming: boolean;
   canRate: boolean;
   rating: FeedbackRatingIntEnum | null;
+  note: WidgetFeedbackNoteState | null;
   changeCards: WidgetChangeCardView[];
 }
 
@@ -231,15 +250,24 @@ export interface WidgetPanelView {
   linkOrigins: string[];
 }
 
-export type WidgetPanelActions = WidgetChangeCardActions & {
-  onSend: (text: string) => void;
-  onStop: () => void;
-  onRetry: () => void;
-  onNewChat: () => void;
-  onClose: () => void;
-  onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
-  onDraftChange: (draft: string) => void;
-};
+// DEV_NOTE: The note box's controls (M7-10), each by reply id
+export interface WidgetFeedbackNoteActions {
+  onNoteChange: (messageId: string, text: string) => void;
+  onNoteSend: (messageId: string) => void;
+  onNoteDismiss: (messageId: string) => void;
+  onNoteEdit: (messageId: string) => void;
+}
+
+export type WidgetPanelActions = WidgetChangeCardActions &
+  WidgetFeedbackNoteActions & {
+    onSend: (text: string) => void;
+    onStop: () => void;
+    onRetry: () => void;
+    onNewChat: () => void;
+    onClose: () => void;
+    onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
+    onDraftChange: (draft: string) => void;
+  };
 
 export type WidgetPanelProps = WidgetPanelActions & { view: WidgetPanelView };
 
@@ -261,7 +289,7 @@ export interface WidgetLauncherProps {
 // to resume, kept in localStorage per chatbot and host user so a reload continues the chat; hostUser is a SHA-256 of
 // the host user the latest token is for (its sub), which keys that saved id, learned from every token; pendingText is
 // a message waiting for its socket to open; draft is the composer's text (a refused message comes back to it); ratings
-// are the saved thumbs, pendingRatings the ones sent and not yet answered; review holds the change requests the DO
+// are the saved thumbs, pendingRatings the ones sent and not yet answered; notes the note boxes by reply id (M7-10); review holds the change requests the DO
 // sent and the review cards' local state (M3-5). accent is the host's brand colour (null = lime).
 export interface WidgetStoreState {
   isOpen: boolean;
@@ -276,6 +304,7 @@ export interface WidgetStoreState {
   pendingText: string | null;
   ratings: Record<string, FeedbackRatingIntEnum>;
   pendingRatings: Record<string, FeedbackRatingIntEnum>;
+  notes: Record<string, WidgetFeedbackNoteState>;
   review: WidgetChangeReviewState;
 }
 
@@ -410,6 +439,7 @@ export interface WidgetAssistantMessageProps {
   canStop: boolean;
   onStop: () => void;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
+  noteActions: WidgetFeedbackNoteActions;
   changeActions: WidgetChangeCardActions;
 }
 
@@ -424,7 +454,16 @@ export interface WidgetSourcesProps {
 export interface WidgetFeedbackProps {
   messageId: string;
   rating: FeedbackRatingIntEnum | null;
+  note: WidgetFeedbackNoteState | null;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
+  noteActions: WidgetFeedbackNoteActions;
+}
+
+export interface WidgetFeedbackNoteBoxProps {
+  messageId: string;
+  rating: FeedbackRatingIntEnum;
+  note: WidgetFeedbackNoteState;
+  noteActions: WidgetFeedbackNoteActions;
 }
 
 export interface WidgetUnavailableCardProps {

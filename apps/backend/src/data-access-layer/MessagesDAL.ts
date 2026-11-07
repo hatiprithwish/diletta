@@ -168,7 +168,11 @@ export default class MessagesDAL {
         eq(feedback.companyId, messages.companyId),
       ];
       const rows = await tx
-        .select({ ...getColumns(messages), rating: feedback.rating })
+        .select({
+          ...getColumns(messages),
+          rating: feedback.rating,
+          feedbackNote: feedback.comment,
+        })
         .from(messages)
         .leftJoin(feedback, and(...feedbackJoinConditions))
         .where(and(...conditions))

@@ -119,6 +119,7 @@ export default class ConversationTranscriptProvider {
       rating: message.rating,
       ratingLabel:
         message.rating === null ? null : Schemas.FEEDBACK_RATING_LABEL_MAP[message.rating],
+      feedbackNote: message.feedbackNote,
     };
   }
 
