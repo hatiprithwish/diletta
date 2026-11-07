@@ -1,5 +1,5 @@
-import { isToolUIPart } from "ai";
-import type { UIMessage, getToolName } from "ai";
+import { getToolName, isToolUIPart } from "ai";
+import type { UIMessage } from "ai";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The review cards (M3-5) from Think's transcript and the change requests the DO sent (change_request
@@ -505,13 +505,34 @@ export function toChangeCardsByMessage(
   return byMessage;
 }
 
+// DEV_NOTE: A read tool's step line says what it looked at, from the tool's own name (<host>_<verb>_<noun>, e.g.
+// eregister_list_report_charts → "Looked up report charts"). A name with no known read verb has no noun to show.
+const READ_STEP_VERBS: Record<string, { running: string; done: string }> = {
+  list: { running: "Looking up", done: "Looked up" },
+  get: { running: "Looking up", done: "Looked up" },
+  read: { running: "Looking up", done: "Looked up" },
+  find: { running: "Looking up", done: "Looked up" },
+  search: { running: "Searching", done: "Searched" },
+};
+
+export function readStepLabel(toolName: string, state: "running" | "done"): string | null {
+  const words = toolName.split("_").filter((word) => word.length > 0);
+  const verbAt = words.findIndex((word) => READ_STEP_VERBS[word] !== undefined);
+  const verb = verbAt === -1 ? undefined : READ_STEP_VERBS[words[verbAt] ?? ""];
+  const noun = verbAt === -1 ? "" : words.slice(verbAt + 1).join(" ");
+  if (!verb || noun.length === 0) return null;
+  return `${verb[state]} ${noun}`;
+}
+
 // DEV_NOTE: A write tool's step line (toolName isn't search_help_docs): what its output says happened, in the
 // widget's words. Think's own paused output ({status: "paused"}) waits for the user.
 export function hostToolStepLabel(part: Parameters<typeof getToolName>[0]): {
   label: string;
   isFailed: boolean;
 } {
-  if (part.state !== "output-available") return { label: "Working", isFailed: false };
+  if (part.state !== "output-available") {
+    return { label: readStepLabel(getToolName(part), "running") ?? "Working", isFailed: false };
+  }
   const output: unknown = part.output;
   if (
     typeof output === "object" &&
@@ -521,9 +542,12 @@ export function hostToolStepLabel(part: Parameters<typeof getToolName>[0]): {
   ) {
     return { label: "Waiting for your approval", isFailed: false };
   }
+  const readLabel = readStepLabel(getToolName(part), "done") ?? "Done";
   const parsed = Schemas.ZHostToolOutput.safeParse(output);
-  if (!parsed.success) return { label: "Done", isFailed: false };
+  if (!parsed.success) return { label: readLabel, isFailed: false };
   switch (parsed.data.status) {
+    case Schemas.HostToolStatusEnum.Ok:
+      return { label: readLabel, isFailed: false };
     case Schemas.HostToolStatusEnum.Committed:
       return { label: "Change saved", isFailed: false };
     case Schemas.HostToolStatusEnum.Verified:
@@ -540,6 +564,6 @@ export function hostToolStepLabel(part: Parameters<typeof getToolName>[0]): {
     case Schemas.HostToolStatusEnum.Blocked:
       return { label: "Step failed", isFailed: true };
     default:
-      return { label: "Done", isFailed: false };
+      return { label: readLabel, isFailed: false };
   }
 }
