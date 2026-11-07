@@ -241,6 +241,7 @@ export type WidgetPanelActions = WidgetChangeCardActions & {
   onRetry: () => void;
   onNewChat: () => void;
   onHistory: () => void;
+  onToggleFullScreen: () => void;
   onClose: () => void;
   onRate: (messageId: string, rating: FeedbackRatingIntEnum) => void;
   onDraftChange: (draft: string) => void;
@@ -283,6 +284,7 @@ export interface WidgetStoreState {
   pendingRatings: Record<string, FeedbackRatingIntEnum>;
   review: WidgetChangeReviewState;
   screen: WidgetScreen;
+  isFullScreen: boolean;
 }
 
 // DEV_NOTE: startOver switches to another conversation (or none) and clears everything that belonged to the old one:
@@ -295,6 +297,7 @@ export interface WidgetStoreActions {
   setConversation: (conversationPublicId: string | null) => void;
   startOver: (conversationPublicId: string | null) => void;
   setScreen: (screen: WidgetScreen) => void;
+  setFullScreen: (isFullScreen: boolean) => void;
   patch: (patch: Partial<WidgetStoreState>) => void;
 }
 
@@ -394,11 +397,14 @@ export interface WidgetShadowHostProps {
   accent?: WidgetAccent | null;
 }
 
+// DEV_NOTE: isFullScreen: the full-screen header (Exit full screen and Close; Your chats is the sidebar there)
 export interface WidgetHeaderProps {
   chatbotName: string;
   status: WidgetStatusEnum;
+  isFullScreen: boolean;
   onHistory: () => void;
   onNewChat: () => void;
+  onToggleFullScreen: () => void;
   onClose: () => void;
 }
 
@@ -565,6 +571,7 @@ export interface WidgetHistoryProps {
   view: WidgetHistoryView;
   onBack: () => void;
   onNewChat: () => void;
+  onToggleFullScreen: () => void;
   onClose: () => void;
   onPick: (item: WidgetConversationListItem) => void;
   onMore: () => void;
@@ -578,6 +585,7 @@ export interface WidgetPastChatProps {
   linkOrigins: string[];
   onBack: () => void;
   onNewChat: () => void;
+  onToggleFullScreen: () => void;
   onClose: () => void;
   onRetry: () => void;
 }
@@ -588,5 +596,39 @@ export interface WidgetSubHeaderProps {
   subtitle: string | null;
   backLabel: string;
   onBack: () => void;
+  onToggleFullScreen: () => void;
   onClose: () => void;
+}
+
+// DEV_NOTE: The open widget's frame around every screen: the 380 × 680 floating panel, or the whole window in full
+// screen (a modal dialog there: focus stays inside). Escape closes it either way.
+export interface WidgetPanelFrameProps {
+  label: string;
+  isFullScreen: boolean;
+  onClose: () => void;
+}
+
+// DEV_NOTE: The chat below the header: the log (welcome, messages, notices) and the composer. isWide: full screen, the
+// content in a centred column of readable width.
+export type WidgetChatLogProps = WidgetPanelProps & { isWide: boolean };
+
+// DEV_NOTE: Your chats below its header (the floating screen's body, or the full-screen sidebar). onBack null: no Back
+// to chat (the sidebar sits beside the chat). selectedPublicId: the row on screen, highlighted.
+export type WidgetHistoryListProps = Omit<
+  WidgetHistoryProps,
+  "onBack" | "onClose" | "onToggleFullScreen"
+> & { onBack: (() => void) | null; selectedPublicId: string | null };
+
+// DEV_NOTE: A past chat below its header: the read-only log and Start a new chat. isWide: full screen (centred column,
+// the chat's title above its messages, as the header there is the chatbot's).
+export type WidgetPastChatLogProps = Omit<
+  WidgetPastChatProps,
+  "onBack" | "onClose" | "onToggleFullScreen"
+> & { isWide: boolean };
+
+// DEV_NOTE: The full-screen widget: one header, Your chats as a sidebar, and the chat or the past chat picked in it
+export interface WidgetFullScreenPanelProps {
+  panel: WidgetPanelProps;
+  history: WidgetHistoryListProps;
+  past: Omit<WidgetPastChatLogProps, "isWide"> | null;
 }

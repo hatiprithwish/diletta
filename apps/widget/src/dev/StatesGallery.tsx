@@ -21,6 +21,7 @@ const actions: Schemas.WidgetPanelActions = {
   onRetry: noop,
   onNewChat: noop,
   onHistory: noop,
+  onToggleFullScreen: noop,
   onClose: noop,
   onRate: noop,
   onDraftChange: noop,
@@ -499,6 +500,7 @@ export default function StatesGallery() {
                 view={state.view}
                 onBack={noop}
                 onNewChat={noop}
+                onToggleFullScreen={noop}
                 onClose={noop}
                 onPick={noop}
                 onMore={noop}
@@ -519,6 +521,7 @@ export default function StatesGallery() {
               linkOrigins={[]}
               onBack={noop}
               onNewChat={noop}
+              onToggleFullScreen={noop}
               onClose={noop}
               onRetry={noop}
             />

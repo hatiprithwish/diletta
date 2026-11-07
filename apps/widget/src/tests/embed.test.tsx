@@ -690,3 +690,75 @@ describe("Your chats", () => {
     ).toBeInTheDocument();
   });
 });
+
+// DEV_NOTE: Full screen: offered from the sm breakpoint up (matchMedia stubbed wide here), the choice saved, Your chats
+// as the sidebar beside the chat
+describe("Full screen", () => {
+  const LIST: Schemas.WidgetConversationsApiResponse = {
+    isSuccess: true,
+    conversations: [
+      {
+        publicId: "conv-old",
+        title: "Add a fire drill for Hall B on Friday",
+        isOpen: false,
+        lastActivityAt: new Date().toISOString(),
+      },
+    ],
+    totalRecords: 1,
+  };
+  const FULL_SCREEN_KEY = "diletta-widget:full-screen";
+  const wide = (matches: boolean) =>
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    );
+
+  beforeEach(() => {
+    fetchMock.mockImplementation(async (input: URL) =>
+      input.toString().includes("/widget/conversations")
+        ? new Response(JSON.stringify(LIST))
+        : new Response(JSON.stringify({ isSuccess: true, bootstrap: BOOTSTRAP })),
+    );
+  });
+
+  it("fills the window with Your chats beside the chat, saves the choice, and exits", async () => {
+    wide(true);
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    const panel = shadow();
+    await userEvent.click(await panel.findByRole("button", { name: "Full screen" }));
+    const dialog = panel.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(
+      await panel.findByRole("button", { name: /Add a fire drill for Hall B on Friday/ }),
+    ).toBeInTheDocument();
+    expect(panel.getByLabelText("Message")).toBeInTheDocument();
+    expect(storage.getItem(FULL_SCREEN_KEY)).toBe("1");
+
+    await userEvent.click(panel.getByRole("button", { name: "Exit full screen" }));
+    expect(panel.getByRole("dialog")).not.toHaveAttribute("aria-modal");
+    expect(panel.queryByRole("button", { name: /Add a fire drill/ })).not.toBeInTheDocument();
+    expect(storage.getItem(FULL_SCREEN_KEY)).toBeNull();
+  });
+
+  it("opens in full screen when the visitor left it so, but never on a narrow screen", async () => {
+    storage.setItem(FULL_SCREEN_KEY, "1");
+    wide(false);
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    expect(await shadow().findByRole("button", { name: "Your chats" })).toBeInTheDocument();
+    expect(shadow().getByRole("dialog")).not.toHaveAttribute("aria-modal");
+    act(() => diletta().destroy());
+
+    wide(true);
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+      diletta().open();
+    });
+    expect(await shadow().findByRole("button", { name: "Exit full screen" })).toBeInTheDocument();
+  });
+});

@@ -17,6 +17,7 @@ function renderHistory(view: Schemas.WidgetHistoryView) {
   const actions = {
     onBack: vi.fn(),
     onNewChat: vi.fn(),
+    onToggleFullScreen: vi.fn(),
     onClose: vi.fn(),
     onPick: vi.fn(),
     onMore: vi.fn(),
@@ -95,6 +96,7 @@ describe("PastChat", () => {
     linkOrigins: [],
     onBack: vi.fn(),
     onNewChat: vi.fn(),
+    onToggleFullScreen: vi.fn(),
     onClose: vi.fn(),
     onRetry: vi.fn(),
   };
