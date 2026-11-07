@@ -131,6 +131,35 @@ export function routeTestHostFetch() {
   });
 }
 
+// DEV_NOTE: The next write (a request that isn't a GET) to the test host is answered with this status and JSON body,
+// before it reaches the host, like a host that refuses a call with its own error answer (the test host's status
+// faults carry no body). Call it after routeTestHostFetch, which it layers over; a read goes through untouched.
+export function answerNextHostWriteWith(status: number, body: unknown) {
+  const current = globalThis.fetch;
+  const previous = vi.isMockFunction(current) ? current.getMockImplementation() : current;
+  const next: typeof fetch = previous ?? unmockedFetch;
+  let isAnswered = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const method = (
+      init?.method ?? (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
+    if (
+      !isAnswered &&
+      method !== "GET" &&
+      URL.canParse(url) &&
+      new URL(url).origin === testHostOrigin
+    ) {
+      isAnswered = true;
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return await next(input, init);
+  });
+}
+
 // DEV_NOTE: The test company's tool definition columns for one of Schemas.TEST_HOST_TOOL_DEFINITIONS, as the seed
 // script stores them (ops normalised at the current schema version)
 export function testHostToolColumns(name: string) {

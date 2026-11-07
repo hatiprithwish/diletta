@@ -9,6 +9,7 @@ import type {
 } from "../toolDefinitions/ToolDefinitionsCommon";
 import type { RenderedToolRequest } from "../toolDefinitions/ToolOpRenderer";
 import type { ReadbackCheckExpectations } from "../toolDefinitions/ToolReadbackCompare";
+import type { HostIssue } from "./HostIssues";
 
 // DEV_NOTE: Host API calls (@app/adapter, M3-2). A failed or slow attempt is tried again at most HOST_CALL_MAX_RETRIES
 // times (when its idempotency mode allows it): after the host's Retry-After when it gives one (capped), else
@@ -113,6 +114,9 @@ export interface HostCallResponse extends ApiResponse {
   // A refused write only: what the host's error answer said (HOST_ERROR_TEXT_MAX_CHARS at most). It can echo the
   // user's values, so it is stored encrypted and never logged; message above never holds it.
   hostError?: string;
+  // A refused read, read-before or write whose answer was a 400 or 422 with issues in it (extractHostIssues, ADR 0008):
+  // field paths and rule messages only, for the model. Still host text: screened before the model sees it, never logged.
+  hostIssues?: HostIssue[];
   // Requests this call sent for the step itself (an Emulated readback check isn't counted)
   attempts: number;
   // A write only, on every outcome: whether one of its sends may have landed. When true on an outcome that isn't a

@@ -14,6 +14,7 @@ import { buildHostUrl, defaultHostRetryWait, parseHostBaseUrl, sendHostAttempt }
 // A 3xx is never followed. A write's 3xx may have landed (POST / redirect / GET), so it's Unknown and not resent.
 // Pure: no DB, no logger, never throws; messages carry no token, body or args, so the caller can log them. A refused
 // write's `hostError` (the host's error text) is the one exception: the caller stores it encrypted and never logs it.
+// A 400 / 422's `hostIssues` (field paths and rule messages only, ADR 0008) is the other: for the model, screened first.
 // Known limit: an Emulated check reads the host right after a failed attempt, so a host that applies writes late
 // (eventual consistency) can still see a resend twice. Such a host's tools should be Native or None.
 
@@ -42,12 +43,23 @@ function retryDelayMs(retry: number, retryAfterMs: number | null): number {
   return retryAfterMs ?? Schemas.HOST_CALL_RETRY_BASE_MS * 2 ** retry;
 }
 
+// DEV_NOTE: The field issues of a 400 / 422 answer (ADR 0008), from its parsed body; none (undefined) for any other
+// status, an unreadable body or one with no issue in it
+function toHostIssues(
+  httpStatus: number,
+  result: Extract<Schemas.HostAttemptResult, { kind: Schemas.HostAttemptKindEnum.Answered }>,
+): Schemas.HostIssue[] | undefined {
+  if (!result.isReadable) return undefined;
+  const issues = Schemas.extractHostIssues(httpStatus, result.body);
+  return issues.length > 0 ? issues : undefined;
+}
+
 // The one response builder: a read passes its attempts, a write its attempts and mayHaveLanded
 function toResponse(
   outcome: Schemas.HostCallOutcomeEnum,
   message: string | undefined,
   state: Schemas.HostWriteState | Pick<Schemas.HostWriteState, "attempts">,
-  extra: Pick<Schemas.HostCallResponse, "httpStatus" | "body" | "hostError"> = {},
+  extra: Pick<Schemas.HostCallResponse, "httpStatus" | "body" | "hostError" | "hostIssues"> = {},
 ): Schemas.HostCallResponse {
   return { isSuccess: isSuccessOutcome(outcome), outcome, message, ...state, ...extra };
 }
@@ -59,6 +71,7 @@ function failUnlessMaybeLanded(
   state: Schemas.HostWriteState,
   httpStatus?: number,
   hostError?: string,
+  hostIssues?: Schemas.HostIssue[],
 ): Schemas.HostCallResponse {
   return state.mayHaveLanded
     ? toResponse(
@@ -67,7 +80,7 @@ function failUnlessMaybeLanded(
         state,
         { httpStatus },
       )
-    : toResponse(outcome, message, state, { httpStatus, hostError });
+    : toResponse(outcome, message, state, { httpStatus, hostError, hostIssues });
 }
 
 export default class RestAdapter implements Schemas.HostAdapter {
@@ -217,7 +230,7 @@ export default class RestAdapter implements Schemas.HostAdapter {
         Schemas.HostCallOutcomeEnum.Refused,
         `Host refused the call (${httpStatus})`,
         state,
-        { httpStatus },
+        { httpStatus, hostIssues: toHostIssues(httpStatus, result) },
       );
     }
   }
@@ -446,6 +459,7 @@ export default class RestAdapter implements Schemas.HostAdapter {
           state,
           httpStatus,
           result.text ?? undefined,
+          toHostIssues(httpStatus, result),
         );
       }
       state.mayHaveLanded = true;
