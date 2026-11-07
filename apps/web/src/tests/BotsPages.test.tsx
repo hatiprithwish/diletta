@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -113,6 +113,18 @@ const OPTIONS: Schemas.ChatbotConfigOptions = {
   ],
   knowledgeSources: [{ publicId: "ks_1", name: "Help center" }],
   activeKeyProviders: [],
+};
+
+// DEV_NOTE: ADR 0010. An operator's /dashboard/me (the "Publish without tests" button is theirs only)
+const OPERATOR_ME: Schemas.AdminProfile = {
+  clerkUserId: "user_1",
+  email: "op@diletta.example",
+  name: "Olu Operator",
+  createdAt: new Date("2026-09-01T09:00:00.000Z"),
+  updatedAt: new Date("2026-09-01T09:00:00.000Z"),
+  role: Schemas.AdminRoleEnum.Operator,
+  company: null,
+  actingCompanies: [],
 };
 
 type Handler = (url: string, init?: RequestInit) => { status: number; body: unknown } | null;
@@ -418,6 +430,93 @@ describe("Settings › Bots › version", () => {
     await waitFor(() =>
       expect(calls(fetchMock, "POST", "/configs/cfg_13/back-to-draft")).toHaveLength(1),
     );
+  });
+
+  it("lets an operator publish a version in testing without its tests, after a confirmation", async () => {
+    const testing = {
+      ...V13,
+      chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Testing,
+      chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Testing,
+    };
+    const published = {
+      ...testing,
+      chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Published,
+      chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Published,
+    };
+    const fetchMock = mockApi((url, init) => {
+      if (url.endsWith("/dashboard/me")) {
+        return { status: 200, body: { isSuccess: true, admin: OPERATOR_ME } };
+      }
+      if (url.endsWith("/configs/cfg_13/publish-without-tests")) {
+        return { status: 200, body: { isSuccess: true, chatbotConfig: published } };
+      }
+      if (url.endsWith("/configs/cfg_13") && (init?.method ?? "GET") === "GET") {
+        return { status: 200, body: { isSuccess: true, chatbotConfig: testing } };
+      }
+      return null;
+    });
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+
+    // Testing has no plain Publish; the operator's button is there
+    await userEvent.click(await screen.findByRole("button", { name: "Publish without tests" }));
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Publish v13 without passing its tests?",
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Publish without tests" }));
+    await waitFor(() =>
+      expect(calls(fetchMock, "POST", "/configs/cfg_13/publish-without-tests")).toHaveLength(1),
+    );
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/configs/cfg_13/publish")),
+    ).toHaveLength(0);
+    expect(toast.success).toHaveBeenCalledWith(
+      "v13 is live. The assistant uses it from the next message.",
+    );
+  });
+
+  it("shows the refusal of a publish without tests, and offers the button to operators only", async () => {
+    const ready = {
+      ...V13,
+      chatbotConfigStatus: Schemas.ChatbotConfigStatusIntEnum.Ready,
+      chatbotConfigStatusLabel: Schemas.ChatbotConfigStatusLabelEnum.Ready,
+    };
+    const refuse = (url: string, init?: RequestInit) => {
+      if (url.endsWith("/configs/cfg_13/publish-without-tests")) {
+        return {
+          status: 409,
+          body: {
+            isSuccess: false,
+            message: "Add a working model key for Google before publishing",
+            failure: Schemas.ChatbotConfigFailureEnum.ModelKeyMissing,
+            missingKeyProviders: [Schemas.ModelProviderEnum.Google],
+          },
+        };
+      }
+      if (url.endsWith("/configs/cfg_13") && (init?.method ?? "GET") === "GET") {
+        return { status: 200, body: { isSuccess: true, chatbotConfig: ready } };
+      }
+      return null;
+    };
+
+    // A company admin: no such button
+    mockApi(refuse);
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+    expect(await screen.findByRole("button", { name: "Publish" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publish without tests" })).toBeNull();
+    cleanup();
+
+    // An operator, on a Ready version: both buttons, and the refusal shows
+    mockApi((url, init) =>
+      url.endsWith("/dashboard/me")
+        ? { status: 200, body: { isSuccess: true, admin: OPERATOR_ME } }
+        : refuse(url, init),
+    );
+    renderPage("/settings/bots/bot_1/versions/cfg_13");
+    await userEvent.click(await screen.findByRole("button", { name: "Publish without tests" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Publish without tests" }));
+    expect(await screen.findByText("This version wasn't published")).toBeInTheDocument();
   });
 
   it("publishes a version that passed its tests", async () => {

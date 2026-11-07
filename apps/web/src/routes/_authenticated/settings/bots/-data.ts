@@ -391,13 +391,19 @@ export function useMoveToDraft(chatbotPublicId: string, publicId: string) {
   });
 }
 
-export function usePublishVersion(chatbotPublicId: string, publicId: string) {
+// DEV_NOTE: isWithoutTests = an operator's publish of a Testing or Ready version without a passed gate run (ADR 0010)
+export function usePublishVersion(
+  chatbotPublicId: string,
+  publicId: string,
+  options: { isWithoutTests?: boolean } = {},
+) {
   const { getToken } = useAuth();
   const queryClient = useQueryClient();
+  const action = options.isWithoutTests ? "publish-without-tests" : "publish";
   return useMutation({
     mutationFn: () =>
       apiClient<Schemas.ChatbotConfigWriteApiResponse>(
-        `${configsPath(chatbotPublicId)}/${encodeURIComponent(publicId)}/publish`,
+        `${configsPath(chatbotPublicId)}/${encodeURIComponent(publicId)}/${action}`,
         getToken,
         { method: "POST" },
       ),

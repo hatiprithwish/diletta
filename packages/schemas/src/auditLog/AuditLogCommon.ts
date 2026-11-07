@@ -54,6 +54,8 @@ export enum AuditEntityActionEnum {
   MadeDefault = "made_default",
   Discarded = "discarded",
   Published = "published",
+  // DEV_NOTE: Operator only (ADR 0010): a version published without a passed gate run
+  PublishedWithoutTests = "published_without_tests",
   SentToTesting = "sent_to_testing",
   MovedToDraft = "moved_to_draft",
   PassedGate = "passed_gate",
@@ -159,6 +161,7 @@ export const AUDIT_ENTITY_ACTIONS = {
     AuditEntityActionEnum.PassedGate,
     AuditEntityActionEnum.FailedGate,
     AuditEntityActionEnum.Published,
+    AuditEntityActionEnum.PublishedWithoutTests,
     AuditEntityActionEnum.GateRunStarted,
     AuditEntityActionEnum.TestRunStarted,
     AuditEntityActionEnum.RunResumed,

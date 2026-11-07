@@ -575,8 +575,9 @@ export default class ChatbotConfigsDAL {
     return response;
   }
 
-  // DEV_NOTE: Ready → Published (the DAL matches Ready: a version goes live only through its gate). The caller archives the
-  // old Published version first, in the same transaction (UNQ_chatbot_configs_chatbot_id_published).
+  // DEV_NOTE: → Published from the statuses the caller names (Ready for a publish, Testing or Ready for an operator's
+  // publish without tests, ADR 0010). The caller archives the old Published version first, in the same transaction
+  // (UNQ_chatbot_configs_chatbot_id_published).
   async publishChatbotConfig(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.PublishChatbotConfigDALRequest,
@@ -589,7 +590,7 @@ export default class ChatbotConfigsDAL {
         eq(chatbotConfigs.publicId, params.publicId),
         eq(chatbotConfigs.chatbotId, params.chatbotId),
         eq(chatbotConfigs.companyId, params.companyId),
-        eq(chatbotConfigs.status, Schemas.ChatbotConfigStatusIntEnum.Ready),
+        inArray(chatbotConfigs.status, [...params.fromStatuses]),
       ];
       const [chatbotConfig] = await tx
         .update(chatbotConfigs)
@@ -604,7 +605,7 @@ export default class ChatbotConfigsDAL {
         .returning();
 
       if (!chatbotConfig) {
-        response.message = "Ready chatbot config not found";
+        response.message = "Chatbot config to publish not found";
         response.isNotFound = true;
         return response;
       }

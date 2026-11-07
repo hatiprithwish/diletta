@@ -34,7 +34,8 @@ type NormalizedBody =
 // in place, discarded (→ Archived: configs are never deleted, runs and conversations point at them) or sent to testing
 // (→ Testing, M5-4). Its gate run's finish (EvalHarnessRepo) moves it to Ready (approved_by_run_id) or back to Draft; an
 // admin can take a Testing or Ready version back to Draft. Only a Ready version is published (→ Published, the previous
-// Published → Archived), on its passed gate run, which must have run every active safety case. One open version (Draft,
+// Published → Archived), on its passed gate run, which must have run every active safety case (an operator may publish a
+// Testing or Ready version without that run, ADR 0010). One open version (Draft,
 // Testing, Ready) per chatbot: create, copy and publish take the chatbot row's lock; save, discard and the gate moves
 // lock the version row and act only from their statuses (the DAL matches them), which is enough for them. The gate run's
 // move (applyGateResult) runs in the eval harness's finish transaction, so the whole lifecycle stays in this Repo. Bodies are written only through normalizeConfigBody and read for the editor through
@@ -868,6 +869,28 @@ export default class ChatbotConfigsRepo {
   async publishChatbotConfig(
     params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
   ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
+    return await this.publish(params, { isGateOverridden: false });
+  }
+
+  // DEV_NOTE: An operator's publish of a Testing or Ready version without a passed gate run (ADR 0010): the same
+  // transaction as publishChatbotConfig, minus the gate approval (so minus the safety coverage check). The version's
+  // needs (a working model key, Active pinned tools, priced models) are still checked, the audit row is
+  // PublishedWithoutTests, and approved_by_run_id stays as it is (null unless the version had passed). A Gate run still
+  // in flight does no harm: its finish moves only a Testing version (applyGateResult), and this one is Published.
+  async publishChatbotConfigWithoutTests(
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
+  ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
+    return await this.publish(params, { isGateOverridden: true });
+  }
+
+  private async publish(
+    params: ConfigScope & { adminId: string; actor: Schemas.AuditActor },
+    options: { isGateOverridden: boolean },
+  ): Promise<Schemas.WithOutboxIds<Schemas.ChatbotConfigWriteApiResponse>> {
+    const { isGateOverridden } = options;
+    const fromStatuses: readonly Schemas.ChatbotConfigStatusIntEnum[] = isGateOverridden
+      ? Schemas.CHATBOT_CONFIG_GATE_STATUSES
+      : [Schemas.ChatbotConfigStatusIntEnum.Ready];
     return await withTenant(
       this.db,
       params.companyId,
@@ -878,16 +901,22 @@ export default class ChatbotConfigsRepo {
           companyId: params.companyId,
           chatbot: resolved.chatbot,
           publicId: params.publicId,
-          statuses: [Schemas.ChatbotConfigStatusIntEnum.Ready],
-          failure: Schemas.ChatbotConfigFailureEnum.NotReady,
-          refusal: "Only a version that passed its tests can be published",
+          statuses: fromStatuses,
+          failure: isGateOverridden
+            ? Schemas.ChatbotConfigFailureEnum.NotInGate
+            : Schemas.ChatbotConfigFailureEnum.NotReady,
+          refusal: isGateOverridden
+            ? "Only a version in testing or ready to publish can be published without its tests"
+            : "Only a version that passed its tests can be published",
         });
         if (!found.isSuccess) return found.response;
-        const notApproved = await this.checkGateApproval(tx, {
-          companyId: params.companyId,
-          chatbotConfig: found.chatbotConfig,
-        });
-        if (notApproved) return notApproved;
+        if (!isGateOverridden) {
+          const notApproved = await this.checkGateApproval(tx, {
+            companyId: params.companyId,
+            chatbotConfig: found.chatbotConfig,
+          });
+          if (notApproved) return notApproved;
+        }
         const read = this.readStoredBody(found.chatbotConfig);
         if (!read.isSuccess) return read.response;
         const refused = await this.checkPublishNeeds(tx, {
@@ -907,6 +936,7 @@ export default class ChatbotConfigsRepo {
           chatbotId: resolved.chatbot.id,
           publicId: params.publicId,
           publishedBy: params.adminId,
+          fromStatuses,
         });
         // DEV_NOTE: The old version is already archived: a failed publish must not commit a chatbot with none
         if (!published.isSuccess) {
@@ -917,7 +947,9 @@ export default class ChatbotConfigsRepo {
           params,
           resolved.chatbot,
           published,
-          Schemas.AuditEntityActionEnum.Published,
+          isGateOverridden
+            ? Schemas.AuditEntityActionEnum.PublishedWithoutTests
+            : Schemas.AuditEntityActionEnum.Published,
         );
       },
     );

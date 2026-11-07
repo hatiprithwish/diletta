@@ -864,7 +864,10 @@ export interface DashboardPublishIssuesProps {
   options: ChatbotConfigOptions;
   refusal: ChatbotConfigWriteApiResponse | null;
   // The write the version's next step is (and the refusal answered): a draft's send to testing, a Ready version's publish
-  refusalAction: DashboardVersionConfirmEnum.SendToTesting | DashboardVersionConfirmEnum.Publish;
+  refusalAction:
+    | DashboardVersionConfirmEnum.SendToTesting
+    | DashboardVersionConfirmEnum.Publish
+    | DashboardVersionConfirmEnum.PublishWithoutTests;
 }
 
 // DEV_NOTE: The safety hard gate's banner on a draft (M5-4): its newest gate run failed this many safety cases
@@ -898,9 +901,10 @@ export interface DashboardBotVersionEditorProps extends DashboardBotNewDraftProp
 }
 
 // DEV_NOTE: Which of a version's confirmations is open: a draft's Discard and Send to testing, Back to draft (Testing,
-// Ready), a Ready version's Publish
+// Ready), a Ready version's Publish, an operator's Publish without tests (Testing, Ready)
 export enum DashboardVersionConfirmEnum {
   Publish = "publish",
+  PublishWithoutTests = "publish_without_tests",
   Discard = "discard",
   SendToTesting = "send_to_testing",
   BackToDraft = "back_to_draft",

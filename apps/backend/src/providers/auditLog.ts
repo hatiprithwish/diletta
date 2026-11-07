@@ -98,6 +98,8 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.PassedGate]: "Passed its tests, ready to publish",
     [Schemas.AuditEntityActionEnum.FailedGate]: "Failed its tests, back to draft",
     [Schemas.AuditEntityActionEnum.Published]: "Published a version",
+    [Schemas.AuditEntityActionEnum.PublishedWithoutTests]:
+      "Published a version without its tests passing",
     [Schemas.AuditEntityActionEnum.GateRunStarted]: "Started a version's publish tests",
     [Schemas.AuditEntityActionEnum.TestRunStarted]: "Ran a version's tests",
     [Schemas.AuditEntityActionEnum.RunResumed]: "Resumed a version's tests",

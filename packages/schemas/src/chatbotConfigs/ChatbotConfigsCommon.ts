@@ -112,7 +112,8 @@ export const CHATBOT_CONFIG_GATE_STATUSES = [
 
 // DEV_NOTE: Why a draft write, a send to testing or a publish was refused. 409 = the version's or the company's state
 // refused it (no model key for a provider the routing uses, a pinned tool version not Active, a model the router can't
-// price; M5-4: publish only from Ready, on a passed gate run that ran every active safety case); 400 = the body isn't
+// price; M5-4: publish only from Ready, on a passed gate run that ran every active safety case, unless an operator
+// publishes a Testing or Ready version without tests, ADR 0010); 400 = the body isn't
 // a valid config spec.
 export enum ChatbotConfigFailureEnum {
   NotDraft = "NotDraft",
