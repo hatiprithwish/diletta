@@ -8,13 +8,14 @@ Before any conversation exists, it reads its settings from `GET /widget/bootstra
 
 A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`):
 
-| Option         | Required | What it is                                                                                                                                                                                                                                           |
-| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apiBase`      | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`)                                                                                                                             |
-| `getToken`     | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                                                                                                                                                         |
-| `getHostToken` | no       | `() => Promise<string>`: the signed-in user's bearer token for the host's own API. The chatbot reads and changes records as this user (`jwt_forward`). Called again whenever the chatbot asks for a fresh one. Without it, changes can't be approved |
-| `chatbot`      | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                                                                                                                                               |
-| `theme`        | no       | `"light"` (default) or `"dark"`                                                                                                                                                                                                                      |
+| Option         | Required | What it is                                                                                                                                                                                                                                                                                                                   |
+| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiBase`      | yes      | The platform worker's origin, e.g. `https://diletta-worker.example.workers.dev` (https; plain http only for `localhost`)                                                                                                                                                                                                     |
+| `getToken`     | yes      | `() => Promise<string>`: asks the host's own backend for a fresh companion JWT (≤ 5 minutes)                                                                                                                                                                                                                                 |
+| `getHostToken` | no       | `() => Promise<string>`: the signed-in user's bearer token for the host's own API. The chatbot reads and changes records as this user (`jwt_forward`). Called again whenever the chatbot asks for a fresh one. Without it, changes can't be approved                                                                         |
+| `chatbot`      | no       | A chatbot publicId; when absent, the company's default chatbot is used                                                                                                                                                                                                                                                       |
+| `theme`        | no       | `"light"` (default) or `"dark"`                                                                                                                                                                                                                                                                                              |
+| `accent`       | no       | The host's brand colour, replacing lime: `{ fill, fillForeground, text? }`, each a CSS colour (`#hex`, `rgb()`, `oklch()`…). `fill` colours the launcher, send and Approve buttons; `fillForeground` is the text and icons on it; `text` (default `fill`) is links and the focus ring. Pass the values for the current theme |
 
 **Script tag.** The static Worker in `apps/widget/wrangler.jsonc` serves the bundle (`diletta-widget.js`).
 
@@ -27,13 +28,13 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
     getHostToken: () => fetch("/api/session-token").then((response) => response.text()),
     theme: "light",
   });
-  // window.Diletta.open() / close() / setTheme("dark") / destroy() act on the same widget
+  // window.Diletta.open() / close() / setTheme("dark") / setAccent({...} | null) / destroy() act on the same widget
 </script>
 ```
 
-`init` throws on bad options. Calling it a second time replaces the first widget; the first `init`'s controller then does nothing, so it can't destroy the new one. `init` may run from a `<head>` script: the widget joins `<body>` once it exists.
+`init` throws on bad options, including an accent colour the browser can't draw (`CSS.supports`); `setAccent` throws the same way, and `setAccent(null)` goes back to lime. Calling `init` a second time replaces the first widget; the first `init`'s controller then does nothing, so it can't destroy the new one. `init` may run from a `<head>` script: the widget joins `<body>` once it exists.
 
-**React.** Use `<DilettaWidget apiBase=… getToken=… theme=… />`, exported from `apps/widget/src/index.ts`. `vite build --mode lib` builds it to `dist/lib/index.js`, with React external. A new `theme` re-themes the widget in place; a new `apiBase` or `chatbot` starts a fresh one.
+**React.** Use `<DilettaWidget apiBase=… getToken=… theme=… />`, exported from `apps/widget/src/index.ts`. `vite build --mode lib` builds it to `dist/lib/index.js`, with React external. A new `theme` or `accent` re-colours the widget in place (the accent is compared by its colours, so a new object each render is fine); a new `apiBase` or `chatbot` starts a fresh one.
 
 **What the host sets up:**
 
@@ -77,13 +78,13 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 
 ## Bundle size
 
-`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7 and 185.4 KiB at M3-5 (review cards, the checkbox and native select). `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
+`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7 and 185.4 KiB at M3-5 (review cards, the checkbox and native select). It was 196.0 KiB at M7-5 (host accent), close to the budget. `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
 
 The biggest parts are React DOM, zod, `cn`, the agents client (including its unused capnweb transport) and `ai`. Markdown is the widget's own small parser (`src/lib/markdown.ts`) rather than a library, to stay within the budget.
 
 ## Local development
 
-The dev host (`pnpm dev:widget`, http://localhost:5174) is a stand-in host page with the live widget. Add `?gallery` to see every widget state drawn from sample data, and `&theme=dark` for dark mode. The gallery needs no backend and is what the light and dark screenshots are taken from.
+The dev host (`pnpm dev:widget`, http://localhost:5174) is a stand-in host page with the live widget. Add `?gallery` to see every widget state drawn from sample data, `&theme=dark` for dark mode, and `&accent=host` for a sample blue host accent. The gallery needs no backend and is what the light and dark screenshots are taken from.
 
 To chat for real, the dev host signs its own tokens, so it needs a one-time setup against a staging company:
 

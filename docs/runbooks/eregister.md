@@ -1,6 +1,6 @@
 # eRegister
 
-eRegister is the first customer host (M7). This runbook covers its connection to Diletta (M7-1) and its tools (M7-2).
+eRegister is the first customer host (M7). This runbook covers its connection to Diletta (M7-1), its tools (M7-2), and the widget in eRegister's app with the internal pilot (M7-5).
 
 For now, eRegister runs only against **Diletta staging**, through its own eRegister env `ai-agent`. That env is a separate backend Worker and a separate frontend Pages project. It reuses the eRegister `test` env's database, KV, R2, queues, sandbox and Firebase project (`digital-registers-test`). The `test` and `feature` envs are not changed. There's no production connection yet; that comes with M7-6.
 
@@ -175,22 +175,83 @@ One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md
 
 Every write tool has a readback, and the undo where eRegister allows one. `pnpm --filter @app/schemas test` (`EregisterTools.test.ts`) checks this for every tool: each one saves, its args convert, each write has a readback, creates and updates undo, deletes are marked not undoable, and an update sends only what it compares or restores. On staging, after loading the tools, run one create, update and delete of a button through the widget. Each ends Verified, and undoing the update ends Undone.
 
+## Widget and internal pilot (M7-5)
+
+### The widget in eRegister's app
+
+The eRegister app (`eregister-reborn`, `apps/eregister-app`) mounts the widget in its app shell (`src/components/ai/diletta/DilettaWidget.tsx`, rendered by `AppLayout`). It loads `diletta-widget.js` by script tag and calls `window.Diletta.init`. The widget shows its own floating launcher. eRegister's concept "AI Assistant" panel is a separate thing and stays switched off.
+
+| Option         | What eRegister passes                                                                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiBase`      | `VITE_DILETTA_API_BASE`                                                                                                                                                                                                                     |
+| `getToken`     | `POST /api/p/companies/<current company>/companion/token` with the user's Firebase ID token, its `token`                                                                                                                                    |
+| `getHostToken` | the user's Firebase ID token (`getIdToken()`, which Firebase refreshes before it expires)                                                                                                                                                   |
+| `theme`        | the app's current theme: `dark` when `<html>` has the `.dark` class (eRegister's System setting resolves to it), else `light`                                                                                                               |
+| `accent`       | the user's eRegister accent for that theme: `oklch(--primary)` as the fill, `oklch(--primary-foreground)` on it (white if unset), `oklch(--primary-text)` for links and the focus ring, read from `<html>`'s computed style (`hostLook.ts`) |
+| `chatbot`      | not passed: the Diletta company's default chatbot                                                                                                                                                                                           |
+
+When the user changes theme or accent, eRegister's `ThemeProvider` updates `<html>`'s `class` / `data-accent`; a `MutationObserver` on those attributes calls `setTheme` and `setAccent`, so the widget re-colours without restarting. Switching company in eRegister starts a fresh widget, and leaving the app shell (sign-out) destroys it. The saved conversation is keyed by Diletta's platform, the chatbot and the Firebase uid, not by the eRegister company. So after a company switch, opening the panel resumes the same chat. The tools pick the eRegister company by `companyId`, so state the company in the chat when it matters, or start a new chat.
+
+It is on only in a build that sets both variables. They live only in the `AI_AGENT_ENV` GitHub secret of `eregister-reborn`, so the test and production builds don't load the widget. Every eRegister company in the ai-agent env gets the launcher. They all chat with the one eRegister company in Diletta, and the chatbot sees only what the signed-in user can see.
+
+| Variable                  | Value (Diletta staging)                                                      |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `VITE_DILETTA_WIDGET_URL` | `https://diletta-widget-staging.hatiprithwish.workers.dev/diletta-widget.js` |
+| `VITE_DILETTA_API_BASE`   | `https://diletta-worker-staging.hatiprithwish.workers.dev`                   |
+
+Add both to `AI_AGENT_ENV`, then push to `ai-agent-pages` or run `app-ai-agent-deploy.yml` by hand. The variables are read at build time, so a change needs a new deploy.
+
+Only `https://eregister-ai-agent-1ms.pages.dev` is in the connection's `allowed_origins`. A Pages preview URL (`<hash>.eregister-ai-agent-1ms.pages.dev`) gets 403 on `/widget/bootstrap`. Pilot on the main URL.
+
+**Before the pilot**, check each of these on Diletta staging:
+
+- The Staging connection is Active, with the origin above.
+- The tools are loaded and the chatbot's config pins the ones the pilot needs (at least `eregister_list_companies` and the button tools).
+- The knowledge sources are synced (M7-3).
+- The chatbot is the company's default and has a Published config whose gate run passed (M7-4).
+- The company has an active model key and room in its budget (`docs/runbooks/model-keys.md`, `budget.md`).
+
+### Pilot
+
+Pilot users are our own team, each signed in to `https://eregister-ai-agent-1ms.pages.dev` with their own eRegister account in an eRegister test company. The chatbot acts with that account's eRegister role. Each user runs the tasks below in the widget alone, with no engineer helping. Use a register made for the pilot, so nothing in it matters.
+
+| #   | Task                                                                                              | Done when                                                                                      |
+| --- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 1   | Ask how to do something in eRegister (for example how a register button works)                    | The answer cites a help source                                                                 |
+| 2   | Ask which registers the company has, then which buttons one of them has                           | The lists match eRegister                                                                      |
+| 3   | Ask it to add a button to the pilot register, and approve                                         | The card ends Verified and the button shows in eRegister                                       |
+| 4   | Ask it to rename that button. Before approving, use **Edit** to change the new name, then approve | The card returns to approval with the edited diff, ends Verified, and eRegister shows the edit |
+| 5   | Undo that rename                                                                                  | The card ends Undone and eRegister shows the old name                                          |
+| 6   | Ask it to change the button's description, and reject                                             | Nothing changes in eRegister                                                                   |
+| 7   | Ask it to delete the button, and approve                                                          | The card says it can't be undone, ends Verified, and the button is gone                        |
+| 8   | Reload the page mid-chat, then open the widget                                                    | The chat resumes with its history                                                              |
+| 9   | Rate replies: thumbs up on a good one, thumbs down on a weak one                                  | The thumbs-down shows as an issue on the Quality page                                          |
+
+While the pilot runs, an operator watches it from the Diletta dashboard, acting in the eRegister company (ADR 0006, `docs/runbooks/operators.md`). Check the Conversations, Changes (nothing left as "needs a person"), Quality and Knowledge (doc gaps) pages. A task that needed help, or ended other than its "done when", becomes a Quality issue and gets fixed before the user runs it again: change the config, the knowledge or a tool, and publish again through the gate.
+
+Record each pilot user's run in the M7-5 tracking issue: the user, their eRegister role, the date, the tasks done unaided, and the Quality issues raised. **M7-5 is done** when every pilot user has done all nine tasks unaided on the current Published config. That ticks the launch readiness box "Pilot users completed real tasks on staging without engineer help".
+
+**For M7-6 (production):** the test and production eRegister apps are hosted on Firebase, with a Content-Security-Policy in `apps/eregister-app/firebase.json`. That policy must allow the widget's script host (`script-src`), the platform worker over `https:` and `wss:` (`connect-src`), and Google Fonts (`style-src` `https://fonts.googleapis.com`, `font-src` `https://fonts.gstatic.com`). The Pages ai-agent app sets no CSP.
+
 ## Check it works (M7-1 done when)
 
 1. **Staging eval JWT works.** Run `pnpm evals:run --config <any config publicId of the company>`. The harness signs in to Firebase, then starts a run. Any answer past auth shows the eval JWT and the connection were accepted. Before M7-2 and M7-4 add tools and cases, that answer is likely a 400 `Invalid` (no active case). A 401 means the key (see `docs/runbooks/evals.md`), and a 403 means the connection isn't Staging or isn't Active.
 2. **Production rejects it.** An eval JWT that names a production connection is 403 before anything is read (`authenticateEval`; `evalHarness.test.ts` "answers 401 without a valid platform signature, 403 for a production or unknown connection"). eRegister's production connection comes with M7-6. Repeat the check against it then.
-3. **Companion JWT.** Signed in on `https://eregister-ai-agent-1ms.pages.dev`, `POST {iss}/api/p/companies/<id>/companion/token` answers a token whose header has `alg` ES256 and the `kid`, and whose claims have `iss` = the connection's issuer, `aud` `diletta-widget` and `exp - iat` = 300. The widget itself is embedded in M7-5.
+3. **Companion JWT.** Signed in on `https://eregister-ai-agent-1ms.pages.dev`, `POST {iss}/api/p/companies/<id>/companion/token` answers a token whose header has `alg` ES256 and the `kid`, and whose claims have `iss` = the connection's issuer, `aud` `diletta-widget` and `exp - iat` = 300. The widget itself is embedded in M7-5 (see [Widget and internal pilot](#widget-and-internal-pilot-m7-5)).
 
 ## Troubleshooting
 
-| Symptom                                                                           | Likely cause                                                                                                                                      |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Harness: "eRegister test user sign-in failed: HTTP 400 INVALID_LOGIN_CREDENTIALS" | Wrong email or password, or Email/Password sign-in is off in Firebase                                                                             |
-| Harness: "uid is not EVAL_HOST_USER"                                              | `EVAL_HOST_USER` holds the email or another user's uid                                                                                            |
-| Widget: every connect refused as an unknown issuer                                | The connection's `jwt_issuer` and the token's `iss` differ (a trailing slash, the wrong env)                                                      |
-| Widget: signature refused                                                         | `COMPANION_JWT_SIGNING_KEY` was rotated and the JWKS cache hasn't refetched yet (within a minute), or the JWKS route answers 404 (secret missing) |
-| A write ends "needs a person" right after a create or a delete                    | eRegister's answer was lost: check the record in eRegister, then resolve it on the Changes page                                                   |
-| Every update of one kind ends Changes undone                                      | eRegister stores a compared field in another form: regenerate the schemas, or drop that field from the tool's compare                             |
-| `/companion/token` or `/.well-known/jwks.json` is 404                             | `COMPANION_JWT_SIGNING_KEY` isn't set on that env                                                                                                 |
-| Sign-in fails on the ai-agent app                                                 | `eregister-ai-agent-1ms.pages.dev` isn't an authorized domain in Firebase                                                                         |
-| Browser CORS error calling the eRegister API                                      | The app's origin isn't in the ai-agent env's `CORS_WHITELIST`                                                                                     |
+| Symptom                                                                           | Likely cause                                                                                                                                                        |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Harness: "eRegister test user sign-in failed: HTTP 400 INVALID_LOGIN_CREDENTIALS" | Wrong email or password, or Email/Password sign-in is off in Firebase                                                                                               |
+| Harness: "uid is not EVAL_HOST_USER"                                              | `EVAL_HOST_USER` holds the email or another user's uid                                                                                                              |
+| Widget: every connect refused as an unknown issuer                                | The connection's `jwt_issuer` and the token's `iss` differ (a trailing slash, the wrong env)                                                                        |
+| Widget: signature refused                                                         | `COMPANION_JWT_SIGNING_KEY` was rotated and the JWKS cache hasn't refetched yet (within a minute), or the JWKS route answers 404 (secret missing)                   |
+| A write ends "needs a person" right after a create or a delete                    | eRegister's answer was lost: check the record in eRegister, then resolve it on the Changes page                                                                     |
+| Every update of one kind ends Changes undone                                      | eRegister stores a compared field in another form: regenerate the schemas, or drop that field from the tool's compare                                               |
+| `/companion/token` or `/.well-known/jwks.json` is 404                             | `COMPANION_JWT_SIGNING_KEY` isn't set on that env                                                                                                                   |
+| Sign-in fails on the ai-agent app                                                 | `eregister-ai-agent-1ms.pages.dev` isn't an authorized domain in Firebase                                                                                           |
+| No launcher on the ai-agent app                                                   | `VITE_DILETTA_WIDGET_URL` or `VITE_DILETTA_API_BASE` is missing from `AI_AGENT_ENV` (build time: deploy again), or `diletta-widget.js` failed to load (network tab) |
+| Launcher shows, panel says "Temporarily unavailable"                              | See `docs/runbooks/widget.md` › Troubleshooting. A 403 on `/widget/bootstrap` from a `<hash>.eregister-ai-agent-1ms.pages.dev` preview URL is expected              |
+| `/companion/token` answers 403                                                    | The user isn't a member of the eRegister company open in the app                                                                                                    |
+| Browser CORS error calling the eRegister API                                      | The app's origin isn't in the ai-agent env's `CORS_WHITELIST`                                                                                                       |

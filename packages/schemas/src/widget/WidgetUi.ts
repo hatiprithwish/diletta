@@ -7,7 +7,12 @@ import type {
 import type { FeedbackRatingIntEnum } from "../feedback";
 import type { KnowledgeCitation } from "../knowledgeSearch";
 import type { WidgetBootstrap } from "./WidgetApiResponse";
-import type { WidgetInitOptions, WidgetStatusEnum, WidgetThemeEnum } from "./WidgetCommon";
+import type {
+  WidgetAccent,
+  WidgetInitOptions,
+  WidgetStatusEnum,
+  WidgetThemeEnum,
+} from "./WidgetCommon";
 
 // DEV_NOTE: The widget's view model (apps/widget, M2-7). The chat hooks turn Think's transcript and the DO's frames
 // into it; the components only render it, so every state in DESIGN.md §7 can be drawn from plain data.
@@ -257,11 +262,12 @@ export interface WidgetLauncherProps {
 // the host user the latest token is for (its sub), which keys that saved id, learned from every token; pendingText is
 // a message waiting for its socket to open; draft is the composer's text (a refused message comes back to it); ratings
 // are the saved thumbs, pendingRatings the ones sent and not yet answered; review holds the change requests the DO
-// sent and the review cards' local state (M3-5).
+// sent and the review cards' local state (M3-5). accent is the host's brand colour (null = lime).
 export interface WidgetStoreState {
   isOpen: boolean;
   draft: string;
   theme: WidgetThemeEnum;
+  accent: WidgetAccent | null;
   hostUser: string | null;
   conversationPublicId: string | null;
   isSocketEnabled: boolean;
@@ -274,10 +280,12 @@ export interface WidgetStoreState {
 }
 
 // DEV_NOTE: startOver switches to another conversation (or none) and clears everything that belonged to the old one:
-// socket off, ratings, review, unsent text, notice, unavailable. The theme, the panel and the host user stay.
+// socket off, ratings, review, unsent text, notice, unavailable. The theme, the accent, the panel and the host user
+// stay.
 export interface WidgetStoreActions {
   setOpen: (isOpen: boolean) => void;
   setTheme: (theme: WidgetThemeEnum) => void;
+  setAccent: (accent: WidgetAccent | null) => void;
   setConversation: (conversationPublicId: string | null) => void;
   startOver: (conversationPublicId: string | null) => void;
   patch: (patch: Partial<WidgetStoreState>) => void;
@@ -302,6 +310,7 @@ export interface WidgetRootProps {
 export interface DilettaWidgetInstanceProps {
   options: WidgetInitOptions;
   theme: WidgetThemeEnum;
+  accent: WidgetAccent | null;
 }
 
 // DEV_NOTE: What the widget's app, its chat session and its hooks are built from
@@ -368,8 +377,14 @@ export type WidgetBootstrapState =
   | { status: "ready"; bootstrap: WidgetBootstrap }
   | { status: "failed" };
 
+// DEV_NOTE: A host accent checked by the widget (the schema, then CSS.supports for each colour)
+export type WidgetAccentParseResult =
+  | { isSuccess: true; accent: WidgetAccent }
+  | { isSuccess: false; message: string };
+
 export interface WidgetShadowHostProps {
   theme: WidgetThemeEnum;
+  accent?: WidgetAccent | null;
 }
 
 export interface WidgetHeaderProps {

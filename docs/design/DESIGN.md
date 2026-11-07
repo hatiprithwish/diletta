@@ -12,6 +12,7 @@ Design canvas (editable): https://claude.ai/artifact/KUVrZKQFi6TGdzRqt5TcDC
 - Minimal and calm: white space instead of boxes, 1px borders, no shadows except the floating widget.
 - One accent: lime. It is a fill (buttons, toggles, bars, launcher) with near-black text on it.
   As text or a link, use `brand-text` (deep lime in light mode, bright lime in dark).
+  The one exception is the chat widget on a host page: the host may pass its own brand colour (§7).
 - Mono (`font-mono`) only for machine values: record IDs, tool names, model names, config versions, keys.
 - Light and dark are equal citizens. Every screen ships in both.
 - Plain words in the UI. Never show internal names (`turn_id`, `change_requests`, `needs_human`) to users.
@@ -231,6 +232,11 @@ Anatomy (`widget-Welcome` … `widget-Unavailable`):
 
 - Floating panel 380 × 680, radius 18, `shadow-float`, no border. Renders in Shadow DOM so host CSS
   can't leak in or out. Theme follows the host (light / dark prop).
+- Host accent (optional, `accent` option): the host's brand colour replaces lime in the widget's
+  brand fills (launcher, send, Approve, welcome icon, checkboxes), with the host's text colour on
+  them, its brand-as-text colour for links and the focus ring, and a brand tint mixed from the fill.
+  Diffs and success keep their green. Without it the widget is lime. The host passes the values for
+  its current mode and updates them when the mode or the brand colour changes.
 - Header: bot name (14/600), status dot + word (Online, Working, Unavailable), New chat, Close
   (icon buttons in `text-subtle-foreground`).
 - Messages: user = right-aligned `bubble` pill; assistant = plain text, no bubble.
