@@ -329,6 +329,8 @@ export enum LogAction {
   UpsertFeedback = "UpsertFeedback",
   ListConversationFeedback = "ListConversationFeedback",
   RecordFeedback = "RecordFeedback",
+  SetFeedbackComment = "SetFeedbackComment",
+  RecordFeedbackNote = "RecordFeedbackNote",
 
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",

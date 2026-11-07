@@ -334,6 +334,10 @@ export interface DashboardQualityListProps {
   onPage: (page: number) => void;
 }
 
+export interface DashboardFeedbackNoteProps {
+  note: string;
+}
+
 export interface DashboardQualityRowProps {
   qualityIssue: QualityIssueListItem;
   search: QualityPageSearch;

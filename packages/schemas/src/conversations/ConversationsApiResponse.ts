@@ -57,7 +57,7 @@ export enum ConversationTurnEntryKindEnum {
 }
 
 // DEV_NOTE: One message of a turn. text null = purged. citations: the sources the reply's [n] markers cite.
-// rating: the user's thumb on this reply, if any.
+// rating: the user's thumb on this reply, if any; feedbackNote the note they left with it (M7-10), the user's own words.
 export interface ConversationTurnMessage {
   kind: ConversationTurnEntryKindEnum.Message;
   publicId: string;
@@ -67,6 +67,7 @@ export interface ConversationTurnMessage {
   citations: Pick<KnowledgeCitation, "n" | "title" | "sourceUrl">[];
   rating: FeedbackRatingIntEnum | null;
   ratingLabel: FeedbackRatingLabelEnum | null;
+  feedbackNote: string | null;
 }
 
 // DEV_NOTE: The change a write tool call proposed. summary holds no values (tool, kind, field count).

@@ -87,6 +87,7 @@ const DETAIL: Schemas.ConversationDetail = {
           citations: [],
           rating: null,
           ratingLabel: null,
+          feedbackNote: null,
         },
         {
           kind: Schemas.ConversationTurnEntryKindEnum.Message,
@@ -100,6 +101,7 @@ const DETAIL: Schemas.ConversationDetail = {
           ],
           rating: Schemas.FeedbackRatingIntEnum.Up,
           ratingLabel: Schemas.FeedbackRatingLabelEnum.Up,
+          feedbackNote: "Quick and right.",
         },
       ],
     },
@@ -323,6 +325,8 @@ describe("Conversation detail", () => {
       "https://help.example.com/fire",
     );
     expect(within(card).queryByRole("link", { name: "Bad link" })).not.toBeInTheDocument();
+    expect(within(card).getByText("Their note")).toBeInTheDocument();
+    expect(within(card).getByText("Quick and right.")).toBeInTheDocument();
     expect(within(card).getByText("update_record")).toBeInTheDocument();
     expect(within(card).getByText("Needs a person")).toBeInTheDocument();
     expect(

@@ -36,6 +36,7 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   issueTypeLabel: null,
   note: null,
   ratedReply: "Every 6 months, per the Fire safety policy.",
+  feedbackNote: null,
   chatbotName: "eRegister Assistant",
   isChatbotWide: false,
   docGapCluster: null,
@@ -71,9 +72,18 @@ const ROW_HEALTH: Schemas.QualityIssueListItem = {
   conversation: null,
 };
 
+// DEV_NOTE: A thumbs-down with the user's note (M7-10): the row quotes the note, not the reply
+const ROW_NOTED: Schemas.QualityIssueListItem = {
+  ...ROW_USER,
+  publicId: "qi_4",
+  ratedReply: "Pick a register first.",
+  feedbackNote: "I already chose Fire safety.",
+  conversation: { publicId: "conv_4", title: "Answer ignored the selected register" },
+};
+
 const LIST: Schemas.GetQualityIssuesApiResponse = {
   isSuccess: true,
-  qualityIssues: [ROW_USER, ROW_SYSTEM, ROW_HEALTH],
+  qualityIssues: [ROW_USER, ROW_SYSTEM, ROW_HEALTH, ROW_NOTED],
   totalRecords: 7,
   tabCounts: { open: 7, converted: 12, fixed: 9, dismissed: 15 },
 };
@@ -81,6 +91,7 @@ const LIST: Schemas.GetQualityIssuesApiResponse = {
 const DETAIL: Schemas.QualityIssueDetail = {
   ...ROW_USER,
   rating: Schemas.FeedbackRatingIntEnum.Down,
+  feedbackNote: "Our policy changed to quarterly in July.",
   excerpt: [
     { role: Schemas.MessageRoleIntEnum.User, text: "How often do we need to run fire drills?" },
     {
@@ -281,6 +292,12 @@ describe("Quality list", () => {
       within(systemRow).getByText("EXT-B-019 read back as Open after an approved change."),
     ).toBeInTheDocument();
     expect(within(systemRow).getByText(/^Automatic check,/)).toBeInTheDocument();
+
+    const notedRow = screen
+      .getByRole("link", { name: "Answer ignored the selected register" })
+      .closest("li")!;
+    expect(within(notedRow).getByText('"I already chose Fire safety."')).toBeInTheDocument();
+    expect(within(notedRow).queryByText(/Pick a register first/)).not.toBeInTheDocument();
   });
 
   it("switches tabs through the URL and back to page 1", async () => {
@@ -327,6 +344,8 @@ describe("Quality issue", () => {
     ).toBeInTheDocument();
     expect(within(card).getByText("Tom")).toBeInTheDocument();
     expect(within(card).getByText("Rated not helpful")).toBeInTheDocument();
+    expect(within(card).getByText("Their note")).toBeInTheDocument();
+    expect(within(card).getByText("Our policy changed to quarterly in July.")).toBeInTheDocument();
     expect(within(card).getByRole("combobox", { name: "Issue type" })).toHaveTextContent(
       "Choose a type",
     );

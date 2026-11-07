@@ -22,6 +22,7 @@ const message = (
   createdAt: at(0),
   updatedAt: at(0),
   rating: null,
+  feedbackNote: null,
   ...overrides,
 });
 
@@ -133,6 +134,7 @@ describe("ConversationTranscriptProvider.buildTranscript", () => {
             ],
           },
           rating: Schemas.FeedbackRatingIntEnum.Down,
+          feedbackNote: "Our policy is quarterly now.",
         }),
         message({ turnId: T1, content: { nope: true } }),
       ],
@@ -149,6 +151,7 @@ describe("ConversationTranscriptProvider.buildTranscript", () => {
       citations: [{ n: 1, title: "Fire drills", sourceUrl: "https://a.b/c" }],
       rating: Schemas.FeedbackRatingIntEnum.Down,
       ratingLabel: Schemas.FeedbackRatingLabelEnum.Down,
+      feedbackNote: "Our policy is quarterly now.",
     });
     expect(JSON.stringify(entries[2])).not.toContain("doc_1");
   });

@@ -11,8 +11,12 @@ export interface MessageDALResponse extends ApiResponse {
   chatMessage?: Message;
 }
 
-// DEV_NOTE: A transcript message with its user's thumb (one rating per reply per user), for the dashboard (M4-4)
-export type TranscriptMessageRow = Message & { rating: FeedbackRatingIntEnum | null };
+// DEV_NOTE: A transcript message with its user's thumb (one rating per reply per user), for the dashboard (M4-4), and
+// the note they left on it (M7-10)
+export type TranscriptMessageRow = Message & {
+  rating: FeedbackRatingIntEnum | null;
+  feedbackNote: string | null;
+};
 
 // DEV_NOTE: One message's text only (content->>'text'; null once purged or when it has none), for a quality issue's
 // excerpt and test rewrite (M4-6)

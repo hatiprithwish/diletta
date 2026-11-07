@@ -804,6 +804,7 @@ export default class QualityIssuesDAL {
           string | null
         >`left(${messages.content}->>'text', ${Schemas.QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1})`,
         rating: feedback.rating,
+        feedbackNote: feedback.comment,
       })
       .from(qualityIssues)
       .leftJoin(conversations, and(...conversationJoinConditions))

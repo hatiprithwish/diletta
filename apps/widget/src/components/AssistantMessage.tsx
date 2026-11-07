@@ -8,7 +8,7 @@ import StopButton from "@/components/StopButton";
 import ToolSteps from "@/components/ToolSteps";
 
 // DEV_NOTE: One reply, no bubble: its steps, its text (caret while streaming), the review cards of the changes it
-// proposed (M3-5), Stop while it runs, then its sources and the thumbs once it's finished. Its links may point to the
+// proposed (M3-5), Stop while it runs, then its sources and the thumbs (with the note box, M7-10) once it's finished. Its links may point to the
 // host app (linkOrigins) and to the sources it cites, nowhere else (M6-4): a link a prompt injection planted can't
 // carry the chat out.
 export default function AssistantMessage({
@@ -17,6 +17,7 @@ export default function AssistantMessage({
   canStop,
   onStop,
   onRate,
+  noteActions,
   changeActions,
 }: Schemas.WidgetAssistantMessageProps) {
   const allowedOrigins = [
@@ -37,7 +38,13 @@ export default function AssistantMessage({
       {message.isStreaming && canStop && <StopButton onStop={onStop} />}
       {!message.isStreaming && <Sources citations={message.citations} />}
       {message.canRate && (
-        <Feedback messageId={message.id} rating={message.rating} onRate={onRate} />
+        <Feedback
+          messageId={message.id}
+          rating={message.rating}
+          note={message.note}
+          onRate={onRate}
+          noteActions={noteActions}
+        />
       )}
     </div>
   );

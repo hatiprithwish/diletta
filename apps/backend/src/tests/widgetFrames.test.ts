@@ -156,6 +156,39 @@ describe("WidgetFrameProvider.admit feedback", () => {
   });
 });
 
+describe("WidgetFrameProvider.admit feedback notes", () => {
+  it("admits a trimmed note on one reply's rating", () => {
+    const frame = JSON.stringify({
+      type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE,
+      messageId: "reply-1",
+      note: "  Our policy is quarterly now.  ",
+    });
+    expect(WidgetFrameProvider.admit(frame, none)).toEqual({
+      kind: "feedbackNote",
+      messageId: "reply-1",
+      note: "Our policy is quarterly now.",
+    });
+  });
+
+  it("refuses an empty, overlong or unnamed note, never echoing its text in the reason", () => {
+    const refused = [
+      { type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE, messageId: "reply-1", note: "   " },
+      {
+        type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE,
+        messageId: "reply-1",
+        note: "secret ".repeat(Schemas.FEEDBACK_NOTE_MAX_CHARS),
+      },
+      { type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE, note: "secret" },
+      { type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE, messageId: "reply-1", note: 7 },
+    ];
+    for (const frame of refused) {
+      const admission = WidgetFrameProvider.admit(JSON.stringify(frame), none);
+      expect(admission.kind).toBe("refuse");
+      expect(JSON.stringify(admission)).not.toContain("secret");
+    }
+  });
+});
+
 describe("WidgetFrameProvider.admit host token and change request decisions", () => {
   it("admits the widget's host token for the DO's memory", () => {
     const token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln";
