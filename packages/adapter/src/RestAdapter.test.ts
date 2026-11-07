@@ -622,6 +622,35 @@ describe("A refused write's answer", () => {
     expect((await adapter().execute(commit(none))).hostError).toBeUndefined();
   });
 
+  it("keeps a 400 / 422's field issues, for a write and a read, and no other key of the answer (ADR 0008)", async () => {
+    const answer = JSON.stringify({
+      message: "Invalid request data",
+      zodErrors: [{ path: ["name"], message: "Required", input: "jane@acme.com" }],
+    });
+    host.faults = [{ kind: "status", status: 400, body: answer }];
+    const write = await adapter().execute(commit(none));
+    expect(write.hostIssues).toEqual([{ path: "name", message: "Required" }]);
+    expect(JSON.stringify(write.hostIssues)).not.toContain("jane@acme.com");
+
+    host.faults = [{ kind: "status", status: 422, body: answer }];
+    const refusedRead = await adapter().execute({
+      risk: Schemas.ToolDefinitionRiskIntEnum.Read,
+      request: rendered({}),
+    });
+    expect(refusedRead.outcome).toBe(Schemas.HostCallOutcomeEnum.Refused);
+    expect(refusedRead.hostIssues).toEqual([{ path: "name", message: "Required" }]);
+  });
+
+  it("keeps no issues for another status, an answer without any, or one that isn't JSON", async () => {
+    const answer = JSON.stringify({ errors: [{ path: ["name"], message: "Required" }] });
+    host.faults = [{ kind: "status", status: 403, body: answer }];
+    expect((await adapter().execute(commit(none))).hostIssues).toBeUndefined();
+    host.faults = [{ kind: "status", status: 400, body: JSON.stringify({ error: "Bad" }) }];
+    expect((await adapter().execute(commit(none))).hostIssues).toBeUndefined();
+    host.faults = [{ kind: "status", status: 400, body: "not json" }];
+    expect((await adapter().execute(commit(none))).hostIssues).toBeUndefined();
+  });
+
   it("keeps nothing for a write that may have landed", async () => {
     host.faults = [{ kind: "status", status: 500, body: "boom" }];
     const response = await adapter().execute(commit(none));
