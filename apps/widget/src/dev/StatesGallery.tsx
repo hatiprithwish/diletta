@@ -377,7 +377,7 @@ const STATES: Schemas.WidgetGalleryState[] = [
 ];
 
 export default function StatesGallery() {
-  const { theme, toggle } = useDevTheme();
+  const { theme, accent, toggle } = useDevTheme();
   return (
     <div className="min-h-screen bg-muted p-8 text-foreground">
       <div className="mb-6 flex items-center gap-4">
@@ -390,7 +390,7 @@ export default function StatesGallery() {
       <div className="flex flex-wrap items-start gap-8">
         <figure className="flex flex-col gap-3">
           <figcaption className="text-caption text-muted-foreground">Closed</figcaption>
-          <ShadowHost theme={theme}>
+          <ShadowHost theme={theme} accent={accent}>
             <Launcher
               label="Ask about your registers"
               chatbotName={base.chatbotName}
@@ -402,7 +402,7 @@ export default function StatesGallery() {
         {STATES.map((state) => (
           <figure key={state.name} className="flex flex-col gap-3" data-state={state.name}>
             <figcaption className="text-caption text-muted-foreground">{state.name}</figcaption>
-            <ShadowHost theme={theme}>
+            <ShadowHost theme={theme} accent={accent}>
               <Panel view={state.view} {...actions} />
             </ShadowHost>
           </figure>

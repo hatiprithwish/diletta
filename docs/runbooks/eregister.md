@@ -181,15 +181,16 @@ Every write tool has a readback, and the undo where eRegister allows one. `pnpm 
 
 The eRegister app (`eregister-reborn`, `apps/eregister-app`) mounts the widget in its app shell (`src/components/ai/diletta/DilettaWidget.tsx`, rendered by `AppLayout`). It loads `diletta-widget.js` by script tag and calls `window.Diletta.init`. The widget shows its own floating launcher. eRegister's concept "AI Assistant" panel is a separate thing and stays switched off.
 
-| Option         | What eRegister passes                                                                                    |
-| -------------- | -------------------------------------------------------------------------------------------------------- |
-| `apiBase`      | `VITE_DILETTA_API_BASE`                                                                                  |
-| `getToken`     | `POST /api/p/companies/<current company>/companion/token` with the user's Firebase ID token, its `token` |
-| `getHostToken` | the user's Firebase ID token (`getIdToken()`, which Firebase refreshes before it expires)                |
-| `theme`        | `light` (eRegister has no dark mode)                                                                     |
-| `chatbot`      | not passed: the Diletta company's default chatbot                                                        |
+| Option         | What eRegister passes                                                                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiBase`      | `VITE_DILETTA_API_BASE`                                                                                                                                                                                                                     |
+| `getToken`     | `POST /api/p/companies/<current company>/companion/token` with the user's Firebase ID token, its `token`                                                                                                                                    |
+| `getHostToken` | the user's Firebase ID token (`getIdToken()`, which Firebase refreshes before it expires)                                                                                                                                                   |
+| `theme`        | the app's current theme: `dark` when `<html>` has the `.dark` class (eRegister's System setting resolves to it), else `light`                                                                                                               |
+| `accent`       | the user's eRegister accent for that theme: `oklch(--primary)` as the fill, `oklch(--primary-foreground)` on it (white if unset), `oklch(--primary-text)` for links and the focus ring, read from `<html>`'s computed style (`hostLook.ts`) |
+| `chatbot`      | not passed: the Diletta company's default chatbot                                                                                                                                                                                           |
 
-Switching company in eRegister starts a fresh widget, and leaving the app shell (sign-out) destroys it. The saved conversation is keyed by Diletta's platform, the chatbot and the Firebase uid, not by the eRegister company. So after a company switch, opening the panel resumes the same chat. The tools pick the eRegister company by `companyId`, so state the company in the chat when it matters, or start a new chat.
+When the user changes theme or accent, eRegister's `ThemeProvider` updates `<html>`'s `class` / `data-accent`; a `MutationObserver` on those attributes calls `setTheme` and `setAccent`, so the widget re-colours without restarting. Switching company in eRegister starts a fresh widget, and leaving the app shell (sign-out) destroys it. The saved conversation is keyed by Diletta's platform, the chatbot and the Firebase uid, not by the eRegister company. So after a company switch, opening the panel resumes the same chat. The tools pick the eRegister company by `companyId`, so state the company in the chat when it matters, or start a new chat.
 
 It is on only in a build that sets both variables. They live only in the `AI_AGENT_ENV` GitHub secret of `eregister-reborn`, so the test and production builds don't load the widget. Every eRegister company in the ai-agent env gets the launcher. They all chat with the one eRegister company in Diletta, and the chatbot sees only what the signed-in user can see.
 

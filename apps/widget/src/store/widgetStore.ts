@@ -14,11 +14,15 @@ export const EMPTY_REVIEW: Schemas.WidgetChangeReviewState = {
 
 // DEV_NOTE: One store per embedded widget (not a module singleton), so two widgets on a page, or a test, never share
 // state. The script-tag controller and the React component both drive it.
-export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Schemas.WidgetStore> {
+export function createWidgetStore(
+  theme: Schemas.WidgetThemeEnum,
+  accent: Schemas.WidgetAccent | null = null,
+): StoreApi<Schemas.WidgetStore> {
   return createStore<Schemas.WidgetStore>()((set) => ({
     isOpen: false,
     draft: "",
     theme,
+    accent,
     hostUser: null,
     conversationPublicId: null,
     isSocketEnabled: false,
@@ -30,6 +34,7 @@ export function createWidgetStore(theme: Schemas.WidgetThemeEnum): StoreApi<Sche
     review: EMPTY_REVIEW,
     setOpen: (isOpen) => set({ isOpen }),
     setTheme: (nextTheme) => set({ theme: nextTheme }),
+    setAccent: (nextAccent) => set({ accent: nextAccent }),
     setConversation: (conversationPublicId) => set({ conversationPublicId }),
     startOver: (conversationPublicId) =>
       set({

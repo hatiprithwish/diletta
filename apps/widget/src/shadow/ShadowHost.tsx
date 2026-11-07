@@ -4,16 +4,31 @@ import { createPortal } from "react-dom";
 import { cn } from "@app/ui/lib/utils";
 import * as Schemas from "@app/schemas";
 import { ensureDocumentAssets, shadowCss } from "@/shadow/documentAssets";
+import { ACCENT_PROPERTIES, accentProperties } from "@/lib/accent";
 
 // DEV_NOTE: The widget's Shadow DOM boundary (DESIGN.md §7): an element in the host page with an open shadow root
 // holding the widget's own styles, into which the widget renders through a portal. Dark mode is the preset's .dark
-// class on the wrapper inside the root. Re-attaching is guarded, so React's strict-mode double effects are safe.
+// class on the wrapper inside the root. A host accent (M7-5) sets the brand variables on that same wrapper, so it wins
+// over the preset's light and dark values. Re-attaching is guarded, so React's strict-mode double effects are safe.
 export default function ShadowHost({
   theme,
+  accent = null,
   children,
 }: PropsWithChildren<Schemas.WidgetShadowHostProps>) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [mount, setMount] = useState<HTMLElement | null>(null);
+  const [themeRoot, setThemeRoot] = useState<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!themeRoot) return;
+    if (!accent) {
+      for (const property of ACCENT_PROPERTIES) themeRoot.style.removeProperty(property);
+      return;
+    }
+    for (const [property, value] of Object.entries(accentProperties(accent))) {
+      themeRoot.style.setProperty(property, value);
+    }
+  }, [themeRoot, accent]);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -36,7 +51,11 @@ export default function ShadowHost({
     <div ref={hostRef} data-diletta-widget="">
       {mount &&
         createPortal(
-          <div className={cn(theme === Schemas.WidgetThemeEnum.Dark && "dark")}>
+          <div
+            ref={setThemeRoot}
+            data-diletta-theme-root=""
+            className={cn(theme === Schemas.WidgetThemeEnum.Dark && "dark")}
+          >
             <div className="font-sans text-foreground antialiased">{children}</div>
           </div>,
           mount,

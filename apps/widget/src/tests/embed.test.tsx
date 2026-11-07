@@ -145,6 +145,20 @@ function shadow() {
   return within(container);
 }
 
+// DEV_NOTE: The wrapper inside the shadow root that carries .dark and the host accent's variables
+function themeRoot(): HTMLElement {
+  const host = document.querySelector("[data-diletta-widget]");
+  const root = host?.shadowRoot?.querySelector<HTMLElement>("[data-diletta-theme-root]");
+  if (!root) throw new Error("Widget not mounted");
+  return root;
+}
+
+const ACCENT: Schemas.WidgetAccent = {
+  fill: "oklch(56% 0.197 262)",
+  fillForeground: "#ffffff",
+  text: "oklch(49% 0.182 262)",
+};
+
 const conversationFrame = (publicId: string, feedback: Schemas.WidgetFeedbackRating[] = []) => ({
   type: "conversation",
   conversation: { publicId },
@@ -226,6 +240,54 @@ describe("window.Diletta", () => {
         getToken: "nope" as unknown as () => Promise<string>,
       }),
     ).toThrow(TypeError);
+  });
+
+  it("sets the host accent on the theme root, re-colours it with setAccent, and goes back to lime on null", async () => {
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken, accent: ACCENT });
+    });
+    await shadow().findByRole("button", { name: "Ask about your registers" });
+    expect(themeRoot().style.getPropertyValue("--primary")).toBe(ACCENT.fill);
+    expect(themeRoot().style.getPropertyValue("--primary-foreground")).toBe("#ffffff");
+    expect(themeRoot().style.getPropertyValue("--brand-text")).toBe(ACCENT.text);
+    expect(themeRoot().style.getPropertyValue("--ring")).toBe(ACCENT.text);
+
+    act(() => {
+      diletta().setTheme(Schemas.WidgetThemeEnum.Dark);
+      diletta().setAccent({ fill: "teal", fillForeground: "black" });
+    });
+    expect(themeRoot()).toHaveClass("dark");
+    expect(themeRoot().style.getPropertyValue("--primary")).toBe("teal");
+    expect(themeRoot().style.getPropertyValue("--brand-text")).toBe("teal");
+
+    act(() => diletta().setAccent(null));
+    expect(themeRoot().style.getPropertyValue("--primary")).toBe("");
+    expect(themeRoot().style.getPropertyValue("--brand-soft")).toBe("");
+  });
+
+  it("refuses an accent that isn't a CSS colour, at init and in setAccent", () => {
+    expect(() =>
+      diletta().init({
+        apiBase: API_BASE,
+        getToken,
+        accent: { fill: "red; background: black", fillForeground: "white" },
+      }),
+    ).toThrow();
+    vi.stubGlobal("CSS", { supports: (_property: string, value: string) => value !== "blurple" });
+    expect(() =>
+      diletta().init({
+        apiBase: API_BASE,
+        getToken,
+        accent: { fill: "blurple", fillForeground: "white" },
+      }),
+    ).toThrow(TypeError);
+
+    act(() => {
+      diletta().init({ apiBase: API_BASE, getToken });
+    });
+    expect(() => diletta().setAccent({ fill: "blurple", fillForeground: "white" })).toThrow(
+      TypeError,
+    );
   });
 
   it("reads the bootstrap with a bearer token, creates no socket, and shows the launcher label", async () => {
@@ -470,6 +532,31 @@ describe("window.Diletta", () => {
 });
 
 describe("<DilettaWidget />", () => {
+  it("re-colours in place for a new accent, and renders nothing for a colour the browser can't draw", async () => {
+    const view = render(<DilettaWidget apiBase={API_BASE} accent={ACCENT} getToken={getToken} />);
+    await shadow().findByRole("button", { name: "Ask about your registers" });
+    const root = themeRoot();
+    expect(root.style.getPropertyValue("--primary")).toBe(ACCENT.fill);
+
+    view.rerender(
+      <DilettaWidget
+        apiBase={API_BASE}
+        accent={{ fill: "teal", fillForeground: "black" }}
+        getToken={getToken}
+      />,
+    );
+    expect(themeRoot()).toBe(root);
+    expect(root.style.getPropertyValue("--primary")).toBe("teal");
+
+    view.rerender(<DilettaWidget apiBase={API_BASE} getToken={getToken} />);
+    expect(root.style.getPropertyValue("--primary")).toBe("");
+
+    vi.stubGlobal("CSS", { supports: () => false });
+    view.rerender(<DilettaWidget apiBase={API_BASE} accent={ACCENT} getToken={getToken} />);
+    expect(document.querySelector("[data-diletta-widget]")).toBeNull();
+    view.unmount();
+  });
+
   it("starts a fresh widget for a new chatbot, nothing of the old one's conversation kept", async () => {
     const view = render(<DilettaWidget apiBase={API_BASE} chatbot="bot-a" getToken={getToken} />);
     await userEvent.click(

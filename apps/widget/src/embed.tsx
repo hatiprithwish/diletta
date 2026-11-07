@@ -2,14 +2,19 @@ import { createRoot } from "react-dom/client";
 import * as Schemas from "@app/schemas";
 import { createWidgetStore } from "@/store/widgetStore";
 import WidgetRoot from "@/WidgetRoot";
+import { parseWidgetAccent } from "@/lib/accent";
 
 // DEV_NOTE: The script-tag build (dist/embed/diletta-widget.js). The host page loads it and calls
-//   window.Diletta.init({ apiBase, chatbot?, theme?, getToken, getHostToken? })
+//   window.Diletta.init({ apiBase, chatbot?, theme?, accent?, getToken, getHostToken? })
 // which mounts one widget (a second init replaces the first) and returns that widget's controller; window.Diletta.open
-// / close / setTheme / destroy act on the current widget. A controller only ever acts on its own widget, so an old
+// / close / setTheme / setAccent / destroy act on the current widget. A controller only ever acts on its own widget, so an old
 // one can't destroy a newer init. Bad options throw, so a host developer sees the mistake at once. Called from a
 // <head> script, the widget joins <body> once the document has one.
-function mount(options: Schemas.WidgetInitOptions, config: Schemas.WidgetEmbedConfig) {
+function mount(
+  options: Schemas.WidgetInitOptions,
+  config: Schemas.WidgetEmbedConfig,
+  accent: Schemas.WidgetAccent | null,
+) {
   const container = document.createElement("div");
   container.id = "diletta-widget";
   const attach = () => document.body.append(container);
@@ -18,7 +23,7 @@ function mount(options: Schemas.WidgetInitOptions, config: Schemas.WidgetEmbedCo
   } else {
     document.addEventListener("DOMContentLoaded", attach, { once: true });
   }
-  const store = createWidgetStore(config.theme ?? Schemas.WidgetThemeEnum.Light);
+  const store = createWidgetStore(config.theme ?? Schemas.WidgetThemeEnum.Light, accent);
   const root = createRoot(container);
   root.render(
     <WidgetRoot
@@ -38,6 +43,16 @@ function mount(options: Schemas.WidgetInitOptions, config: Schemas.WidgetEmbedCo
 
 let current: ReturnType<typeof mount> | null = null;
 
+// DEV_NOTE: The accent as init and setAccent take it: absent / null = lime, a bad one throws
+function accentOrThrow(
+  accent: Schemas.WidgetAccent | null | undefined,
+): Schemas.WidgetAccent | null {
+  if (accent === undefined || accent === null) return null;
+  const parsed = parseWidgetAccent(accent);
+  if (!parsed.isSuccess) throw new TypeError(`Diletta: accent ${parsed.message}`);
+  return parsed.accent;
+}
+
 function controllerFor(widget: () => ReturnType<typeof mount> | null): Schemas.WidgetController {
   return {
     open: () => widget()?.store.getState().setOpen(true),
@@ -45,6 +60,10 @@ function controllerFor(widget: () => ReturnType<typeof mount> | null): Schemas.W
     setTheme: (theme) => {
       const parsed = Schemas.ZWidgetEmbedConfig.shape.theme.parse(theme);
       if (parsed) widget()?.store.getState().setTheme(parsed);
+    },
+    setAccent: (accent) => {
+      const parsed = accentOrThrow(accent);
+      widget()?.store.getState().setAccent(parsed);
     },
     destroy: () => {
       const target = widget();
@@ -57,6 +76,7 @@ function controllerFor(widget: () => ReturnType<typeof mount> | null): Schemas.W
 
 function init(options: Schemas.WidgetInitOptions): Schemas.WidgetController {
   const config = Schemas.ZWidgetEmbedConfig.parse(options);
+  const accent = accentOrThrow(config.accent);
   if (typeof options.getToken !== "function") {
     throw new TypeError("Diletta.init: getToken must be a function returning a companion JWT");
   }
@@ -64,7 +84,7 @@ function init(options: Schemas.WidgetInitOptions): Schemas.WidgetController {
     throw new TypeError("Diletta.init: getHostToken must be a function returning the host token");
   }
   current?.unmount();
-  const mounted = mount(options, config);
+  const mounted = mount(options, config, accent);
   current = mounted;
   return controllerFor(() => (current === mounted ? mounted : null));
 }

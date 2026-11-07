@@ -9,9 +9,30 @@ export enum WidgetThemeEnum {
   Dark = "dark",
 }
 
+// DEV_NOTE: One CSS colour from the host (#hex, rgb(), hsl(), oklch(), a named colour…). Only characters a colour
+// value can hold, so it can't close the declaration it lands in; the widget also checks it with CSS.supports.
+export const ZWidgetCssColor = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .regex(/^[#\w\s(),.%/+-]+$/, "must be a CSS colour");
+
+// DEV_NOTE: The host's brand colour (M7-5), replacing lime in the widget's brand fills: fill = the launcher, send and
+// Approve buttons, the welcome icon (--primary); fillForeground = text and icons on that fill (--primary-foreground);
+// text = brand as text and the focus ring (--brand-text, --ring; absent = fill). The brand-tinted surface is mixed
+// from fill. Diffs and success keep their own colours. The host passes the values for its current light / dark mode
+// and calls setAccent when they change; absent = lime.
+export const ZWidgetAccent = z.object({
+  fill: ZWidgetCssColor,
+  fillForeground: ZWidgetCssColor,
+  text: ZWidgetCssColor.optional(),
+});
+export type WidgetAccent = z.infer<typeof ZWidgetAccent>;
+
 // DEV_NOTE: The embed options that are plain data, checked when the widget starts. apiBase is the platform worker's
 // origin (https, or http on localhost for development); chatbot is the chatbot's publicId (absent = the company's
-// default chatbot).
+// default chatbot); accent is the host's brand colour (absent = lime).
 export const ZWidgetEmbedConfig = z.object({
   apiBase: z.url({ protocol: /^https?$/ }).refine((value) => {
     const url = new URL(value);
@@ -21,6 +42,7 @@ export const ZWidgetEmbedConfig = z.object({
   }, "apiBase must be https (http only on localhost)"),
   chatbot: z.string().trim().min(1).max(64).optional(),
   theme: z.enum(WidgetThemeEnum).optional(),
+  accent: ZWidgetAccent.optional(),
 });
 export type WidgetEmbedConfig = z.infer<typeof ZWidgetEmbedConfig>;
 
@@ -34,8 +56,8 @@ export type WidgetInitOptions = WidgetEmbedConfig & {
   getHostToken?: () => Promise<string>;
 };
 
-// DEV_NOTE: Props of the React export: the same options, all of them reactive (a new theme re-themes it, a new
-// chatbot or apiBase starts over)
+// DEV_NOTE: Props of the React export: the same options, all of them reactive (a new theme or accent re-colours it,
+// a new chatbot or apiBase starts over)
 export type DilettaWidgetProps = WidgetInitOptions;
 
 // DEV_NOTE: What window.Diletta.init returns, and what window.Diletta itself calls on the one embedded widget
@@ -43,6 +65,8 @@ export interface WidgetController {
   open: () => void;
   close: () => void;
   setTheme: (theme: WidgetThemeEnum) => void;
+  // DEV_NOTE: null goes back to lime; a bad accent throws, like a bad init option
+  setAccent: (accent: WidgetAccent | null) => void;
   destroy: () => void;
 }
 
@@ -68,6 +92,21 @@ export const WIDGET_BUNDLE_MAX_GZIP_BYTES = 200 * 1024;
 export const WIDGET_DEV_PORT = 5174;
 export const WIDGET_DEV_ORIGIN = `http://localhost:${WIDGET_DEV_PORT}`;
 export const WIDGET_DEV_API_BASE = "http://localhost:8787";
+
+// DEV_NOTE: The dev host's and gallery's sample host accent (?accent=host), per theme: a blue brand like eRegister's
+// default, to check the widget re-colours its brand fills in light and dark
+export const WIDGET_DEV_ACCENT: Record<WidgetThemeEnum, WidgetAccent> = {
+  [WidgetThemeEnum.Light]: {
+    fill: "oklch(56% 0.197 262)",
+    fillForeground: "oklch(100% 0 0)",
+    text: "oklch(49% 0.182 262)",
+  },
+  [WidgetThemeEnum.Dark]: {
+    fill: "oklch(57% 0.153 263)",
+    fillForeground: "oklch(100% 0 0)",
+    text: "oklch(72% 0.08 265)",
+  },
+};
 
 // DEV_NOTE: The host user a dev token is signed for (sub) and shown as (name)
 export interface WidgetDevUser {

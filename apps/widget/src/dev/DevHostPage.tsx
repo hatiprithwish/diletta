@@ -20,7 +20,7 @@ async function getDevToken(): Promise<string> {
 }
 
 export default function DevHostPage() {
-  const { theme, toggle } = useDevTheme();
+  const { theme, accent, toggle } = useDevTheme();
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="flex h-14 items-center justify-between border-b border-border px-6">
@@ -45,7 +45,12 @@ export default function DevHostPage() {
           </tbody>
         </table>
       </main>
-      <DilettaWidget apiBase={Schemas.WIDGET_DEV_API_BASE} theme={theme} getToken={getDevToken} />
+      <DilettaWidget
+        apiBase={Schemas.WIDGET_DEV_API_BASE}
+        theme={theme}
+        accent={accent}
+        getToken={getDevToken}
+      />
     </div>
   );
 }
