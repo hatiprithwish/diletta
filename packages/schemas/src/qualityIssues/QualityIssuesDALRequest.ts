@@ -51,10 +51,13 @@ export type CountOpenQualityIssuesDALRequest = Pick<QualityIssue, "companyId"> &
 
 // DEV_NOTE: An admin's flag on a conversation (M4-4, source = Admin): status Open, issueType null until triage, no
 // note. At most one open admin issue per conversation: the DAL locks (company, conversation) and returns the open one
-// instead of opening another. It checks the conversation and the admin exist in the company.
+// instead of opening another. It checks the conversation and the admin exist in the company. isOperator (ADR 0006: an
+// operator acting in the company): its admins row has no company and RLS hides it from the company's transactions, so
+// there is no row to check; the caller derives it from the signed-in admin, never from the client.
 export type CreateAdminQualityIssueDALRequest = Pick<QualityIssue, "companyId"> & {
   conversationId: string;
   createdBy: string;
+  isOperator: boolean;
 };
 
 // DEV_NOTE: The Quality list's filters (M4-6), resolved by the Repo: chatbotId is the internal id of the chatbot public

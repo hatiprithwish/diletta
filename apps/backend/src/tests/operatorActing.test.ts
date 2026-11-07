@@ -5,7 +5,16 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as Schemas from "@app/schemas";
-import { activityLog, admins, companies, eventOutbox } from "@/db/tables";
+import {
+  activityLog,
+  admins,
+  chatbotUsers,
+  chatbots,
+  companies,
+  conversations,
+  eventOutbox,
+  qualityIssues,
+} from "@/db/tables";
 import worker from "@/index";
 import Utility from "@/utils/Utility";
 // Declare env type for this test suite
@@ -52,6 +61,7 @@ const ownerDatabaseUrl =
 const operator = `user_op_${crypto.randomUUID()}`;
 const adminB = `user_b_${crypto.randomUUID()}`;
 let operatorAdminId = "";
+let conversationPublicId = "";
 const company = { a: "", aPublicId: "", b: "", bPublicId: "", c: "", cPublicId: "" };
 
 async function withOwnerDb<T>(run: (ownerDb: NodePgDatabase) => Promise<T>): Promise<T> {
@@ -129,6 +139,30 @@ beforeAll(async () => {
       ])
       .returning({ id: admins.id, clerkUserId: admins.clerkUserId });
     operatorAdminId = inserted.find((row) => row.clerkUserId === operator)!.id;
+    // A conversation in company A for the flag test
+    const [chatbot] = await ownerDb
+      .insert(chatbots)
+      .values({
+        publicId: Utility.generatePublicId(),
+        companyId: company.a,
+        name: "Bot",
+        isDefault: true,
+      })
+      .returning({ id: chatbots.id });
+    const [chatbotUser] = await ownerDb
+      .insert(chatbotUsers)
+      .values({ companyId: company.a, hostUserId: `user-${crypto.randomUUID()}` })
+      .returning({ id: chatbotUsers.id });
+    const [conversation] = await ownerDb
+      .insert(conversations)
+      .values({
+        publicId: Utility.generatePublicId(),
+        companyId: company.a,
+        chatbotUserId: chatbotUser!.id,
+        chatbotId: chatbot!.id,
+      })
+      .returning({ publicId: conversations.publicId });
+    conversationPublicId = conversation!.publicId;
   });
 });
 
@@ -137,6 +171,10 @@ afterAll(async () => {
     await ownerDb.delete(admins).where(inArray(admins.clerkUserId, [operator, adminB]));
     const companyIds = [company.a, company.b, company.c].filter(Boolean);
     if (companyIds.length === 0) return;
+    await ownerDb.delete(qualityIssues).where(inArray(qualityIssues.companyId, companyIds));
+    await ownerDb.delete(conversations).where(inArray(conversations.companyId, companyIds));
+    await ownerDb.delete(chatbotUsers).where(inArray(chatbotUsers.companyId, companyIds));
+    await ownerDb.delete(chatbots).where(inArray(chatbots.companyId, companyIds));
     await ownerDb.delete(eventOutbox).where(inArray(eventOutbox.companyId, companyIds));
     await ownerDb.delete(activityLog).where(inArray(activityLog.companyId, companyIds));
     await ownerDb.delete(companies).where(inArray(companies.id, companyIds));
@@ -209,6 +247,37 @@ describe("Operators acting in a company (ADR 0006)", { timeout: ROUTE_FLOW_TIMEO
     ]);
 
     expect((await call("POST", "/dashboard/acting", { as: adminB })).status).toBe(403);
+  });
+
+  it("lets an operator flag a conversation in the company they act in, as the Operator", async () => {
+    const flagged = await call("POST", `/dashboard/conversations/${conversationPublicId}/flag`, {
+      as: operator,
+      acting: company.aPublicId,
+    });
+    expect([200, 201]).toContain(flagged.status);
+
+    const [issues, events] = await withOwnerDb(async (ownerDb) => {
+      const issueRows = await ownerDb
+        .select({ createdBy: qualityIssues.createdBy, source: qualityIssues.source })
+        .from(qualityIssues)
+        .where(eq(qualityIssues.companyId, company.a));
+      const eventRows = await ownerDb
+        .select({ actorType: activityLog.actorType, actorId: activityLog.actorId })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.companyId, company.a),
+            eq(activityLog.entityType, Schemas.QUALITY_ISSUE_ENTITY_TYPE),
+          ),
+        );
+      return [issueRows, eventRows] as const;
+    });
+    expect(issues).toEqual([
+      { createdBy: operatorAdminId, source: Schemas.QualityIssueSourceIntEnum.Admin },
+    ]);
+    expect(events).toEqual([
+      { actorType: Schemas.ActivityLogActorTypeIntEnum.Operator, actorId: operatorAdminId },
+    ]);
   });
 
   it("ignores a company admin's acting header: they only ever reach their own company", async () => {

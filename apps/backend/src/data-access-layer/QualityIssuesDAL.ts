@@ -711,25 +711,29 @@ export default class QualityIssuesDAL {
         return response;
       }
 
-      const adminConditions = [
-        eq(admins.id, params.createdBy),
-        eq(admins.companyId, params.companyId),
-      ];
-      const [admin] = await tx
-        .select({ id: admins.id })
-        .from(admins)
-        .where(and(...adminConditions))
-        .limit(1);
-      if (!admin) {
-        const message = "Admin not found";
-        AppLogger.error({
-          category: Schemas.LogCategory.DAL,
-          action: Schemas.LogAction.CreateAdminQualityIssue,
-          message,
-          metadata: params,
-        });
-        response.message = message;
-        return response;
+      // DEV_NOTE: An operator acting in the company (ADR 0006) has no admins row in it to find (company_id is null and
+      // RLS hides it from the company's transactions); its id is stored as created_by like any admin's
+      if (!params.isOperator) {
+        const adminConditions = [
+          eq(admins.id, params.createdBy),
+          eq(admins.companyId, params.companyId),
+        ];
+        const [admin] = await tx
+          .select({ id: admins.id })
+          .from(admins)
+          .where(and(...adminConditions))
+          .limit(1);
+        if (!admin) {
+          const message = "Admin not found";
+          AppLogger.error({
+            category: Schemas.LogCategory.DAL,
+            action: Schemas.LogAction.CreateAdminQualityIssue,
+            message,
+            metadata: params,
+          });
+          response.message = message;
+          return response;
+        }
       }
 
       const openConditions = [

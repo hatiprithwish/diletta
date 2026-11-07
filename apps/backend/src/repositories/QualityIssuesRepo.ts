@@ -628,6 +628,7 @@ export default class QualityIssuesRepo {
           companyId,
           conversationId,
           createdBy: params.adminId,
+          isOperator: params.actor.actorType === Schemas.ActivityLogActorTypeIntEnum.Operator,
         });
         if (!issue.isSuccess || !issue.qualityIssue) {
           return { isSuccess: false, message: issue.message ?? "Conversation not flagged" };
