@@ -37,7 +37,7 @@ import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
 
-const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_id_eval_case_id_eval_attempt_eval_try";
+const EVAL_ATTEMPT_INDEX = "UNQ_conversations_eval_run_case_attempt_try";
 
 // DEV_NOTE: What purging one chat needs (M6-1); erasedAt set = its user was erased (M6-2)
 const PURGE_ROW_COLUMNS = {

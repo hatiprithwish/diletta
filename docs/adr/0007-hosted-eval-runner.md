@@ -50,4 +50,6 @@ A run that stops on the way (the judge or host down, a runner fault) had to be r
 3. **A gate run that stopped isn't a verdict.** This changes M5-4. Only a **Done** gate run moves its version (Ready on a pass, Draft on a fail). A Failed one leaves it Testing, so it can be resumed or run again; the safety rule and `evalRunGateDecision` are unchanged.
 4. **Run failed cases.** `POST /dashboard/eval-runs` takes `failedCasesOfRunId` on a Manual run only: the run holds, from the moment it is queued, the cases of that run (same chatbot) that didn't pass every attempt (`Schemas.failedEvalCaseIds`, a case never run included) and are still active. A Gate always runs every case.
 
+Resume also takes a Running run that lost its runner (`Schemas.canResumeEvalRun`: stale for `EVAL_RUN_RUNNING_STALE_MINUTES`, started from the dashboard, holding its case set). It is failed (`RunnerUnavailable`) and reopened in the same transaction, so recovering it never starts a new full run. Its reset never ran, so the attempt that was cut off is sent again without one; every attempt's `{case.tag}` is its own, so what the cut-off one left on the host doesn't match it.
+
 The run page shows **Resume** when `runActions.canResume` and **Run failed cases (n)** when `runActions.failedCaseCount` > 0.

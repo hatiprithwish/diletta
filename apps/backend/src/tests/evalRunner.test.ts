@@ -820,6 +820,61 @@ describe("Hosted eval runner (M7-9)", { timeout: FLOW_TIMEOUT_MS }, () => {
     expect(crossCompany.status).toBe(404);
   });
 
+  it("resumes a run stuck Running without starting a new one", async () => {
+    const started = await call("POST", "/dashboard/eval-runs", {
+      as: adminA,
+      body: {
+        chatbotConfigId: tenantA.configPublicId,
+        trigger: Schemas.EvalRunTriggerIntEnum.Manual,
+      },
+    });
+    expect(started.status).toBe(201);
+    const runPublicId = (started.body.evalRun as { publicId: string }).publicId;
+    const token = await runnerToken(tenantA);
+    const first = await call("POST", "/eval/runs", {
+      token,
+      body: { runId: runPublicId, harnessVersion: "runner-1" },
+    });
+    expect(first.status).toBe(201);
+
+    const page = async () =>
+      (await call("GET", `/dashboard/eval-runs/${runPublicId}`, { as: adminA })).body.runActions;
+    expect(await page()).toEqual({ canResume: false, failedCaseCount: 0 });
+    const early = await call("POST", `/dashboard/eval-runs/${runPublicId}/resume`, { as: adminA });
+    expect(early.body.failure).toBe(Schemas.EvalRunStartFailureEnum.NotResumable);
+
+    const lostAt = new Date(Date.now() - (Schemas.EVAL_RUN_RUNNING_STALE_MINUTES + 1) * 60_000);
+    await withOwnerDb((ownerDb) =>
+      ownerDb.update(evalRuns).set({ updatedAt: lostAt }).where(eq(evalRuns.publicId, runPublicId)),
+    );
+    expect(await page()).toMatchObject({ canResume: true });
+    const runCount = async () =>
+      (
+        await withOwnerDb((ownerDb) =>
+          ownerDb
+            .select({ id: evalRuns.id })
+            .from(evalRuns)
+            .where(eq(evalRuns.companyId, tenantA.companyId)),
+        )
+      ).length;
+    const before = await runCount();
+    const resumed = await call("POST", `/dashboard/eval-runs/${runPublicId}/resume`, {
+      as: adminA,
+    });
+    expect(resumed.status).toBe(200);
+    expect(await runCount()).toBe(before);
+    expect(await runRow(runPublicId)).toMatchObject({
+      status: Schemas.EvalRunStatusIntEnum.Queued,
+      failure: null,
+      resumedCount: 1,
+    });
+    await new EvalRunnerRepo(runnerEnv).failQueuedRun({
+      companyPublicId: tenantA.companyPublicId,
+      runPublicId,
+      failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+    });
+  });
+
   it("removes the test sign-in, after which no run can start", async () => {
     const removed = await call("DELETE", loginPath(tenantA, tenantA.stagingPublicId), {
       as: operator,

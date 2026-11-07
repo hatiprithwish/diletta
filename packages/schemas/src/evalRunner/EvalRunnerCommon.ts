@@ -2,7 +2,10 @@ import { z } from "zod";
 import {
   EVAL_GATE_MIN_K,
   EvalRunFailureIntEnum,
+  EvalRunStatusIntEnum,
   EvalRunTriggerIntEnum,
+  isEvalRunResumable,
+  type EvalRun,
 } from "../evalRuns/EvalRunsCommon";
 
 // ─── The hosted eval runner (M7-9, ADR 0007) ────────────────────────────────
@@ -78,6 +81,32 @@ export const EVAL_RUN_QUEUED_STALE_MINUTES = 15;
 // reset or finish sets it) lost its runner mid-run (a chained instance that never ran): the next Run press fails it
 // (RunnerUnavailable) the same way. An attempt is one chatbot turn, minutes at most.
 export const EVAL_RUN_RUNNING_STALE_MINUTES = 30;
+
+// DEV_NOTE: A Queued or Running run that hasn't moved for its stale limit (from updated_at: a queue, a resume and every
+// model call of an attempt move it): it never reached, or lost, the runner
+export function isEvalRunStale(run: Pick<EvalRun, "status" | "updatedAt">, nowMs: number): boolean {
+  const staleMinutes =
+    run.status === EvalRunStatusIntEnum.Queued
+      ? EVAL_RUN_QUEUED_STALE_MINUTES
+      : run.status === EvalRunStatusIntEnum.Running
+        ? EVAL_RUN_RUNNING_STALE_MINUTES
+        : null;
+  return staleMinutes !== null && run.updatedAt.getTime() < nowMs - staleMinutes * 60_000;
+}
+
+// DEV_NOTE: Resume (ADR 0007 › Resume) takes a Failed run (isEvalRunResumable) or a Running one that lost its runner
+// (stale, started from the dashboard, holding its case set): that one is failed first, in the same transaction
+export function canResumeEvalRun(
+  run: Pick<EvalRun, "status" | "startedBy" | "evalCaseIds" | "updatedAt">,
+  nowMs: number,
+): boolean {
+  if (isEvalRunResumable(run)) return true;
+  return (
+    run.status === EvalRunStatusIntEnum.Running &&
+    isEvalRunStale(run, nowMs) &&
+    isEvalRunResumable({ ...run, status: EvalRunStatusIntEnum.Failed })
+  );
+}
 
 // DEV_NOTE: The harness version a queued run holds until the runner starts it (eval_runs.harness_version is not null);
 // /eval/runs replaces it with the runner's own

@@ -159,8 +159,8 @@ export default class EvalRunnerRepo {
     return await this.handOff(companyId, queued, 0, { trigger: params.trigger });
   }
 
-  // DEV_NOTE: Resume (ADR 0007 › Resume): a Failed run the dashboard started and the runner reached
-  // (isEvalRunResumable) goes back to Queued with its case set and results, resumed_count one up, then the runner's
+  // DEV_NOTE: Resume (ADR 0007 › Resume): a Failed run the dashboard started and the runner reached, or a Running one
+  // that lost its runner (canResumeEvalRun; failed here first) goes back to Queued with its case set and results, resumed_count one up, then the runner's
   // chain starts again as <run>-r<n> and runs only the attempts without a result. A Gate run's version must still be
   // Testing (an incomplete gate run leaves it there). Same one-run-per-version rule and test sign-in check as startRun,
   // the version locked; audited RunResumed.
@@ -206,7 +206,7 @@ export default class EvalRunnerRepo {
           return { isSuccess: false, message: locked.message, outboxIds: [] };
         }
         const run = locked.evalRun;
-        if (!Schemas.isEvalRunResumable(run) || run.companyConnectionId === null) {
+        if (!Schemas.canResumeEvalRun(run, Date.now()) || run.companyConnectionId === null) {
           return this.refuse(
             Schemas.EvalRunStartFailureEnum.NotResumable,
             "Only a run that stopped on the way can be resumed",
@@ -220,6 +220,18 @@ export default class EvalRunnerRepo {
             Schemas.EvalRunStartFailureEnum.NotTesting,
             "This version isn't in testing any more; send it to testing and run its tests again",
           );
+        }
+        // DEV_NOTE: A Running run that lost its runner is failed here first (as the next Run press would), so it is
+        // resumed instead of a new run starting
+        if (run.status === Schemas.EvalRunStatusIntEnum.Running) {
+          const failed = await this.evalRunsDal.failOpenEvalRun(tx, {
+            companyId,
+            id: run.id,
+            status: Schemas.EvalRunStatusIntEnum.Running,
+            failure: Schemas.EvalRunFailureIntEnum.RunnerUnavailable,
+          });
+          if (!failed.isSuccess)
+            return { isSuccess: false, message: failed.message, outboxIds: [] };
         }
         const blocked = await this.clearActiveRun(tx, companyId, chatbotConfig.id);
         if (blocked) return blocked;
@@ -315,11 +327,7 @@ export default class EvalRunnerRepo {
     }
     const { evalRun } = active;
     const isQueued = evalRun.status === Schemas.EvalRunStatusIntEnum.Queued;
-    const staleMinutes = isQueued
-      ? Schemas.EVAL_RUN_QUEUED_STALE_MINUTES
-      : Schemas.EVAL_RUN_RUNNING_STALE_MINUTES;
-    // DEV_NOTE: updated_at: a queue, a resume and every model call of an attempt move it
-    if (evalRun.updatedAt.getTime() >= Date.now() - staleMinutes * 60_000) {
+    if (!Schemas.isEvalRunStale(evalRun, Date.now())) {
       return this.refuse(
         Schemas.EvalRunStartFailureEnum.AlreadyRunning,
         "This version's tests are already running",
