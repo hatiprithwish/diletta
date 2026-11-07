@@ -83,6 +83,7 @@ export default function ChatLog({ view, isWide, ...actions }: Schemas.WidgetChat
               canStop={view.canStop}
               onStop={actions.onStop}
               onRate={actions.onRate}
+              noteActions={actions}
               changeActions={actions}
             />
           ),

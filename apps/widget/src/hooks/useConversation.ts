@@ -7,7 +7,7 @@ import { useLatest } from "@/hooks/useLatest";
 import { NO_CONNECT_FAILURES, nextConnectFailure } from "@/lib/connectFailures";
 import { hostUserOf } from "@/lib/hostUser";
 import { savedConversationKey, writeSavedConversation } from "@/lib/savedConversation";
-import { parseServerFrame, ratingsOf } from "@/lib/serverFrames";
+import { notesOf, parseServerFrame, ratingsOf } from "@/lib/serverFrames";
 import { splitUnsent } from "@/lib/transcriptView";
 import { useWidgetStore, useWidgetStoreApi } from "@/store/WidgetStoreContext";
 
@@ -23,7 +23,8 @@ import { useWidgetStore, useWidgetStoreApi } from "@/store/WidgetStoreContext";
 //
 // The DO's own frames (lib/serverFrames.ts, parsed before use): unavailable / a refused send stop the pending request
 // (the DO never answers it, so Think's client would wait forever) and keep the unsent message; closed ends the
-// conversation, and a message it refused is sent again in a new one; feedback settles a thumb; change requests, edit
+// conversation, and a message it refused is sent again in a new one; feedback settles a thumb (a newly saved thumb opens
+// its note box, M7-10) and feedback_note settles a note; change requests, edit
 // answers and token_needed go to the review cards (useChangeReview, M3-5). Every connect sends the host token.
 //
 // One socket per conversation id: the session using this hook is remounted when the id changes (ChatSession's key), so
@@ -161,6 +162,7 @@ export function useConversation(params: Schemas.WidgetAppProps) {
           store.patch({
             ratings: ratingsOf(frame.feedback),
             pendingRatings: {},
+            notes: notesOf(frame.feedback),
             isUnavailable: false,
           });
           setIsReady(true);
@@ -199,9 +201,38 @@ export function useConversation(params: Schemas.WidgetAppProps) {
             store.patch({ pendingRatings, notice: FEEDBACK_NOT_SAVED_NOTICE });
             return;
           }
+          // DEV_NOTE: A new thumb drops any note (the server cleared it) and asks for one; the same thumb again keeps it
+          const isNewThumb = store.ratings[frame.messageId] !== frame.rating;
           store.patch({
             pendingRatings,
             ratings: { ...store.ratings, [frame.messageId]: frame.rating },
+            notes: isNewThumb
+              ? {
+                  ...store.notes,
+                  [frame.messageId]: {
+                    status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+                    text: "",
+                    hasSaved: false,
+                  },
+                }
+              : store.notes,
+          });
+          return;
+        }
+        case "feedback_note": {
+          const note = store.notes[frame.messageId];
+          if (note?.status !== Schemas.WidgetFeedbackNoteStatusEnum.Sending) return;
+          store.patch({
+            notes: {
+              ...store.notes,
+              [frame.messageId]: frame.isSaved
+                ? {
+                    status: Schemas.WidgetFeedbackNoteStatusEnum.Sent,
+                    text: note.text,
+                    hasSaved: true,
+                  }
+                : { ...note, status: Schemas.WidgetFeedbackNoteStatusEnum.NotSent },
+            },
           });
           return;
         }
@@ -333,6 +364,55 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     [agent, isReady, storeApi],
   );
 
+  // DEV_NOTE: The note box (M7-10). Send needs a ready socket and 1 to FEEDBACK_NOTE_MAX_CHARS characters (the DO
+  // checks again); Not now goes back to the stored note if there is one, else closes the box; Edit note reopens it.
+  const setNote = useCallback(
+    (messageId: string, note: Schemas.WidgetFeedbackNoteState | null) => {
+      const store = storeApi.getState();
+      const { [messageId]: _previous, ...others } = store.notes;
+      store.patch({ notes: note ? { ...others, [messageId]: note } : others });
+    },
+    [storeApi],
+  );
+  const noteActions: Schemas.WidgetFeedbackNoteActions = useMemo(
+    () => ({
+      onNoteChange: (messageId, text) => {
+        const note = storeApi.getState().notes[messageId];
+        setNote(messageId, {
+          status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+          text,
+          hasSaved: note?.hasSaved ?? false,
+        });
+      },
+      onNoteSend: (messageId) => {
+        const note = storeApi.getState().notes[messageId];
+        const text = note?.text.trim() ?? "";
+        if (!note || !isReady || text.length === 0) return;
+        if (text.length > Schemas.FEEDBACK_NOTE_MAX_CHARS) return;
+        setNote(messageId, { ...note, status: Schemas.WidgetFeedbackNoteStatusEnum.Sending });
+        agent.send(
+          JSON.stringify({ type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE, messageId, note: text }),
+        );
+      },
+      onNoteDismiss: (messageId) => {
+        const note = storeApi.getState().notes[messageId];
+        setNote(
+          messageId,
+          note?.hasSaved ? { ...note, status: Schemas.WidgetFeedbackNoteStatusEnum.Sent } : null,
+        );
+      },
+      onNoteEdit: (messageId) => {
+        const note = storeApi.getState().notes[messageId];
+        setNote(messageId, {
+          status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+          text: note?.text ?? "",
+          hasSaved: note?.hasSaved ?? false,
+        });
+      },
+    }),
+    [agent, isReady, setNote, storeApi],
+  );
+
   return {
     messages,
     isStreaming: chat.isStreaming,
@@ -343,6 +423,7 @@ export function useConversation(params: Schemas.WidgetAppProps) {
     retry,
     newChat,
     rate,
+    noteActions,
     changeActions: review.actions,
   };
 }

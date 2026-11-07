@@ -29,7 +29,8 @@ export type AdminQualityIssueDALResponse = QualityIssueWriteDALResponse;
 // change request, test and rated reply are left joins (no DB foreign keys; a chatbot-wide system issue has no
 // conversation, M5-5, so its conversation* fields are null). ratedReplyText
 // is the start of the rated reply's text (QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1 chars, so a longer one can be marked
-// cut; null once purged). rating = the rating as it stands now (the user may have switched it to Up).
+// cut; null once purged). rating = the rating as it stands now (the user may have switched it to Up); feedbackNote the
+// note the user left on it (M7-10).
 export interface DashboardQualityIssueRow {
   id: string;
   publicId: string;
@@ -47,6 +48,8 @@ export interface DashboardQualityIssueRow {
   conversationContentPurgedAt: Date | null;
   chatbotName: string | null;
   docGapClusterLabel: string | null;
+  feedbackThemePublicId: string | null;
+  feedbackThemeLabel: string | null;
   userName: string | null;
   changeRequestPublicId: string | null;
   evalCasePublicId: string | null;
@@ -54,6 +57,9 @@ export interface DashboardQualityIssueRow {
   ratedMessageId: string | null;
   ratedReplyText: string | null;
   rating: FeedbackRatingIntEnum | null;
+  feedbackNote: string | null;
+  noteThemePublicId: string | null;
+  noteThemeLabel: string | null;
 }
 
 export interface DashboardQualityIssueDALResponse extends ApiResponse {

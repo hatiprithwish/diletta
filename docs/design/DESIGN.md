@@ -175,6 +175,16 @@ Everything is company-level. Decided:
 | Settings › Team        | `dashboard-Team`          | `settings/team/`                               | admins (Clerk invites)                                                |
 | Settings › Budget      | `dashboard-Budget`        | `settings/budget/`                             | companies.spending_budget, model_calls                                |
 
+Quality › User feedback (M7-10, design canvas https://claude.ai/artifact/JtxJfzy7ofVwxxMN5s8Qyf): under the page
+header a row of underlined view links, **Issues** (with the open count) and **User feedback**, each its own route. User
+feedback: a thumb `ToggleGroup` (Didn't like / Liked, with counts), a status `ToggleGroup` (Open / Resolved / Dismissed,
+with counts) and the caption "Grouped by AI from users' notes, with personal details removed"; then the list + detail
+layout. A row: thumb icon, the theme's label, an "Issue opened" warning chip when it opened a Quality item, its newest
+summary quoted, "N notes from M people, latest …". The detail card: "Didn't like, first …, latest …", the label, the
+counts, a warning-soft banner linking the Quality issue, "What people said" (summaries, each with "View conversation"),
+Show all, and while Open Mark resolved (outline, `Check`) and Dismiss (ghost). The user's own note shows as "Their note"
+on the transcript and the user issue, with "Part of <theme>" once grouped. The widget's note box: §7.
+
 Quality page, issue detail: "Issue type" is a `Select` with placeholder "Choose a type" and options
 Knowledge gap, Missing tool, Tool bug, Model error, Prompt injection. It stays empty for user flags
 until an admin triages them (`quality_issues.issue_type` is null until then).
@@ -271,6 +281,12 @@ States:
 | Your chats: empty / error | `?gallery` › Your chats: …         | no chats yet / read failed   | "No past chats yet" + Back to chat; "Your chats didn't load" + Try again              |
 | A chat that has ended     | `?gallery` › A chat that has ended | user picked an ended chat    | messages + sources read-only, no composer, Start a new chat                           |
 | Full screen               | dev host page (`pnpm dev:widget`)  | visitor chose Full screen    | sidebar of chats, centred chat column, Exit full screen                               |
+
+Feedback note (M7-10, design canvas above): once a thumb is saved, a bordered box (radius 12) under it asks "What went
+wrong?" (down) or "What was helpful?" (up) "(optional)", a 3-row textarea, a "0 / 1,000" counter, Not now (ghost) and
+Send (primary, off while empty), and "Your rating is saved. The note goes to the team behind this assistant, so leave out
+personal details." Sent: "Thanks for the note" (`Check`) with Edit note beside the thumbs. Not sent: a destructive-soft row
+"Your note wasn't sent. Your rating is saved." with Try again. The gallery has all four.
 
 Silent token refresh has no UI by design.
 

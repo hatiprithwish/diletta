@@ -253,17 +253,18 @@ Exit: security review signed off, load test meets its target, runbooks written.
 
 Exit: eRegister live in production, first week monitored.
 
-| ID   | Task                                                                               | Done when                                          | Lane              |
-| ---- | ---------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
-| M7-1 | eRegister connections: production + staging, issuer, origins, test user, reset API | Staging eval JWT works; production rejects it      | Platform          |
-| M7-2 | eRegister tools from OpenAPI, then `compare` and `inverse_op` authored             | Every write tool has readback; undo where possible | Runtime           |
-| M7-3 | Knowledge sources set up and synced                                                | Gap clusters start filling                         | Knowledge + Evals |
-| M7-4 | eRegister eval cases incl. safety; gate passes on staging                          | Gate run approves the first config                 | Knowledge + Evals |
-| M7-5 | Widget embedded in eRegister staging; internal pilot                               | Pilot users complete real tasks                    | Product           |
-| M7-6 | Production publish and first-week watch                                            | Launch readiness all ticked                        | All               |
-| M7-7 | Operator acts as a company admin in any company (ADR 0006); before M7-5            | Operator edits eRegister's config, audited as us   | Platform          |
-| M7-8 | Operator pages: companies (create, status), connections, tools, insights rebuild   | eRegister set up end to end from the UI, audited   | Platform          |
-| M7-9 | Hosted eval runner (ADR 0007): Python Workflow, Run gate / Run tests buttons       | An admin's gate run moves a version to Ready       | Evals             |
+| ID    | Task                                                                               | Done when                                          | Lane              |
+| ----- | ---------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
+| M7-1  | eRegister connections: production + staging, issuer, origins, test user, reset API | Staging eval JWT works; production rejects it      | Platform          |
+| M7-2  | eRegister tools from OpenAPI, then `compare` and `inverse_op` authored             | Every write tool has readback; undo where possible | Runtime           |
+| M7-3  | Knowledge sources set up and synced                                                | Gap clusters start filling                         | Knowledge + Evals |
+| M7-4  | eRegister eval cases incl. safety; gate passes on staging                          | Gate run approves the first config                 | Knowledge + Evals |
+| M7-5  | Widget embedded in eRegister staging; internal pilot                               | Pilot users complete real tasks                    | Product           |
+| M7-6  | Production publish and first-week watch                                            | Launch readiness all ticked                        | All               |
+| M7-7  | Operator acts as a company admin in any company (ADR 0006); before M7-5            | Operator edits eRegister's config, audited as us   | Platform          |
+| M7-8  | Operator pages: companies (create, status), connections, tools, insights rebuild   | eRegister set up end to end from the UI, audited   | Platform          |
+| M7-9  | Hosted eval runner (ADR 0007): Python Workflow, Run gate / Run tests buttons       | An admin's gate run moves a version to Ready       | Evals             |
+| M7-10 | Feedback notes: optional note on a rating; AI-read themes per chatbot on Quality   | A note's theme opens a Quality item at 5 from 3    | Product           |
 
 ## Testing strategy
 

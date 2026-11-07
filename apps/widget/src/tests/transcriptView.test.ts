@@ -26,7 +26,34 @@ const transcript = (assistantParts: UIMessage["parts"]): UIMessage[] => [
   { id: "a1", role: "assistant", parts: assistantParts },
 ];
 
+const OPEN_NOTE: Schemas.WidgetFeedbackNoteState = {
+  status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+  text: "Too long",
+  hasSaved: false,
+};
+
 describe("toMessageViews", () => {
+  it("shows a reply's note box, but none while a new thumb is on its way (M7-10)", () => {
+    const params = {
+      messages: transcript([{ type: "text", text: "Every 6 months." }]),
+      isStreaming: false,
+      ratings: { a1: Schemas.FeedbackRatingIntEnum.Down },
+      pendingRatings: {},
+      notes: { a1: OPEN_NOTE },
+      review: EMPTY_REVIEW,
+    };
+    const shown = toMessageViews(params)[1];
+    if (shown?.role !== "assistant") throw new Error("No reply");
+    expect(shown.note).toEqual(OPEN_NOTE);
+
+    const pending = toMessageViews({
+      ...params,
+      pendingRatings: { a1: Schemas.FeedbackRatingIntEnum.Up },
+    })[1];
+    if (pending?.role !== "assistant") throw new Error("No reply");
+    expect(pending.note).toBeNull();
+  });
+
   it("shows a reply's search as a step and lists only the sources its markers cite", () => {
     const views = toMessageViews({
       messages: transcript([
@@ -39,6 +66,7 @@ describe("toMessageViews", () => {
       isStreaming: false,
       ratings: { a1: Schemas.FeedbackRatingIntEnum.Up },
       pendingRatings: {},
+      notes: {},
       review: EMPTY_REVIEW,
     });
     expect(views[0]).toEqual({ role: "user", id: "u1", text: "How do I add a field?" });
@@ -63,6 +91,7 @@ describe("toMessageViews", () => {
       isStreaming: true,
       ratings: {},
       pendingRatings: {},
+      notes: {},
       review: EMPTY_REVIEW,
     });
     const reply = views[1];
@@ -86,6 +115,7 @@ describe("toMessageViews", () => {
       isStreaming: false,
       ratings: {},
       pendingRatings: { a1: Schemas.FeedbackRatingIntEnum.Down },
+      notes: { a1: OPEN_NOTE },
       review: EMPTY_REVIEW,
     });
     const reply = views[1];

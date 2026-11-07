@@ -14,3 +14,11 @@ export type ListConversationFeedbackDALRequest = Pick<Feedback, "companyId" | "c
   conversationId: string;
   limit: number;
 };
+
+// DEV_NOTE: The note on one chatbot user's rating of one message (M7-10): only an existing rating row gets it
+export type SetFeedbackCommentDALRequest = Pick<
+  Feedback,
+  "companyId" | "messageId" | "chatbotUserId"
+> & {
+  comment: string;
+};

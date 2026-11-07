@@ -31,6 +31,7 @@ Which files go with which task:
 | M3-5, M3-8 (approve, edit, bulk, token refresh) | `widget-Approval`, `widget-Editing`, `widget-Bulk`, `widget-Verified`, `widget-Mismatch*` |
 | M4-1 (shell)                                    | DESIGN.md §4, `dashboard-Overview`, `dashboard-Overview-collapsed`                        |
 | M7-8 (operator pages)                           | DESIGN.md §6 › Operator pages and its design canvas                                       |
+| M7-10 (feedback notes and themes)               | DESIGN.md §6 › Quality › User feedback, §7 › Feedback note, and their design canvas       |
 | M4-3 … M4-10 (pages)                            | DESIGN.md §5–6 and the matching `dashboard-*` screenshot                                  |
 
 The editable design canvas lives at https://claude.ai/artifact/KUVrZKQFi6TGdzRqt5TcDC.

@@ -186,7 +186,10 @@ interface DecidedChangeRequest {
 //
 // Feedback (M2-7): the widget's feedback frame rates one reply. The read model is caught up first (the reply must be
 // in messages), then FeedbackRepo stores it (a thumbs-down with its user quality issue, M2-8); the widget gets the
-// stored rating back, or null when it wasn't saved.
+// stored rating back, or null when it wasn't saved. Its feedback_note frame (M7-10) adds the visitor's note to a
+// rating they gave: checked for prompt injection first (a flagged note is never stored, and is recorded like any other
+// detection, turning nothing off), then FeedbackRepo.recordFeedbackNote; the widget hears whether it was saved. Notes
+// share the feedback queue and rate limit.
 // The ratings already given go out with the conversation frame on connect (read by the worker before the upgrade).
 //
 // Undo (M3-7): a Verified change request can be undone by the user until its undo_until (CHANGE_REQUEST_UNDO_WINDOW_MS
@@ -426,7 +429,7 @@ export class ConversationDO extends Think<Env> {
     const feedbackHeader = ctx.request.headers.get(Constants.CONVERSATION_FEEDBACK_HEADER);
     const entries: unknown = feedbackHeader ? Utility.parseJson(feedbackHeader) : [];
     const feedback = (Array.isArray(entries) ? entries : []).flatMap((entry: unknown) => {
-      const parsed = Schemas.ZWidgetFeedbackRating.safeParse(entry);
+      const parsed = Schemas.ZWidgetFeedbackRatingState.safeParse(entry);
       return parsed.success ? [parsed.data] : [];
     });
     this.send(connection, {
@@ -467,6 +470,10 @@ export class ConversationDO extends Think<Env> {
     }
     if (admission.kind === "feedback") {
       await this.queueFeedback(ws, admission.messageId, admission.rating);
+      return;
+    }
+    if (admission.kind === "feedbackNote") {
+      await this.queueFeedbackNote(ws, admission.messageId, admission.note);
       return;
     }
     if (admission.kind === "hostToken") {
@@ -971,6 +978,63 @@ export class ConversationDO extends Think<Env> {
     const recorded = this.feedbackQueue.then(() => this.recordFeedback(ws, messageId, rating));
     this.feedbackQueue = recorded.catch(() => undefined);
     return recorded;
+  }
+
+  // DEV_NOTE: A note goes through the same queue and rate limit as ratings, so a note sent right after its rating is
+  // stored after it. Over the limit → not saved, no database work.
+  private queueFeedbackNote(ws: WebSocket, messageId: string, note: string): Promise<void> {
+    if (!this.takeFrameSlot("feedback", Constants.FEEDBACK_FRAMES_PER_WINDOW)) {
+      this.reply(ws, { type: "feedback_note", messageId, isSaved: false });
+      return Promise.resolve();
+    }
+
+    const recorded = this.feedbackQueue.then(() => this.recordFeedbackNote(ws, messageId, note));
+    this.feedbackQueue = recorded.catch(() => undefined);
+    return recorded;
+  }
+
+  // DEV_NOTE: Stores the visitor's note on their rating of one reply (M7-10). Untrusted text that a model reads later
+  // (the feedback themes), so it is checked for prompt injection here: a flagged note is not stored and is recorded as a
+  // detection (FeedbackNote; the conversation's changes stay on: a note is never a turn). Nothing logs the text.
+  private async recordFeedbackNote(ws: WebSocket, messageId: string, note: string): Promise<void> {
+    const state = this.getRuntimeState();
+    if (!state || state.isClosed || this.isClosing) {
+      this.reply(ws, { type: "feedback_note", messageId, isSaved: false });
+      return;
+    }
+    const flagged = ConversationDO.firstInjection([note]);
+    if (flagged) {
+      this.flagInjection(Schemas.PromptInjectionLocationEnum.FeedbackNote, flagged, null);
+      this.reply(ws, { type: "feedback_note", messageId, isSaved: false });
+      return;
+    }
+    const recorded = await new FeedbackRepo(this.env).recordFeedbackNote({
+      session: state.session,
+      sessionMessageId: messageId,
+      note,
+    });
+    if (!recorded.isSuccess) {
+      if (recorded.failure !== Schemas.RecordFeedbackFailureEnum.NotFound) {
+        AppLogger.warn({
+          category: Schemas.LogCategory.Feedback,
+          action: Schemas.LogAction.RecordFeedbackNote,
+          message: recorded.message ?? "Feedback note not saved",
+          metadata: { conversationPublicId: this.name, failure: recorded.failure ?? null },
+        });
+      }
+      this.reply(ws, { type: "feedback_note", messageId, isSaved: false });
+      if (recorded.failure === Schemas.RecordFeedbackFailureEnum.ConversationClosed) {
+        this.patchRuntimeState({ isClosed: true });
+        this.sendClosed(ws);
+      }
+      return;
+    }
+    // DEV_NOTE: The note's feedback.note_added event (M7-10), relayed after the commit; the Cron sweep publishes it if
+    // this relay never runs
+    if (recorded.outboxId) {
+      this.relayEvents([recorded.outboxId]);
+    }
+    this.reply(ws, { type: "feedback_note", messageId, isSaved: true });
   }
 
   // DEV_NOTE: Stores a rating for one reply (M2-7). The read model is synced first, so a reply that just finished is in

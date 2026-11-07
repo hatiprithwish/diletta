@@ -31,6 +31,8 @@ export enum PromptInjectionLocationEnum {
   UserMessage = "user_message",
   HelpDoc = "help_doc",
   HostData = "host_data",
+  // DEV_NOTE: A visitor's note on a rating (M7-10): checked before it is stored, a flagged one is never stored
+  FeedbackNote = "feedback_note",
 }
 
 export enum PromptInjectionRuleEnum {
@@ -262,5 +264,7 @@ export function promptInjectionNote(
           : "data read from your app";
       return `Found automatically in ${where}, which ${what}. That field was kept from the chatbot; clean up the record in your app to clear it.`;
     }
+    case PromptInjectionLocationEnum.FeedbackNote:
+      return `Found automatically in a user's note on a rating, which ${what}. The note wasn't saved; the rating was.`;
   }
 }

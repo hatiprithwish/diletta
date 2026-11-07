@@ -573,6 +573,7 @@ export const qualityIssues = table(
     note: t.text(),
     evalCaseId: t.bigint("eval_case_id", { mode: "string" }), // → eval_cases.id (became a test)
     docGapClusterId: t.bigint("doc_gap_cluster_id", { mode: "string" }), // → doc_gap_clusters.id (M5-6)
+    feedbackThemeId: t.bigint("feedback_theme_id", { mode: "string" }), // → feedback_themes.id (M7-10)
     createdBy: t.bigint("created_by", { mode: "string" }), // → admins.id, source = admin only
     updatedBy: t.bigint("updated_by", { mode: "string" }), // → admins.id (triage)
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -583,9 +584,14 @@ export const qualityIssues = table(
     t.uniqueIndex("UNQ_quality_issues_feedback_id").on(table.feedbackId),
     t.uniqueIndex("UNQ_quality_issues_eval_case_id").on(table.evalCaseId),
     t.uniqueIndex("UNQ_quality_issues_doc_gap_cluster_id").on(table.docGapClusterId),
+    t.uniqueIndex("UNQ_quality_issues_feedback_theme_id").on(table.feedbackThemeId),
     t.check(
       "CHK_quality_issues_doc_gap_cluster_id",
       sql`${table.docGapClusterId} IS NULL OR (${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.System)} AND ${table.conversationId} IS NULL)`,
+    ),
+    t.check(
+      "CHK_quality_issues_feedback_theme_id",
+      sql`${table.feedbackThemeId} IS NULL OR (${table.source} = ${lit(Schemas.QualityIssueSourceIntEnum.System)} AND ${table.conversationId} IS NULL)`,
     ),
     t.check(
       "CHK_quality_issues_user_feedback_id",
@@ -795,6 +801,8 @@ export const feedback = table(
     chatbotUserId: t.bigint("chatbot_user_id", { mode: "string" }).notNull(), // → chatbot_users.id
     rating: t.smallint().$type<Schemas.FeedbackRatingIntEnum>().notNull(),
     comment: t.text(),
+    // DEV_NOTE: M7-10: one more on every stored note, so the themes pipeline can tell a stale event from the note now
+    commentVersion: t.integer("comment_version").notNull().default(0),
     createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1143,5 +1151,64 @@ export const eventOutbox = table(
       .index("IDX_event_outbox_pending_created_at")
       .on(table.createdAt)
       .where(sql`${table.status} = ${lit(Schemas.EventOutboxStatusIntEnum.Pending)}`),
+  ],
+);
+
+// DEV_NOTE: M7-10 — feedback themes: visitors' notes on their ratings, grouped per chatbot and per thumb. A theme's
+// label is its first note's summary (no personal details). Resolved themes are never joined again.
+export const feedbackThemes = table(
+  "feedback_themes",
+  {
+    id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
+    publicId: t.text("public_id").notNull(),
+    companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
+    rating: t.smallint().$type<Schemas.FeedbackRatingIntEnum>().notNull(),
+    label: t.text().notNull(),
+    centroid: t.halfvec("centroid", { dimensions: 1024 }).notNull(),
+    noteCount: t.integer("note_count").notNull().default(0),
+    status: t
+      .smallint()
+      .$type<Schemas.FeedbackThemeStatusIntEnum>()
+      .notNull()
+      .default(Schemas.FeedbackThemeStatusIntEnum.Open),
+    createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    t.uniqueIndex("UNQ_feedback_themes_public_id").on(table.publicId),
+    t.index("IDX_feedback_themes_company_id").on(table.companyId),
+    t.index("IDX_feedback_themes_chatbot_id").on(table.chatbotId),
+  ],
+);
+
+// DEV_NOTE: M7-10 — one note's summary per feedback row (an edit replaces it). summary is the model's rewrite with no
+// personal details; the user's own words stay in feedback.comment. theme_id null = pending (summary stored, not grouped).
+export const feedbackNotes = table(
+  "feedback_notes",
+  {
+    id: t.bigint({ mode: "string" }).primaryKey().generatedAlwaysAsIdentity(),
+    publicId: t.text("public_id").notNull(),
+    companyId: t.bigint("company_id", { mode: "string" }).notNull(), // → companies.id
+    chatbotId: t.bigint("chatbot_id", { mode: "string" }).notNull(), // → chatbots.id
+    feedbackId: t.bigint("feedback_id", { mode: "string" }).notNull(), // → feedback.id
+    conversationId: t.bigint("conversation_id", { mode: "string" }).notNull(), // → conversations.id
+    chatbotUserId: t.bigint("chatbot_user_id", { mode: "string" }).notNull(), // → chatbot_users.id
+    rating: t.smallint().$type<Schemas.FeedbackRatingIntEnum>().notNull(),
+    commentVersion: t.integer("comment_version").notNull(),
+    summary: t.text().notNull(),
+    embedding: t.halfvec("embedding", { dimensions: 1024 }),
+    themeId: t.bigint("theme_id", { mode: "string" }), // → feedback_themes.id
+    createdAt: t.timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: t.timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    t.uniqueIndex("UNQ_feedback_notes_public_id").on(table.publicId),
+    t.uniqueIndex("UNQ_feedback_notes_feedback_id").on(table.feedbackId),
+    t.index("IDX_feedback_notes_company_id").on(table.companyId),
+    t.index("IDX_feedback_notes_chatbot_id").on(table.chatbotId),
+    t.index("IDX_feedback_notes_conversation_id").on(table.conversationId),
+    t.index("IDX_feedback_notes_chatbot_user_id").on(table.chatbotUserId),
+    t.index("IDX_feedback_notes_theme_id").on(table.themeId),
   ],
 );

@@ -53,6 +53,8 @@ export enum QualityIssueTypeIntEnum {
   ModelError = 4,
   Injection = 5,
   HealthDrop = 6,
+  // DEV_NOTE: M7-10: a Didn't like feedback theme that kept growing
+  FeedbackTheme = 7,
 }
 
 export enum QualityIssueTypeLabelEnum {
@@ -62,6 +64,7 @@ export enum QualityIssueTypeLabelEnum {
   ModelError = "Model error",
   Injection = "Prompt injection",
   HealthDrop = "Health drop",
+  FeedbackTheme = "User feedback",
 }
 
 export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
@@ -74,6 +77,7 @@ export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
   [QualityIssueTypeIntEnum.ModelError]: QualityIssueTypeLabelEnum.ModelError,
   [QualityIssueTypeIntEnum.Injection]: QualityIssueTypeLabelEnum.Injection,
   [QualityIssueTypeIntEnum.HealthDrop]: QualityIssueTypeLabelEnum.HealthDrop,
+  [QualityIssueTypeIntEnum.FeedbackTheme]: QualityIssueTypeLabelEnum.FeedbackTheme,
 };
 
 // DEV_NOTE: The activity_log / event_outbox names of quality issue events, shared by every writer (ModelKeyFailureProvider,
@@ -126,6 +130,7 @@ export const ZQualityIssue = z.object({
   note: z.string().nullable(),
   evalCaseId: z.string().nullable(),
   docGapClusterId: z.string().nullable(),
+  feedbackThemeId: z.string().nullable(),
   createdBy: z.string().nullable(),
   updatedBy: z.string().nullable(),
   createdAt: z.date(),

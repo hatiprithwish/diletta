@@ -22,6 +22,9 @@ const message = (
   createdAt: at(0),
   updatedAt: at(0),
   rating: null,
+  feedbackNote: null,
+  feedbackThemePublicId: null,
+  feedbackThemeLabel: null,
   ...overrides,
 });
 
@@ -133,6 +136,9 @@ describe("ConversationTranscriptProvider.buildTranscript", () => {
             ],
           },
           rating: Schemas.FeedbackRatingIntEnum.Down,
+          feedbackNote: "Our policy is quarterly now.",
+          feedbackThemePublicId: "ft_1",
+          feedbackThemeLabel: "Answers use an old drill schedule",
         }),
         message({ turnId: T1, content: { nope: true } }),
       ],
@@ -149,6 +155,8 @@ describe("ConversationTranscriptProvider.buildTranscript", () => {
       citations: [{ n: 1, title: "Fire drills", sourceUrl: "https://a.b/c" }],
       rating: Schemas.FeedbackRatingIntEnum.Down,
       ratingLabel: Schemas.FeedbackRatingLabelEnum.Down,
+      feedbackNote: "Our policy is quarterly now.",
+      feedbackTheme: { publicId: "ft_1", label: "Answers use an old drill schedule" },
     });
     expect(JSON.stringify(entries[2])).not.toContain("doc_1");
   });
