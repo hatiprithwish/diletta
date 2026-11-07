@@ -1,4 +1,5 @@
 import type { ApiResponse, TotalRecordsResponse } from "../common";
+import type { EncryptedValue } from "../crypto/CryptoCommon";
 import type { ChangeRequestTabCounts } from "./ChangeRequestsApiResponse";
 import type { ChangeRequest, ChangeRequestRow } from "./ChangeRequestsCommon";
 
@@ -46,6 +47,11 @@ export interface DashboardChangeRequestRow {
 
 export interface DashboardChangeRequestDALResponse extends ApiResponse {
   changeRequest?: DashboardChangeRequestRow;
+}
+
+// DEV_NOTE: storedValues null = purged (no ciphertext left)
+export interface ChangeRequestStoredValuesDALResponse extends ApiResponse {
+  storedValues?: { encryptedValue: EncryptedValue; encryptionKeyVersion: number } | null;
 }
 
 export interface DashboardChangeRequestsDALResponse extends ApiResponse {

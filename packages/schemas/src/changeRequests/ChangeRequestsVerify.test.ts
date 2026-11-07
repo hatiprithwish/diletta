@@ -167,7 +167,7 @@ describe("getChangeRequestHostRef", () => {
 });
 
 describe("parseChangeRequestPayload", () => {
-  it("upgrades a v1 payload with no result or mismatches yet, and refuses anything else", () => {
+  it("upgrades a v1 or v2 payload to v3, and refuses anything else", () => {
     const v1 = {
       version: 1,
       kind: ChangeRequestKindEnum.Update,
@@ -177,13 +177,20 @@ describe("parseChangeRequestPayload", () => {
     };
     expect(parseChangeRequestPayload(v1)).toEqual({
       ...v1,
-      version: 2,
+      version: 3,
       result: null,
       mismatches: null,
+      hostFailure: null,
     });
     const v2 = { ...v1, version: 2, result: { data: { id: "r1" } }, mismatches: [] };
-    expect(parseChangeRequestPayload(v2)).toEqual(v2);
-    expect(parseChangeRequestPayload({ ...v1, version: 3 })).toBeNull();
+    expect(parseChangeRequestPayload(v2)).toEqual({ ...v2, version: 3, hostFailure: null });
+    const v3 = {
+      ...v2,
+      version: 3,
+      hostFailure: { httpStatus: 400, text: '{"message":"Register schema is incorrect"}' },
+    };
+    expect(parseChangeRequestPayload(v3)).toEqual(v3);
+    expect(parseChangeRequestPayload({ ...v1, version: 4 })).toBeNull();
     expect(parseChangeRequestPayload("not a payload")).toBeNull();
   });
 });

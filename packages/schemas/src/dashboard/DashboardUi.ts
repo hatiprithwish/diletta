@@ -17,6 +17,7 @@ import type {
 } from "../companies";
 import type {
   ChangeRequestDetail,
+  ChangeRequestHostFailure,
   ChangeRequestListTabEnum,
   ChangeRequestListItem,
   ChangeRequestTimelineEntry,
@@ -320,6 +321,11 @@ export interface DashboardChangeDetailCardProps {
 // DEV_NOTE: One loaded change's body (M4-4; M4-5 adds its timeline and Mark resolved)
 export interface DashboardChangeDetailProps {
   changeRequest: ChangeRequestDetail;
+}
+
+// DEV_NOTE: What the company's app said when it refused a change; null = no longer kept (purged with the values)
+export interface DashboardHostAnswerProps {
+  hostFailure: ChangeRequestHostFailure | null;
 }
 
 export interface DashboardChangeTimelineProps {

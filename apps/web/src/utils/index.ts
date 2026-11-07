@@ -151,6 +151,17 @@ export default class Utilities {
     return when === TIME_FORMAT.format(new Date(iso)) ? time : `${when} ${time}`;
   }
 
+  // DEV_NOTE: Text that is a JSON object or array, indented one level per line; anything else as it is
+  static prettyJson(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return text;
+    }
+  }
+
   // DEV_NOTE: RFC 4180 CSV: every cell quoted, quotes doubled. A cell a spreadsheet would run as a formula (=, +, -, @,
   // tab, carriage return first) gets a leading apostrophe: titles are what visitors typed.
   static toCsv(rows: string[][]): string {

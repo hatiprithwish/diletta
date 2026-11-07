@@ -19,6 +19,9 @@ export const HOST_CALL_RETRY_AFTER_MAX_MS = 5_000;
 export const HOST_CALL_TIMEOUT_MS = 15_000;
 // A host response body larger than this is not read (a read fails; a write that answered 2xx still landed)
 export const HOST_RESPONSE_MAX_BYTES = 1_048_576;
+// DEV_NOTE: The most of a host's error answer we keep (M3-4 follow-up): the text a refused write is stored with, cut
+// to this many characters
+export const HOST_ERROR_TEXT_MAX_CHARS = 2000;
 
 // DEV_NOTE: Native idempotency sends the caller's key in this header on every attempt of a write (IETF
 // draft-ietf-httpapi-idempotency-key-header), so the host runs it once. A key is printable ASCII with no spaces.
@@ -107,6 +110,9 @@ export interface HostCallResponse extends ApiResponse {
   httpStatus?: number;
   // The parsed JSON response of a Succeeded call (null = empty body); undefined when unreadable or not Succeeded
   body?: unknown;
+  // A refused write only: what the host's error answer said (HOST_ERROR_TEXT_MAX_CHARS at most). It can echo the
+  // user's values, so it is stored encrypted and never logged; message above never holds it.
+  hostError?: string;
   // Requests this call sent for the step itself (an Emulated readback check isn't counted)
   attempts: number;
   // A write only, on every outcome: whether one of its sends may have landed. When true on an outcome that isn't a
@@ -166,6 +172,8 @@ export type HostAttemptResult =
       // An empty body is readable (null); non-JSON, over the size cap or cut off is not
       isReadable: boolean;
       body: unknown;
+      // The answer's own text (JSON compacted), cut to HOST_ERROR_TEXT_MAX_CHARS; null = empty, too big or cut off
+      text: string | null;
     }
   | { kind: HostAttemptKindEnum.NoAnswer | HostAttemptKindEnum.Aborted };
 

@@ -2629,13 +2629,14 @@ export class ConversationDO extends Think<Env> {
 
     // DEV_NOTE: The args passed the input_schema and the read-before is parsed JSON; anything that isn't JSON is refused
     const edited = Schemas.ZChangeRequestPayload.safeParse({
-      version: 2,
+      version: 3,
       kind: payload.kind,
       args,
       before,
       changes,
       result: null,
       mismatches: null,
+      hostFailure: null,
     });
     if (!edited.success) return refuse(EDIT_INVALID_MESSAGE);
     const saved = await repo.saveEdit({

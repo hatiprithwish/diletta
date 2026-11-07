@@ -347,6 +347,37 @@ function ChangeDetailCard({ publicId, search }: Schemas.DashboardChangeDetailCar
 
 // DEV_NOTE: One change: where it stands and why, what it was (never its values), its timeline and, while it needs a
 // person, Mark resolved
+// DEV_NOTE: What the company's app said when it refused a change: its status and its own message, indented when it is
+// JSON. Kept encrypted for the same hour as the change's values, so after that it reads as gone. The text can echo the
+// user's values: it is shown here only, never copied anywhere else.
+function HostAnswer({ hostFailure }: Schemas.DashboardHostAnswerProps) {
+  const text = hostFailure?.text ? Utilities.prettyJson(hostFailure.text) : null;
+  return (
+    <section className="mx-[22px] mb-4 flex flex-col gap-2">
+      <h3 className="text-caption text-muted-foreground">What your app said</h3>
+      {!hostFailure ? (
+        <p className="text-body text-muted-foreground">
+          It's no longer kept. Answers are removed an hour after the change ends.
+        </p>
+      ) : (
+        <>
+          {hostFailure.httpStatus !== null && (
+            <p className="text-body text-foreground">
+              Your app answered with <span className="font-mono">{hostFailure.httpStatus}</span>
+              {text === null && " and no message."}
+            </p>
+          )}
+          {text !== null && (
+            <pre className="max-h-64 overflow-auto rounded-lg bg-muted px-3 py-2.5 font-mono text-mono-value break-words whitespace-pre-wrap text-foreground">
+              {text}
+            </pre>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 export function ChangeDetail({ changeRequest }: Schemas.DashboardChangeDetailProps) {
   const { conversation } = changeRequest;
   const resolve = useResolveChange(changeRequest.publicId);
@@ -375,6 +406,9 @@ export function ChangeDetail({ changeRequest }: Schemas.DashboardChangeDetailPro
           {changeRequest.errorLabel}.
           {isNeedsHuman && " Check the record in your app, then mark it resolved."}
         </p>
+      )}
+      {changeRequest.errorCode === Schemas.ChangeRequestErrorCodeEnum.HostRefused && (
+        <HostAnswer hostFailure={changeRequest.hostFailure} />
       )}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2.5 border-t px-[22px] py-4 text-body">
         <dt className="text-muted-foreground">Tool</dt>

@@ -95,6 +95,10 @@ export type FindDashboardChangeRequestDALRequest = Pick<ChangeRequest, "companyI
   isForUpdate?: boolean;
 };
 
+// DEV_NOTE: One change request's stored (encrypted) values by its internal id, for the one dashboard read that
+// decrypts them: a refused commit's host answer (ChangeRequestHostFailure)
+export type FindChangeRequestStoredValuesDALRequest = Pick<ChangeRequest, "companyId" | "id">;
+
 // DEV_NOTE: The Changes list's filters (M4-5), resolved by the Repo: chatbotUserId and chatbotId are internal ids (from
 // the host user id and the chatbot public id the client sent), null = any. Both go through the conversation.
 export type ChangeRequestsFilterDALRequest = Pick<ChangeRequest, "companyId"> & {

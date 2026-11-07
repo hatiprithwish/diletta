@@ -135,8 +135,9 @@ export default class ChangeRequestTimelineProvider {
   private static withReason(text: string, detail: Schemas.ChangeRequestEventDetail): string {
     const code = detail.errorCode ?? detail.reason ?? null;
     const { errorLabel } = Schemas.changeRequestErrorOf(code);
-    return errorLabel
-      ? `${text}: ${errorLabel.charAt(0).toLowerCase()}${errorLabel.slice(1)}`
-      : text;
+    if (!errorLabel) return text;
+    // DEV_NOTE: The host's HTTP status, when it answered (a number: its text is never in the event)
+    const status = detail.httpStatus ? ` (${detail.httpStatus})` : "";
+    return `${text}: ${errorLabel.charAt(0).toLowerCase()}${errorLabel.slice(1)}${status}`;
   }
 }

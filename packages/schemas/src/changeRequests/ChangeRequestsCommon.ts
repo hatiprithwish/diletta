@@ -128,7 +128,7 @@ export const ZChangeRequestPayloadV1 = z.object({
   changes: z.array(ZChangeRequestChange),
 });
 
-export const ZChangeRequestPayload = z.object({
+export const ZChangeRequestPayloadV2 = z.object({
   version: z.literal(2),
   kind: z.enum(ChangeRequestKindEnum),
   args: z.record(z.string(), z.json()),
@@ -137,15 +137,40 @@ export const ZChangeRequestPayload = z.object({
   result: z.json().nullable(),
   mismatches: z.array(ZChangeRequestMismatch).nullable(),
 });
+
+// DEV_NOTE: What a host's error answer to a refused commit said: its HTTP status and its text (at most
+// HOST_ERROR_TEXT_MAX_CHARS). Host data that can echo the user's values, so it lives only in the encrypted payload (purged
+// with the values) and goes to company admins on the Changes detail: never into a log, an event, the model, the
+// widget, a transcript or a list row.
+export const ZChangeRequestHostFailure = z.object({
+  httpStatus: z.number().int().nullable(),
+  text: z.string().nullable(),
+});
+export type ChangeRequestHostFailure = z.infer<typeof ZChangeRequestHostFailure>;
+
+// v3 adds hostFailure: what the host's error answer said when it refused the commit (null otherwise)
+export const ZChangeRequestPayload = z.object({
+  version: z.literal(3),
+  kind: z.enum(ChangeRequestKindEnum),
+  args: z.record(z.string(), z.json()),
+  before: z.json().nullable(),
+  changes: z.array(ZChangeRequestChange),
+  result: z.json().nullable(),
+  mismatches: z.array(ZChangeRequestMismatch).nullable(),
+  hostFailure: ZChangeRequestHostFailure.nullable(),
+});
 export type ChangeRequestPayload = z.infer<typeof ZChangeRequestPayload>;
 
-// DEV_NOTE: A stored payload at today's shape (v1 → v2: no result or mismatches yet), or null when it is neither
+// DEV_NOTE: A stored payload at today's shape (v1 → v2: no result or mismatches yet; v2 → v3: no host failure), or null
+// when it is none of them
 export function parseChangeRequestPayload(value: unknown): ChangeRequestPayload | null {
   const current = ZChangeRequestPayload.safeParse(value);
   if (current.success) return current.data;
+  const v2 = ZChangeRequestPayloadV2.safeParse(value);
+  if (v2.success) return { ...v2.data, version: 3, hostFailure: null };
   const v1 = ZChangeRequestPayloadV1.safeParse(value);
   if (!v1.success) return null;
-  return { ...v1.data, version: 2, result: null, mismatches: null };
+  return { ...v1.data, version: 3, result: null, mismatches: null, hostFailure: null };
 }
 
 // DEV_NOTE: change_requests.error_code: why a change request ended Failed or NeedsHuman. The step was refused before
@@ -502,5 +527,7 @@ export const ZChangeRequestEventDetail = z.object({
   isUserUndo: z.boolean().optional().catch(undefined),
   errorCode: z.string().nullable().optional().catch(undefined),
   reason: z.string().nullable().optional().catch(undefined),
+  // The host's HTTP status when it refused a commit (a number only: its text lives in the encrypted payload)
+  httpStatus: z.number().int().nullable().optional().catch(undefined),
 });
 export type ChangeRequestEventDetail = z.infer<typeof ZChangeRequestEventDetail>;

@@ -9,8 +9,10 @@ import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
 import ChangeRequestTimelineProvider from "@/providers/changeRequestTimeline";
 import ChangeRequestsProvider from "@/providers/changeRequests";
+import CompanyKeyProvider from "@/providers/companyKey";
 import CriticalEventProvider from "@/providers/criticalEvent";
 import AppLogger from "@/providers/logger";
+import Utility from "@/utils/Utility";
 import * as Schemas from "@app/schemas";
 
 type Tx = NodePgTransaction<EmptyRelations>;
@@ -26,8 +28,9 @@ type ResolvedChange = Schemas.ResolveChangeRequestResponse & {
 
 // DEV_NOTE: Tenant Repo — change requests as the dashboard reads them: the Changes list with its tab counts, the
 // Requested by choices, one change's detail with its timeline from activity_log, the sidebar's needs-a-person count (M4-5), and
-// Mark resolved, the only write. Never reads or returns a change's values (encrypted_changes): the action engine
-// (ActionEngineRepo) is the only reader of those. requesterId (a host user id) and botId (a chatbot public id) are
+// Mark resolved, the only write. Never returns a change's values (encrypted_changes): the action engine
+// (ActionEngineRepo) is the only reader of those, except the detail's hostFailure (a refused commit's host answer,
+// readHostFailure: decrypts the payload and returns that one field). requesterId (a host user id) and botId (a chatbot public id) are
 // resolved in the company (unknown → 404).
 export default class ChangeRequestsRepo {
   private db: NodePgDatabase;
@@ -36,7 +39,7 @@ export default class ChangeRequestsRepo {
   private chatbotsDal: ChatbotsDAL;
   private chatbotUsersDal: ChatbotUsersDAL;
 
-  constructor(env: Env) {
+  constructor(private env: Env) {
     this.db = getDbClient(env);
     this.dal = new ChangeRequestsDAL();
     this.activityLogDal = new ActivityLogDAL();
@@ -65,6 +68,7 @@ export default class ChangeRequestsRepo {
   private toDetail(
     row: Schemas.DashboardChangeRequestRow,
     timeline: Schemas.ChangeRequestTimelineEntry[],
+    hostFailure: Schemas.ChangeRequestHostFailure | null = null,
   ): Schemas.ChangeRequestDetail {
     return {
       publicId: row.publicId,
@@ -73,6 +77,7 @@ export default class ChangeRequestsRepo {
       changeRequestStatus: row.status,
       changeRequestStatusLabel: Schemas.CHANGE_REQUEST_STATUS_LABEL_MAP[row.status],
       ...Schemas.changeRequestErrorOf(row.errorCode),
+      hostFailure,
       toolName: row.toolName,
       toolVersion: row.toolVersion,
       wasEdited: row.wasEdited,
@@ -325,8 +330,32 @@ export default class ChangeRequestsRepo {
       changeRequest: this.toDetail(
         row,
         ChangeRequestTimelineProvider.timeline(logs.activityLogs ?? []),
+        await this.readHostFailure(tx, companyId, row),
       ),
     };
+  }
+
+  // DEV_NOTE: The one place the dashboard decrypts a change request's values, and it keeps only hostFailure: what the
+  // host said when it refused the commit (the payload's other fields are dropped, never returned). null when the host
+  // didn't refuse it, nothing was kept, or the values were purged. A payload that can't be read answers null (the key
+  // provider logs it): the detail still loads.
+  private async readHostFailure(
+    tx: Tx,
+    companyId: string,
+    row: Schemas.DashboardChangeRequestRow,
+  ): Promise<Schemas.ChangeRequestHostFailure | null> {
+    if (row.errorCode !== Schemas.ChangeRequestErrorCodeEnum.HostRefused) return null;
+    const stored = await this.dal.getChangeRequestStoredValues(tx, { companyId, id: row.id });
+    if (!stored.isSuccess || !stored.storedValues) return null;
+    const [decrypted] = await CompanyKeyProvider.decryptValues(this.env, tx, {
+      companyId,
+      column: Schemas.EncryptedColumnEnum.ChangeRequestChanges,
+      values: [stored.storedValues],
+    });
+    if (!decrypted?.isSuccess || decrypted.plaintext === undefined) return null;
+    return (
+      Schemas.parseChangeRequestPayload(Utility.parseJson(decrypted.plaintext))?.hostFailure ?? null
+    );
   }
 
   private async resolveFilter(

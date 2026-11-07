@@ -71,6 +71,7 @@ const REQUESTERS: Schemas.GetChangeRequestRequestersApiResponse = {
 
 const DETAIL: Schemas.ChangeRequestDetail = {
   ...ROW_NEEDS,
+  hostFailure: null,
   wasEdited: true,
   undoUntil: null,
   conversation: {
@@ -378,6 +379,47 @@ describe("Change detail", () => {
     const card = await screen.findByRole("region", { name: "Change" });
     expect(await within(card).findByText("Marked resolved by Ana Ruiz")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
+  });
+
+  const refusedDetail = (
+    hostFailure: Schemas.ChangeRequestHostFailure | null,
+  ): Schemas.ChangeRequestDetail => ({
+    ...DETAIL,
+    changeRequestStatus: Schemas.ChangeRequestStatusIntEnum.Failed,
+    changeRequestStatusLabel: Schemas.ChangeRequestStatusLabelEnum.Failed,
+    errorCode: Schemas.ChangeRequestErrorCodeEnum.HostRefused,
+    errorLabel: Schemas.CHANGE_REQUEST_ERROR_LABEL_MAP.host_refused,
+    hostFailure,
+  });
+  const mockDetail = (changeRequest: Schemas.ChangeRequestDetail) =>
+    mockApi((url, init) =>
+      url.includes("/dashboard/change-requests/cr_1")
+        ? { status: 200, body: { isSuccess: true, changeRequest } }
+        : defaultApi(url, init),
+    );
+
+  it("shows what the app said when it refused a change, indented", async () => {
+    mockDetail(
+      refusedDetail({ httpStatus: 400, text: '{"message":"Register schema is incorrect"}' }),
+    );
+    renderPage("/changes/cr_1");
+    const card = await screen.findByRole("region", { name: "Change" });
+    expect(await within(card).findByText("What your app said")).toBeInTheDocument();
+    expect(within(card).getByText("400")).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        (_, element) =>
+          element?.tagName === "PRE" &&
+          element.textContent === '{\n  "message": "Register schema is incorrect"\n}',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says the app's answer is no longer kept once the values are purged", async () => {
+    mockDetail(refusedDetail(null));
+    renderPage("/changes/cr_1");
+    const card = await screen.findByRole("region", { name: "Change" });
+    expect(await within(card).findByText(/no longer kept/)).toBeInTheDocument();
   });
 
   it("says a missing change isn't available", async () => {

@@ -163,13 +163,14 @@ export default class ActionEngineRepo {
       );
       // DEV_NOTE: Args and the read-before response are parsed JSON already; a value that isn't JSON fails the proposal
       const parsedPayload = Schemas.ZChangeRequestPayload.safeParse({
-        version: 2,
+        version: 3,
         kind: params.kind,
         args: params.args,
         before: params.before ?? null,
         changes: params.changes,
         result: null,
         mismatches: null,
+        hostFailure: null,
       });
       if (!parsedPayload.success) {
         return {
@@ -468,8 +469,25 @@ export default class ActionEngineRepo {
 
       const ended = ChangeRequestsProvider.commitEnd(hostCall, plan.isResume);
       const rootLogId = await this.findRootLogId(tx, session);
-      const detail = { outcome: hostCall.outcome, mayHaveLanded: hostCall.mayHaveLanded === true };
+      const detail = {
+        outcome: hostCall.outcome,
+        mayHaveLanded: hostCall.mayHaveLanded === true,
+        httpStatus: hostCall.httpStatus ?? null,
+      };
       if (ended.status !== Schemas.ChangeRequestStatusIntEnum.Committed) {
+        // DEV_NOTE: A refused commit keeps what the host said, encrypted in the payload (never in the event detail,
+        // which holds only the status); the payload is purged with the values after the undo window
+        const refusedPayload: Schemas.ChangeRequestPayload | undefined =
+          hostCall.outcome === Schemas.HostCallOutcomeEnum.Refused &&
+          (hostCall.httpStatus !== undefined || hostCall.hostError !== undefined)
+            ? {
+                ...plan.payload,
+                hostFailure: {
+                  httpStatus: hostCall.httpStatus ?? null,
+                  text: hostCall.hostError ?? null,
+                },
+              }
+            : undefined;
         const moved = await this.moveStatus(tx, {
           session,
           row,
@@ -477,12 +495,17 @@ export default class ActionEngineRepo {
           status: ended.status,
           errorCode: ended.errorCode,
           detail,
+          payload: refusedPayload,
         });
         return {
           isSuccess: true,
           message: "Commit finished",
           outboxIds: moved.outboxIds,
-          changeRequest: ChangeRequestsProvider.toView(moved.row, plan.payload, Date.now()),
+          changeRequest: ChangeRequestsProvider.toView(
+            moved.row,
+            refusedPayload ?? plan.payload,
+            Date.now(),
+          ),
         };
       }
 

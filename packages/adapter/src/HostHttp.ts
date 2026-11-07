@@ -93,6 +93,22 @@ function parseJson(text: string | null): { isReadable: boolean; body: unknown } 
   }
 }
 
+// DEV_NOTE: The answer's own text for a stored error: JSON compacted, trimmed, cut to HOST_ERROR_TEXT_MAX_CHARS
+// (null = empty, too big or cut off)
+function toErrorText(text: string | null): string | null {
+  const trimmed = text?.trim() ?? "";
+  if (trimmed === "") return null;
+  let compact = trimmed;
+  try {
+    compact = JSON.stringify(JSON.parse(trimmed));
+  } catch {
+    // not JSON: keep the text as the host sent it
+  }
+  return compact.length > Schemas.HOST_ERROR_TEXT_MAX_CHARS
+    ? `${compact.slice(0, Schemas.HOST_ERROR_TEXT_MAX_CHARS)}…`
+    : compact;
+}
+
 // DEV_NOTE: Redirects are never followed (redirect: "manual"): a 3xx comes back as an answer, so the auth headers only
 // ever go to the connection's base_url. The timeout covers the body read too.
 export async function sendHostAttempt(params: {
@@ -139,6 +155,7 @@ export async function sendHostAttempt(params: {
     status: response.status,
     retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
     ...parseJson(text),
+    text: toErrorText(text),
   };
 }
 
