@@ -49,6 +49,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 - **Host user.** Learned from every token (the bootstrap read's and every connect's), so a chat started before the bootstrap read finished is still saved, and a host that signs in as someone else without `destroy()` gets that user's saved conversation, never the previous user's. The hash needs `crypto.subtle`, which browsers offer only on https pages (and `localhost`); on a plain http host page nothing is saved and every reload starts a new chat.
 - **Reload.** Opening the panel resumes the saved conversation. The server sends the transcript and the ratings already given.
 - **New chat.** Clears the saved id and shows the welcome screen. The old conversation closes on its own after 30 minutes idle.
+- **Your chats (history).** `GET /widget/conversations?chatbot=&pageNo=` lists the signed-in host user's own chats with this chatbot, last activity first, 20 a page, with the total. `GET /widget/conversations/:publicId` reads one back: the user's messages and the replies with their sources, from the read model (`messages`). Both take the same bearer token and checks as the bootstrap read and create nothing. A chat that isn't this user's with this chatbot is 404, whether it exists or not. Eval chats, chats with no message yet and chats the retention purge has cleared are never listed. An erased user's old chats are gone from it too: their host id was scrubbed.
 - **Every connect** gets a fresh token through `getToken`, sent in `Sec-WebSocket-Protocol`. Tokens are never stored.
 - **Host token (M3-8).** Sent after every connect through `getHostToken`, never stored. When the chatbot needs a fresh one mid-conversation (it has none after a server restart, or the host refused it), it asks, and the widget calls `getHostToken` again with nothing shown to the visitor. If `getHostToken` fails, a lookup tells the visitor to sign in again, and an approved change that can't be finished within 5 minutes (the widget was closed) goes to the company's team as "needs a person". `getHostToken` should return a token the host's API still accepts, refreshing it if needed.
 
@@ -68,7 +69,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
   - 404: chatbot not found.
   - 200 with `widget: null`: no published config.
 - After a message: the DO answered `unavailable`, for example no model key, a provider failure, or a budget refusal (see `docs/runbooks/budget.md` and `ai-gateway.md`).
-- After five failed connects: the socket upgrade keeps being refused. A browser can't read the upgrade's status, so test `/widget/bootstrap` with the same token. It runs the same checks.
+- After five failed connects: the socket upgrade keeps being refused. A browser can't read the upgrade's status, so test `/widget/bootstrap` with the same token. It runs the same checks. `/widget/conversations` does too, and answers an empty list to a user with no chats.
 
 **A conversation won't resume.** After two refused connects the widget drops the saved id and shows a new chat with a note that the old one ended. It opens no new conversation until the visitor sends a message. That's expected when the old one closed after idling.
 

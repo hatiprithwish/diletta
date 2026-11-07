@@ -89,6 +89,9 @@ export enum LogAction {
   VerifyWidgetJwt = "VerifyWidgetJwt",
   AuthenticateWidget = "AuthenticateWidget",
   GetWidgetBootstrap = "GetWidgetBootstrap",
+  GetWidgetConversations = "GetWidgetConversations",
+  GetWidgetConversationsCount = "GetWidgetConversationsCount",
+  GetWidgetConversation = "GetWidgetConversation",
 
   // Crypto
   ReadMasterKey = "ReadMasterKey",

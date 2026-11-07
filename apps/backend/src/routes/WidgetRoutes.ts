@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { getAgentByName } from "agents";
 import Constants from "@/config/Constants";
@@ -8,6 +9,7 @@ import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import FeedbackRepo from "@/repositories/FeedbackRepo";
 import WidgetAuthRepo from "@/repositories/WidgetAuthRepo";
 import WidgetBootstrapRepo from "@/repositories/WidgetBootstrapRepo";
+import WidgetHistoryRepo from "@/repositories/WidgetHistoryRepo";
 import type AppContext from "@/config/AppContext";
 import * as Schemas from "@app/schemas";
 
@@ -19,8 +21,9 @@ import * as Schemas from "@app/schemas";
 // status with a generic body (401 / 403 / 404 / 500); which check failed is logged, never sent. The answer selects
 // 'diletta.v1' only, so the token is never echoed.
 //
-// GET /bootstrap (M2-7, ADR 0002) is the one HTTP call: what the widget shows before a conversation exists. Same
-// token, same WidgetAuthRepo checks, sent as Authorization: Bearer (still never in the URL); it creates nothing.
+// GET /bootstrap (M2-7, ADR 0002): what the widget shows before a conversation exists. GET /conversations and
+// /conversations/:publicId: the widget's history, the user's own chats with this chatbot. Same token, same
+// WidgetAuthRepo checks, sent as Authorization: Bearer (still never in the URL); none of them creates anything.
 const WidgetRoutes = new Hono<AppContext>();
 
 const FAILURE_BODY: Record<Schemas.WidgetAuthFailureEnum, string> = {
@@ -30,57 +33,70 @@ const FAILURE_BODY: Record<Schemas.WidgetAuthFailureEnum, string> = {
   [Schemas.WidgetAuthFailureEnum.ServerError]: "Server error",
 };
 
-// DEV_NOTE: Host pages call /bootstrap cross-origin, and which origins may is per connection, known only once the token
-// is verified. So CORS answers any origin, without credentials (no cookies; the token is the only credential), and
-// the data itself is gated by WidgetAuthRepo: a token's connection must list the request's Origin, else 403 with a
-// generic body.
-WidgetRoutes.use(
-  "/bootstrap",
-  cors({
-    origin: (origin) => origin,
-    allowMethods: ["GET", "OPTIONS"],
-    allowHeaders: ["Authorization"],
-    maxAge: 600,
-    credentials: false,
-  }),
-);
+// DEV_NOTE: Host pages call /bootstrap and the history routes cross-origin, and which origins may is per connection,
+// known only once the token is verified. So CORS answers any origin, without credentials (no cookies; the token is
+// the only credential), and the data itself is gated by WidgetAuthRepo: a token's connection must list the request's
+// Origin, else 403 with a generic body.
+const widgetCors = cors({
+  origin: (origin) => origin,
+  allowMethods: ["GET", "OPTIONS"],
+  allowHeaders: ["Authorization"],
+  maxAge: 600,
+  credentials: false,
+});
+WidgetRoutes.use("/bootstrap", widgetCors);
+WidgetRoutes.use("/conversations", widgetCors);
+WidgetRoutes.use("/conversations/*", widgetCors);
 
 // DEV_NOTE: The bearer scheme is case-insensitive (RFC 9110)
 const BEARER = /^bearer\s+(.+)$/i;
 const INVALID_REQUEST_BODY = "Invalid request";
 
-WidgetRoutes.get("/bootstrap", async (c) => {
-  const reject = (failure: Schemas.WidgetAuthFailureEnum) =>
-    c.json(
-      { isSuccess: false, message: FAILURE_BODY[failure] },
-      Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
-    );
+const rejectWith = (c: Context<AppContext>, failure: Schemas.WidgetAuthFailureEnum) =>
+  c.json(
+    { isSuccess: false, message: FAILURE_BODY[failure] },
+    Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
+  );
 
+// DEV_NOTE: The HTTP routes' one gate: the companion JWT as Authorization: Bearer, through WidgetAuthRepo.authenticate.
+// The request (query, path) is checked only after the token: without a valid token the answer is 401 whatever it
+// says; a verified token with a bad request gets 400. Returns the identity and the parsed request, or the response
+// to send.
+async function authenticateBearer<T>(
+  c: Context<AppContext>,
+  parsed: { success: true; data: T } | { success: false },
+  chatbotOf: (data: T) => string | undefined,
+): Promise<{ identity: Schemas.WidgetIdentity; data: T } | { response: Response }> {
   const token = BEARER.exec(c.req.header("Authorization") ?? "")?.[1]?.trim() ?? "";
-  if (!token) {
-    return reject(Schemas.WidgetAuthFailureEnum.Unauthorized);
-  }
+  if (!token) return { response: rejectWith(c, Schemas.WidgetAuthFailureEnum.Unauthorized) };
 
-  // DEV_NOTE: The query is checked only after the token: without a valid token the answer is 401 whatever
-  // the query says; a verified token with a bad query gets 400
-  const query = Schemas.ZWidgetBootstrapApiRequest.safeParse(c.req.query());
   const authenticated = await new WidgetAuthRepo(c.env).authenticate({
     token,
     origin: c.req.header("Origin") ?? null,
-    chatbotPublicId: query.success ? (query.data.chatbot ?? null) : null,
+    chatbotPublicId: parsed.success ? (chatbotOf(parsed.data) ?? null) : null,
   });
-  if (!query.success && authenticated.failure !== Schemas.WidgetAuthFailureEnum.Unauthorized) {
-    return c.json({ isSuccess: false, message: INVALID_REQUEST_BODY }, 400);
+  if (!parsed.success && authenticated.failure !== Schemas.WidgetAuthFailureEnum.Unauthorized) {
+    return { response: c.json({ isSuccess: false, message: INVALID_REQUEST_BODY }, 400) };
   }
-  if (!authenticated.isSuccess || !authenticated.identity) {
-    return reject(authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+  if (!parsed.success || !authenticated.isSuccess || !authenticated.identity) {
+    return {
+      response: rejectWith(c, authenticated.failure ?? Schemas.WidgetAuthFailureEnum.ServerError),
+    };
   }
+  return { identity: authenticated.identity, data: parsed.data };
+}
 
-  const result = await new WidgetBootstrapRepo(c.env).getBootstrap({
-    identity: authenticated.identity,
-  });
+WidgetRoutes.get("/bootstrap", async (c) => {
+  const gate = await authenticateBearer(
+    c,
+    Schemas.ZWidgetBootstrapApiRequest.safeParse(c.req.query()),
+    (query) => query.chatbot,
+  );
+  if ("response" in gate) return gate.response;
+
+  const result = await new WidgetBootstrapRepo(c.env).getBootstrap({ identity: gate.identity });
   if (!result.isSuccess || !result.bootstrap) {
-    return reject(result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
+    return rejectWith(c, result.failure ?? Schemas.WidgetAuthFailureEnum.ServerError);
   }
   const response: Schemas.WidgetBootstrapApiResponse = {
     isSuccess: true,
@@ -90,16 +106,72 @@ WidgetRoutes.get("/bootstrap", async (c) => {
   return c.json(response, 200);
 });
 
+// DEV_NOTE: The widget's history (Your chats): the signed-in host user's own chats with this chatbot, newest first, a
+// page at a time. Reads only, like /bootstrap.
+WidgetRoutes.get("/conversations", async (c) => {
+  const gate = await authenticateBearer(
+    c,
+    Schemas.ZWidgetConversationsApiRequest.safeParse(c.req.query()),
+    (query) => query.chatbot,
+  );
+  if ("response" in gate) return gate.response;
+
+  const result = await new WidgetHistoryRepo(c.env).getConversations({
+    identity: gate.identity,
+    pageNo: gate.data.pageNo ?? null,
+  });
+  if (!result.isSuccess) return rejectWith(c, Schemas.WidgetAuthFailureEnum.ServerError);
+  const response: Schemas.WidgetConversationsApiResponse = {
+    isSuccess: true,
+    message: result.message,
+    conversations: result.conversations ?? [],
+    totalRecords: result.totalRecords ?? 0,
+  };
+  return c.json(response, 200);
+});
+
+// DEV_NOTE: One of those chats read back (its messages and their sources). 404 for a chat that isn't this user's with
+// this chatbot, whether it exists or not.
+WidgetRoutes.get("/conversations/:publicId", async (c) => {
+  const params = Schemas.ZWidgetConversationApiParams.safeParse({
+    publicId: c.req.param("publicId"),
+  });
+  const query = Schemas.ZWidgetBootstrapApiRequest.safeParse(c.req.query());
+  const gate = await authenticateBearer(
+    c,
+    params.success && query.success
+      ? { success: true as const, data: { ...query.data, ...params.data } }
+      : { success: false as const },
+    (request) => request.chatbot,
+  );
+  if ("response" in gate) return gate.response;
+
+  const result = await new WidgetHistoryRepo(c.env).getConversation({
+    identity: gate.identity,
+    publicId: gate.data.publicId,
+  });
+  if (!result.isSuccess || !result.conversation) {
+    return rejectWith(
+      c,
+      result.isNotFound
+        ? Schemas.WidgetAuthFailureEnum.NotFound
+        : Schemas.WidgetAuthFailureEnum.ServerError,
+    );
+  }
+  const response: Schemas.WidgetConversationApiResponse = {
+    isSuccess: true,
+    message: result.message,
+    conversation: result.conversation,
+  };
+  return c.json(response, 200);
+});
+
 WidgetRoutes.get("/ws", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
     return c.json({ isSuccess: false, message: "Expected a WebSocket upgrade" }, 426);
   }
 
-  const reject = (failure: Schemas.WidgetAuthFailureEnum) =>
-    c.json(
-      { isSuccess: false, message: FAILURE_BODY[failure] },
-      Schemas.WIDGET_AUTH_FAILURE_HTTP_STATUS_MAP[failure],
-    );
+  const reject = (failure: Schemas.WidgetAuthFailureEnum) => rejectWith(c, failure);
 
   // DEV_NOTE: The browser sends the offered subprotocols comma-separated; the token is the one that isn't ours
   const offered = (c.req.header("Sec-WebSocket-Protocol") ?? "")
