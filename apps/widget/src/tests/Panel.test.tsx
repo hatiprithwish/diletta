@@ -27,6 +27,7 @@ function renderPanel(view: Partial<Schemas.WidgetPanelView>) {
     onStop: vi.fn(),
     onRetry: vi.fn(),
     onNewChat: vi.fn(),
+    onHistory: vi.fn(),
     onClose: vi.fn(),
     onRate: vi.fn(),
     onNoteChange: vi.fn(),
@@ -96,12 +97,14 @@ describe("Panel", () => {
     expect(actions.onSend).toHaveBeenCalledWith("Which inspections are overdue?");
   });
 
-  it("sends the draft on Enter, and has New chat and Close", async () => {
+  it("sends the draft on Enter, and has Your chats, New chat and Close", async () => {
     const actions = renderPanel({ draft: "How many are due?" });
     await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
     expect(actions.onSend).toHaveBeenCalledWith("How many are due?");
+    await userEvent.click(screen.getByRole("button", { name: "Your chats" }));
     await userEvent.click(screen.getByRole("button", { name: "New chat" }));
     await userEvent.click(screen.getByRole("button", { name: "Close assistant" }));
+    expect(actions.onHistory).toHaveBeenCalled();
     expect(actions.onNewChat).toHaveBeenCalled();
     expect(actions.onClose).toHaveBeenCalled();
   });
@@ -525,6 +528,7 @@ const noopActions = {
   onStop: vi.fn(),
   onRetry: vi.fn(),
   onNewChat: vi.fn(),
+  onHistory: vi.fn(),
   onClose: vi.fn(),
   onRate: vi.fn(),
   onNoteChange: vi.fn(),

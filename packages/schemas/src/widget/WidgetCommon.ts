@@ -82,8 +82,9 @@ export enum WidgetStatusEnum {
 }
 
 // DEV_NOTE: The widget bundle's size budget (dev plan open question, M2-7): React, the Think chat client, markdown and
-// the styles, gzipped. The widget build fails above it.
-export const WIDGET_BUNDLE_MAX_GZIP_BYTES = 200 * 1024;
+// the styles, gzipped. The widget build fails above it. 200 KiB at M2-7, 210 KiB since Your chats + full screen
+// (202.1 KiB then).
+export const WIDGET_BUNDLE_MAX_GZIP_BYTES = 210 * 1024;
 
 // DEV_NOTE: Development only (apps/widget dev host, `pnpm --filter widget dev`). The dev host signs its own companion
 // JWTs with a local ES256 key (apps/widget/.dev/dev-key.json, gitignored, made by `pnpm --filter widget dev:setup`),

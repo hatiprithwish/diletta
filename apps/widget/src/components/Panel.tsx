@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import type { KeyboardEvent } from "react";
 import type * as Schemas from "@app/schemas";
 import AssistantMessage from "@/components/AssistantMessage";
 import Composer from "@/components/Composer";
@@ -8,6 +7,7 @@ import StopButton from "@/components/StopButton";
 import UnavailableCard from "@/components/UnavailableCard";
 import UserBubble from "@/components/UserBubble";
 import Welcome from "@/components/Welcome";
+import { PANEL_FRAME_CLASS, closeOnEscape } from "@/lib/panelFrame";
 
 // DEV_NOTE: The open widget (DESIGN.md §7): 380 × 680 floating panel (smaller on a small screen), header, the chat or
 // the welcome screen, and the composer. Renders the view model only; every action goes up through props.
@@ -49,25 +49,19 @@ export default function Panel({ view, ...actions }: Schemas.WidgetPanelProps) {
     isFollowingRef.current = fromBottom <= FOLLOW_THRESHOLD_PX;
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      actions.onClose();
-    }
-  };
-
   const showWelcome = view.welcome !== null && view.messages.length === 0 && !view.isBusy;
 
   return (
     <div
       role="dialog"
       aria-label={view.chatbotName}
-      onKeyDown={onKeyDown}
-      className="flex h-170 max-h-[calc(100dvh-56px)] w-95 max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl bg-background shadow-float"
+      onKeyDown={closeOnEscape(actions.onClose)}
+      className={PANEL_FRAME_CLASS}
     >
       <Header
         chatbotName={view.chatbotName}
         status={view.status}
+        onHistory={actions.onHistory}
         onNewChat={actions.onNewChat}
         onClose={actions.onClose}
       />

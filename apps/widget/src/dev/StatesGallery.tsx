@@ -1,11 +1,14 @@
 import { Moon, Sun } from "@phosphor-icons/react";
 import { Button } from "@app/ui/components/button";
 import * as Schemas from "@app/schemas";
+import History from "@/components/History";
 import Launcher from "@/components/Launcher";
 import Panel from "@/components/Panel";
+import PastChat from "@/components/PastChat";
 import ShadowHost from "@/shadow/ShadowHost";
 import { useDevTheme } from "@/dev/useDevTheme";
 import { toChangeCard } from "@/lib/changeRequestView";
+import { pastChatMeta, toHistoryView } from "@/lib/historyView";
 import { EMPTY_REVIEW } from "@/store/widgetStore";
 
 // DEV_NOTE: Development only (?gallery): the widget states from DESIGN.md §7 (M2-7, and the review cards of M3-5),
@@ -17,6 +20,7 @@ const actions: Schemas.WidgetPanelActions = {
   onStop: noop,
   onRetry: noop,
   onNewChat: noop,
+  onHistory: noop,
   onClose: noop,
   onRate: noop,
   onNoteChange: noop,
@@ -468,6 +472,85 @@ const STATES: Schemas.WidgetGalleryState[] = [
   },
 ];
 
+// DEV_NOTE: Your chats and a past chat (the history screens), from sample chats relative to now
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const HISTORY_ITEMS: Schemas.WidgetConversationListItem[] = [
+  {
+    publicId: "c1",
+    title: "Which inspections are overdue this week?",
+    isOpen: true,
+    lastActivityAt: minutesAgo(2),
+  },
+  {
+    publicId: "c2",
+    title: "Add a fire drill for Hall B on Friday",
+    isOpen: false,
+    lastActivityAt: minutesAgo(90),
+  },
+  {
+    publicId: "c3",
+    title: "How do I export the visitor log?",
+    isOpen: true,
+    lastActivityAt: minutesAgo(60 * 26),
+  },
+  {
+    publicId: "c4",
+    title: "Who signed in after 6pm on Monday?",
+    isOpen: false,
+    lastActivityAt: minutesAgo(60 * 24 * 4),
+  },
+];
+const historyView = (state: Schemas.WidgetHistoryState) =>
+  toHistoryView({ state, currentPublicId: "c1", now: new Date() });
+const HISTORY_STATES: { name: string; view: Schemas.WidgetHistoryView }[] = [
+  {
+    name: "Your chats",
+    view: historyView({
+      status: "ready",
+      items: HISTORY_ITEMS,
+      totalRecords: 9,
+      isLoadingMore: false,
+      moreFailed: false,
+    }),
+  },
+  { name: "Your chats: loading", view: historyView({ status: "loading" }) },
+  {
+    name: "Your chats: none yet",
+    view: historyView({
+      status: "ready",
+      items: [],
+      totalRecords: 0,
+      isLoadingMore: false,
+      moreFailed: false,
+    }),
+  },
+  { name: "Your chats: didn't load", view: historyView({ status: "failed" }) },
+];
+const PAST_ITEM = HISTORY_ITEMS[1]!;
+const PAST_META = pastChatMeta(PAST_ITEM, new Date());
+const PAST_CHAT: Schemas.WidgetPastChatState = {
+  status: "ready",
+  conversation: {
+    ...PAST_ITEM,
+    messages: [
+      { publicId: "m1", role: "user", text: PAST_ITEM.title, citations: [] },
+      {
+        publicId: "m2",
+        role: "assistant",
+        text: "I can add that. Which time works: 10:00 or 14:00? Fire drills in Hall B usually run for 20 minutes [1].",
+        citations: [{ n: 1, documentPublicId: "d1", title: "Fire drill policy", sourceUrl: null }],
+      },
+      { publicId: "m3", role: "user", text: "14:00 please", citations: [] },
+      {
+        publicId: "m4",
+        role: "assistant",
+        text: "Done. The fire drill for Hall B is booked for Friday at 14:00.",
+        citations: [],
+      },
+    ],
+  },
+};
+
 export default function StatesGallery() {
   const { theme, accent, toggle } = useDevTheme();
   return (
@@ -499,6 +582,40 @@ export default function StatesGallery() {
             </ShadowHost>
           </figure>
         ))}
+        {HISTORY_STATES.map((state) => (
+          <figure key={state.name} className="flex flex-col gap-3" data-state={state.name}>
+            <figcaption className="text-caption text-muted-foreground">{state.name}</figcaption>
+            <ShadowHost theme={theme} accent={accent}>
+              <History
+                chatbotName={base.chatbotName}
+                view={state.view}
+                onBack={noop}
+                onNewChat={noop}
+                onClose={noop}
+                onPick={noop}
+                onMore={noop}
+                onRetry={noop}
+              />
+            </ShadowHost>
+          </figure>
+        ))}
+        <figure className="flex flex-col gap-3" data-state="A chat that has ended">
+          <figcaption className="text-caption text-muted-foreground">
+            A chat that has ended
+          </figcaption>
+          <ShadowHost theme={theme} accent={accent}>
+            <PastChat
+              item={PAST_ITEM}
+              meta={PAST_META}
+              state={PAST_CHAT}
+              linkOrigins={[]}
+              onBack={noop}
+              onNewChat={noop}
+              onClose={noop}
+              onRetry={noop}
+            />
+          </ShadowHost>
+        </figure>
       </div>
     </div>
   );
