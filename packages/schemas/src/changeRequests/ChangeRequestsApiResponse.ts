@@ -1,6 +1,7 @@
 import type { ApiResponse } from "../common";
 import type {
   ChangeRequestErrorCodeEnum,
+  ChangeRequestHostFailure,
   ChangeRequestListTabEnum,
   ChangeRequestResolveFailureEnum,
   ChangeRequestStatusIntEnum,
@@ -57,7 +58,8 @@ export interface ChangeRequestTimelineEntry {
 }
 
 // DEV_NOTE: GET /dashboard/change-requests/:publicId (M4-4, grown by M4-5 with the timeline). Never the change's
-// values. errorLabel says why it failed or needs a person. conversation.title null = purged or none.
+// values, except hostFailure (a refused commit's host answer, decrypted for this one read). errorLabel says why it
+// failed or needs a person. conversation.title null = purged or none.
 export interface ChangeRequestDetail {
   publicId: string;
   summary: string;
@@ -66,6 +68,8 @@ export interface ChangeRequestDetail {
   changeRequestStatusLabel: ChangeRequestStatusLabelEnum;
   errorCode: ChangeRequestErrorCodeEnum | null;
   errorLabel: string | null;
+  // What the host said when it refused the commit (status + text); null = none kept, or its values were purged
+  hostFailure: ChangeRequestHostFailure | null;
   toolName: string | null;
   toolVersion: number;
   wasEdited: boolean;

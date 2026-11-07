@@ -22,6 +22,7 @@ import HostToolCallProvider from "@/providers/hostToolCall";
 import ChangeRequestsDAL from "@/data-access-layer/ChangeRequestsDAL";
 import ActionEngineRepo from "@/repositories/ActionEngineRepo";
 import ChangeRequestPurgeRepo from "@/repositories/ChangeRequestPurgeRepo";
+import ChangeRequestsRepo from "@/repositories/ChangeRequestsRepo";
 import CompaniesRepo from "@/repositories/CompaniesRepo";
 import Utility from "@/utils/Utility";
 import {
@@ -228,13 +229,14 @@ async function forgedPlan(changeRequestPublicId: string): Promise<Schemas.Commit
     changeRequestPublicId,
     tool: await loadUpdateTool(sessionA),
     payload: {
-      version: 2,
+      version: 3,
       kind: Schemas.ChangeRequestKindEnum.Update,
       args: { recordId: "rec_alpha", amount: 1 },
       before: null,
       changes: [],
       result: null,
       mismatches: null,
+      hostFailure: null,
     },
     idempotencyKey: Schemas.changeRequestCommitIdempotencyKey(changeRequestPublicId),
     isResume: false,
@@ -570,6 +572,72 @@ describe("ActionEngineRepo change requests", () => {
     },
   );
 
+  it("keeps a refused commit's host answer encrypted, shows it to its own company only, and leaves it out of the event", async () => {
+    const repo = new ActionEngineRepo(env);
+    const hostError = '{"message":"Email jane@acme.com already exists"}';
+    const publicId = (await propose(sessionA, 12, false)).changeRequest!.publicId;
+    const started = await startCommit(sessionA, publicId);
+    const finished = await repo.finishCommit({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      hostCall: {
+        outcome: Schemas.HostCallOutcomeEnum.Refused,
+        mayHaveLanded: false,
+        attempts: 1,
+        httpStatus: 400,
+        hostError,
+      },
+      plan: started.plan!,
+    });
+    expect(finished.changeRequest?.changeRequestStatus).toBe(
+      Schemas.ChangeRequestStatusIntEnum.Failed,
+    );
+
+    // The event holds the status, never the text
+    const failedEvent = (await eventsOf(publicId)).at(-1);
+    expect(failedEvent?.detail).toMatchObject({ httpStatus: 400 });
+    expect(JSON.stringify(failedEvent?.detail)).not.toContain("jane@acme.com");
+
+    // Stored encrypted: no plaintext in the column
+    const [stored] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ encryptedChanges: changeRequests.encryptedChanges })
+        .from(changeRequests)
+        .where(eq(changeRequests.publicId, publicId)),
+    );
+    expect(stored?.encryptedChanges).toBeTruthy();
+    expect(stored?.encryptedChanges).not.toContain("jane@acme.com");
+
+    // The dashboard of its own company reads it back; another company can't see the change at all
+    const detail = await new ChangeRequestsRepo(env).getChangeRequest({
+      companyId: sessionA.companyId,
+      publicId,
+    });
+    expect(detail.changeRequest?.hostFailure).toEqual({ httpStatus: 400, text: hostError });
+    const other = await new ChangeRequestsRepo(env).getChangeRequest({
+      companyId: sessionB.companyId,
+      publicId,
+    });
+    expect(other.isSuccess).toBe(false);
+    expect(other.isNotFound).toBe(true);
+  });
+
+  it("keeps no host answer for a commit that failed without one", async () => {
+    const publicId = (await propose(sessionA, 13, false)).changeRequest!.publicId;
+    const started = await startCommit(sessionA, publicId);
+    await new ActionEngineRepo(env).finishCommit({
+      session: sessionA,
+      changeRequestPublicId: publicId,
+      hostCall: { outcome: Schemas.HostCallOutcomeEnum.Failed, mayHaveLanded: false, attempts: 1 },
+      plan: started.plan!,
+    });
+    const detail = await new ChangeRequestsRepo(env).getChangeRequest({
+      companyId: sessionA.companyId,
+      publicId,
+    });
+    expect(detail.changeRequest?.hostFailure).toBeNull();
+  });
+
   it("expires a proposal as the system, and refuses to approve it afterwards", async () => {
     const repo = new ActionEngineRepo(env);
     const publicId = (await propose(sessionA, 11)).changeRequest!.publicId;
@@ -713,12 +781,13 @@ function editedPayload(plan: Schemas.EditPlan, amount: number): Schemas.ChangeRe
   const args = { ...plan.payload.args, amount };
   const before = { data: { id: "rec_alpha", amount: 120 } };
   return {
-    version: 2,
+    version: 3,
     kind: plan.payload.kind,
     args,
     before,
     result: null,
     mismatches: null,
+    hostFailure: null,
     changes: Schemas.buildChangeRequestChanges({
       kind: plan.payload.kind,
       callOp: plan.tool.ops.callOp,
@@ -1493,13 +1562,14 @@ describe("ActionEngineRepo cross-company isolation (diletta_app)", () => {
           session,
           changeRequestPublicId: publicId,
           payload: {
-            version: 2,
+            version: 3,
             kind: Schemas.ChangeRequestKindEnum.Update,
             args: { recordId: "rec_alpha", amount: 1 },
             before: null,
             changes: [],
             result: null,
             mismatches: null,
+            hostFailure: null,
           },
           editId: Utility.generateUlid(),
         });

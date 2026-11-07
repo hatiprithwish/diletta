@@ -12,7 +12,8 @@ import { buildHostUrl, defaultHostRetryWait, parseHostBaseUrl, sendHostAttempt }
 //       replaces → resent; anything else (unreadable, or a value stored in another form) → Unknown, never resent.
 //     None: Unknown, never resent.
 // A 3xx is never followed. A write's 3xx may have landed (POST / redirect / GET), so it's Unknown and not resent.
-// Pure: no DB, no logger, never throws; messages carry no token, body or args, so the caller can log them.
+// Pure: no DB, no logger, never throws; messages carry no token, body or args, so the caller can log them. A refused
+// write's `hostError` (the host's error text) is the one exception: the caller stores it encrypted and never logs it.
 // Known limit: an Emulated check reads the host right after a failed attempt, so a host that applies writes late
 // (eventual consistency) can still see a resend twice. Such a host's tools should be Native or None.
 
@@ -46,7 +47,7 @@ function toResponse(
   outcome: Schemas.HostCallOutcomeEnum,
   message: string | undefined,
   state: Schemas.HostWriteState | Pick<Schemas.HostWriteState, "attempts">,
-  extra: Pick<Schemas.HostCallResponse, "httpStatus" | "body"> = {},
+  extra: Pick<Schemas.HostCallResponse, "httpStatus" | "body" | "hostError"> = {},
 ): Schemas.HostCallResponse {
   return { isSuccess: isSuccessOutcome(outcome), outcome, message, ...state, ...extra };
 }
@@ -57,6 +58,7 @@ function failUnlessMaybeLanded(
   message: string,
   state: Schemas.HostWriteState,
   httpStatus?: number,
+  hostError?: string,
 ): Schemas.HostCallResponse {
   return state.mayHaveLanded
     ? toResponse(
@@ -65,7 +67,7 @@ function failUnlessMaybeLanded(
         state,
         { httpStatus },
       )
-    : toResponse(outcome, message, state, { httpStatus });
+    : toResponse(outcome, message, state, { httpStatus, hostError });
 }
 
 export default class RestAdapter implements Schemas.HostAdapter {
@@ -443,6 +445,7 @@ export default class RestAdapter implements Schemas.HostAdapter {
           `Host refused the call (${httpStatus})`,
           state,
           httpStatus,
+          result.text ?? undefined,
         );
       }
       state.mayHaveLanded = true;

@@ -591,3 +591,41 @@ describe("RestAdapter.undo", () => {
     expect(host.appliedWrites).toBe(1);
   });
 });
+
+describe("A refused write's answer", () => {
+  const none = Schemas.ToolDefinitionIdempotencyModeIntEnum.None;
+
+  it("keeps the host's error text (JSON compacted), not in the message", async () => {
+    host.faults = [
+      {
+        kind: "status",
+        status: 400,
+        body: JSON.stringify({ message: "Email jane@acme.com already exists" }, null, 2),
+      },
+    ];
+    const response = await adapter().execute(commit(none));
+    expect(response).toMatchObject({
+      outcome: Schemas.HostCallOutcomeEnum.Refused,
+      httpStatus: 400,
+      hostError: '{"message":"Email jane@acme.com already exists"}',
+    });
+    expect(response.message).not.toContain("jane@acme.com");
+  });
+
+  it("keeps a plain-text answer, cut to the cap, and nothing for an empty one", async () => {
+    host.faults = [
+      { kind: "status", status: 403, body: "x".repeat(Schemas.HOST_ERROR_TEXT_MAX_CHARS + 50) },
+    ];
+    const long = await adapter().execute(commit(none));
+    expect(long.hostError).toBe(`${"x".repeat(Schemas.HOST_ERROR_TEXT_MAX_CHARS)}…`);
+    host.faults = [{ kind: "status", status: 403 }];
+    expect((await adapter().execute(commit(none))).hostError).toBeUndefined();
+  });
+
+  it("keeps nothing for a write that may have landed", async () => {
+    host.faults = [{ kind: "status", status: 500, body: "boom" }];
+    const response = await adapter().execute(commit(none));
+    expect(response.outcome).toBe(Schemas.HostCallOutcomeEnum.Unknown);
+    expect(response.hostError).toBeUndefined();
+  });
+});

@@ -111,6 +111,20 @@ describe("ChangeRequestTimelineProvider.timeline", () => {
     ]);
   });
 
+  it("adds the host's status to a refused commit, and nothing else of its answer", () => {
+    expect(
+      labels([
+        event(Action.Failed, {
+          detail: {
+            errorCode: Schemas.ChangeRequestErrorCodeEnum.HostRefused,
+            httpStatus: 400,
+            hostError: "Email jane@acme.com already exists",
+          },
+        }),
+      ]),
+    ).toEqual(["Not saved: your app refused the change (400)"]);
+  });
+
   it("reads an unreadable detail as empty, an unknown code as ours, and leaves out unknown actions", () => {
     expect(
       labels([

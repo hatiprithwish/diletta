@@ -135,13 +135,14 @@ describe("ChangeRequestsProvider deadline and view", () => {
 
   it("offers editable fields only while Proposed with a readable payload, and leaves the tool call id to the DO", () => {
     const payload: Schemas.ChangeRequestPayload = {
-      version: 2,
+      version: 3,
       kind: Schemas.ChangeRequestKindEnum.Update,
       args: { recordId: "rec_alpha", amount: 1 },
       before: null,
       changes: [],
       result: null,
       mismatches: null,
+      hostFailure: null,
     };
     const editable: Schemas.ChangeRequestEditableField[] = [
       {
@@ -243,13 +244,14 @@ describe("ChangeRequestsProvider undo window (M3-7)", () => {
 
   it("shows undoUntil only while the user can undo it, and marks an undo under way", () => {
     const payload: Schemas.ChangeRequestPayload = {
-      version: 2,
+      version: 3,
       kind: Schemas.ChangeRequestKindEnum.Update,
       args: { recordId: "rec_alpha", amount: 1 },
       before: null,
       changes: [],
       result: null,
       mismatches: null,
+      hostFailure: null,
     };
     const open = verified({ undoUntil: new Date(NOW + 60_000) });
     expect(ChangeRequestsProvider.toView(open, payload, NOW).undoUntil).toBe(

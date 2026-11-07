@@ -64,11 +64,15 @@ export interface StartCommitRequest {
 
 // DEV_NOTE: How the commit's host call ended (@app/adapter), for the change request's status. plan: the one
 // startCommit handed out (isResume: an earlier attempt may have reached the host; tool: its readback reads the result
-// for the read-after). body: the commit's response, kept for the read-after and the undo (M3-6).
+// for the read-after). body: the commit's response, kept for the read-after and the undo (M3-6). httpStatus +
+// hostError: a refused commit's status and error text, kept in the encrypted payload (ChangeRequestHostFailure).
 export interface FinishCommitRequest {
   session: ConversationSession;
   changeRequestPublicId: string;
-  hostCall: Pick<HostCallResponse, "outcome" | "mayHaveLanded" | "attempts" | "body">;
+  hostCall: Pick<
+    HostCallResponse,
+    "outcome" | "mayHaveLanded" | "attempts" | "body" | "httpStatus" | "hostError"
+  >;
   plan: CommitPlan;
 }
 

@@ -16,6 +16,8 @@ import ChangeOutcome from "@/components/ChangeOutcome";
 import ChangeRequestBulk from "@/components/ChangeRequestBulk";
 import ChangeRequestEditor from "@/components/ChangeRequestEditor";
 import DiffLine from "@/components/DiffLine";
+import ValueBlock from "@/components/ValueBlock";
+import { isBlockValue } from "@/lib/changeRequestView";
 
 // DEV_NOTE: A review card (DESIGN.md §7 Approval / Editing / Bulk): 1px border, radius 12, a header with the kind's
 // icon, the title and one line, one row per record (mono id + its diff), and the footer actions. Renders the view
@@ -108,12 +110,25 @@ export default function ChangeRequestCard({ card, actions }: Schemas.WidgetChang
                 <span aria-hidden className="text-subtle-foreground">
                   →
                 </span>
-                <span className="rounded bg-diff-new px-1.5 text-foreground">
-                  {line.expected ?? "empty"}
-                </span>
+                {isBlockValue(line.expected) ? null : (
+                  <span className="rounded bg-diff-new px-1.5 text-foreground">
+                    {line.expected ?? "empty"}
+                  </span>
+                )}
               </dd>
+              {isBlockValue(line.expected) && (
+                <dd className="col-span-2">
+                  <ValueBlock text={line.expected} className="bg-diff-new text-foreground" />
+                </dd>
+              )}
               <dt className="text-subtle-foreground">Found</dt>
-              <dd className="text-foreground">{line.found ?? "empty"}</dd>
+              <dd className="min-w-0 text-foreground">
+                {isBlockValue(line.found) ? (
+                  <ValueBlock text={line.found} className="border border-muted" />
+                ) : (
+                  (line.found ?? "empty")
+                )}
+              </dd>
             </div>
           ))}
         </dl>

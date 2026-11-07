@@ -1,8 +1,13 @@
+import { useState } from "react";
 import { ArrowCounterClockwise, Trash } from "@phosphor-icons/react";
 import { Button } from "@app/ui/components/button";
 import { Input } from "@app/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@app/ui/components/native-select";
 import * as Schemas from "@app/schemas";
+import { cn } from "@app/ui/lib/utils";
+import { Textarea } from "@app/ui/components/textarea";
+import ValueBlock from "@/components/ValueBlock";
+import { isBlockValue } from "@/lib/changeRequestView";
 
 // DEV_NOTE: The editor (DESIGN.md §7 widget-Editing): one input per editable field, its kind from the tool's
 // input_schema (a list → select, a yes/no → select, a number, a date, else text), the changed fields that can't be
@@ -21,6 +26,9 @@ function FieldInput({
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
+  // DEV_NOTE: Long or multi-line text edits in a textarea (an input would drop its line breaks). Decided once, when the
+  // editor opens, so typing past the limit doesn't swap the element and lose focus.
+  const [isLong] = useState(() => isBlockValue(value));
   const options =
     editable.enumValues?.map(String) ??
     (editable.type === Schemas.ChangeRequestFieldTypeEnum.Boolean ? ["true", "false"] : null);
@@ -44,6 +52,18 @@ function FieldInput({
       </NativeSelect>
     );
   }
+  if (isLong) {
+    return (
+      <Textarea
+        aria-label={field}
+        value={value}
+        required={editable.isRequired}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="max-h-56 text-body"
+      />
+    );
+  }
   const isNumber =
     editable.type === Schemas.ChangeRequestFieldTypeEnum.Number ||
     editable.type === Schemas.ChangeRequestFieldTypeEnum.Integer;
@@ -59,6 +79,11 @@ function FieldInput({
       className="text-body"
     />
   );
+}
+
+function ReadOnlyValue({ text }: { text: string }) {
+  if (isBlockValue(text)) return <ValueBlock text={text} className="border border-muted" />;
+  return <span className="text-foreground">{text || "empty"}</span>;
 }
 
 export default function ChangeRequestEditor({ card, actions }: Schemas.WidgetChangeCardProps) {
@@ -95,7 +120,12 @@ export default function ChangeRequestEditor({ card, actions }: Schemas.WidgetCha
               record.editFields.map((field) => (
                 <div
                   key={field.field}
-                  className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] items-center gap-2 text-widget-row"
+                  className={cn(
+                    "text-widget-row",
+                    isBlockValue(field.value)
+                      ? "flex min-w-0 flex-col gap-1.5"
+                      : "grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] items-center gap-2",
+                  )}
                 >
                   <span className="truncate font-mono text-subtle-foreground">{field.field}</span>
                   {field.editable && record.isProposed ? (
@@ -114,7 +144,7 @@ export default function ChangeRequestEditor({ card, actions }: Schemas.WidgetCha
                       }
                     />
                   ) : (
-                    <span className="text-foreground">{field.value || "empty"}</span>
+                    <ReadOnlyValue text={field.value} />
                   )}
                 </div>
               ))

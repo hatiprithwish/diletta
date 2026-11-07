@@ -804,6 +804,53 @@ export default class ChangeRequestsDAL {
     return response;
   }
 
+  // DEV_NOTE: The stored ciphertext of one change request (null once purged). Only the dashboard's host failure read
+  // uses it; the Repo decrypts it through CompanyKeyProvider.
+  async getChangeRequestStoredValues(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindChangeRequestStoredValuesDALRequest,
+  ) {
+    const response: Schemas.ChangeRequestStoredValuesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(changeRequests.id, params.id),
+        eq(changeRequests.companyId, params.companyId),
+      ];
+      const [selected] = await tx
+        .select({
+          encryptedChanges: changeRequests.encryptedChanges,
+          iv: changeRequests.iv,
+          encryptionKeyVersion: changeRequests.encryptionKeyVersion,
+        })
+        .from(changeRequests)
+        .where(and(...conditions))
+        .limit(1);
+
+      response.isSuccess = true;
+      response.message = "Change request values fetched successfully";
+      response.storedValues =
+        selected?.encryptedChanges && selected.iv && selected.encryptionKeyVersion !== null
+          ? {
+              encryptedValue: { ciphertext: selected.encryptedChanges, iv: selected.iv },
+              encryptionKeyVersion: selected.encryptionKeyVersion,
+            }
+          : null;
+    } catch (error) {
+      const message = "Unknown error in fetching change request values";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetChangeRequestDetails,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
   // DEV_NOTE: Retention purge (M6-1), the backstop past the undo window purge: every status, NeedsHuman too. Status, summary and
   // counts stay.
   async clearConversationValues(
