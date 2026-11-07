@@ -111,7 +111,7 @@ The harness signs the test user in through Firebase (`accounts:signInWithPasswor
 
 ## Tools (M7-2)
 
-The chatbot reads and changes eRegister configuration through 47 tools (`Schemas.EREGISTER_TOOL_DEFINITIONS`, `packages/schemas/src/eregister/`). The tools are bindings written in code (which fields a tool sends, how it is read back and undone); each field's schema comes from eRegister's OpenAPI spec (`/api/openapi.json`) and follows it (`docs/runbooks/tool-contracts.md`). Each tool runs as the signed-in user, with that user's eRegister role.
+The chatbot reads and changes eRegister configuration through 48 tools (`Schemas.EREGISTER_TOOL_DEFINITIONS`, `packages/schemas/src/eregister/`). The tools are bindings written in code (which fields a tool sends, how it is read back and undone); each field's schema comes from eRegister's OpenAPI spec (`/api/openapi.json`) and follows it (`docs/runbooks/tool-contracts.md`). Each tool runs as the signed-in user, with that user's eRegister role.
 
 | Area          | Reads                                                                         | Writes                                                       |
 | ------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -126,6 +126,7 @@ The chatbot reads and changes eRegister configuration through 47 tools (`Schemas
 | Dashboards    | list, get                                                                     | create, update, delete                                       |
 | Widgets       | list, get                                                                     | create, update, delete                                       |
 | Buttons       | list, get                                                                     | create, update (name, description, status, priority), delete |
+| Entries       | none                                                                          | create (one entry; checked by its External ID)               |
 
 Not tools: running, deploying, triggering, importing, exporting or printing anything.
 
@@ -136,6 +137,8 @@ Not tools: running, deploying, triggering, importing, exporting or printing anyt
 | Create | by the new id: the fields sent | deletes it                                                   | not resent: a person checks it          |
 | Update | the fields sent                | puts the read-before values back                             | read back first, then resent or settled |
 | Delete | must answer 404                | **none**: eRegister can't recreate a record under its old id | not resent: a person checks it          |
+
+**Entries.** `eregister_create_entry` adds one entry with `POST …/registers/{id}/data` (`data` = the first step's fields by field id, optional `notes`, and `insertId`, the entry's External ID). The model reads the register first and always passes a new unique `insertId`; the read back compares it, since eRegister's answer holds nothing else safe to compare (calculated fields and sequence numbers change `data`, and it returns neither notes nor the register). A create without an `insertId` is Unknown, never a mismatch: a person checks it on the Changes page. Undo deletes the entry by the `pid` in the create's answer. Update and delete are not tools.
 
 A field eRegister reshapes when it is read isn't compared. That covers a register's schema and flow, an action's triggers, roles access and a button's execution config. A register update or an action update still puts the whole read-before record back on undo. A Word (Docx) layout's file can only be uploaded in eRegister.
 
@@ -256,7 +259,7 @@ One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md
    pnpm --filter backend eregister:tools --company <companyPublicId> --connection <connectionPublicId>
    ```
 
-3. Pin the `{name, version}` list (the dialog's pins, or the script's output) in the chatbot's config (`tools`). Pin only the tools the chatbot needs: every pinned tool's schema goes into every model call. All 47 come to about 30K tokens.
+3. Pin the `{name, version}` list (the dialog's pins, or the script's output) in the chatbot's config (`tools`). Pin only the tools the chatbot needs: every pinned tool's schema goes into every model call. All 48 come to about 30K tokens.
 
 ### Check it works (M7-2 done when)
 

@@ -96,6 +96,8 @@ export const EREGISTER_BODY_FIELDS = {
   updateDashboardBody: ["name", "description", "inputSchema", "rolesAccess"],
   createWidgetBody: ["reportChartId", "layout", "mapping", "config", "codeblockPid", "type"],
   updateWidgetBody: ["layout", "mapping", "config", "type"],
+  // A register entry: data holds the first step's fields (keyed by field id); insertId is the entry's External ID
+  createEntryBody: ["data", "notes", "insertId"],
   createButtonBody: [
     "name",
     "description",

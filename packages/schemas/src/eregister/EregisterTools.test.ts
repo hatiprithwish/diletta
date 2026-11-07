@@ -242,4 +242,46 @@ describe("EREGISTER_TOOL_DEFINITIONS", () => {
   it("refuse a company id that could add a path segment", () => {
     expect(validate("eregister_list_registers", { companyId: "42/../7" }).isSuccess).toBe(false);
   });
+
+  it("add an entry to a register's data, read it back by its pid and undo by deleting it", () => {
+    const tool = byName("eregister_create_entry");
+    const args = {
+      companyId: "42",
+      registerId: "reg1",
+      data: { name: "Acme" },
+      notes: "from chat",
+      insertId: "k3x9q2ab",
+    };
+    expect(renderToolOp(tool.ops.callOp, { args })).toMatchObject({
+      isSuccess: true,
+      request: {
+        method: ToolOpMethodEnum.Post,
+        path: "/companies/42/prod/registers/reg1/data",
+        body: { data: { name: "Acme" }, notes: "from chat", insertId: "k3x9q2ab" },
+      },
+    });
+    const result = { pid: "e1", insertId: "k3x9q2ab" };
+    expect(renderToolOp(tool.ops.readbackOp!, { args, result }).request?.path).toBe(
+      "/companies/42/prod/registers/reg1/data/e1",
+    );
+    expect(renderToolOp(tool.ops.inverseOp!, { args, result }).request).toMatchObject({
+      method: ToolOpMethodEnum.Delete,
+      path: "/companies/42/prod/registers/reg1/data/e1",
+    });
+  });
+
+  it("verify an entry by its External ID; without one the check is unknown, never a mismatch", () => {
+    const args = { companyId: "42", registerId: "reg1", data: { name: "Acme" } };
+    // eRegister fills in data (calculated fields, sequences): it is never compared
+    const stored = { pid: "e1", insertId: "k3x9q2ab", data: { name: "Acme", total: 7 } };
+    expect(readAfter("eregister_create_entry", { ...args, insertId: "k3x9q2ab" }, stored)).toBe(
+      ChangeRequestCheckVerdictEnum.Matches,
+    );
+    expect(readAfter("eregister_create_entry", { ...args, insertId: "other" }, stored)).toBe(
+      ChangeRequestCheckVerdictEnum.Differs,
+    );
+    expect(readAfter("eregister_create_entry", args, stored)).toBe(
+      ChangeRequestCheckVerdictEnum.Unknown,
+    );
+  });
 });
