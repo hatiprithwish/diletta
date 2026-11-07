@@ -26,7 +26,7 @@ function toStep(part: Parameters<typeof getToolName>[0]): Schemas.WidgetToolStep
   if (part.state !== "output-available") {
     return {
       id,
-      label: isSearch ? "Searching the help docs" : "Working",
+      label: isSearch ? "Searching the help docs" : hostToolStepLabel(part).label,
       detail: null,
       state: Schemas.WidgetToolStepStateEnum.Running,
     };

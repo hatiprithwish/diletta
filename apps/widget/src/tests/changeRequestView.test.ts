@@ -5,6 +5,7 @@ import {
   displayValue,
   groupChangeRequests,
   parseEditText,
+  readStepLabel,
   toChangeCard,
   undoableMembers,
 } from "@/lib/changeRequestView";
@@ -377,5 +378,18 @@ describe("displayValue and parseEditText", () => {
       isValid: true,
       value: 2,
     });
+  });
+});
+
+describe("readStepLabel", () => {
+  it("names what a read tool looked at, from its tool name", () => {
+    expect(readStepLabel("eregister_list_report_charts", "done")).toBe("Looked up report charts");
+    expect(readStepLabel("eregister_get_register", "running")).toBe("Looking up register");
+    expect(readStepLabel("search_orders", "done")).toBe("Searched orders");
+  });
+
+  it("has no label for a name without a read verb and a noun", () => {
+    expect(readStepLabel("eregister_create_register", "done")).toBeNull();
+    expect(readStepLabel("list", "done")).toBeNull();
   });
 });
