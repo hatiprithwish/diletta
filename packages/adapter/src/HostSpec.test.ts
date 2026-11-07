@@ -16,6 +16,15 @@ describe("fetchHostSpec", () => {
     expect(new Headers(init?.headers).get("authorization")).toBeNull();
   });
 
+  it("calls fetch bare: the Workers runtime throws when a platform fetch is called as a method", async () => {
+    const platformFetch = vi.fn<typeof fetch>(function (this: unknown) {
+      if (this !== undefined) throw new TypeError("Illegal invocation");
+      return Promise.resolve(new Response(JSON.stringify({ openapi: "3.1.0", paths: {} })));
+    });
+    const result = await fetchHostSpec({ fetch: platformFetch, url: URL_OK });
+    expect(result.isSuccess).toBe(true);
+  });
+
   it("refuses a URL it can't trust without calling it", async () => {
     const fetchMock = answer("{}");
     for (const url of [

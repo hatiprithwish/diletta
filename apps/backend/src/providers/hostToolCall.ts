@@ -187,7 +187,13 @@ export default class HostToolCallProvider {
   // DEV_NOTE: A company's OpenAPI spec (ADR 0009, sync): a public GET of the URL an operator set on the connection, with
   // no credentials. Never throws; the message holds no body.
   static async getSpec(params: { url: string; signal?: AbortSignal }) {
-    return await fetchHostSpec({ fetch: globalThis.fetch, url: params.url, signal: params.signal });
+    // DEV_NOTE: Wrapped like RestAdapter's: a bare globalThis.fetch called as a method of another object throws
+    // "Illegal invocation" in the Workers runtime
+    return await fetchHostSpec({
+      fetch: (input, init) => fetch(input, init),
+      url: params.url,
+      signal: params.signal,
+    });
   }
 
   private static adapterFor(
