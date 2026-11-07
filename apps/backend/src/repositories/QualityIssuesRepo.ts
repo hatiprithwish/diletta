@@ -85,6 +85,10 @@ export default class QualityIssuesRepo {
       isChatbotWide:
         row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
       docGapCluster: row.docGapClusterLabel !== null ? { label: row.docGapClusterLabel } : null,
+      feedbackTheme:
+        row.feedbackThemePublicId !== null && row.feedbackThemeLabel !== null
+          ? { publicId: row.feedbackThemePublicId, label: row.feedbackThemeLabel }
+          : null,
       conversation:
         row.conversationPublicId === null
           ? null

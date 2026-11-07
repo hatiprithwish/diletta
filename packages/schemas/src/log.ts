@@ -332,6 +332,22 @@ export enum LogAction {
   SetFeedbackComment = "SetFeedbackComment",
   RecordFeedbackNote = "RecordFeedbackNote",
 
+  // Feedback themes (M7-10)
+  LockFeedbackTheming = "LockFeedbackTheming",
+  FindNearestFeedbackTheme = "FindNearestFeedbackTheme",
+  CreateFeedbackTheme = "CreateFeedbackTheme",
+  GrowFeedbackTheme = "GrowFeedbackTheme",
+  ShrinkFeedbackTheme = "ShrinkFeedbackTheme",
+  UpsertFeedbackNote = "UpsertFeedbackNote",
+  GetFeedbackNoteByFeedback = "GetFeedbackNoteByFeedback",
+  DeleteFeedbackNote = "DeleteFeedbackNote",
+  AttachFeedbackNote = "AttachFeedbackNote",
+  CountFeedbackThemeUsers = "CountFeedbackThemeUsers",
+  GetFeedbackNoteSource = "GetFeedbackNoteSource",
+  ProcessFeedbackNote = "ProcessFeedbackNote",
+  RewriteFeedbackNote = "RewriteFeedbackNote",
+  GetQualityIssueByFeedbackTheme = "GetQualityIssueByFeedbackTheme",
+
   // Activity log + outbox
   CreateActivityLog = "CreateActivityLog",
   CreateActivityLogs = "CreateActivityLogs",

@@ -39,6 +39,10 @@ export enum ModelTaskTypeEnum {
   // Workers AI. Background jobs: no conversation on the row.
   DocGapRewrite = "doc_gap.rewrite",
   DocGapEmbed = "doc_gap.embed",
+  // DEV_NOTE: Feedback themes (M7-10): a note's summary on the company's key, its embedding on Workers AI. Background
+  // jobs: no conversation on the row.
+  FeedbackNoteRewrite = "feedback_note.rewrite",
+  FeedbackNoteEmbed = "feedback_note.embed",
 }
 
 // DEV_NOTE: Providers the platform pays for itself (model_calls.provider). Never a company model key provider: a

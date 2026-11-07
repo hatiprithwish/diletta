@@ -19,7 +19,8 @@ export default class KnowledgeEmbedProvider {
       taskType:
         | Schemas.ModelTaskTypeEnum.KnowledgeEmbed
         | Schemas.ModelTaskTypeEnum.SearchEmbed
-        | Schemas.ModelTaskTypeEnum.DocGapEmbed;
+        | Schemas.ModelTaskTypeEnum.DocGapEmbed
+        | Schemas.ModelTaskTypeEnum.FeedbackNoteEmbed;
       texts: string[];
     },
   ): Promise<Schemas.KnowledgeEmbedResponse> {

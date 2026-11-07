@@ -36,6 +36,8 @@ export interface QualityIssueListItem {
   isChatbotWide: boolean;
   // DEV_NOTE: Set on the item a growing group of unanswered questions opened (M5-6), so the page names it
   docGapCluster: { label: string } | null;
+  // DEV_NOTE: Set on the item a growing Didn't like feedback theme opened (M7-10)
+  feedbackTheme: { publicId: string; label: string } | null;
   conversation: {
     publicId: string;
     title: string | null;

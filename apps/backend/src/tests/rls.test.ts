@@ -27,6 +27,8 @@ import {
   conversations,
   docGapClusters,
   docGaps,
+  feedbackNotes,
+  feedbackThemes,
   evalCases,
   evalResults,
   evalRuns,
@@ -339,6 +341,39 @@ const FIXTURES: Fixture[] = [
           rating: Schemas.FeedbackRatingIntEnum.Up,
         })
         .returning({ id: feedback.id }),
+  },
+  {
+    name: "feedback_notes",
+    insert: (client, companyId) =>
+      client
+        .insert(feedbackNotes)
+        .values({
+          publicId: pid(),
+          companyId,
+          chatbotId: fakeId(),
+          feedbackId: fakeId(),
+          conversationId: fakeId(),
+          chatbotUserId: fakeId(),
+          rating: Schemas.FeedbackRatingIntEnum.Down,
+          commentVersion: 1,
+          summary: "RLS test",
+        })
+        .returning({ id: feedbackNotes.id }),
+  },
+  {
+    name: "feedback_themes",
+    insert: (client, companyId) =>
+      client
+        .insert(feedbackThemes)
+        .values({
+          publicId: pid(),
+          companyId,
+          chatbotId: fakeId(),
+          rating: Schemas.FeedbackRatingIntEnum.Down,
+          label: "RLS test",
+          centroid: vector(),
+        })
+        .returning({ id: feedbackThemes.id }),
   },
   {
     name: "files",

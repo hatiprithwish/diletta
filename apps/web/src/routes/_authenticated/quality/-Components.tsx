@@ -41,11 +41,15 @@ import {
 const UNTITLED = "Untitled conversation";
 const NOT_TRIAGED = "Not triaged";
 
-// DEV_NOTE: An issue's title: its conversation's, for a growing group of unanswered questions (M5-6) the group's, or for
-// a check on the whole chatbot (a health drop, M5-5, no conversation) the chatbot it is about
+// DEV_NOTE: An issue's title: its conversation's, for a growing group of unanswered questions (M5-6) the group's, for a
+// growing Didn't like feedback theme (M7-10) the theme's, or for a check on the whole chatbot (a health drop, M5-5, no
+// conversation) the chatbot it is about
 function issueTitle(qualityIssue: Schemas.QualityIssueListItem): string {
   if (qualityIssue.docGapCluster) {
     return `Unanswered questions: ${qualityIssue.docGapCluster.label}`;
+  }
+  if (qualityIssue.feedbackTheme) {
+    return `Users don't like: ${qualityIssue.feedbackTheme.label}`;
   }
   if (qualityIssue.isChatbotWide) {
     return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
@@ -392,11 +396,13 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
           <p className="text-body text-muted-foreground">
             {qualityIssue.docGapCluster
               ? "Several people asked this and the help docs had no answer. Use Add a document on this group in Knowledge; that closes this item too."
-              : qualityIssue.isChatbotWide
-                ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
-                : qualityIssue.isContentPurged
-                  ? "The chat's content was deleted."
-                  : "No messages yet."}
+              : qualityIssue.feedbackTheme
+                ? "Several people rated replies not helpful and left notes saying the same thing. Their notes are under User feedback."
+                : qualityIssue.isChatbotWide
+                  ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
+                  : qualityIssue.isContentPurged
+                    ? "The chat's content was deleted."
+                    : "No messages yet."}
           </p>
         )}
         {qualityIssue.excerpt.map((message) => (

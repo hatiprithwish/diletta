@@ -42,6 +42,7 @@ export const ZFeedback = z.object({
   chatbotUserId: z.string(),
   rating: z.enum(FeedbackRatingIntEnum),
   comment: z.string().nullable(),
+  commentVersion: z.number().int(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

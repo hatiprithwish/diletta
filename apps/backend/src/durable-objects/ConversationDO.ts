@@ -1029,6 +1029,11 @@ export class ConversationDO extends Think<Env> {
       }
       return;
     }
+    // DEV_NOTE: The note's feedback.note_added event (M7-10), relayed after the commit; the Cron sweep publishes it if
+    // this relay never runs
+    if (recorded.outboxId) {
+      this.relayEvents([recorded.outboxId]);
+    }
     this.reply(ws, { type: "feedback_note", messageId, isSaved: true });
   }
 

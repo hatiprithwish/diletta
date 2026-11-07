@@ -88,8 +88,9 @@ export default class FeedbackDAL {
     return response;
   }
 
-  // DEV_NOTE: The note on one chatbot user's rating of one message (M7-10), replacing any earlier one. No rating row =
-  // isNotFound (a note is only ever left on a rating). The note is raw user text: it stays out of every log.
+  // DEV_NOTE: The note on one chatbot user's rating of one message (M7-10), replacing any earlier one, its version one
+  // more. No rating row = isNotFound (a note is only ever left on a rating). The note is raw user text: it stays out of
+  // every log.
   async setFeedbackComment(
     tx: NodePgTransaction<EmptyRelations>,
     params: Schemas.SetFeedbackCommentDALRequest,
@@ -105,7 +106,11 @@ export default class FeedbackDAL {
       ];
       const [feedbackResponse] = await tx
         .update(feedback)
-        .set({ comment: params.comment, updatedAt: new Date() })
+        .set({
+          comment: params.comment,
+          commentVersion: sql`${feedback.commentVersion} + 1`,
+          updatedAt: new Date(),
+        })
         .where(and(...conditions))
         .returning();
 
