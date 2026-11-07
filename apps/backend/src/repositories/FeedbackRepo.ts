@@ -4,10 +4,13 @@ import ChatbotsDAL from "@/data-access-layer/ChatbotsDAL";
 import CompaniesDAL from "@/data-access-layer/CompaniesDAL";
 import ConversationsDAL from "@/data-access-layer/ConversationsDAL";
 import FeedbackDAL from "@/data-access-layer/FeedbackDAL";
+import FeedbackNotesDAL from "@/data-access-layer/FeedbackNotesDAL";
+import FeedbackThemesDAL from "@/data-access-layer/FeedbackThemesDAL";
 import MessagesDAL from "@/data-access-layer/MessagesDAL";
 import Constants from "@/config/Constants";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import CriticalEventProvider from "@/providers/criticalEvent";
 import UserQualityIssueProvider from "@/providers/userQualityIssue";
 import * as Schemas from "@app/schemas";
 
@@ -18,6 +21,8 @@ import * as Schemas from "@app/schemas";
 export default class FeedbackRepo {
   private db: NodePgDatabase;
   private feedbackDal: FeedbackDAL;
+  private feedbackNotesDal: FeedbackNotesDAL;
+  private feedbackThemesDal: FeedbackThemesDAL;
   private messagesDal: MessagesDAL;
   private conversationsDal: ConversationsDAL;
   private companiesDal: CompaniesDAL;
@@ -26,6 +31,8 @@ export default class FeedbackRepo {
   constructor(env: Env) {
     this.db = getDbClient(env);
     this.feedbackDal = new FeedbackDAL();
+    this.feedbackNotesDal = new FeedbackNotesDAL();
+    this.feedbackThemesDal = new FeedbackThemesDAL();
     this.messagesDal = new MessagesDAL();
     this.conversationsDal = new ConversationsDAL();
     this.companiesDal = new CompaniesDAL();
@@ -60,6 +67,24 @@ export default class FeedbackRepo {
         return FeedbackRepo.refuse(Schemas.RecordFeedbackFailureEnum.ServerError, saved.message);
       }
       const rating = { messageId: params.sessionMessageId, rating: saved.feedback.rating };
+
+      // DEV_NOTE: A thumb switch cleared the note (M7-10): its summary leaves its theme with it
+      if (saved.feedback.comment === null) {
+        const removed = await this.feedbackNotesDal.deleteFeedbackNote(tx, {
+          companyId: session.companyId,
+          feedbackId: saved.feedback.id,
+        });
+        if (!removed.isSuccess)
+          throw new TenantRollbackError(removed.message ?? "Note not removed");
+        if (removed.themeId) {
+          const shrunk = await this.feedbackThemesDal.shrinkFeedbackTheme(tx, {
+            companyId: session.companyId,
+            id: removed.themeId,
+          });
+          if (!shrunk.isSuccess)
+            throw new TenantRollbackError(shrunk.message ?? "Theme not shrunk");
+        }
+      }
       if (saved.feedback.rating !== Schemas.FeedbackRatingIntEnum.Down) {
         return { isSuccess: true, message: saved.message, rating };
       }
@@ -82,7 +107,9 @@ export default class FeedbackRepo {
 
   // DEV_NOTE: The visitor's note on their rating of a reply (M7-10), replacing an earlier one. Same checks as a rating
   // (conversation open, company and chatbot active, a synced reply of this conversation), and the user must have rated
-  // it (else NotFound). The DO has already checked the text for prompt injection. Nothing is logged with the text.
+  // it (else NotFound). The DO has already checked the text for prompt injection. Nothing is logged with the text. A
+  // stored note records a feedback.note_added critical event (ids and the note's version only), which the themes
+  // pipeline reads (M7-10); outboxId is it, for the DO to relay after the commit.
   async recordFeedbackNote(params: {
     session: Schemas.ConversationSession;
     sessionMessageId: string;
@@ -100,7 +127,7 @@ export default class FeedbackRepo {
         chatbotUserId: session.chatbotUserId,
         comment: params.note,
       });
-      if (!saved.isSuccess) {
+      if (!saved.isSuccess || !saved.feedback) {
         return FeedbackRepo.refuse(
           saved.isNotFound
             ? Schemas.RecordFeedbackFailureEnum.NotFound
@@ -108,7 +135,30 @@ export default class FeedbackRepo {
           saved.message,
         );
       }
-      return { isSuccess: true, message: saved.message };
+      const { feedback } = saved;
+
+      const detail: Schemas.FeedbackNoteAddedDetail = {
+        feedbackId: feedback.id,
+        commentVersion: feedback.commentVersion,
+      };
+      const event = await CriticalEventProvider.record(tx, {
+        companyId: session.companyId,
+        actorType: Schemas.ActivityLogActorTypeIntEnum.ChatbotUser,
+        actorId: session.chatbotUserId,
+        entityType: Schemas.FEEDBACK_NOTE_ENTITY_TYPE,
+        entityId: feedback.id,
+        entityAction: Schemas.FEEDBACK_NOTE_ENTITY_ACTION,
+        entityVersion: null,
+        parentLogId: checked.conversation.rootLogId,
+        rootLogId: checked.conversation.rootLogId,
+        detail,
+        eventType: Schemas.FEEDBACK_NOTE_ADDED_EVENT_TYPE,
+        dedupeKey: Schemas.feedbackNoteAddedDedupeKey(feedback.publicId, feedback.commentVersion),
+      });
+      if (!event.isSuccess || !event.outboxId) {
+        throw new TenantRollbackError(event.message ?? "Feedback note event not recorded");
+      }
+      return { isSuccess: true, message: saved.message, outboxId: event.outboxId };
     });
   }
 

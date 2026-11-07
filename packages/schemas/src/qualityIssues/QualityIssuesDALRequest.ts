@@ -14,7 +14,7 @@ import type {
 export type CreateSystemQualityIssueDALRequest = Pick<
   QualityIssue,
   "companyId" | "issueType" | "note"
-> & { docGapClusterId?: string } & (
+> & { docGapClusterId?: string; feedbackThemeId?: string } & (
     | { conversationId: string; chatbotId?: undefined }
     | { conversationId: null; chatbotId: string }
   );
@@ -92,6 +92,12 @@ export type UpdateQualityIssueStatusDALRequest = Pick<QualityIssue, "companyId" 
   ) & {
     updatedBy: string;
   };
+
+// DEV_NOTE: The one item a feedback theme ever opened (M7-10), whatever its status. isForUpdate locks it.
+export type GetQualityIssueByFeedbackThemeDALRequest = Pick<QualityIssue, "companyId"> & {
+  feedbackThemeId: string;
+  isForUpdate: boolean;
+};
 
 // DEV_NOTE: The one item a group of unanswered questions ever opened (M5-6), whatever its status. isForUpdate locks it.
 export type GetQualityIssueByDocGapClusterDALRequest = Pick<QualityIssue, "companyId"> & {

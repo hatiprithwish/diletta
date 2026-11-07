@@ -40,6 +40,7 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   chatbotName: "eRegister Assistant",
   isChatbotWide: false,
   docGapCluster: null,
+  feedbackTheme: null,
   conversation: { publicId: "conv_1", title: "Bot gave old fire drill frequency" },
   createdAt: "2026-10-20T13:20:00.000Z",
   updatedAt: "2026-10-20T13:20:00.000Z",
@@ -661,6 +662,38 @@ describe("Quality issue", () => {
       "/knowledge",
     );
     expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
+  });
+
+  it("shows a growing Didn't like feedback theme with its label, no test or conversation", async () => {
+    const themeItem: Schemas.QualityIssueDetail = {
+      ...ROW_HEALTH,
+      publicId: "qi_3",
+      issueType: Schemas.QualityIssueTypeIntEnum.FeedbackTheme,
+      issueTypeLabel: Schemas.QualityIssueTypeLabelEnum.FeedbackTheme,
+      note: Schemas.feedbackThemeQualityNote("Answers quote the old fire drill schedule"),
+      feedbackTheme: { publicId: "ft_1", label: "Answers quote the old fire drill schedule" },
+      rating: null,
+      excerpt: [],
+      isContentPurged: false,
+      conversation: null,
+      changeRequestPublicId: null,
+      evalCase: null,
+    };
+    mockApi((url, init) =>
+      url.includes("/dashboard/quality-issues/qi_3")
+        ? { status: 200, body: { isSuccess: true, qualityIssue: themeItem } }
+        : defaultApi(url, init),
+    );
+    renderPage("/quality/qi_3");
+    const card = await detailCard();
+    expect(
+      await within(card).findByRole("heading", {
+        name: "Users don't like: Answers quote the old fire drill schedule",
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).getByText(/left notes saying the same thing/)).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("link", { name: "Open conversation" })).not.toBeInTheDocument();
   });
 
   it("keeps a saved note when the answer carries no issue", async () => {

@@ -19,7 +19,9 @@ export interface ConversationFeedbackResponse extends ApiResponse {
   ratings?: WidgetFeedbackRatingState[];
 }
 
-// DEV_NOTE: Server-side only (FeedbackRepo → Conversation DO): whether the note on a rating was stored, or why not
+// DEV_NOTE: Server-side only (FeedbackRepo → Conversation DO): whether the note on a rating was stored, or why not.
+// outboxId (internal) is its feedback.note_added event (M7-10), for the DO to relay after the commit.
 export interface RecordFeedbackNoteResponse extends ApiResponse {
   failure?: RecordFeedbackFailureEnum;
+  outboxId?: string;
 }

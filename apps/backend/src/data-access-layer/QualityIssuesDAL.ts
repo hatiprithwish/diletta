@@ -8,11 +8,12 @@ import {
   chatbots,
   companies,
   conversations,
+  docGapClusters,
   evalCases,
   feedback,
+  feedbackThemes,
   messages,
   qualityIssues,
-  docGapClusters,
 } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
@@ -138,8 +139,10 @@ export default class QualityIssuesDAL {
         eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.System),
         eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
         isNull(qualityIssues.conversationId),
-        // DEV_NOTE: An item a group of questions opened (M5-6) has no conversation either, but it isn't this one
+        // DEV_NOTE: An item a group of questions opened (M5-6) or a feedback theme opened (M7-10) has no conversation
+        // either, but it isn't this one
         isNull(qualityIssues.docGapClusterId),
+        isNull(qualityIssues.feedbackThemeId),
       ];
       const [qualityIssue] = await tx
         .select()
@@ -158,6 +161,44 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetOpenChatbotWideQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getQualityIssueByFeedbackTheme(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetQualityIssueByFeedbackThemeDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.feedbackThemeId, params.feedbackThemeId),
+      ];
+      const query = tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...conditions))
+        .limit(1);
+      const [qualityIssue] = params.isForUpdate ? await query.for("update") : await query;
+
+      response.isSuccess = true;
+      response.message = qualityIssue
+        ? "Quality issue of the feedback theme fetched successfully"
+        : "The feedback theme has no quality issue";
+      response.qualityIssue = qualityIssue;
+    } catch (error) {
+      const message = "Unknown error in fetching quality issue of feedback theme";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetQualityIssueByFeedbackTheme,
         message,
         error,
         metadata: params,
@@ -334,6 +375,7 @@ export default class QualityIssuesDAL {
           issueType: params.issueType,
           note: params.note,
           docGapClusterId: params.docGapClusterId,
+          feedbackThemeId: params.feedbackThemeId,
         })
         .returning();
 
@@ -773,6 +815,10 @@ export default class QualityIssuesDAL {
       eq(docGapClusters.id, qualityIssues.docGapClusterId),
       eq(docGapClusters.companyId, qualityIssues.companyId),
     ];
+    const feedbackThemeJoinConditions = [
+      eq(feedbackThemes.id, qualityIssues.feedbackThemeId),
+      eq(feedbackThemes.companyId, qualityIssues.companyId),
+    ];
     return tx
       .select({
         id: qualityIssues.id,
@@ -791,6 +837,8 @@ export default class QualityIssuesDAL {
         conversationContentPurgedAt: conversations.contentPurgedAt,
         chatbotName: chatbots.name,
         docGapClusterLabel: docGapClusters.label,
+        feedbackThemePublicId: feedbackThemes.publicId,
+        feedbackThemeLabel: feedbackThemes.label,
         // DEV_NOTE: An erased user keeps its row, not its name
         userName: sql<
           string | null
@@ -810,6 +858,7 @@ export default class QualityIssuesDAL {
       .leftJoin(conversations, and(...conversationJoinConditions))
       .leftJoin(chatbots, and(...chatbotJoinConditions))
       .leftJoin(docGapClusters, and(...docGapClusterJoinConditions))
+      .leftJoin(feedbackThemes, and(...feedbackThemeJoinConditions))
       .leftJoin(chatbotUsers, and(...userJoinConditions))
       .leftJoin(changeRequests, and(...changeRequestJoinConditions))
       .leftJoin(evalCases, and(...evalCaseJoinConditions))
