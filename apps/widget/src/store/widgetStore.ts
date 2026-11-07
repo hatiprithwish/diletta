@@ -1,6 +1,7 @@
 import { createStore } from "zustand/vanilla";
 import type { StoreApi } from "zustand/vanilla";
 import type * as Schemas from "@app/schemas";
+import { readSavedFullScreen, writeSavedFullScreen } from "@/lib/savedLayout";
 
 // DEV_NOTE: The review state of a conversation with no change requests yet
 export const EMPTY_REVIEW: Schemas.WidgetChangeReviewState = {
@@ -37,6 +38,7 @@ export function createWidgetStore(
     notes: {},
     review: EMPTY_REVIEW,
     screen: CHAT_SCREEN,
+    isFullScreen: readSavedFullScreen(),
     setOpen: (isOpen) => set({ isOpen }),
     setTheme: (nextTheme) => set({ theme: nextTheme }),
     setAccent: (nextAccent) => set({ accent: nextAccent }),
@@ -56,6 +58,10 @@ export function createWidgetStore(
         screen: CHAT_SCREEN,
       }),
     setScreen: (screen) => set({ screen }),
+    setFullScreen: (isFullScreen) => {
+      writeSavedFullScreen(isFullScreen);
+      set({ isFullScreen });
+    },
     patch: (patch) => set(patch),
   }));
 }

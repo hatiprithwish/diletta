@@ -247,8 +247,12 @@ Anatomy (`widget-Welcome` … `widget-Unavailable`):
   them, its brand-as-text colour for links and the focus ring, and a brand tint mixed from the fill.
   Diffs and success keep their green. Without it the widget is lime. The host passes the values for
   its current mode and updates them when the mode or the brand colour changes.
-- Header: bot name (14/600), status dot + word (Online, Working, Unavailable), Your chats, New chat,
-  Close (icon buttons in `text-subtle-foreground`).
+- Header: bot name (14/600), status dot + word (Online, Working, Unavailable), Your chats, Full
+  screen (from `sm` up), New chat, Close (icon buttons in `text-subtle-foreground`).
+- Full screen (the visitor's choice, remembered; from `sm` up only): the panel fills the window, no
+  radius or shadow, as a modal dialog. One header with a line under it (Exit full screen, Close), Your
+  chats as a 280px `bg-sidebar` column on the left, and the chat or the past chat in a centred 760px
+  column beside it. Escape still closes the widget.
 - Your chats and a past chat use a sub-header instead: Back, title (and its line under it), Close.
 - Messages: user = right-aligned `bubble` pill; assistant = plain text, no bubble.
 - Cards (approval, verified, mismatch): 1px border, radius 12; header with icon + title + one line;
@@ -276,6 +280,7 @@ States:
 | Your chats                | `?gallery` › Your chats            | user opened Your chats       | New chat, rows grouped Today / Yesterday / Earlier, brand dot on open ones, Show more |
 | Your chats: empty / error | `?gallery` › Your chats: …         | no chats yet / read failed   | "No past chats yet" + Back to chat; "Your chats didn't load" + Try again              |
 | A chat that has ended     | `?gallery` › A chat that has ended | user picked an ended chat    | messages + sources read-only, no composer, Start a new chat                           |
+| Full screen               | dev host page (`pnpm dev:widget`)  | visitor chose Full screen    | sidebar of chats, centred chat column, Exit full screen                               |
 
 Feedback note (M7-10, design canvas above): once a thumb is saved, a bordered box (radius 12) under it asks "What went
 wrong?" (down) or "What was helpful?" (up) "(optional)", a 3-row textarea, a "0 / 1,000" counter, Not now (ghost) and
