@@ -922,6 +922,92 @@ describe("ChatbotConfigsRepo: the gate (M5-4)", { timeout: SUITE_TIMEOUT_MS }, (
   });
 });
 
+describe("ChatbotConfigsRepo: publish without tests", { timeout: SUITE_TIMEOUT_MS }, () => {
+  it("publishes a Testing or Ready version without a passed gate run, still checking its needs, and audits it", async () => {
+    const tenant = await createTenant();
+    const keyPublicId = await addModelKey(tenant, Schemas.ModelProviderEnum.Anthropic);
+    const repo = new ChatbotConfigsRepo(env);
+    const scope = { companyId: tenant.companyId, chatbotPublicId: tenant.chatbotPublicId };
+    const actor = { adminId: tenant.adminId, actor: adminAuditActor(tenant.adminId) };
+    // A safety case no run has covered: the normal publish would refuse every version below
+    await addSafetyCase(tenant);
+
+    const v1 = await repo.createChatbotConfig({ ...scope, ...actor, body: configBody() });
+    const v1Version = { ...scope, ...actor, publicId: v1.chatbotConfig?.publicId ?? "" };
+
+    // A draft never goes live this way either
+    expect((await repo.publishChatbotConfigWithoutTests(v1Version)).failure).toBe(
+      Schemas.ChatbotConfigFailureEnum.NotInGate,
+    );
+
+    // Testing, with no gate run at all
+    await repo.sendChatbotConfigToTesting(v1Version);
+    const keyUpdate = (status: Schemas.CompanySecretStatusIntEnum) =>
+      new CompanySecretsRepo(env).updateCompanySecret({
+        companyId: tenant.companyId,
+        publicId: keyPublicId,
+        companySecret: { status },
+      });
+    // Its needs are still checked: no working model key, no publish
+    await keyUpdate(Schemas.CompanySecretStatusIntEnum.Invalid);
+    const noKey = await repo.publishChatbotConfigWithoutTests(v1Version);
+    expect(noKey.failure).toBe(Schemas.ChatbotConfigFailureEnum.ModelKeyMissing);
+    expect(noKey.outboxIds).toBeUndefined();
+    await keyUpdate(Schemas.CompanySecretStatusIntEnum.Active);
+
+    const published = await repo.publishChatbotConfigWithoutTests(v1Version);
+    expect(published.isSuccess).toBe(true);
+    expect(published.outboxIds).toHaveLength(1);
+    expect(published.chatbotConfig?.chatbotConfigStatus).toBe(
+      Schemas.ChatbotConfigStatusIntEnum.Published,
+    );
+    expect(published.chatbotConfig?.publishedAt).not.toBeNull();
+    const [approval] = await withOwnerDb((ownerDb) =>
+      ownerDb
+        .select({ approvedByRunId: chatbotConfigs.approvedByRunId })
+        .from(chatbotConfigs)
+        .where(eq(chatbotConfigs.publicId, v1Version.publicId)),
+    );
+    expect(approval?.approvedByRunId).toBeNull();
+    expect((await repo.publishChatbotConfigWithoutTests(v1Version)).failure).toBe(
+      Schemas.ChatbotConfigFailureEnum.NotInGate,
+    );
+
+    // Ready on a failed gate run, over the live version
+    const v2 = await repo.copyChatbotConfig(v1Version);
+    const v2Version = { ...scope, ...actor, publicId: v2.chatbotConfig?.publicId ?? "" };
+    await passGate(tenant, v2Version.publicId, { hasPassed: false });
+    expect((await repo.publishChatbotConfig(v2Version)).failure).toBe(
+      Schemas.ChatbotConfigFailureEnum.NotApproved,
+    );
+    const overridden = await repo.publishChatbotConfigWithoutTests(v2Version);
+    expect(overridden.isSuccess).toBe(true);
+    expect(overridden.chatbotConfig?.chatbotConfigStatus).toBe(
+      Schemas.ChatbotConfigStatusIntEnum.Published,
+    );
+    const listed = await repo.getChatbotConfigs(scope);
+    expect(
+      listed.chatbotConfigs?.map((row) => [row.configVersion, row.chatbotConfigStatusLabel]),
+    ).toEqual([
+      [2, Schemas.ChatbotConfigStatusLabelEnum.Published],
+      [1, Schemas.ChatbotConfigStatusLabelEnum.Archived],
+    ]);
+
+    expect(
+      (await auditActionsOf(tenant.companyId, Schemas.AuditEntityTypeEnum.ChatbotConfig)).map(
+        (row) => row.entityAction,
+      ),
+    ).toEqual([
+      Schemas.AuditEntityActionEnum.Created,
+      Schemas.AuditEntityActionEnum.SentToTesting,
+      Schemas.AuditEntityActionEnum.PublishedWithoutTests,
+      Schemas.AuditEntityActionEnum.Created,
+      Schemas.AuditEntityActionEnum.SentToTesting,
+      Schemas.AuditEntityActionEnum.PublishedWithoutTests,
+    ]);
+  });
+});
+
 describe("CompaniesRepo: read-only mode", { timeout: SUITE_TIMEOUT_MS }, () => {
   it("turns on and off with an audit row each, and records nothing for no change", async () => {
     const tenant = await createTenant();

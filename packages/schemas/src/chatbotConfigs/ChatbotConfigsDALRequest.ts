@@ -77,11 +77,12 @@ export type MoveChatbotConfigStatusDALRequest = Pick<
   updatedBy?: string;
 };
 
-// DEV_NOTE: Ready → Published (the DAL matches Ready: a version never goes live without passing the gate)
+// DEV_NOTE: → Published, from the given statuses: Ready for a publish (a version goes live through its gate), Testing or
+// Ready for an operator's publish without tests (ADR 0010)
 export type PublishChatbotConfigDALRequest = Pick<
   ChatbotConfig,
   "companyId" | "chatbotId" | "publicId" | "publishedBy"
->;
+> & { fromStatuses: readonly ChatbotConfigStatusIntEnum[] };
 
 // DEV_NOTE: The company's Published configs (at most one per chatbot), for the pin guard (M4-10: a pinned tool version
 // can't be disabled). Bodies are returned as stored; the Repo reads them through Schemas.readConfigBody, never by

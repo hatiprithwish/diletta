@@ -216,4 +216,26 @@ ChatbotConfigsRoutes.post(
   },
 );
 
+// DEV_NOTE: An operator's publish of a Testing or Ready version without a passed gate run (ADR 0010). A company admin
+// is refused by the authz action (operator only); the operator acts in the company their header names.
+ChatbotConfigsRoutes.post(
+  "/:publicId/publish-without-tests",
+  checkAuth,
+  authorizeCompany(Schemas.AuthzActionEnum.ChatbotConfigPublishOverride),
+  async (c) => {
+    const companyId = c.get("companyId");
+    const repo = new ChatbotConfigsRepo(c.env);
+    const { outboxIds, ...response } = await repo.publishChatbotConfigWithoutTests({
+      companyId,
+      chatbotPublicId: c.req.param("chatbotPublicId") ?? "",
+      publicId: c.req.param("publicId"),
+      adminId: c.get("admin").adminId,
+      actor: auditActorFor(c.get("admin")),
+    });
+    EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
+
+    return c.json(response, writeStatus(response, 200));
+  },
+);
+
 export default ChatbotConfigsRoutes;

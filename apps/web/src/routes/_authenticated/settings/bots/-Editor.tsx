@@ -19,6 +19,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageError } from "@/components/page-state";
 import { StatusChip } from "@/components/status-chip";
 import { ApiError } from "@/providers/apiClient";
+import { useMe } from "../../-data";
 import Utilities from "@/utils";
 import { TEST_RESULT_TONE, VERSION_STATUS_TONE } from "./-Components";
 import { ConfigForm } from "./-DraftForm";
@@ -38,7 +39,8 @@ import {
 } from "./-data";
 
 const { Draft, Testing, Ready } = Schemas.ChatbotConfigStatusIntEnum;
-const { Publish, Discard, SendToTesting, BackToDraft } = Schemas.DashboardVersionConfirmEnum;
+const { Publish, PublishWithoutTests, Discard, SendToTesting, BackToDraft } =
+  Schemas.DashboardVersionConfirmEnum;
 
 // DEV_NOTE: The editor's line under the title, per status (M5-4: a draft goes live only through its tests)
 const VERSION_DESCRIPTION: Partial<Record<Schemas.ChatbotConfigStatusIntEnum, string>> = {
@@ -61,6 +63,12 @@ const CONFIRM_COPY: Record<
     description:
       "It becomes the live version: every conversation uses it from the next message. The current live version is kept, and you can roll back by copying it.",
     action: "Publish",
+  },
+  [PublishWithoutTests]: {
+    title: (version) => `Publish v${version} without passing its tests?`,
+    description:
+      "It becomes the live version even though its tests haven't passed, and its safety cases aren't checked. The publish is recorded in the audit log as made without tests. A working model key and turned-on tools are still required.",
+    action: "Publish without tests",
   },
   [Discard]: {
     title: (version) => `Discard v${version}?`,
@@ -287,12 +295,18 @@ function VersionEditor({ chatbot, options, version }: Schemas.DashboardBotVersio
               gateRunPublicId={version.gateRunPublicId}
             />
           )}
-          {(isDraft || version.chatbotConfigStatus === Ready) && (
+          {(isDraft || version.chatbotConfigStatus === Ready || refusal !== null) && (
             <PublishIssues
               body={version.body}
               options={options}
               refusal={refusal}
-              refusalAction={isDraft ? SendToTesting : Publish}
+              refusalAction={
+                isDraft
+                  ? SendToTesting
+                  : version.chatbotConfigStatus === Ready
+                    ? Publish
+                    : PublishWithoutTests
+              }
             />
           )}
           <ConfigForm
@@ -328,6 +342,12 @@ function VersionActions({
   const sendToTesting = useSendToTesting(chatbotPublicId, version.publicId);
   const moveToDraft = useMoveToDraft(chatbotPublicId, version.publicId);
   const publish = usePublishVersion(chatbotPublicId, version.publicId);
+  const publishWithoutTests = usePublishVersion(chatbotPublicId, version.publicId, {
+    isWithoutTests: true,
+  });
+  // DEV_NOTE: ADR 0010: only an operator publishes a version in the gate without its tests passing (the backend refuses
+  // anyone else)
+  const isOperator = useMe().data?.admin?.role === Schemas.AdminRoleEnum.Operator;
   const discard = useDiscardDraft(chatbotPublicId, version.publicId);
   const [confirming, setConfirming] = useState<Schemas.DashboardVersionConfirmEnum | null>(null);
   const draft = rows.data?.chatbots?.find((row) => row.publicId === chatbotPublicId)?.draftConfig;
@@ -373,6 +393,7 @@ function VersionActions({
     const showRefusal = { onError: (error: unknown) => onRefusal(configRefusalOf(error)) };
     onRefusal(null);
     if (confirming === Publish) publish.mutate(undefined, showRefusal);
+    if (confirming === PublishWithoutTests) publishWithoutTests.mutate(undefined, showRefusal);
     if (confirming === SendToTesting) sendToTesting.mutate(undefined, showRefusal);
     if (confirming === BackToDraft) moveToDraft.mutate(undefined);
     if (confirming === Discard) {
@@ -413,6 +434,15 @@ function VersionActions({
           onClick={() => setConfirming(BackToDraft)}
         >
           Back to draft
+        </Button>
+      )}
+      {isOperator && status !== Draft && (
+        <Button
+          variant="outline"
+          disabled={publishWithoutTests.isPending || version.body === null}
+          onClick={() => setConfirming(PublishWithoutTests)}
+        >
+          {publishWithoutTests.isPending ? "Publishing…" : "Publish without tests"}
         </Button>
       )}
       {status === Ready && (
@@ -478,7 +508,7 @@ function PublishIssues({
   refusal,
   refusalAction,
 }: Schemas.DashboardPublishIssuesProps) {
-  const isPublish = refusalAction === Publish;
+  const isPublish = refusalAction === Publish || refusalAction === PublishWithoutTests;
   const lines: string[] = [];
   if (refusal) {
     lines.push(refusal.message ?? "Nothing changed.");

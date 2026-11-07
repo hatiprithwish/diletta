@@ -11,6 +11,8 @@ export enum AuthzActionEnum {
   ChatbotConfigRead = "chatbot_config.read",
   ChatbotConfigUpdate = "chatbot_config.update",
   ChatbotConfigPublish = "chatbot_config.publish",
+  // Publish a Testing or Ready version without a passed gate run (operator only, ADR 0010)
+  ChatbotConfigPublishOverride = "chatbot_config.publish_override",
   ReadOnlyModeRead = "company.read_only_read",
   ReadOnlyModeUpdate = "company.read_only_update",
 
@@ -124,6 +126,7 @@ export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.CompanyConnectionUpdate,
   AuthzActionEnum.ToolContractSync,
   AuthzActionEnum.CompanyActAs,
+  AuthzActionEnum.ChatbotConfigPublishOverride,
 ]);
 
 // DEV_NOTE: The company a resource belongs to (internal companies.id, resolved server-side). null = no single

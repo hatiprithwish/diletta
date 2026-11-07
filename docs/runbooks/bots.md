@@ -37,6 +37,15 @@ Publish makes a **Ready** version the live version in one transaction, and every
 
 The last three are checked at the send to testing too, and again at the publish (a key or tool can change in between). The previous live version becomes Archived. The editor shows the key, price and tool checks before you send or publish; the server checks again under its locks.
 
+### Publish without tests (operators only)
+
+When the gate can't run or keeps failing for a reason outside the version (no Test sign-in on the Staging connection yet, the eval runner not deployed, a case that needs fixing), an operator acting in the company (ADR 0006) can publish a **Testing or Ready** version without a passed gate run: **Publish without tests** on the version's page, confirmed. A Draft can't be published this way: send it to testing first.
+
+- It skips the gate approval and so the safety case check. Everything else above still applies: a working model key, priced models, Active pinned tools (a refusal shows on the page as for a normal publish).
+- The audit log shows "Published a version without its tests passing", made by the operator. A company admin never sees the button, and the endpoint answers them 403.
+- A gate run still running for that version changes nothing when it finishes. Run the tests afterwards (Tests › Run) if you want the result on record.
+- Prefer fixing the gate (`docs/runbooks/evals.md`): this is the way out, not the way in.
+
 ## Tool versions and published configs
 
 An operator can't disable a tool version that a Published config pins (409 `PinnedByPublishedConfig`). Publish a version without it first (or one pinning another version), then disable it. A publish and a disable at the same moment can't cross: the publish reads its pins `FOR SHARE`.
