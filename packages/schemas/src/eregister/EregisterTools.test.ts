@@ -111,12 +111,10 @@ describe("EREGISTER_TOOL_DEFINITIONS", () => {
 
   it("declare every body field a tool sends, as an empty schema the spec fills in", () => {
     for (const tool of EREGISTER_TOOL_DEFINITIONS) {
+      // Every {args.x} in the body, nested ones (a bulk create's items) included
       const sent = [
-        ...Object.keys(tool.ops.callOp.bodyMap ?? {}),
-        ...Object.values(tool.ops.callOp.bodyMap ?? {}),
-      ]
-        .map((value) => /^\{args\.(\w+)\}$/.exec(String(value))?.[1])
-        .filter((name): name is string => name !== undefined);
+        ...JSON.stringify(tool.ops.callOp.bodyMap ?? {}).matchAll(/\{args\.(\w+)\}/g),
+      ].map((match) => match[1]!);
       for (const name of sent) {
         expect(Object.keys(tool.ops.inputSchema.properties), `${tool.name}.${name}`).toContain(
           name,
@@ -174,6 +172,45 @@ describe("EREGISTER_TOOL_DEFINITIONS", () => {
     expect(
       renderToolOp(tool.ops.readbackOp!, { args, result: { data: { id: "rep1" } } }).request?.path,
     ).toBe("/companies/42/reports-v2/rep1");
+  });
+
+  it("send a widget in eRegister's bulk create and read it back by the first created id", () => {
+    const tool = byName("eregister_create_widget");
+    const args = {
+      companyId: "42",
+      entityType: 1,
+      entityId: "dash1",
+      type: 2,
+      layout: { x: 0, y: 0, w: 4, h: 2 },
+      config: { markdown: "Hello" },
+    };
+    expect(renderToolOp(tool.ops.callOp, { args })).toMatchObject({
+      isSuccess: true,
+      request: {
+        method: ToolOpMethodEnum.Post,
+        path: "/companies/42/widgets",
+        body: {
+          entityType: 1,
+          entityId: "dash1",
+          widgets: [{ type: 2, layout: { x: 0, y: 0, w: 4, h: 2 }, config: { markdown: "Hello" } }],
+        },
+      },
+    });
+    const result = { data: { created: [{ id: "w1" }], failed: [] } };
+    expect(renderToolOp(tool.ops.readbackOp!, { args, result }).request?.path).toBe(
+      "/companies/42/widgets/w1",
+    );
+    expect(renderToolOp(tool.ops.inverseOp!, { args, result }).request).toMatchObject({
+      method: ToolOpMethodEnum.Delete,
+      path: "/companies/42/widgets/w1",
+    });
+    // Nothing created (every widget failed): there is no id to read back, so the render refuses
+    expect(
+      renderToolOp(tool.ops.readbackOp!, {
+        args,
+        result: { data: { created: [], failed: [{ index: 0, message: "no" }] } },
+      }).isSuccess,
+    ).toBe(false);
   });
 
   it("read a code block and a layout back with their source", () => {
