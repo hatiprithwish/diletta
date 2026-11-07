@@ -22,8 +22,11 @@ export async function fetchHostSpec(params: {
   const signal = params.signal ? AbortSignal.any([params.signal, timeout]) : timeout;
   let response: Response;
   let text: string | null;
+  // DEV_NOTE: Called bare, never as params.fetch(…): a platform fetch called as a method of another object throws
+  // "Illegal invocation" in the Workers runtime, and the catch below would report it as a host that didn't answer
+  const { fetch: send } = params;
   try {
-    response = await params.fetch(checked.data, {
+    response = await send(checked.data, {
       method: "GET",
       headers: { Accept: "application/json" },
       redirect: "manual",
