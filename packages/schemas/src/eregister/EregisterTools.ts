@@ -243,6 +243,42 @@ function listTool(params: {
   };
 }
 
+// DEV_NOTE: Add an entry (a row) to a register: POST …/registers/{id}/data answers the saved entry itself, with its pid.
+// The model can't be made to pass insertId (a body field is required only where the spec says so), so a create read
+// back by it is verified when it does, and a person checks it when it doesn't ("unknown" never undoes). The answer holds
+// nothing else to compare safely: eRegister fills in calculated fields and sequence numbers in data, and it doesn't
+// return notes or the register. An insertId is the entry's External ID: unique in the company, so a resend of the same
+// create can't add a second entry.
+function createEntryTool(): EregisterToolDefinition {
+  const entryPath = `${REGISTERS}/{args.registerId}/data`;
+  const createdPath = `${entryPath}/{result.pid}`;
+  return {
+    name: "eregister_create_entry",
+    description:
+      "Add one entry (a row) to a register. Read the register first (eregister_get_register) and put the values in data, keyed by the field ids of its first step. Always pass insertId: the entry's External ID, a new unique value you make up (for example 8 random letters and digits) unless the user gave one; it is how the entry is checked after it is saved.",
+    ...CREATE,
+    ops: {
+      inputSchema: buildEregisterInputSchema({
+        pathArgs: {
+          registerId: eregisterIdProperty("The register's id (its publicId / handle)"),
+        },
+        body: "createEntryBody",
+      }),
+      callOp: {
+        method: ToolOpMethodEnum.Post,
+        path: entryPath,
+        bodyMap: argsBodyMap(bodyNames("createEntryBody")),
+      },
+      readbackOp: {
+        method: ToolOpMethodEnum.Get,
+        path: createdPath,
+        compare: { insertId: "insertId" },
+      },
+      inverseOp: { method: ToolOpMethodEnum.Delete, path: createdPath },
+    },
+  };
+}
+
 const COMPANY = "/companies/{args.companyId}";
 const REGISTERS = `${COMPANY}/${EREGISTER_REGISTER_MODE}/registers`;
 const REPORT_ID = { reportId: eregisterIdProperty("The report's id") };
@@ -585,5 +621,6 @@ export const EREGISTER_TOOL_DEFINITIONS: EregisterToolDefinition[] = [
     path: `${COMPANY}/buttons/list`,
     args: PAGE_ARGS,
   }),
+  createEntryTool(),
   ...AREAS.flatMap(areaTools),
 ];
