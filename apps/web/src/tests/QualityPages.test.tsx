@@ -37,6 +37,7 @@ const ROW_USER: Schemas.QualityIssueListItem = {
   note: null,
   ratedReply: "Every 6 months, per the Fire safety policy.",
   feedbackNote: null,
+  feedbackNoteTheme: null,
   chatbotName: "eRegister Assistant",
   isChatbotWide: false,
   docGapCluster: null,
@@ -93,6 +94,7 @@ const DETAIL: Schemas.QualityIssueDetail = {
   ...ROW_USER,
   rating: Schemas.FeedbackRatingIntEnum.Down,
   feedbackNote: "Our policy changed to quarterly in July.",
+  feedbackNoteTheme: { publicId: "ft_1", label: "Answers quote the old fire drill schedule" },
   excerpt: [
     { role: Schemas.MessageRoleIntEnum.User, text: "How often do we need to run fire drills?" },
     {
@@ -347,6 +349,9 @@ describe("Quality issue", () => {
     expect(within(card).getByText("Rated not helpful")).toBeInTheDocument();
     expect(within(card).getByText("Their note")).toBeInTheDocument();
     expect(within(card).getByText("Our policy changed to quarterly in July.")).toBeInTheDocument();
+    expect(
+      within(card).getByRole("link", { name: "Answers quote the old fire drill schedule" }),
+    ).toHaveAttribute("href", "/quality/feedback/ft_1");
     expect(within(card).getByRole("combobox", { name: "Issue type" })).toHaveTextContent(
       "Choose a type",
     );
@@ -692,6 +697,10 @@ describe("Quality issue", () => {
       }),
     ).toBeInTheDocument();
     expect(within(card).getByText(/left notes saying the same thing/)).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "See the notes" })).toHaveAttribute(
+      "href",
+      "/quality/feedback/ft_1",
+    );
     expect(within(card).queryByRole("button", { name: "Create test" })).not.toBeInTheDocument();
     expect(within(card).queryByRole("link", { name: "Open conversation" })).not.toBeInTheDocument();
   });

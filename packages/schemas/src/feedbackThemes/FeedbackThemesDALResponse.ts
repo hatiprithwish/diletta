@@ -6,6 +6,7 @@ import type {
   FeedbackNoteAddedDetail,
   FeedbackNoteRewriteSource,
   FeedbackTheme,
+  FeedbackThemeStatusIntEnum,
 } from "./FeedbackThemesCommon";
 
 export interface FeedbackThemeDALResponse extends ApiResponse {
@@ -82,5 +83,43 @@ export interface OpenFeedbackThemeQualityIssueRequest {
 
 export interface OpenFeedbackThemeQualityIssueResponse extends ApiResponse {
   isOpened?: boolean;
+  outboxId?: string;
+}
+
+// DEV_NOTE: One theme as the User feedback view reads it, with internal ids (the Repo drops them)
+export interface FeedbackThemeRow extends FeedbackTheme {
+  chatbotName: string | null;
+  userCount: number;
+  latestSummary: string | null;
+  latestNoteAt: Date | null;
+  qualityIssuePublicId: string | null;
+}
+
+export interface FeedbackThemeRowsDALResponse extends ApiResponse {
+  feedbackThemes?: FeedbackThemeRow[];
+}
+
+export interface FeedbackThemeRowDALResponse extends ApiResponse {
+  feedbackTheme?: FeedbackThemeRow;
+}
+
+// DEV_NOTE: Every status × thumb count in one read
+export interface FeedbackThemeCountsDALResponse extends ApiResponse {
+  counts?: Record<FeedbackThemeStatusIntEnum, Record<FeedbackRatingIntEnum, number>>;
+}
+
+export interface FeedbackThemeNoteRow {
+  publicId: string;
+  summary: string;
+  conversationPublicId: string | null;
+  createdAt: Date;
+}
+
+export interface FeedbackThemeNotesDALResponse extends ApiResponse {
+  notes?: FeedbackThemeNoteRow[];
+}
+
+// DEV_NOTE: outboxId unset = there was no open item to close
+export interface CloseFeedbackThemeQualityIssueResponse extends ApiResponse {
   outboxId?: string;
 }

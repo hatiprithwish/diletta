@@ -149,3 +149,59 @@ export function feedbackThemeOpensQualityIssue(params: {
 export function feedbackThemeQualityNote(label: string): string {
   return `Several people rated replies not helpful for the same reason: "${label}". See their notes under User feedback.`;
 }
+
+// DEV_NOTE: The User feedback view's tabs (M7-10), one status each, and its thumb filter. An admin resolves or dismisses
+// an Open theme; neither is reopened by hand.
+export enum FeedbackThemeListTabEnum {
+  Open = "open",
+  Resolved = "resolved",
+  Dismissed = "dismissed",
+}
+
+export const ZFeedbackThemeListTab = z.enum(FeedbackThemeListTabEnum);
+
+export type FeedbackThemeTabCounts = Record<FeedbackThemeListTabEnum, number>;
+
+export const FEEDBACK_THEME_TAB_STATUS: Record<
+  FeedbackThemeListTabEnum,
+  FeedbackThemeStatusIntEnum
+> = {
+  [FeedbackThemeListTabEnum.Open]: FeedbackThemeStatusIntEnum.Open,
+  [FeedbackThemeListTabEnum.Resolved]: FeedbackThemeStatusIntEnum.Resolved,
+  [FeedbackThemeListTabEnum.Dismissed]: FeedbackThemeStatusIntEnum.Dismissed,
+};
+
+export enum FeedbackThemeRatingFilterEnum {
+  Disliked = "disliked",
+  Liked = "liked",
+}
+
+export const ZFeedbackThemeRatingFilter = z.enum(FeedbackThemeRatingFilterEnum);
+
+export type FeedbackThemeRatingCounts = Record<FeedbackThemeRatingFilterEnum, number>;
+
+export const FEEDBACK_THEME_RATING_FILTER_RATING: Record<
+  FeedbackThemeRatingFilterEnum,
+  FeedbackRatingIntEnum
+> = {
+  [FeedbackThemeRatingFilterEnum.Disliked]: FeedbackRatingIntEnum.Down,
+  [FeedbackThemeRatingFilterEnum.Liked]: FeedbackRatingIntEnum.Up,
+};
+
+// DEV_NOTE: Most notes first by default
+export enum FeedbackThemeSortColumn {
+  NoteCount = "noteCount",
+  CreatedAt = "createdAt",
+  UpdatedAt = "updatedAt",
+}
+
+export const ZFeedbackThemeSortColumn = z.enum(FeedbackThemeSortColumn);
+
+// DEV_NOTE: Rows per page, and how many of a theme's notes its detail reads (the newest)
+export const FEEDBACK_THEMES_PAGE_SIZE = 20;
+export const FEEDBACK_THEME_NOTES_MAX = 50;
+
+// DEV_NOTE: Why a resolve or dismiss changed nothing (409): the theme is no longer Open (someone closed it first)
+export enum FeedbackThemeUpdateFailureEnum {
+  NotOpen = "NotOpen",
+}

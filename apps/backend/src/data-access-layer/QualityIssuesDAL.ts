@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
+import { alias } from "drizzle-orm/pg-core";
 import {
   admins,
   changeRequests,
@@ -11,6 +12,7 @@ import {
   docGapClusters,
   evalCases,
   feedback,
+  feedbackNotes,
   feedbackThemes,
   messages,
   qualityIssues,
@@ -18,6 +20,9 @@ import {
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
+
+// DEV_NOTE: The theme a user issue's note was grouped into (M7-10), next to the theme a theme item is about
+const noteThemes = alias(feedbackThemes, "note_themes");
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). System issues come from the model router's
@@ -819,6 +824,14 @@ export default class QualityIssuesDAL {
       eq(feedbackThemes.id, qualityIssues.feedbackThemeId),
       eq(feedbackThemes.companyId, qualityIssues.companyId),
     ];
+    const feedbackNoteJoinConditions = [
+      eq(feedbackNotes.feedbackId, feedback.id),
+      eq(feedbackNotes.companyId, feedback.companyId),
+    ];
+    const noteThemeJoinConditions = [
+      eq(noteThemes.id, feedbackNotes.themeId),
+      eq(noteThemes.companyId, feedbackNotes.companyId),
+    ];
     return tx
       .select({
         id: qualityIssues.id,
@@ -853,6 +866,8 @@ export default class QualityIssuesDAL {
         >`left(${messages.content}->>'text', ${Schemas.QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1})`,
         rating: feedback.rating,
         feedbackNote: feedback.comment,
+        noteThemePublicId: noteThemes.publicId,
+        noteThemeLabel: noteThemes.label,
       })
       .from(qualityIssues)
       .leftJoin(conversations, and(...conversationJoinConditions))
@@ -863,6 +878,8 @@ export default class QualityIssuesDAL {
       .leftJoin(changeRequests, and(...changeRequestJoinConditions))
       .leftJoin(evalCases, and(...evalCaseJoinConditions))
       .leftJoin(feedback, and(...feedbackJoinConditions))
+      .leftJoin(feedbackNotes, and(...feedbackNoteJoinConditions))
+      .leftJoin(noteThemes, and(...noteThemeJoinConditions))
       .leftJoin(messages, and(...messageJoinConditions));
   }
 

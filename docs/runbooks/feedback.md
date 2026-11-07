@@ -15,6 +15,14 @@ A widget user can leave an optional note when they rate a reply. Each note is re
 
 Switching thumbs clears the note and takes its summary out of its theme. An edit replaces the summary and moves it to whichever theme the new one fits.
 
+## Quality › User feedback
+
+Admins read the themes under **Quality › User feedback**: Didn't like or Liked, Open / Resolved / Dismissed, most notes first. A theme shows how many notes from how many people, the Quality issue it opened (if any) and what people said, each summary linking to its conversation.
+
+- **Mark resolved** when the chatbot answers better. Its Quality item closes as Fixed. A Resolved theme is never joined again: if people keep saying the same thing, a new theme starts.
+- **Dismiss** when it isn't worth acting on. Its Quality item closes as Dismissed. A Dismissed theme still grows quietly, so the same complaint doesn't come back as a new theme.
+- Both are audited (Security › Audit log: "Resolved user feedback", "Dismissed user feedback"). Neither can be undone from the dashboard; a 409 means someone else closed it first.
+
 ## What is kept where
 
 - `feedback.comment`: the user's own words. Shown to admins on the transcript and the Quality issue. Cleared by the retention purge with the rest of the chat.

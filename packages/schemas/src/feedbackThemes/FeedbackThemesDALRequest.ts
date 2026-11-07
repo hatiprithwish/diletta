@@ -1,4 +1,12 @@
-import type { FeedbackNote, FeedbackTheme } from "./FeedbackThemesCommon";
+import type { PageDALRequest } from "../common";
+import type { AuditActor } from "../auditLog/AuditLogCommon";
+import type { QualityIssueCloseStatus } from "../qualityIssues";
+import type {
+  FeedbackNote,
+  FeedbackTheme,
+  FeedbackThemeSortColumn,
+  FeedbackThemeStatusIntEnum,
+} from "./FeedbackThemesCommon";
 
 // DEV_NOTE: Every tenant DAL request carries companyId — every query filters on it, on top of RLS.
 
@@ -62,4 +70,32 @@ export type CountFeedbackThemeUsersDALRequest = Pick<FeedbackNote, "companyId"> 
 export interface GetFeedbackNoteSourceDALRequest {
   companyId: string;
   feedbackId: string;
+}
+
+export type GetFeedbackThemesDALRequest = Pick<FeedbackTheme, "companyId" | "rating" | "status"> &
+  PageDALRequest & { sortColumn: FeedbackThemeSortColumn };
+
+export type CountFeedbackThemesDALRequest = Pick<FeedbackTheme, "companyId">;
+
+// DEV_NOTE: One theme by its public id within the company. isForUpdate locks the theme only.
+export type GetFeedbackThemeDALRequest = Pick<FeedbackTheme, "companyId" | "publicId"> & {
+  isForUpdate: boolean;
+};
+
+export type GetFeedbackThemeNotesDALRequest = Pick<FeedbackTheme, "companyId"> & {
+  themeId: string;
+  limit: number;
+};
+
+// DEV_NOTE: Open → Resolved or Dismissed. isNotFound when no Open theme has that id.
+export type CloseFeedbackThemeDALRequest = Pick<FeedbackTheme, "companyId" | "id"> & {
+  status: FeedbackThemeStatusIntEnum.Resolved | FeedbackThemeStatusIntEnum.Dismissed;
+};
+
+export interface CloseFeedbackThemeQualityIssueRequest {
+  companyId: string;
+  feedbackThemeId: string;
+  status: QualityIssueCloseStatus;
+  adminId: string;
+  actor: AuditActor;
 }

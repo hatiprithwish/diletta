@@ -508,6 +508,18 @@ function MessageView({ message, speaker }: Schemas.DashboardConversationMessageP
           <blockquote className="text-body break-words text-subtle-foreground">
             {message.feedbackNote}
           </blockquote>
+          {message.feedbackTheme && (
+            <p className="text-caption text-muted-foreground">
+              Part of{" "}
+              <Link
+                to="/quality/feedback/$id"
+                params={{ id: message.feedbackTheme.publicId }}
+                className="text-brand-text hover:text-foreground"
+              >
+                {message.feedbackTheme.label}
+              </Link>
+            </p>
+          )}
         </figure>
       )}
       {message.citations.length > 0 && (

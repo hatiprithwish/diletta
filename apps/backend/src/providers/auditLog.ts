@@ -33,6 +33,10 @@ const AUDIT_ACTION_WORDS: AuditActionWords = {
     [Schemas.AuditEntityActionEnum.Answered]: "Answered unanswered questions",
     [Schemas.AuditEntityActionEnum.Dismissed]: "Dismissed unanswered questions",
   },
+  [Schemas.AuditEntityTypeEnum.FeedbackTheme]: {
+    [Schemas.AuditEntityActionEnum.Resolved]: "Resolved user feedback",
+    [Schemas.AuditEntityActionEnum.Dismissed]: "Dismissed user feedback",
+  },
   [Schemas.AuditEntityTypeEnum.EvalCase]: {
     [Schemas.AuditEntityActionEnum.Created]: "Created test case",
     [Schemas.AuditEntityActionEnum.Updated]: "Edited test case",

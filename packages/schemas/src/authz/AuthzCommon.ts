@@ -40,6 +40,10 @@ export enum AuthzActionEnum {
   DocGapClusterRead = "doc_gap_cluster.read",
   DocGapClusterUpdate = "doc_gap_cluster.update",
 
+  // Quality › User feedback (company-scoped, M7-10): read the themes users' notes were grouped into; resolve or dismiss one
+  FeedbackThemeRead = "feedback_theme.read",
+  FeedbackThemeUpdate = "feedback_theme.update",
+
   // Insights pages (company-scoped, M4-3): Overview, Usage, Impact read the activity rollups; Impact's minutes per task
   InsightRead = "insight.read",
   RoiAssumptionUpdate = "roi_assumption.update",
