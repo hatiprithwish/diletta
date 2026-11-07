@@ -324,7 +324,7 @@ export default class EvalRunsRepo {
     run: Schemas.DashboardEvalRunRow,
   ): Promise<{ runActions: Schemas.EvalRunActions } | Schemas.ApiResponse> {
     const canResume =
-      Schemas.isEvalRunResumable(run) &&
+      Schemas.canResumeEvalRun(run, Date.now()) &&
       (run.trigger !== Schemas.EvalRunTriggerIntEnum.Gate ||
         run.configStatus === Schemas.ChatbotConfigStatusIntEnum.Testing);
     const isEnded =

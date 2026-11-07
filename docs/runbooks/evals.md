@@ -151,7 +151,7 @@ How one run goes:
 
 ### Resume, or run the failed cases
 
-A run that stopped on the way (Failed: the judge or the host down, a runner fault) shows **Resume** on its page. It reopens the same run: the attempts that have a result are kept, the rest run, the attempt that was cut off included (as a new chat: the run was reset before it stopped). The runner's chain for it is `<run>-r<n>-…`. A gate run that stopped leaves its version in testing, so Resume can still make it Ready; only a run that reached Done moves the version.
+A run that stopped on the way (Failed: the judge or the host down, a runner fault), or one stuck Running with no change for 30 minutes (its runner lost), shows **Resume** on its page. It reopens the same run: the attempts that have a result are kept, the rest run, the attempt that was cut off included (as a new chat: the run was reset before it stopped). The runner's chain for it is `<run>-r<n>-…`. A gate run that stopped leaves its version in testing, so Resume can still make it Ready; only a run that reached Done moves the version.
 
 **Run failed cases (n)** starts a new manual run (k = 1) of the cases that didn't pass every attempt of that run, still active. It's for checking a fix cheaply; the publish check is always the whole gate.
 

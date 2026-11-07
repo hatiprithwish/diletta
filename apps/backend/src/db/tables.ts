@@ -665,7 +665,7 @@ export const conversations = table(
     t.index("IDX_conversations_eval_run_id").on(table.evalRunId),
     t.index("IDX_conversations_eval_case_id").on(table.evalCaseId),
     t
-      .uniqueIndex("UNQ_conversations_eval_run_id_eval_case_id_eval_attempt_eval_try")
+      .uniqueIndex("UNQ_conversations_eval_run_case_attempt_try")
       .on(table.evalRunId, table.evalCaseId, table.evalAttempt, table.evalTry),
     t.check(
       "CHK_conversations_eval_attempt",
