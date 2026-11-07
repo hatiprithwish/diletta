@@ -170,6 +170,10 @@ export enum LogAction {
   // Tool definitions
   CreateToolDefinition = "CreateToolDefinition",
   CreateToolDefinitions = "CreateToolDefinitions",
+  LoadToolSet = "LoadToolSet",
+  SyncToolContracts = "SyncToolContracts",
+  ListToolContractConnections = "ListToolContractConnections",
+  RecordToolContractSync = "RecordToolContractSync",
   ActivateToolDefinitions = "ActivateToolDefinitions",
   GetToolDefinitionDetails = "GetToolDefinitionDetails",
   ListToolDefinitions = "ListToolDefinitions",

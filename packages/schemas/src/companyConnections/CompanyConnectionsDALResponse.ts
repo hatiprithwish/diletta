@@ -16,3 +16,19 @@ export interface CompanyConnectionsDALResponse extends ApiResponse {
 export interface ConnectionEnvironmentsDALResponse extends ApiResponse {
   environments?: Pick<CompanyConnection, "companyId" | "environment">[];
 }
+
+// DEV_NOTE: ADR 0009, server-side only (withPlatform): the connections the hourly contract sync reads next
+export type ToolContractDueConnection = Pick<
+  CompanyConnection,
+  | "id"
+  | "publicId"
+  | "companyId"
+  | "openapiUrl"
+  | "openapiShaping"
+  | "openapiSpecHash"
+  | "openapiFailure"
+>;
+
+export interface ToolContractDueConnectionsDALResponse extends ApiResponse {
+  connections?: ToolContractDueConnection[];
+}

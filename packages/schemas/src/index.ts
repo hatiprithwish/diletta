@@ -14,6 +14,7 @@ export * from "./widget";
 export * from "./chatbotConfigs";
 export * from "./configSpec";
 export * from "./toolDefinitions";
+export * from "./toolContracts";
 export * from "./hostAdapter";
 export * from "./evalRuns";
 export * from "./evalCases";

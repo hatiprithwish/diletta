@@ -32,4 +32,16 @@ export type UpdateCompanyConnectionDALRequest = FindCompanyConnectionDALRequest 
   NullableDALFields<
     Pick<CompanyConnectionBase, "baseUrl" | "authConfig" | "jwtIssuer" | "allowedOrigins"> &
       Pick<CompanyConnection, "status">
-  > & { resetOp?: CompanyConnectionBase["resetOp"] } & Pick<CompanyConnection, "updatedBy">;
+  > & {
+    resetOp?: CompanyConnectionBase["resetOp"];
+    openapiUrl?: CompanyConnectionBase["openapiUrl"];
+    openapiShaping?: CompanyConnectionBase["openapiShaping"];
+  } & Pick<CompanyConnection, "updatedBy">;
+
+// DEV_NOTE: ADR 0009. What a contract sync found, written on the connection: a failure keeps the last good spec hash.
+export type RecordToolContractSyncDALRequest = FindCompanyConnectionDALRequest &
+  Pick<CompanyConnection, "openapiFailure"> & { openapiSpecHash?: string };
+
+// DEV_NOTE: ADR 0009, cross-company (withPlatform): Active REST connections with a spec URL, never synced or synced
+// before `syncedBefore`, least recently synced first
+export type GetToolContractDueConnectionsDALRequest = { limit: number; syncedBefore: Date };

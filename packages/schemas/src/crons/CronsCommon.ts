@@ -13,6 +13,8 @@ export enum CronJobEnum {
   EvalTranscriptSweep = "EvalTranscriptSweep",
   PlatformEvalCaseSync = "PlatformEvalCaseSync",
   ContentRetentionPurge = "ContentRetentionPurge",
+  // ADR 0009: each connection with an OpenAPI spec URL, oldest-synced first, a few per tick
+  ToolContractSync = "ToolContractSync",
   // Daily, at Constants.ACTIVITY_LOG_PARTITIONS_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)
   ActivityLogPartitions = "ActivityLogPartitions",
   // Daily, at Constants.NIGHTLY_SUITE_CHECK_UTC_HOUR, minute Constants.CRON_HOURLY_MINUTE (UTC)

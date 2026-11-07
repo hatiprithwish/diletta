@@ -6,15 +6,16 @@ import {
 } from "../toolDefinitions/ToolDefinitionsCommon";
 import { ToolOpMethodEnum } from "../toolDefinitions/ToolOpsV1";
 import {
+  EREGISTER_BODY_FIELDS,
   EREGISTER_REGISTER_MODE,
   argsBodyMap,
   beforeBodyMap,
   buildEregisterInputSchema,
   compareAt,
   eregisterIdProperty,
+  type EregisterBodyName,
   type EregisterToolDefinition,
 } from "./EregisterCommon";
-import type { EregisterInputSchemaName } from "./EregisterInputSchemas";
 
 // DEV_NOTE: eRegister's tools (M7-2): reads, plus create / update / delete of registers, code blocks, layouts,
 // actions, reports, report charts, dashboards, dashboard widgets and buttons. Stored on eRegister's connection by
@@ -84,13 +85,13 @@ interface EregisterArea {
   idField: string;
   createdId: string;
   readQuery?: Record<string, string>;
-  createBody: EregisterInputSchemaName;
+  createBody: EregisterBodyName;
   createExtra?: Record<string, Record<string, unknown>>;
   createRequired?: string[];
   createConstants?: Record<string, number | string>;
   createCompare: string[];
   updateMethod: ToolOpMethodEnum.Put;
-  updateBody: EregisterInputSchemaName;
+  updateBody: EregisterBodyName;
   updateFields: string[];
   // Restored by undo, when more than updateFields (a full-replace PUT sends the whole record back)
   undoFields?: string[];
@@ -190,10 +191,8 @@ function areaTools(area: EregisterArea): EregisterToolDefinition[] {
   ];
 }
 
-function bodyNames(body: EregisterInputSchemaName): string[] {
-  return Object.keys(
-    buildEregisterInputSchema({ body }).properties as Record<string, unknown>,
-  ).filter((name) => name !== "companyId");
+function bodyNames(body: EregisterBodyName): string[] {
+  return [...EREGISTER_BODY_FIELDS[body]];
 }
 
 function listTool(params: {

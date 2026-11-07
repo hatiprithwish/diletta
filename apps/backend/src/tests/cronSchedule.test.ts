@@ -16,6 +16,7 @@ import runModelCallUsageBackfill from "@/crons/ModelCallUsageBackfillCron";
 import runNightlySuiteCheck from "@/crons/NightlySuiteCheckCron";
 import runOutboxSweep from "@/crons/OutboxSweepCron";
 import runPlatformEvalCaseSync from "@/crons/PlatformEvalCaseSyncCron";
+import runToolContractSync from "@/crons/ToolContractSyncCron";
 import worker from "@/index";
 
 // Declare env type for this test suite
@@ -56,6 +57,9 @@ vi.mock("@/crons/EvalTranscriptSweepCron", () => ({
 vi.mock("@/crons/PlatformEvalCaseSyncCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/crons/ToolContractSyncCron", () => ({
+  default: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/crons/NightlySuiteCheckCron", () => ({
   default: vi.fn().mockResolvedValue(undefined),
 }));
@@ -73,6 +77,7 @@ const {
   EvalTranscriptSweep,
   PlatformEvalCaseSync,
   ContentRetentionPurge,
+  ToolContractSync,
   ActivityLogPartitions,
   NightlySuiteCheck,
   ChatbotHealthCheck,
@@ -102,6 +107,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
       ContentRetentionPurge,
+      ToolContractSync,
     ]);
   });
 
@@ -116,6 +122,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
       ContentRetentionPurge,
+      ToolContractSync,
       ActivityLogPartitions,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T03:15:00Z"))).not.toContain(
@@ -137,6 +144,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
       ContentRetentionPurge,
+      ToolContractSync,
       ChatbotHealthCheck,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T04:01:00Z"))).not.toContain(
@@ -158,6 +166,7 @@ describe("CronScheduleProvider.getDueJobs", () => {
       EvalTranscriptSweep,
       PlatformEvalCaseSync,
       ContentRetentionPurge,
+      ToolContractSync,
       NightlySuiteCheck,
     ]);
     expect(CronScheduleProvider.getDueJobs(at("2026-10-11T06:01:00Z"))).not.toContain(
@@ -206,6 +215,7 @@ describe("scheduled()", () => {
     expect(runEvalTranscriptSweep).toHaveBeenCalledTimes(1);
     expect(runContentRetentionPurge).toHaveBeenCalledTimes(1);
     expect(runPlatformEvalCaseSync).toHaveBeenCalledTimes(1);
+    expect(runToolContractSync).toHaveBeenCalledTimes(1);
     expect(runActivityLogPartitions).toHaveBeenCalledTimes(1);
     expect(runNightlySuiteCheck).not.toHaveBeenCalled();
     expect(runChatbotHealthCheck).not.toHaveBeenCalled();
@@ -220,6 +230,7 @@ describe("scheduled()", () => {
     expect(runEvalTranscriptSweep).not.toHaveBeenCalled();
     expect(runContentRetentionPurge).not.toHaveBeenCalled();
     expect(runPlatformEvalCaseSync).not.toHaveBeenCalled();
+    expect(runToolContractSync).not.toHaveBeenCalled();
     expect(runActivityLogPartitions).not.toHaveBeenCalled();
   });
 

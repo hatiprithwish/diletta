@@ -1,4 +1,4 @@
-import { RestAdapter } from "@app/adapter";
+import { RestAdapter, fetchHostSpec } from "@app/adapter";
 import * as Schemas from "@app/schemas";
 
 // DEV_NOTE: The Conversation DO's host calls (M3-4), the backend's one caller of @app/adapter:
@@ -15,6 +15,7 @@ import * as Schemas from "@app/schemas";
 //   undo (M3-6): a write's inverse_op (args + read-before + result) under the change request's undo key. An Emulated
 //     tool proves a lost answer by reading back (the read-before values against the args, the commit's check swapped).
 //   reset (M5-2): an eval run's staging connection reset_op, once after the run. Eval readbacks use readAfter.
+//   getSpec (ADR 0009): a company's OpenAPI spec, for the tool contract sync.
 export default class HostToolCallProvider {
   static async read(params: {
     tool: Schemas.RuntimeTool;
@@ -181,6 +182,12 @@ export default class HostToolCallProvider {
       isResume: false,
       signal: params.signal,
     });
+  }
+
+  // DEV_NOTE: A company's OpenAPI spec (ADR 0009, sync): a public GET of the URL an operator set on the connection, with
+  // no credentials. Never throws; the message holds no body.
+  static async getSpec(params: { url: string; signal?: AbortSignal }) {
+    return await fetchHostSpec({ fetch: globalThis.fetch, url: params.url, signal: params.signal });
   }
 
   private static adapterFor(

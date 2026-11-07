@@ -55,6 +55,8 @@ export enum QualityIssueTypeIntEnum {
   HealthDrop = 6,
   // DEV_NOTE: M7-10: a Didn't like feedback theme that kept growing
   FeedbackTheme = 7,
+  // DEV_NOTE: ADR 0009: the app's API changed and a tool the chatbot uses has a new version
+  ToolUpdate = 8,
 }
 
 export enum QualityIssueTypeLabelEnum {
@@ -65,6 +67,7 @@ export enum QualityIssueTypeLabelEnum {
   Injection = "Prompt injection",
   HealthDrop = "Health drop",
   FeedbackTheme = "User feedback",
+  ToolUpdate = "Tool update",
 }
 
 export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
@@ -78,6 +81,7 @@ export const QUALITY_ISSUE_TYPE_LABEL_MAP: Record<
   [QualityIssueTypeIntEnum.Injection]: QualityIssueTypeLabelEnum.Injection,
   [QualityIssueTypeIntEnum.HealthDrop]: QualityIssueTypeLabelEnum.HealthDrop,
   [QualityIssueTypeIntEnum.FeedbackTheme]: QualityIssueTypeLabelEnum.FeedbackTheme,
+  [QualityIssueTypeIntEnum.ToolUpdate]: QualityIssueTypeLabelEnum.ToolUpdate,
 };
 
 // DEV_NOTE: The activity_log / event_outbox names of quality issue events, shared by every writer (ModelKeyFailureProvider,
@@ -89,6 +93,8 @@ export enum QualityIssueEntityActionEnum {
   ProviderAdded = "provider_added",
   // DEV_NOTE: The daily health check (M5-5) found another day's drop while the chatbot's Health drop issue is open
   HealthDropAdded = "health_drop_added",
+  // DEV_NOTE: ADR 0009: another tool update while the chatbot's Tool update issue is open
+  ToolUpdateAdded = "tool_update_added",
   // DEV_NOTE: An admin's work on the Quality page (M4-6): the type and note set, closed as fixed or dismissed, or
   // turned into a test
   Triaged = "triaged",

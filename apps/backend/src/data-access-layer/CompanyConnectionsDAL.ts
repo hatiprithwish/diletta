@@ -1,7 +1,8 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { EmptyRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections } from "@/db/tables";
+import { sql } from "drizzle-orm";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
@@ -53,6 +54,8 @@ export default class CompanyConnectionsDAL {
           jwtIssuer: params.jwtIssuer,
           allowedOrigins: params.allowedOrigins,
           resetOp: params.resetOp,
+          openapiUrl: params.openapiUrl,
+          openapiShaping: params.openapiShaping,
           createdBy: params.createdBy,
           updatedBy: params.createdBy,
         })
@@ -264,6 +267,8 @@ export default class CompanyConnectionsDAL {
           status: params.status ?? undefined,
           // DEV_NOTE: undefined = unchanged, null = cleared
           resetOp: params.resetOp,
+          openapiUrl: params.openapiUrl,
+          openapiShaping: params.openapiShaping,
           updatedBy: params.updatedBy,
           updatedAt: now,
         })
@@ -345,6 +350,101 @@ export default class CompanyConnectionsDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: ADR 0009. Cross-company, so only inside withPlatform: the connections the hourly sync reads next, never
+  // synced first, then the longest ago. An operator's sync of one connection doesn't use this.
+  async getToolContractDueConnections(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetToolContractDueConnectionsDALRequest,
+  ) {
+    const response: Schemas.ToolContractDueConnectionsDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(companyConnections.status, Schemas.CompanyConnectionStatusIntEnum.Active),
+        eq(companyConnections.adapterType, Schemas.CompanyConnectionAdapterTypeIntEnum.Rest),
+        isNotNull(companyConnections.openapiUrl),
+        or(
+          isNull(companyConnections.openapiSyncedAt),
+          lt(companyConnections.openapiSyncedAt, params.syncedBefore),
+        ),
+      ];
+      const rows = await tx
+        .select({
+          id: companyConnections.id,
+          publicId: companyConnections.publicId,
+          companyId: companyConnections.companyId,
+          openapiUrl: companyConnections.openapiUrl,
+          openapiShaping: companyConnections.openapiShaping,
+          openapiSpecHash: companyConnections.openapiSpecHash,
+          openapiFailure: companyConnections.openapiFailure,
+        })
+        .from(companyConnections)
+        .where(and(...conditions))
+        .orderBy(
+          sql`${companyConnections.openapiSyncedAt} asc nulls first`,
+          asc(companyConnections.id),
+        )
+        .limit(params.limit);
+
+      response.isSuccess = true;
+      response.message = "Connections due for a contract sync fetched successfully";
+      response.connections = rows;
+    } catch (error) {
+      const message = "Unknown error in listing connections due for a contract sync";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.ListToolContractConnections,
+        message,
+        error,
+        metadata: { limit: params.limit },
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: ADR 0009. What a sync found, on the connection: synced_at moves on every sync (it is what rotates the
+  // sweep), the spec hash only when the spec was read, the failure is null when the sync was fine.
+  async recordToolContractSync(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.RecordToolContractSyncDALRequest,
+  ) {
+    const response: Schemas.ApiResponse = { isSuccess: false };
+
+    try {
+      const updated = await tx
+        .update(companyConnections)
+        .set({
+          openapiSyncedAt: new Date(),
+          openapiFailure: params.openapiFailure,
+          openapiSpecHash: params.openapiSpecHash ?? undefined,
+        })
+        .where(
+          and(
+            eq(companyConnections.publicId, params.publicId),
+            eq(companyConnections.companyId, params.companyId),
+          ),
+        )
+        .returning({ id: companyConnections.id });
+
+      response.isSuccess = updated.length > 0;
+      response.message = updated.length > 0 ? "Contract sync recorded" : "Connection not found";
+    } catch (error) {
+      const message = "Unknown error in recording a contract sync";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.RecordToolContractSync,
+        message,
+        error,
+        metadata: { companyId: params.companyId, publicId: params.publicId },
       });
       response.message = message;
     }

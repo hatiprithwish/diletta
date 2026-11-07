@@ -1,4 +1,16 @@
-import { and, asc, count, desc, eq, getColumns, inArray, max, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  getColumns,
+  inArray,
+  isNotNull,
+  max,
+  ne,
+  sql,
+} from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { companies, companyConnections, toolDefinitions } from "@/db/tables";
@@ -159,6 +171,8 @@ export default class ToolDefinitionsDAL {
           callOp: params.callOp,
           readbackOp: params.readbackOp,
           inverseOp: params.inverseOp,
+          operationId: params.operationId,
+          contractHash: params.contractHash,
           idempotencyMode: params.idempotencyMode,
           approval: params.approval,
           source: params.source,
@@ -463,6 +477,8 @@ export default class ToolDefinitionsDAL {
           authType: companyConnections.authType,
           authConfig: companyConnections.authConfig,
           credentialScope: companyConnections.credentialScope,
+          openapiUrl: companyConnections.openapiUrl,
+          openapiShaping: companyConnections.openapiShaping,
         })
         .from(companyConnections)
         .where(and(...conditions))
@@ -963,6 +979,43 @@ export default class ToolDefinitionsDAL {
         message,
         error,
         metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  // DEV_NOTE: ADR 0009. The names of the tools on one connection that follow its spec (some version has an operation_id)
+  async getBoundToolNames(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.FindBoundToolDefinitionsDALRequest,
+  ) {
+    const response: Schemas.ToolDefinitionNamesDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(toolDefinitions.companyId, params.companyId),
+        eq(toolDefinitions.connectionId, params.connectionId),
+        isNotNull(toolDefinitions.operationId),
+      ];
+      const rows = await tx
+        .selectDistinct({ name: toolDefinitions.name })
+        .from(toolDefinitions)
+        .where(and(...conditions))
+        .orderBy(asc(toolDefinitions.name));
+
+      response.isSuccess = true;
+      response.message = "Bound tool names fetched successfully";
+      response.names = rows.map((row) => row.name);
+    } catch (error) {
+      const message = "Unknown error in fetching a connection's bound tool names";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetLatestToolDefinitions,
+        message,
+        error,
+        metadata: { companyId: params.companyId },
       });
       response.message = message;
     }

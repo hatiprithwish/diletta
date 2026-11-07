@@ -15,6 +15,7 @@ import {
 } from "@/db/tables";
 import worker from "@/index";
 import Utility from "@/utils/Utility";
+import { SPEC_URL, serveSpec, specFor } from "@/tests/helpers/toolSpec";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -164,6 +165,7 @@ beforeAll(async () => {
         credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
         jwtIssuer: `https://${crypto.randomUUID()}.example.com`,
         allowedOrigins: ["https://host.example.com"],
+        openapiUrl: SPEC_URL,
       })
       .returning({ publicId: companyConnections.publicId });
     connectionA = connection!.publicId;
@@ -338,6 +340,7 @@ describe(
       expect(unknown.body.failure).toBe(Schemas.ToolDefinitionFailureEnum.ConnectionNotFound);
 
       const setTools = Schemas.TOOL_SETS[Schemas.ToolSetEnum.Eregister];
+      serveSpec(() => specFor(setTools));
       const loaded = await call("POST", path, { as: operator, body });
       expect(loaded.status).toBe(200);
       expect(loaded.body).not.toHaveProperty("outboxIds");

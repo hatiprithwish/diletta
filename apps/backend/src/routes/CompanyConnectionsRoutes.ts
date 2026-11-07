@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import CompanyConnectionsRepo from "@/repositories/CompanyConnectionsRepo";
+import ToolContractSyncRepo from "@/repositories/ToolContractSyncRepo";
 import EventOutboxRepo from "@/repositories/EventOutboxRepo";
 import checkAuth from "@/middlewares/AuthMiddleware";
 import { authorizePlatform, resolveOperatorCompany } from "@/middlewares/AdminMiddleware";
@@ -157,6 +158,33 @@ CompanyConnectionsRoutes.delete(
     EventOutboxRepo.relayInBackground(c.env, c.executionCtx, { companyId, outboxIds });
 
     return c.json(response, loginStatus(response));
+  },
+);
+
+// DEV_NOTE: ADR 0009: sync this connection's tool schemas from its OpenAPI spec now (isDryRun false), or only check what
+// would change (true). 404 for a connection that isn't the company's, 400 for one with no spec URL, 502 when the spec
+// can't be fetched or read (the same alert the hourly sync raises). Its audit rows are System's, relayed by the Repo.
+CompanyConnectionsRoutes.post(
+  "/:publicId/contract-sync",
+  checkAuth,
+  authorizePlatform(Schemas.AuthzActionEnum.ToolContractSync),
+  resolveOperatorCompany(),
+  zValidator("json", Schemas.ZSyncToolContractApiRequest),
+  async (c) => {
+    const response = await new ToolContractSyncRepo(c.env).syncOne({
+      companyId: c.get("companyId"),
+      connectionPublicId: c.req.param("publicId"),
+      isDryRun: c.req.valid("json").isDryRun,
+    });
+    const status = response.isSuccess
+      ? 200
+      : response.isNotFound
+        ? 404
+        : response.failure !== undefined
+          ? 502
+          : 400;
+
+    return c.json(response, status);
   },
 );
 
