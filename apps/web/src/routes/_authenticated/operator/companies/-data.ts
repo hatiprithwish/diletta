@@ -10,7 +10,11 @@ import { toast } from "sonner";
 import * as Schemas from "@app/schemas";
 import { ApiError, apiClient } from "@/providers/apiClient";
 import Utilities from "@/utils";
-import { QUERY_KEY_ROOTS, invalidateOperatorCompanyViews } from "../../-invalidation";
+import {
+  QUERY_KEY_ROOTS,
+  invalidateOpenIssueViews,
+  invalidateOperatorCompanyViews,
+} from "../../-invalidation";
 
 // DEV_NOTE: The operator's Companies pages (M7-8): the list per status tab + page, the tab counts, one company, and its
 // connections. keys.all() covers them all. A status change sets the company's detail (setQueryData) and refetches the
@@ -393,6 +397,50 @@ export function useUpdateConnection(publicId: string, connectionPublicId: string
       toast.success("Connection saved.");
     },
     onError: toastConnectionError,
+  });
+}
+
+// ─── Tool contract sync (ADR 0009)
+
+// DEV_NOTE: What a refused or failed sync answered (a spec that can't be fetched is a 502 with the reason)
+export function contractSyncResponse(error: unknown): Schemas.SyncToolContractApiResponse | null {
+  return error instanceof ApiError ? (error.body as Schemas.SyncToolContractApiResponse) : null;
+}
+
+// DEV_NOTE: Reads the connection's spec and, unless isDryRun, writes what changed: new Active tool versions, Draft pins
+// and a Tool update issue. The caller shows the answer in a dialog (the mutation's data, or its error's body).
+export function useSyncToolContract(publicId: string, connectionPublicId: string) {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Schemas.SyncToolContractApiRequest) =>
+      apiClient<Schemas.SyncToolContractApiResponse>(
+        `/operator/companies/${encodeURIComponent(publicId)}/connections/${encodeURIComponent(connectionPublicId)}/contract-sync`,
+        getToken,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    onSuccess: (response, body) => {
+      if (body.isDryRun) return;
+      // The connection shows when it was synced; tools and bot drafts changed; an issue may have opened
+      void queryClient.invalidateQueries({
+        queryKey: OperatorCompaniesQueries.keys.connections(publicId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: OperatorCompaniesQueries.keys.tools(publicId),
+      });
+      invalidateOpenIssueViews(queryClient);
+      toast.success(
+        response.changes?.length ? "Tools updated from the spec." : "Every tool already matches.",
+      );
+    },
+    onError: (error) => {
+      const failure = contractSyncResponse(error)?.failure;
+      toast.error(
+        failure
+          ? `${Schemas.TOOL_CONTRACT_SYNC_FAILURE_LABEL_MAP[failure]}.`
+          : "The spec wasn't read. Try again.",
+      );
+    },
   });
 }
 

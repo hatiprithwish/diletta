@@ -50,6 +50,12 @@ export enum ToolSchemaChangeEnum {
   Breaking = "breaking",
 }
 
+export const TOOL_SCHEMA_CHANGE_LABEL_MAP: Record<ToolSchemaChangeEnum, string> = {
+  [ToolSchemaChangeEnum.None]: "No change",
+  [ToolSchemaChangeEnum.Additive]: "Adds only",
+  [ToolSchemaChangeEnum.Breaking]: "Breaking",
+};
+
 // DEV_NOTE: Per-connection shaping (company_connections.openapi_shaping): turns a host's contract into args a model
 // can fill. isDefaultRequired: a field with a default is required (so a read-back compares equal to what the host
 // stored). replaceComponents: a named component replaced by this schema (one large shared shape kept out of the
