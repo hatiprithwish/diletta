@@ -502,6 +502,26 @@ function MessageView({ message, speaker }: Schemas.DashboardConversationMessageP
           </span>
         )}
       </p>
+      {message.feedbackNote && (
+        <figure className="flex max-w-[620px] flex-col gap-1 rounded-lg bg-surface-subtle px-3 py-2.5">
+          <figcaption className="text-caption text-muted-foreground">Their note</figcaption>
+          <blockquote className="text-body break-words text-subtle-foreground">
+            {message.feedbackNote}
+          </blockquote>
+          {message.feedbackTheme && (
+            <p className="text-caption text-muted-foreground">
+              Part of{" "}
+              <Link
+                to="/quality/feedback/$id"
+                params={{ id: message.feedbackTheme.publicId }}
+                className="text-brand-text hover:text-foreground"
+              >
+                {message.feedbackTheme.label}
+              </Link>
+            </p>
+          )}
+        </figure>
+      )}
       {message.citations.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-caption text-muted-foreground">
           {message.citations.map((citation) => (

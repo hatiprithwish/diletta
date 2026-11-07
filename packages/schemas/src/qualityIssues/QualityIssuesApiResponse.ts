@@ -18,7 +18,8 @@ import type { QualityTestFlaggedTerm } from "./QualityTestPersonalDetails";
 // DEV_NOTE: One row of the Quality list (M4-6). Status Enum Pattern for source, status and type (issueType null = not
 // triaged yet). ratedReply = the start of the reply a user rated down (user issues; null for the others and once the
 // chat is purged). conversation null = a chatbot-wide system issue (a health drop, M5-5); its title null = purged or
-// none. isChatbotWide says which it is, so a client never reads it from a missing conversation. chatbotName = the chatbot
+// none. feedbackNote = the note the user left on their rating (M7-10, user issues; null once purged or switched to the
+// other thumb). isChatbotWide says which it is, so a client never reads it from a missing conversation. chatbotName = the chatbot
 // the issue is about (null once it is removed).
 export interface QualityIssueListItem {
   publicId: string;
@@ -30,10 +31,15 @@ export interface QualityIssueListItem {
   issueTypeLabel: QualityIssueTypeLabelEnum | null;
   note: string | null;
   ratedReply: string | null;
+  feedbackNote: string | null;
+  // DEV_NOTE: The feedback theme the user's note was grouped into (M7-10), null while not grouped
+  feedbackNoteTheme: { publicId: string; label: string } | null;
   chatbotName: string | null;
   isChatbotWide: boolean;
   // DEV_NOTE: Set on the item a growing group of unanswered questions opened (M5-6), so the page names it
   docGapCluster: { label: string } | null;
+  // DEV_NOTE: Set on the item a growing Didn't like feedback theme opened (M7-10)
+  feedbackTheme: { publicId: string; label: string } | null;
   conversation: {
     publicId: string;
     title: string | null;

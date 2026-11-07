@@ -80,7 +80,7 @@ A host has two ways in. Both take the same options (`Schemas.WidgetInitOptions`)
 
 ## Bundle size
 
-`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (200 KiB gzipped). It was 170.7 KiB at M2-7 and 185.4 KiB at M3-5 (review cards, the checkbox and native select). It was 196.0 KiB at M7-5 (host accent), close to the budget. `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
+`pnpm --filter widget build` fails when `diletta-widget.js` is over `WIDGET_BUNDLE_MAX_GZIP_BYTES` (210 KiB gzipped; 200 KiB until Your chats and full screen). It was 170.7 KiB at M2-7 and 185.4 KiB at M3-5 (review cards, the checkbox and native select). It was 196.0 KiB at M7-5 (host accent), 199.5 KiB with Your chats and 202.1 KiB with full screen, when the budget went to 210 KiB. Each Phosphor icon costs about 0.5 KiB (all six weights ship), so reuse the icons the widget already has where you can. `@ai-sdk/react` is pinned to the release built on the widget's `ai` version, so the bundle carries one copy of `ai`; bump the two together.
 
 The biggest parts are React DOM, zod, `cn`, the agents client (including its unused capnweb transport) and `ai`. Markdown is the widget's own small parser (`src/lib/markdown.ts`) rather than a library, to stay within the budget.
 

@@ -348,6 +348,7 @@ describe("toMessageViews with change requests", () => {
       isStreaming: false,
       ratings: {},
       pendingRatings: {},
+      notes: {},
       review: review([changeRequest("a")]),
     });
     if (assistant?.role !== "assistant") throw new Error("No reply");

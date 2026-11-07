@@ -29,6 +29,7 @@ export * from "./modelCalls";
 export * from "./modelRouter";
 export * from "./budget";
 export * from "./feedback";
+export * from "./feedbackThemes";
 export * from "./changeRequests";
 export * from "./knowledgeSources";
 export * from "./knowledgeDocuments";

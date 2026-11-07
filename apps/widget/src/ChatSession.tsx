@@ -36,6 +36,7 @@ export default function ChatSession({
   const pendingText = useWidgetStore((state) => state.pendingText);
   const ratings = useWidgetStore((state) => state.ratings);
   const pendingRatings = useWidgetStore((state) => state.pendingRatings);
+  const notes = useWidgetStore((state) => state.notes);
   const review = useWidgetStore((state) => state.review);
   const screen = useWidgetStore((state) => state.screen);
   const conversationPublicId = useWidgetStore((state) => state.conversationPublicId);
@@ -69,6 +70,7 @@ export default function ChatSession({
     isStreaming: conversation.isStreaming,
     ratings,
     pendingRatings,
+    notes,
     review,
   });
   if (pendingText !== null) {
@@ -163,6 +165,7 @@ export default function ChatSession({
         onHistory={() => storeApi.getState().setScreen({ kind: "history" })}
         onClose={onClose}
         onRate={conversation.rate}
+        {...conversation.noteActions}
         {...conversation.changeActions}
         onDraftChange={(value) => storeApi.getState().patch({ draft: value })}
       />

@@ -11,6 +11,8 @@ export enum AuditEntityTypeEnum {
   KnowledgeSource = "knowledge_source",
   KnowledgeDocument = "knowledge_document",
   DocGapCluster = "doc_gap_cluster",
+  // DEV_NOTE: Quality › User feedback (M7-10)
+  FeedbackTheme = "feedback_theme",
   EvalCase = "eval_case",
   RoiAssumption = "roi_assumption",
   ToolDefinition = "tool_definition",
@@ -39,6 +41,7 @@ export enum AuditEntityActionEnum {
   Uploaded = "uploaded",
   Answered = "answered",
   Dismissed = "dismissed",
+  Resolved = "resolved",
   TurnedOn = "turned_on",
   TurnedOff = "turned_off",
   VersionCreated = "version_created",
@@ -99,6 +102,10 @@ export const AUDIT_ENTITY_ACTIONS = {
   ],
   [AuditEntityTypeEnum.DocGapCluster]: [
     AuditEntityActionEnum.Answered,
+    AuditEntityActionEnum.Dismissed,
+  ],
+  [AuditEntityTypeEnum.FeedbackTheme]: [
+    AuditEntityActionEnum.Resolved,
     AuditEntityActionEnum.Dismissed,
   ],
   [AuditEntityTypeEnum.EvalCase]: [

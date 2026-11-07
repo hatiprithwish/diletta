@@ -148,6 +148,7 @@ export enum InsightsUsageUseEnum {
   Routing = "routing",
   TestRuns = "test_runs",
   Search = "search",
+  Feedback = "feedback",
 }
 
 export const INSIGHTS_USAGE_USE_LABEL_MAP: Record<InsightsUsageUseEnum, string> = {
@@ -155,6 +156,7 @@ export const INSIGHTS_USAGE_USE_LABEL_MAP: Record<InsightsUsageUseEnum, string> 
   [InsightsUsageUseEnum.Routing]: "Routing",
   [InsightsUsageUseEnum.TestRuns]: "Test runs (incl. judge)",
   [InsightsUsageUseEnum.Search]: "Search embeddings + rerank",
+  [InsightsUsageUseEnum.Feedback]: "Feedback themes",
 };
 
 // DEV_NOTE: A live call's use, by its task type. Every call made for an eval run is a test run whatever its task
@@ -170,6 +172,8 @@ export const INSIGHTS_TASK_TYPE_USE_MAP: Record<ModelTaskTypeEnum, InsightsUsage
   [ModelTaskTypeEnum.SearchRerank]: InsightsUsageUseEnum.Search,
   [ModelTaskTypeEnum.DocGapRewrite]: InsightsUsageUseEnum.Search,
   [ModelTaskTypeEnum.DocGapEmbed]: InsightsUsageUseEnum.Search,
+  [ModelTaskTypeEnum.FeedbackNoteRewrite]: InsightsUsageUseEnum.Feedback,
+  [ModelTaskTypeEnum.FeedbackNoteEmbed]: InsightsUsageUseEnum.Feedback,
 };
 
 // DEV_NOTE: Calls the platform pays for (Workers AI embeddings and rerank): shown as "Included", never in a spend

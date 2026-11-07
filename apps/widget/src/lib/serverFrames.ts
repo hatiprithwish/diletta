@@ -16,7 +16,22 @@ export function parseServerFrame(data: unknown): Schemas.WidgetServerMessage | n
 
 // DEV_NOTE: The conversation frame's ratings, by reply id
 export function ratingsOf(
-  feedback: Schemas.WidgetFeedbackRating[],
+  feedback: Schemas.WidgetFeedbackRatingState[],
 ): Record<string, Schemas.FeedbackRatingIntEnum> {
   return Object.fromEntries(feedback.map((entry) => [entry.messageId, entry.rating]));
+}
+
+// DEV_NOTE: The ratings that carry a stored note (M7-10) show as sent. Their text stays on the server, so Edit note
+// opens an empty box and a send replaces the stored note.
+export function notesOf(
+  feedback: Schemas.WidgetFeedbackRatingState[],
+): Record<string, Schemas.WidgetFeedbackNoteState> {
+  return Object.fromEntries(
+    feedback
+      .filter((entry) => entry.hasNote)
+      .map((entry) => [
+        entry.messageId,
+        { status: Schemas.WidgetFeedbackNoteStatusEnum.Sent, text: "", hasSaved: true },
+      ]),
+  );
 }

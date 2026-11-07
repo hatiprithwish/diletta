@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { EmptyRelations, SQL } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
+import { alias } from "drizzle-orm/pg-core";
 import {
   admins,
   changeRequests,
@@ -8,15 +9,20 @@ import {
   chatbots,
   companies,
   conversations,
+  docGapClusters,
   evalCases,
   feedback,
+  feedbackNotes,
+  feedbackThemes,
   messages,
   qualityIssues,
-  docGapClusters,
 } from "@/db/tables";
 import * as Schemas from "@app/schemas";
 import AppLogger from "@/providers/logger";
 import Utility from "@/utils/Utility";
+
+// DEV_NOTE: The theme a user issue's note was grouped into (M7-10), next to the theme a theme item is about
+const noteThemes = alias(feedbackThemes, "note_themes");
 
 // DEV_NOTE: Tenant DAL — holds no db client. Every method takes the tx opened by withTenant in the Repo,
 // and every query filters on companyId (defence in depth on top of RLS). System issues come from the model router's
@@ -138,8 +144,10 @@ export default class QualityIssuesDAL {
         eq(qualityIssues.source, Schemas.QualityIssueSourceIntEnum.System),
         eq(qualityIssues.status, Schemas.QualityIssueStatusIntEnum.Open),
         isNull(qualityIssues.conversationId),
-        // DEV_NOTE: An item a group of questions opened (M5-6) has no conversation either, but it isn't this one
+        // DEV_NOTE: An item a group of questions opened (M5-6) or a feedback theme opened (M7-10) has no conversation
+        // either, but it isn't this one
         isNull(qualityIssues.docGapClusterId),
+        isNull(qualityIssues.feedbackThemeId),
       ];
       const [qualityIssue] = await tx
         .select()
@@ -158,6 +166,44 @@ export default class QualityIssuesDAL {
       AppLogger.error({
         category: Schemas.LogCategory.DAL,
         action: Schemas.LogAction.GetOpenChatbotWideQualityIssue,
+        message,
+        error,
+        metadata: params,
+      });
+      response.message = message;
+    }
+
+    return response;
+  }
+
+  async getQualityIssueByFeedbackTheme(
+    tx: NodePgTransaction<EmptyRelations>,
+    params: Schemas.GetQualityIssueByFeedbackThemeDALRequest,
+  ) {
+    const response: Schemas.QualityIssueDALResponse = { isSuccess: false };
+
+    try {
+      const conditions = [
+        eq(qualityIssues.companyId, params.companyId),
+        eq(qualityIssues.feedbackThemeId, params.feedbackThemeId),
+      ];
+      const query = tx
+        .select()
+        .from(qualityIssues)
+        .where(and(...conditions))
+        .limit(1);
+      const [qualityIssue] = params.isForUpdate ? await query.for("update") : await query;
+
+      response.isSuccess = true;
+      response.message = qualityIssue
+        ? "Quality issue of the feedback theme fetched successfully"
+        : "The feedback theme has no quality issue";
+      response.qualityIssue = qualityIssue;
+    } catch (error) {
+      const message = "Unknown error in fetching quality issue of feedback theme";
+      AppLogger.error({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.GetQualityIssueByFeedbackTheme,
         message,
         error,
         metadata: params,
@@ -334,6 +380,7 @@ export default class QualityIssuesDAL {
           issueType: params.issueType,
           note: params.note,
           docGapClusterId: params.docGapClusterId,
+          feedbackThemeId: params.feedbackThemeId,
         })
         .returning();
 
@@ -773,6 +820,18 @@ export default class QualityIssuesDAL {
       eq(docGapClusters.id, qualityIssues.docGapClusterId),
       eq(docGapClusters.companyId, qualityIssues.companyId),
     ];
+    const feedbackThemeJoinConditions = [
+      eq(feedbackThemes.id, qualityIssues.feedbackThemeId),
+      eq(feedbackThemes.companyId, qualityIssues.companyId),
+    ];
+    const feedbackNoteJoinConditions = [
+      eq(feedbackNotes.feedbackId, feedback.id),
+      eq(feedbackNotes.companyId, feedback.companyId),
+    ];
+    const noteThemeJoinConditions = [
+      eq(noteThemes.id, feedbackNotes.themeId),
+      eq(noteThemes.companyId, feedbackNotes.companyId),
+    ];
     return tx
       .select({
         id: qualityIssues.id,
@@ -791,6 +850,8 @@ export default class QualityIssuesDAL {
         conversationContentPurgedAt: conversations.contentPurgedAt,
         chatbotName: chatbots.name,
         docGapClusterLabel: docGapClusters.label,
+        feedbackThemePublicId: feedbackThemes.publicId,
+        feedbackThemeLabel: feedbackThemes.label,
         // DEV_NOTE: An erased user keeps its row, not its name
         userName: sql<
           string | null
@@ -804,15 +865,21 @@ export default class QualityIssuesDAL {
           string | null
         >`left(${messages.content}->>'text', ${Schemas.QUALITY_ISSUE_EXCERPT_MAX_CHARS + 1})`,
         rating: feedback.rating,
+        feedbackNote: feedback.comment,
+        noteThemePublicId: noteThemes.publicId,
+        noteThemeLabel: noteThemes.label,
       })
       .from(qualityIssues)
       .leftJoin(conversations, and(...conversationJoinConditions))
       .leftJoin(chatbots, and(...chatbotJoinConditions))
       .leftJoin(docGapClusters, and(...docGapClusterJoinConditions))
+      .leftJoin(feedbackThemes, and(...feedbackThemeJoinConditions))
       .leftJoin(chatbotUsers, and(...userJoinConditions))
       .leftJoin(changeRequests, and(...changeRequestJoinConditions))
       .leftJoin(evalCases, and(...evalCaseJoinConditions))
       .leftJoin(feedback, and(...feedbackJoinConditions))
+      .leftJoin(feedbackNotes, and(...feedbackNoteJoinConditions))
+      .leftJoin(noteThemes, and(...noteThemeJoinConditions))
       .leftJoin(messages, and(...messageJoinConditions));
   }
 

@@ -8,7 +8,9 @@ import Utility from "@/utils/Utility";
 //     the stored message of an id it already has), ≤ WIDGET_MESSAGE_MAX_CHARS, and nothing else from the body (no
 //     client history, client tools, custom fields or regeneration);
 //   - cancel and stream-resume frames, unchanged;
-//   - the widget's own feedback frame (M2-7): a rating for one reply, which the DO stores itself (Think never sees it);
+//   - the widget's own feedback frame (M2-7): a rating for one reply, which the DO stores itself (Think never sees it),
+//     and its feedback_note frame (M7-10): the visitor's note on that rating, trimmed, ≤ FEEDBACK_NOTE_MAX_CHARS (the
+//     reason a malformed one is refused never holds its text);
 //   - the widget's host_token frame (M3-4): the user's host bearer token for the DO's memory (the reason a malformed
 //     one is refused never holds it);
 //   - the widget's change_request_decision frame (M3-4): approve or reject one proposal, handled by the DO itself, and
@@ -44,6 +46,12 @@ export default class WidgetFrameProvider {
       return feedback.success
         ? { kind: "feedback", messageId: feedback.data.messageId, rating: feedback.data.rating }
         : { kind: "refuse", reason: "Malformed feedback" };
+    }
+    if (envelope.data.type === Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE) {
+      const note = Schemas.ZWidgetFeedbackNoteFrame.safeParse(json);
+      return note.success
+        ? { kind: "feedbackNote", messageId: note.data.messageId, note: note.data.note }
+        : { kind: "refuse", reason: "Malformed feedback note" };
     }
     if (envelope.data.type === Schemas.WIDGET_HOST_TOKEN_FRAME_TYPE) {
       const hostToken = Schemas.ZWidgetHostTokenFrame.safeParse(json);

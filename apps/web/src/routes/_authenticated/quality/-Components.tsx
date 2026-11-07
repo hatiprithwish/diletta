@@ -35,17 +35,22 @@ import {
   useDraftQualityTest,
   useQualityIssue,
   useQualityIssues,
+  useQualityOpenCount,
   useTriageQualityIssue,
 } from "./-data";
 
 const UNTITLED = "Untitled conversation";
 const NOT_TRIAGED = "Not triaged";
 
-// DEV_NOTE: An issue's title: its conversation's, for a growing group of unanswered questions (M5-6) the group's, or for
-// a check on the whole chatbot (a health drop, M5-5, no conversation) the chatbot it is about
+// DEV_NOTE: An issue's title: its conversation's, for a growing group of unanswered questions (M5-6) the group's, for a
+// growing Didn't like feedback theme (M7-10) the theme's, or for a check on the whole chatbot (a health drop, M5-5, no
+// conversation) the chatbot it is about
 function issueTitle(qualityIssue: Schemas.QualityIssueListItem): string {
   if (qualityIssue.docGapCluster) {
     return `Unanswered questions: ${qualityIssue.docGapCluster.label}`;
+  }
+  if (qualityIssue.feedbackTheme) {
+    return `Users don't like: ${qualityIssue.feedbackTheme.label}`;
   }
   if (qualityIssue.isChatbotWide) {
     return `Daily health check: ${qualityIssue.chatbotName ?? "a removed chatbot"}`;
@@ -102,6 +107,58 @@ function TypeChip({ issueTypeLabel }: Pick<Schemas.QualityIssueListItem, "issueT
   );
 }
 
+// DEV_NOTE: The page header both Quality views share
+export function QualityHeader() {
+  return (
+    <PageHeader
+      title="Quality"
+      description="Problems found in real conversations, and what users tell us about the answers"
+    >
+      <Button variant="outline" asChild>
+        <Link to="/conversations">
+          <Flag aria-hidden />
+          Flag a conversation
+        </Link>
+      </Button>
+    </PageHeader>
+  );
+}
+
+// DEV_NOTE: Quality's two views (M7-10): the issue inbox (with its open count) and User feedback, each its own route
+export function QualityViews({ current }: Schemas.DashboardQualityViewsProps) {
+  const openCount = useQualityOpenCount().data?.openCount ?? null;
+  const tabClass = (isCurrent: boolean) =>
+    cn(
+      "-mb-px border-b-2 py-2.5 text-body",
+      isCurrent
+        ? "border-foreground font-medium text-foreground"
+        : "border-transparent text-subtle-foreground hover:text-foreground",
+    );
+  return (
+    <nav aria-label="Quality views" className="flex gap-6 border-b">
+      <Link
+        to="/quality"
+        className={tabClass(current === Schemas.DashboardQualityViewEnum.Issues)}
+        aria-current={current === Schemas.DashboardQualityViewEnum.Issues ? "page" : undefined}
+      >
+        Issues
+        {openCount !== null && (
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            {Utilities.formatCount(openCount)}
+          </span>
+        )}
+      </Link>
+      <Link
+        to="/quality/feedback"
+        className={tabClass(current === Schemas.DashboardQualityViewEnum.Feedback)}
+        aria-current={current === Schemas.DashboardQualityViewEnum.Feedback ? "page" : undefined}
+      >
+        User feedback
+      </Link>
+    </nav>
+  );
+}
+
 // DEV_NOTE: The whole page body, shared by /quality and /quality/$id (selectedId). The tab and the page live in the URL;
 // a tab change goes back to page 1 and keeps the open issue.
 export function QualityPage({ search, selectedId }: Schemas.DashboardQualityPageProps) {
@@ -124,17 +181,8 @@ export function QualityPage({ search, selectedId }: Schemas.DashboardQualityPage
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Quality"
-        description="Problems found in real conversations, from users, admins and automatic checks"
-      >
-        <Button variant="outline" asChild>
-          <Link to="/conversations">
-            <Flag aria-hidden />
-            Flag a conversation
-          </Link>
-        </Button>
-      </PageHeader>
+      <QualityHeader />
+      <QualityViews current={Schemas.DashboardQualityViewEnum.Issues} />
 
       <ToggleGroup
         type="single"
@@ -262,11 +310,11 @@ function QualityList({ response, search, selectedId, onPage }: Schemas.Dashboard
 }
 
 // DEV_NOTE: One issue (DESIGN.md §6): source icon, title (the conversation's) with its type chip, what it is about (the
-// admin's note, else the rated reply) and where it came from, when
+// admin's note, else the user's own note on their rating, else the rated reply) and where it came from, when
 function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQualityRowProps) {
   const Icon = SOURCE_ICON[qualityIssue.source];
-  const summary =
-    qualityIssue.note ?? (qualityIssue.ratedReply ? `"${qualityIssue.ratedReply}"` : null);
+  const quoted = qualityIssue.feedbackNote ?? qualityIssue.ratedReply;
+  const summary = qualityIssue.note ?? (quoted ? `"${quoted}"` : null);
   return (
     <li className={cn("relative flex gap-3 px-[22px] py-4", isSelected && "bg-surface-subtle")}>
       <Icon className="mt-0.5 size-4 shrink-0 text-subtle-foreground" aria-hidden />
@@ -289,6 +337,28 @@ function QualityRow({ qualityIssue, search, isSelected }: Schemas.DashboardQuali
         </p>
       </div>
     </li>
+  );
+}
+
+// DEV_NOTE: The user's own note on their rating (M7-10), quoted as they wrote it, with the theme it was grouped into
+function FeedbackNote({ note, theme }: Schemas.DashboardFeedbackNoteProps) {
+  return (
+    <figure className="flex flex-col gap-1 rounded-lg border bg-card px-3 py-2.5">
+      <figcaption className="text-caption text-muted-foreground">Their note</figcaption>
+      <blockquote className="text-body break-words text-subtle-foreground">{note}</blockquote>
+      {theme && (
+        <p className="text-caption text-muted-foreground">
+          Part of{" "}
+          <Link
+            to="/quality/feedback/$id"
+            params={{ id: theme.publicId }}
+            className="text-brand-text hover:text-foreground"
+          >
+            {theme.label}
+          </Link>
+        </p>
+      )}
+    </figure>
   );
 }
 
@@ -382,11 +452,13 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
           <p className="text-body text-muted-foreground">
             {qualityIssue.docGapCluster
               ? "Several people asked this and the help docs had no answer. Use Add a document on this group in Knowledge; that closes this item too."
-              : qualityIssue.isChatbotWide
-                ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
-                : qualityIssue.isContentPurged
-                  ? "The chat's content was deleted."
-                  : "No messages yet."}
+              : qualityIssue.feedbackTheme
+                ? "Several people rated replies not helpful and left notes saying the same thing. Their notes are under User feedback."
+                : qualityIssue.isChatbotWide
+                  ? "This check looks at the whole chatbot's day, not one conversation. The note says what changed."
+                  : qualityIssue.isContentPurged
+                    ? "The chat's content was deleted."
+                    : "No messages yet."}
           </p>
         )}
         {qualityIssue.excerpt.map((message) => (
@@ -405,6 +477,9 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
           qualityIssue.rating === Schemas.FeedbackRatingIntEnum.Up && (
             <p className="text-body text-muted-foreground">Later rated helpful</p>
           )}
+        {qualityIssue.feedbackNote && (
+          <FeedbackNote note={qualityIssue.feedbackNote} theme={qualityIssue.feedbackNoteTheme} />
+        )}
       </div>
 
       {isOpen ? (
@@ -444,6 +519,16 @@ export function QualityDetail({ qualityIssue }: Schemas.DashboardQualityDetailPr
             {qualityIssue.docGapCluster && (
               <Button asChild>
                 <Link to="/knowledge">Open Knowledge</Link>
+              </Button>
+            )}
+            {qualityIssue.feedbackTheme && (
+              <Button asChild>
+                <Link
+                  to="/quality/feedback/$id"
+                  params={{ id: qualityIssue.feedbackTheme.publicId }}
+                >
+                  See the notes
+                </Link>
               </Button>
             )}
             {!qualityIssue.isChatbotWide && (

@@ -90,6 +90,7 @@ export function toMessageViews(params: {
   isStreaming: boolean;
   ratings: Record<string, Schemas.FeedbackRatingIntEnum>;
   pendingRatings: Record<string, Schemas.FeedbackRatingIntEnum>;
+  notes: Record<string, Schemas.WidgetFeedbackNoteState>;
   review: Schemas.WidgetChangeReviewState;
 }): Schemas.WidgetMessageView[] {
   const lastIndex = params.messages.length - 1;
@@ -112,6 +113,8 @@ export function toMessageViews(params: {
         isStreaming,
         canRate: !isStreaming && text.length > 0,
         rating: params.pendingRatings[message.id] ?? params.ratings[message.id] ?? null,
+        // DEV_NOTE: No box while a new thumb is on its way: its answer decides whether one opens
+        note: message.id in params.pendingRatings ? null : (params.notes[message.id] ?? null),
         changeCards: cards[message.id] ?? [],
       },
     ];

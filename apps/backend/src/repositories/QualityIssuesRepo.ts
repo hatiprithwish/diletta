@@ -80,10 +80,19 @@ export default class QualityIssuesRepo {
         row.issueType === null ? null : Schemas.QUALITY_ISSUE_TYPE_LABEL_MAP[row.issueType],
       note: row.note,
       ratedReply: isPurged ? null : QualityIssuesProvider.ratedReply(row.ratedReplyText),
+      feedbackNote: isPurged ? null : row.feedbackNote,
+      feedbackNoteTheme:
+        row.noteThemePublicId !== null && row.noteThemeLabel !== null
+          ? { publicId: row.noteThemePublicId, label: row.noteThemeLabel }
+          : null,
       chatbotName: row.chatbotName,
       isChatbotWide:
         row.conversationId === null && row.source === Schemas.QualityIssueSourceIntEnum.System,
       docGapCluster: row.docGapClusterLabel !== null ? { label: row.docGapClusterLabel } : null,
+      feedbackTheme:
+        row.feedbackThemePublicId !== null && row.feedbackThemeLabel !== null
+          ? { publicId: row.feedbackThemePublicId, label: row.feedbackThemeLabel }
+          : null,
       conversation:
         row.conversationPublicId === null
           ? null

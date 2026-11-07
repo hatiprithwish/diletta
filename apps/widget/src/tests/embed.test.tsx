@@ -159,7 +159,10 @@ const ACCENT: Schemas.WidgetAccent = {
   text: "oklch(49% 0.182 262)",
 };
 
-const conversationFrame = (publicId: string, feedback: Schemas.WidgetFeedbackRating[] = []) => ({
+const conversationFrame = (
+  publicId: string,
+  feedback: Schemas.WidgetFeedbackRatingState[] = [],
+) => ({
   type: "conversation",
   conversation: { publicId },
   chatbot: { publicId: "bot-1", name: "Registers Assistant" },
@@ -372,6 +375,38 @@ describe("window.Diletta", () => {
       }),
     );
     expect(panel.getByRole("button", { name: "Helpful" })).toHaveAttribute("aria-pressed", "true");
+
+    // DEV_NOTE: M7-10 — the saved thumb opens the note box; the note goes out trimmed and settles on the DO's answer
+    const box = await panel.findByRole("textbox", { name: /What was helpful\?/ });
+    fireEvent.change(box, { target: { value: "  Quick and right  " } });
+    await userEvent.click(panel.getByRole("button", { name: "Send note" }));
+    expect(second.frames().at(-1)).toEqual({
+      type: Schemas.WIDGET_FEEDBACK_NOTE_FRAME_TYPE,
+      messageId: "reply-1",
+      note: "Quick and right",
+    });
+    act(() => second.push({ type: "feedback_note", messageId: "reply-1", isSaved: false }));
+    expect(await panel.findByRole("alert")).toHaveTextContent("Your note wasn't sent.");
+    await userEvent.click(panel.getByRole("button", { name: "Try again" }));
+    act(() => second.push({ type: "feedback_note", messageId: "reply-1", isSaved: true }));
+    expect(await panel.findByText("Thanks for the note")).toBeInTheDocument();
+    await userEvent.click(panel.getByRole("button", { name: "Edit note" }));
+    expect(panel.getByRole("textbox", { name: /What was helpful\?/ })).toHaveValue(
+      "  Quick and right  ",
+    );
+    await userEvent.click(panel.getByRole("button", { name: "Not now" }));
+    expect(panel.getByText("Thanks for the note")).toBeInTheDocument();
+
+    // DEV_NOTE: The other thumb drops the note (the server cleared it) and asks again
+    await userEvent.click(panel.getByRole("button", { name: "Not helpful" }));
+    act(() =>
+      second.push({
+        type: "feedback",
+        messageId: "reply-1",
+        rating: Schemas.FeedbackRatingIntEnum.Down,
+      }),
+    );
+    expect(await panel.findByRole("textbox", { name: /What went wrong\?/ })).toHaveValue("");
   });
 
   it("shows the unavailable state when the DO can't answer, and sends the message again on retry", async () => {

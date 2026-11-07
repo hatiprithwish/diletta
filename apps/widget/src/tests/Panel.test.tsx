@@ -30,6 +30,10 @@ function renderPanel(view: Partial<Schemas.WidgetPanelView>) {
     onHistory: vi.fn(),
     onClose: vi.fn(),
     onRate: vi.fn(),
+    onNoteChange: vi.fn(),
+    onNoteSend: vi.fn(),
+    onNoteDismiss: vi.fn(),
+    onNoteEdit: vi.fn(),
     onDraftChange: vi.fn(),
     onApprove: vi.fn(),
     onReject: vi.fn(),
@@ -56,6 +60,7 @@ const reply = (
   isStreaming: false,
   canRate: false,
   rating: null,
+  note: null,
   changeCards: [],
   ...patch,
 });
@@ -171,6 +176,84 @@ describe("Panel", () => {
     expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(screen.getByRole("button", { name: "Not helpful" }));
     expect(actions.onRate).toHaveBeenCalledWith("a1", Schemas.FeedbackRatingIntEnum.Down);
+  });
+
+  it("asks what went wrong after a thumbs-down, and sends or closes the note", async () => {
+    const actions = renderPanel({
+      messages: [
+        reply({
+          text: "Every 6 months.",
+          canRate: true,
+          rating: Schemas.FeedbackRatingIntEnum.Down,
+          note: { status: Schemas.WidgetFeedbackNoteStatusEnum.Open, text: "", hasSaved: false },
+        }),
+      ],
+    });
+    const box = screen.getByRole("textbox", { name: /What went wrong\?/ });
+    expect(box).toHaveAttribute("maxlength", String(Schemas.FEEDBACK_NOTE_MAX_CHARS));
+    expect(screen.getByText("0 / 1,000")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send note" })).toBeDisabled();
+    fireEvent.change(box, { target: { value: "Quarterly now" } });
+    expect(actions.onNoteChange).toHaveBeenCalledWith("a1", "Quarterly now");
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(actions.onNoteDismiss).toHaveBeenCalledWith("a1");
+    cleanup();
+
+    const typed = renderPanel({
+      messages: [
+        reply({
+          text: "Every 6 months.",
+          canRate: true,
+          rating: Schemas.FeedbackRatingIntEnum.Up,
+          note: {
+            status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+            text: "Quick answer",
+            hasSaved: false,
+          },
+        }),
+      ],
+    });
+    expect(screen.getByRole("textbox", { name: /What was helpful\?/ })).toHaveValue("Quick answer");
+    await userEvent.click(screen.getByRole("button", { name: "Send note" }));
+    expect(typed.onNoteSend).toHaveBeenCalledWith("a1");
+  });
+
+  it("thanks for a sent note with Edit note, and offers Try again when it wasn't sent", async () => {
+    const sent = renderPanel({
+      messages: [
+        reply({
+          text: "Every 6 months.",
+          canRate: true,
+          rating: Schemas.FeedbackRatingIntEnum.Down,
+          note: { status: Schemas.WidgetFeedbackNoteStatusEnum.Sent, text: "", hasSaved: true },
+        }),
+      ],
+    });
+    expect(screen.getByText("Thanks for the note")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /What went wrong/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Edit note" }));
+    expect(sent.onNoteEdit).toHaveBeenCalledWith("a1");
+    cleanup();
+
+    const failed = renderPanel({
+      messages: [
+        reply({
+          text: "Every 6 months.",
+          canRate: true,
+          rating: Schemas.FeedbackRatingIntEnum.Down,
+          note: {
+            status: Schemas.WidgetFeedbackNoteStatusEnum.NotSent,
+            text: "Quarterly now",
+            hasSaved: false,
+          },
+        }),
+      ],
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Your note wasn't sent. Your rating is saved.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(failed.onNoteSend).toHaveBeenCalledWith("a1");
   });
 
   it("links a reply only to the host app and its cited sources; any other link is plain text", () => {
@@ -448,6 +531,10 @@ const noopActions = {
   onHistory: vi.fn(),
   onClose: vi.fn(),
   onRate: vi.fn(),
+  onNoteChange: vi.fn(),
+  onNoteSend: vi.fn(),
+  onNoteDismiss: vi.fn(),
+  onNoteEdit: vi.fn(),
   onDraftChange: vi.fn(),
   onApprove: vi.fn(),
   onReject: vi.fn(),

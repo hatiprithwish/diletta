@@ -23,6 +23,10 @@ const actions: Schemas.WidgetPanelActions = {
   onHistory: noop,
   onClose: noop,
   onRate: noop,
+  onNoteChange: noop,
+  onNoteSend: noop,
+  onNoteDismiss: noop,
+  onNoteEdit: noop,
   onDraftChange: noop,
   onApprove: noop,
   onReject: noop,
@@ -161,7 +165,37 @@ const reply = (
   isStreaming: false,
   canRate: false,
   rating: null,
+  note: null,
   changeCards,
+});
+
+// DEV_NOTE: A rated reply with its note box (M7-10)
+const DRILL_ASK: Schemas.WidgetUserMessageView = {
+  role: "user",
+  id: "u1",
+  text: "How often do we need to run fire drills?",
+};
+const drillReply = (
+  rating: Schemas.FeedbackRatingIntEnum,
+  note: Schemas.WidgetFeedbackNoteState,
+): Schemas.WidgetAssistantMessageView => ({
+  role: "assistant",
+  id: "a1",
+  text: "Every 6 months, per the Fire safety policy. Log each drill in the Fire safety register with the date and who attended. [1]",
+  steps: [],
+  citations: [
+    {
+      n: 1,
+      documentPublicId: "d1",
+      title: "Fire safety policy",
+      sourceUrl: "https://help.example.com/fire-safety",
+    },
+  ],
+  isStreaming: false,
+  canRate: true,
+  rating,
+  note,
+  changeCards: [],
 });
 
 const CLOSE_ASK: Schemas.WidgetUserMessageView = {
@@ -232,6 +266,7 @@ const STATES: Schemas.WidgetGalleryState[] = [
           isStreaming: true,
           canRate: false,
           rating: null,
+          note: null,
           changeCards: [],
         },
       ],
@@ -269,8 +304,65 @@ const STATES: Schemas.WidgetGalleryState[] = [
           isStreaming: false,
           canRate: true,
           rating: null,
+          note: null,
           changeCards: [],
         },
+      ],
+    },
+  },
+  {
+    name: "Note after not helpful",
+    view: {
+      ...base,
+      messages: [
+        DRILL_ASK,
+        drillReply(Schemas.FeedbackRatingIntEnum.Down, {
+          status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+          text: "Our policy changed to quarterly in July. It should read the new policy.",
+          hasSaved: false,
+        }),
+      ],
+    },
+  },
+  {
+    name: "Note after helpful",
+    view: {
+      ...base,
+      messages: [
+        DRILL_ASK,
+        drillReply(Schemas.FeedbackRatingIntEnum.Up, {
+          status: Schemas.WidgetFeedbackNoteStatusEnum.Open,
+          text: "",
+          hasSaved: false,
+        }),
+      ],
+    },
+  },
+  {
+    name: "Note sent",
+    view: {
+      ...base,
+      messages: [
+        DRILL_ASK,
+        drillReply(Schemas.FeedbackRatingIntEnum.Down, {
+          status: Schemas.WidgetFeedbackNoteStatusEnum.Sent,
+          text: "Our policy changed to quarterly in July.",
+          hasSaved: true,
+        }),
+      ],
+    },
+  },
+  {
+    name: "Note not sent",
+    view: {
+      ...base,
+      messages: [
+        DRILL_ASK,
+        drillReply(Schemas.FeedbackRatingIntEnum.Down, {
+          status: Schemas.WidgetFeedbackNoteStatusEnum.NotSent,
+          text: "Our policy changed to quarterly in July.",
+          hasSaved: false,
+        }),
       ],
     },
   },

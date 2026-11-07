@@ -253,17 +253,18 @@ Exit: security review signed off, load test meets its target, runbooks written.
 
 Exit: eRegister live in production, first week monitored.
 
-| ID   | Task                                                                               | Done when                                          | Lane              |
-| ---- | ---------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
-| M7-1 | eRegister connections: production + staging, issuer, origins, test user, reset API | Staging eval JWT works; production rejects it      | Platform          |
-| M7-2 | eRegister tools from OpenAPI, then `compare` and `inverse_op` authored             | Every write tool has readback; undo where possible | Runtime           |
-| M7-3 | Knowledge sources set up and synced                                                | Gap clusters start filling                         | Knowledge + Evals |
-| M7-4 | eRegister eval cases incl. safety; gate passes on staging                          | Gate run approves the first config                 | Knowledge + Evals |
-| M7-5 | Widget embedded in eRegister staging; internal pilot                               | Pilot users complete real tasks                    | Product           |
-| M7-6 | Production publish and first-week watch                                            | Launch readiness all ticked                        | All               |
-| M7-7 | Operator acts as a company admin in any company (ADR 0006); before M7-5            | Operator edits eRegister's config, audited as us   | Platform          |
-| M7-8 | Operator pages: companies (create, status), connections, tools, insights rebuild   | eRegister set up end to end from the UI, audited   | Platform          |
-| M7-9 | Hosted eval runner (ADR 0007): Python Workflow, Run gate / Run tests buttons       | An admin's gate run moves a version to Ready       | Evals             |
+| ID    | Task                                                                               | Done when                                          | Lane              |
+| ----- | ---------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
+| M7-1  | eRegister connections: production + staging, issuer, origins, test user, reset API | Staging eval JWT works; production rejects it      | Platform          |
+| M7-2  | eRegister tools from OpenAPI, then `compare` and `inverse_op` authored             | Every write tool has readback; undo where possible | Runtime           |
+| M7-3  | Knowledge sources set up and synced                                                | Gap clusters start filling                         | Knowledge + Evals |
+| M7-4  | eRegister eval cases incl. safety; gate passes on staging                          | Gate run approves the first config                 | Knowledge + Evals |
+| M7-5  | Widget embedded in eRegister staging; internal pilot                               | Pilot users complete real tasks                    | Product           |
+| M7-6  | Production publish and first-week watch                                            | Launch readiness all ticked                        | All               |
+| M7-7  | Operator acts as a company admin in any company (ADR 0006); before M7-5            | Operator edits eRegister's config, audited as us   | Platform          |
+| M7-8  | Operator pages: companies (create, status), connections, tools, insights rebuild   | eRegister set up end to end from the UI, audited   | Platform          |
+| M7-9  | Hosted eval runner (ADR 0007): Python Workflow, Run gate / Run tests buttons       | An admin's gate run moves a version to Ready       | Evals             |
+| M7-10 | Feedback notes: optional note on a rating; AI-read themes per chatbot on Quality   | A note's theme opens a Quality item at 5 from 3    | Product           |
 
 ## Testing strategy
 
@@ -314,7 +315,7 @@ eRegister goes live when every box below is ticked.
 - [x] Host token in Workflows for large commits: fresh token per step, or cap bulk size and skip Workflows in v1? (M3-4, review item #2) — no Workflows for commits in v1: commits run in the Conversation DO with the in-memory host token, and a conversation holds at most `CHANGE_REQUEST_MAX_PENDING` (20) open proposals.
 - [x] JWT algorithm pinning: which algorithms eRegister signs with (M2-1, review item #7) — RS256 and ES256 only, `kid` required; `none` and HS\* rejected. Confirm eRegister signs with one of the two before M7. Confirmed in M7-1: eRegister signs its companion JWT with ES256 (`COMPANION_JWT_SIGNING_KEY`, `docs/runbooks/eregister.md`).
 - [x] Drizzle on Postgres (from the scaffold): which parts go to raw-SQL migrations beyond RLS, partitions and halfvec? (M0-2) — anything drizzle-kit can't express (RLS policies, partitions, extensions, `halfvec` columns and indexes) goes in a custom migration (`db:generate:sql`) in the same journal as drizzle-kit output.
-- [x] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7) — 200 KiB gzipped for the script-tag bundle (`WIDGET_BUNDLE_MAX_GZIP_BYTES`, the build fails above it); 170.7 KiB at M2-7, with the widget's own small markdown parser instead of a library.
+- [x] Widget bundle size budget with React + shadcn from packages/ui inside Shadow DOM (M2-7) — 200 KiB gzipped for the script-tag bundle (`WIDGET_BUNDLE_MAX_GZIP_BYTES`, the build fails above it); 170.7 KiB at M2-7, with the widget's own small markdown parser instead of a library. Raised to 210 KiB with Your chats + full screen (2026-11-07, 202.1 KiB then).
 - [x] Approval expiry and undo window default values (M3-4, M3-7) — approval expiry decided in M3-4: 15 minutes (`CHANGE_REQUEST_APPROVAL_EXPIRY_MS`); undo window decided in M3-7: 1 hour from the end (`CHANGE_REQUEST_UNDO_WINDOW_MS`), values purged after it (NeedsHuman kept until resolved).
 - [x] Load test target: concurrent conversations per company (M6-5) — 50 concurrent chats of one company, no 5xx, `BudgetDO` admit / reserve / settle p95 ≤ 250 ms, no lost or double-counted spend, outbox lag p95 ≤ 60 s, exact admission under contention (`LOAD_TEST_*`); starting values, tune on real traffic. Run: `docs/runbooks/load.md`.
 - [x] Cluster size that opens a Quality item (M5-6) — 5 questions from 3 different users (`DOC_GAP_QUALITY_MIN_QUESTIONS`, `DOC_GAP_QUALITY_MIN_USERS`), joined at cosine ≥ 0.85; starting values, tune on real traffic.
