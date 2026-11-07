@@ -89,6 +89,8 @@ export default class CompanyConnectionsRepo {
           jwtIssuer: companyConnection.jwtIssuer,
           allowedOrigins: companyConnection.allowedOrigins,
           resetOp: companyConnection.resetOp ?? null,
+          openapiUrl: companyConnection.openapiUrl ?? null,
+          openapiShaping: companyConnection.openapiShaping ?? null,
           createdBy: params.adminId,
         });
         if (!result.isSuccess || !result.companyConnection) {
@@ -186,7 +188,9 @@ export default class CompanyConnectionsRepo {
           isChanged(companyConnection.baseUrl ?? undefined, before.baseUrl) ||
           isChanged(companyConnection.authConfig, before.authConfig) ||
           isChanged(companyConnection.jwtIssuer, before.jwtIssuer) ||
-          isChanged(companyConnection.resetOp, before.resetOp);
+          isChanged(companyConnection.resetOp, before.resetOp) ||
+          isChanged(companyConnection.openapiUrl, before.openapiUrl) ||
+          isChanged(companyConnection.openapiShaping, before.openapiShaping);
         const storedOrigins = new Set(before.allowedOrigins);
         const nextOrigins = companyConnection.allowedOrigins
           ? new Set(companyConnection.allowedOrigins)
@@ -210,6 +214,8 @@ export default class CompanyConnectionsRepo {
           allowedOrigins: isOriginsChanged ? [...(nextOrigins ?? [])] : null,
           status: companyConnection.status ?? null,
           resetOp: companyConnection.resetOp,
+          openapiUrl: companyConnection.openapiUrl,
+          openapiShaping: companyConnection.openapiShaping,
           updatedBy: params.adminId,
         });
         if (!result.isSuccess || !result.companyConnection) {

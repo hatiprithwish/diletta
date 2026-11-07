@@ -14,8 +14,7 @@
     "lint:fix": "eslint src scripts --fix",
     "test": "pnpm typecheck && vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
-    "schema:export": "tsx scripts/exportJsonSchema.ts",
-    "eregister:schemas": "tsx scripts/exportEregisterInputSchemas.ts"
+    "schema:export": "tsx scripts/exportJsonSchema.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"

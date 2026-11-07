@@ -100,6 +100,8 @@ export enum AuthzActionEnum {
   CompanyConnectionRead = "company_connection.read",
   CompanyConnectionCreate = "company_connection.create",
   CompanyConnectionUpdate = "company_connection.update",
+  // Sync a connection's tool schemas from its OpenAPI spec now, or check what would change (operator only, ADR 0009)
+  ToolContractSync = "tool_contract.sync",
 
   // Act as a company admin in a company the operator picks (operator only, ADR 0006): records that they came in
   CompanyActAs = "company.act_as",
@@ -120,6 +122,7 @@ export const OPERATOR_ONLY_ACTIONS: ReadonlySet<AuthzActionEnum> = new Set([
   AuthzActionEnum.CompanyConnectionRead,
   AuthzActionEnum.CompanyConnectionCreate,
   AuthzActionEnum.CompanyConnectionUpdate,
+  AuthzActionEnum.ToolContractSync,
   AuthzActionEnum.CompanyActAs,
 ]);
 

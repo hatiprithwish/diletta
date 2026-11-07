@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { findToolOpPlaceholders } from "../toolDefinitions/ToolOpPlaceholders";
 import { ZToolCallOpV1 } from "../toolDefinitions/ToolOpsV1";
+import {
+  ToolContractSyncFailureIntEnum,
+  ZOpenApiShaping,
+  ZToolContractUrl,
+} from "../toolContracts/ToolContractsCommon";
 
 export enum CompanyConnectionEnvironmentIntEnum {
   Production = 1,
@@ -206,6 +211,9 @@ export const ZCompanyConnectionBase = z.object({
   jwtIssuer: ZJwtIssuer,
   allowedOrigins: z.array(ZOrigin),
   resetOp: ZConnectionResetOp.nullable(),
+  // ADR 0009: the host's OpenAPI spec (public, https) and how its schemas are shaped for the model
+  openapiUrl: ZToolContractUrl.nullable(),
+  openapiShaping: ZOpenApiShaping.nullable(),
 });
 export type CompanyConnectionBase = z.infer<typeof ZCompanyConnectionBase>;
 
@@ -219,6 +227,10 @@ export const ZCompanyConnection = ZCompanyConnectionBase.extend({
   authType: z.string(),
   authConfig: z.unknown(),
   resetOp: z.unknown(),
+  openapiShaping: z.unknown(),
+  openapiSpecHash: z.string().nullable(),
+  openapiSyncedAt: z.date().nullable(),
+  openapiFailure: z.enum(ToolContractSyncFailureIntEnum).nullable(),
   status: z.enum(CompanyConnectionStatusIntEnum),
   createdBy: z.string().nullable(),
   updatedBy: z.string().nullable(),

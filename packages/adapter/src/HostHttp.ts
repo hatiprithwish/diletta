@@ -58,8 +58,11 @@ export function parseRetryAfterMs(value: string | null, now = Date.now()): numbe
   return Math.min(Math.max(ms, 0), Schemas.HOST_CALL_RETRY_AFTER_MAX_MS);
 }
 
-// Reads at most HOST_RESPONSE_MAX_BYTES; null when the body is bigger
-async function readCappedText(response: Response): Promise<string | null> {
+// Reads at most maxBytes; null when the body is bigger
+export async function readCappedText(
+  response: Response,
+  maxBytes: number = Schemas.HOST_RESPONSE_MAX_BYTES,
+): Promise<string | null> {
   if (!response.body) return "";
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -68,7 +71,7 @@ async function readCappedText(response: Response): Promise<string | null> {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > Schemas.HOST_RESPONSE_MAX_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel();
       return null;
     }

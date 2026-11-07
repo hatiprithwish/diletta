@@ -5,7 +5,9 @@ import ChatbotConfigsDAL from "@/data-access-layer/ChatbotConfigsDAL";
 import ToolDefinitionsDAL from "@/data-access-layer/ToolDefinitionsDAL";
 import getDbClient from "@/db/dbClient";
 import withTenant, { TenantRollbackError } from "@/db/withTenant";
+import HostToolCallProvider from "@/providers/hostToolCall";
 import AppLogger from "@/providers/logger";
+import ToolContractProvider from "@/providers/toolContract";
 import {
   operatorAuditActor,
   recordAuditOrRollback,
@@ -230,6 +232,53 @@ export default class ToolDefinitionsRepo {
       readbackOp: ops.readbackOp,
       inverseOp: ops.inverseOp,
     };
+  }
+
+  // DEV_NOTE: The connection's spec URL and shaping (ADR 0009) in a read of their own, so the spec is fetched outside any
+  // transaction. The connection is checked again where the tools are written.
+  private async readContractSource(params: {
+    companyId: string;
+    connectionPublicId: string;
+  }): Promise<
+    | { isSuccess: true; openapiUrl: string; openapiShaping: unknown }
+    | { isSuccess: false; response: Schemas.ToolDefinitionStateResponse }
+  > {
+    const read = await withTenant(this.db, params.companyId, async (tx) => {
+      const found = await this.dal.getToolConnection(tx, params);
+      if (!found.isSuccess) {
+        return {
+          isSuccess: false as const,
+          response: { isSuccess: false, message: found.message },
+        };
+      }
+      if (!found.connection) {
+        return {
+          isSuccess: false as const,
+          response: this.refuse(
+            Schemas.ToolDefinitionFailureEnum.ConnectionNotFound,
+            "Connection not found",
+          ),
+        };
+      }
+      if (!found.connection.openapiUrl) {
+        return {
+          isSuccess: false as const,
+          response: this.refuse(
+            Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
+            "Set the connection's OpenAPI spec URL first: a tool set takes its schemas from the app's spec",
+          ),
+        };
+      }
+      return {
+        isSuccess: true as const,
+        openapiUrl: found.connection.openapiUrl,
+        openapiShaping: found.connection.openapiShaping,
+      };
+    });
+    // DEV_NOTE: withTenant answers a failed transaction as a plain failure
+    if ("openapiUrl" in read && read.isSuccess) return read;
+    if ("response" in read && read.response) return { isSuccess: false, response: read.response };
+    return { isSuccess: false, response: { isSuccess: false, message: read.message } };
   }
 
   // DEV_NOTE: The connection must be the company's and able to serve tool calls: Active, a REST connection, with a
@@ -646,6 +695,12 @@ export default class ToolDefinitionsRepo {
       tool: Schemas.ToolDefinitionSeed;
       ops: Schemas.ToolOps;
       schemaVersion: number;
+      operationId: string;
+      contractHash: string;
+    }[] = [];
+    const drafts: {
+      tool: Schemas.ToolDefinitionSeed;
+      ops: Schemas.ToolOps;
     }[] = [];
     for (const tool of Schemas.TOOL_SETS[params.toolSet]) {
       const ops = this.normalizeOps(tool, tool.ops);
@@ -655,7 +710,74 @@ export default class ToolDefinitionsRepo {
           `${tool.name}: ${ops.response.message ?? "Invalid tool ops"}`,
         );
       }
-      planned.push({ tool, ops: ops.ops, schemaVersion: ops.schemaVersion });
+      drafts.push({ tool, ops: ops.ops });
+    }
+
+    // DEV_NOTE: A tool set is bindings; each body field's schema comes from the connection's OpenAPI spec (ADR 0009),
+    // read before the transaction opens (a slow host never holds one). Without a spec URL nothing is stored: a tool
+    // with an empty schema would let the model send anything.
+    const source = await this.readContractSource({
+      companyId: params.companyId,
+      connectionPublicId: params.connectionPublicId,
+    });
+    if (!source.isSuccess) return source.response;
+    const fetched = await HostToolCallProvider.getSpec({ url: source.openapiUrl });
+    if (!fetched.isSuccess) {
+      return this.refuse(
+        Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
+        `Couldn't read the connection's spec: ${fetched.message}`,
+      );
+    }
+    const spec = Schemas.parseOpenApiSpec(fetched.body);
+    if (!spec.isSuccess) {
+      return this.refuse(Schemas.ToolDefinitionFailureEnum.InvalidOps, spec.message);
+    }
+    const derived = await ToolContractProvider.derive({
+      spec: spec.spec,
+      shaping: ToolContractProvider.shapingOf(source.openapiShaping),
+      tools: drafts.map(({ tool, ops }) => ({
+        name: tool.name,
+        risk: tool.risk,
+        ops,
+        operationId: null,
+      })),
+    });
+    const failed = derived.filter((result) => !result.isSuccess).map((result) => result.message);
+    if (failed.length > 0) {
+      return this.refuse(
+        Schemas.ToolDefinitionFailureEnum.InvalidOps,
+        `The spec doesn't fit these tools: ${failed.slice(0, 5).join("; ")}${failed.length > 5 ? ` (and ${failed.length - 5} more)` : ""}`,
+      );
+    }
+    const unmatched: string[] = [];
+    for (const [index, { tool, ops }] of drafts.entries()) {
+      const result = derived[index];
+      if (!result?.isSuccess) continue;
+      const withSchema = this.normalizeOps(tool, { ...ops, inputSchema: result.inputSchema });
+      if (!withSchema.isSuccess) {
+        return this.refuse(
+          Schemas.ToolDefinitionFailureEnum.InvalidOps,
+          `${tool.name}: ${withSchema.response.message ?? "Invalid tool ops"}`,
+        );
+      }
+      if (result.missingFields.length > 0) {
+        unmatched.push(`${tool.name} (${result.missingFields.join(", ")})`);
+      }
+      planned.push({
+        tool,
+        ops: withSchema.ops,
+        schemaVersion: withSchema.schemaVersion,
+        operationId: result.operationId,
+        contractHash: result.contractHash,
+      });
+    }
+    if (unmatched.length > 0) {
+      AppLogger.warn({
+        category: Schemas.LogCategory.DAL,
+        action: Schemas.LogAction.LoadToolSet,
+        message: "Tools send fields the connection's spec doesn't name",
+        metadata: { companyId: params.companyId, tools: unmatched },
+      });
     }
 
     return await withTenant(
@@ -695,7 +817,7 @@ export default class ToolDefinitionsRepo {
         const tools: Schemas.ToolSetTool[] = [];
         const newVersions: Schemas.CreateToolDefinitionsDALRequest["toolDefinitions"] = [];
         const reactivate: string[] = [];
-        for (const { tool, ops, schemaVersion } of planned) {
+        for (const { tool, ops, schemaVersion, operationId, contractHash } of planned) {
           const latest = latestByName.get(tool.name);
           const content = {
             connectionId: connection.connectionId,
@@ -705,6 +827,8 @@ export default class ToolDefinitionsRepo {
             approval: tool.approval,
             source: tool.source,
             ...this.toOpsColumns(ops, schemaVersion),
+            operationId,
+            contractHash,
           };
           const isSame =
             latest !== undefined &&
@@ -721,6 +845,8 @@ export default class ToolDefinitionsRepo {
                 callOp: latest.callOp,
                 readbackOp: latest.readbackOp,
                 inverseOp: latest.inverseOp,
+                operationId: latest.operationId,
+                contractHash: latest.contractHash,
               });
 
           if (latest && isSame) {
@@ -797,7 +923,15 @@ export default class ToolDefinitionsRepo {
           entityType: Schemas.AuditEntityTypeEnum.ToolDefinition,
           events: audits,
         });
-        return { isSuccess: true, message: "Tool set loaded", tools, outboxIds };
+        return {
+          isSuccess: true,
+          message:
+            unmatched.length > 0
+              ? `Tool set loaded. These tools send fields the spec doesn't name, so the app may refuse them: ${unmatched.join("; ")}`
+              : "Tool set loaded",
+          tools,
+          outboxIds,
+        };
       },
     );
   }

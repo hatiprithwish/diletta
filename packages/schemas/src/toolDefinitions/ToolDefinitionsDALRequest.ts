@@ -20,7 +20,8 @@ export type CreateToolDefinitionDALRequest = Pick<
   | "approval"
   | "source"
   | "createdBy"
->;
+> &
+  Partial<Pick<ToolDefinition, "operationId" | "contractHash">>;
 
 // DEV_NOTE: M7-8. Many new versions of one company in one insert, all at one status (a tool set's load: Active)
 export type CreateToolDefinitionsDALRequest = Pick<
@@ -110,3 +111,6 @@ export type GetWriteToolSummariesDALRequest = Pick<ToolDefinition, "companyId">;
 export type GetActiveToolDefinitionOptionsDALRequest = Pick<ToolDefinition, "companyId"> & {
   limit: number;
 };
+
+// DEV_NOTE: ADR 0009: a connection's tools that follow its spec
+export type FindBoundToolDefinitionsDALRequest = Pick<ToolDefinition, "companyId" | "connectionId">;

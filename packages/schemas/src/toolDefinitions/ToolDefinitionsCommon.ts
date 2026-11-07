@@ -288,6 +288,10 @@ export const ZToolDefinition = z.object({
   callOp: z.unknown(),
   readbackOp: z.unknown(),
   inverseOp: z.unknown(),
+  // ADR 0009: the spec operation call_op sends and the hash of the input_schema this version was made from (null = the
+  // schema was written by hand)
+  operationId: z.string().nullable(),
+  contractHash: z.string().nullable(),
   idempotencyMode: z.enum(ToolDefinitionIdempotencyModeIntEnum),
   approval: z.enum(ToolDefinitionApprovalIntEnum),
   source: z.enum(ToolDefinitionSourceIntEnum),

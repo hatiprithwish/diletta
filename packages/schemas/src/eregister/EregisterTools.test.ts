@@ -20,7 +20,7 @@ import {
   checkReadAfter,
 } from "../changeRequests/ChangeRequestsVerify";
 import { HostCallOutcomeEnum } from "../hostAdapter/HostAdapterCommon";
-import { EREGISTER_INPUT_SCHEMAS } from "./EregisterInputSchemas";
+import { EREGISTER_BODY_FIELDS } from "./EregisterCommon";
 import { EREGISTER_TOOL_DEFINITIONS } from "./EregisterTools";
 
 const byName = (name: string) => {
@@ -109,9 +109,22 @@ describe("EREGISTER_TOOL_DEFINITIONS", () => {
     }
   });
 
-  it("keep tool definitions small: form fields are loose, read on demand", () => {
-    for (const [name, schema] of Object.entries(EREGISTER_INPUT_SCHEMAS)) {
-      expect(JSON.stringify(schema).length, name).toBeLessThan(20_000);
+  it("declare every body field a tool sends, as an empty schema the spec fills in", () => {
+    for (const tool of EREGISTER_TOOL_DEFINITIONS) {
+      const sent = [
+        ...Object.keys(tool.ops.callOp.bodyMap ?? {}),
+        ...Object.values(tool.ops.callOp.bodyMap ?? {}),
+      ]
+        .map((value) => /^\{args\.(\w+)\}$/.exec(String(value))?.[1])
+        .filter((name): name is string => name !== undefined);
+      for (const name of sent) {
+        expect(Object.keys(tool.ops.inputSchema.properties), `${tool.name}.${name}`).toContain(
+          name,
+        );
+      }
+    }
+    for (const [body, fields] of Object.entries(EREGISTER_BODY_FIELDS)) {
+      expect(new Set(fields).size, body).toBe(fields.length);
     }
   });
 
@@ -186,37 +199,6 @@ describe("EREGISTER_TOOL_DEFINITIONS", () => {
     ).toBe(ChangeRequestCheckVerdictEnum.Matches);
     expect(readAfter("eregister_delete_action", deleteArgs, { action: { publicId: "a1" } })).toBe(
       ChangeRequestCheckVerdictEnum.Differs,
-    );
-  });
-
-  it("accept a register with loose form fields, keeping their own keys", () => {
-    const register = {
-      companyId: "42",
-      name: "Visitors",
-      schema: {
-        properties: { addOrEditTitleSuffix: "Entry", displayTitleFieldId: "name" },
-        steps: [
-          {
-            id: "step1",
-            title: "Form Step",
-            type: "form",
-            sections: [
-              {
-                title: "Section",
-                fields: [
-                  { id: "name", label: "Name", type: "text", isRequired: true, maxLength: 80 },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    };
-    const validated = validate("eregister_create_register", register);
-    expect(validated.isSuccess, validated.issues?.join("; ")).toBe(true);
-    expect(JSON.stringify(validated.args)).toContain('"maxLength":80');
-    expect(validate("eregister_create_register", { companyId: "42", name: "x" }).isSuccess).toBe(
-      false,
     );
   });
 

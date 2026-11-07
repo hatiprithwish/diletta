@@ -71,6 +71,7 @@ export const ZToolContractUrl = z
   .max(TOOL_CONTRACT_URL_MAX_CHARS)
   .refine(
     (value) => {
+      if (!URL.canParse(value)) return false;
       const url = new URL(value);
       return url.username === "" && url.password === "" && url.hash === "";
     },

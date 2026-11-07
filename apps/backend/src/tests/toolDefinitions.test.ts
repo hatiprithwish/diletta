@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { eq, inArray } from "drizzle-orm";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { and, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -14,6 +14,7 @@ import {
 } from "@/db/tables";
 import ToolDefinitionsRepo from "@/repositories/ToolDefinitionsRepo";
 import Utility from "@/utils/Utility";
+import { SPEC_URL, serveSpec, specFor } from "@/tests/helpers/toolSpec";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -45,6 +46,20 @@ async function withOwnerDb(run: (ownerDb: NodePgDatabase) => Promise<void>) {
   }
 }
 
+async function withOwnerRow(name: string, companyId: string) {
+  let row: { operationId: string | null; contractHash: string | null } | undefined;
+  await withOwnerDb(async (ownerDb) => {
+    [row] = await ownerDb
+      .select({
+        operationId: toolDefinitions.operationId,
+        contractHash: toolDefinitions.contractHash,
+      })
+      .from(toolDefinitions)
+      .where(and(eq(toolDefinitions.name, name), eq(toolDefinitions.companyId, companyId)));
+  });
+  return row;
+}
+
 function connectionValues(companyId: string) {
   return {
     publicId: Utility.generatePublicId(),
@@ -56,6 +71,7 @@ function connectionValues(companyId: string) {
     credentialScope: Schemas.CompanyConnectionCredentialScopeIntEnum.None,
     jwtIssuer: `https://${crypto.randomUUID()}.example.com`,
     allowedOrigins: ["https://host.example.com"],
+    openapiUrl: SPEC_URL,
   };
 }
 
@@ -626,6 +642,14 @@ describe("ToolDefinitionsRepo", () => {
 // DEV_NOTE: A load writes every tool of the set (47 for eRegister), so these run longer than the default timeout
 describe("ToolDefinitionsRepo.loadToolSet", { timeout: 180_000 }, () => {
   const setTools = Schemas.TOOL_SETS[Schemas.ToolSetEnum.Eregister];
+  let served: Record<string, unknown> | null = specFor(setTools);
+  beforeEach(() => {
+    served = specFor(setTools);
+    serveSpec(() => served);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const load = (companyId: string, connectionPublicId: string) =>
     new ToolDefinitionsRepo(env).loadToolSet({
       companyId,
@@ -752,5 +776,86 @@ describe("ToolDefinitionsRepo.loadToolSet", { timeout: 180_000 }, () => {
       name: setTools[0]!.name,
     });
     expect(counted.totalRecords).toBe(0);
+  });
+
+  it("stores each body field's schema from the spec, with the operation and a hash of it", async () => {
+    served = specFor(setTools, (tool) =>
+      tool === "eregister_create_button"
+        ? {
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string", maxLength: 40 },
+                      status: { type: "integer" },
+                    },
+                    required: ["name"],
+                  },
+                },
+              },
+            },
+          }
+        : undefined,
+    );
+    let connection = "";
+    await withOwnerDb(async (ownerDb) => {
+      const [created] = await ownerDb
+        .insert(companyConnections)
+        .values({ ...connectionValues(companyB), openapiUrl: SPEC_URL })
+        .returning({ publicId: companyConnections.publicId });
+      connection = created!.publicId;
+    });
+    const loaded = await load(companyB, connection);
+    expect(loaded.isSuccess, loaded.message).toBe(true);
+
+    const [row] =
+      (
+        await new ToolDefinitionsRepo(env).getToolDefinitions({
+          companyId: companyB,
+          name: "eregister_create_button",
+        })
+      ).toolDefinitions ?? [];
+    const properties = row?.ops.inputSchema.properties as Record<string, unknown>;
+    expect(properties.name).toEqual({ type: "string", maxLength: 40 });
+    expect(properties.status).toEqual({ type: "integer" });
+    expect(row?.ops.inputSchema.required).toEqual(["companyId", "name"]);
+    const stored = await withOwnerRow("eregister_create_button", companyB);
+    expect(stored).toMatchObject({ operationId: "eregister_create_button" });
+    expect(stored?.contractHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("refuses a connection with no spec URL, a spec that can't be read, and one missing a tool's operation", async () => {
+    let bare = "";
+    await withOwnerDb(async (ownerDb) => {
+      const [created] = await ownerDb
+        .insert(companyConnections)
+        .values({ ...connectionValues(companyB), openapiUrl: null })
+        .returning({ publicId: companyConnections.publicId });
+      bare = created!.publicId;
+    });
+    const noUrl = await load(companyB, bare);
+    expect(noUrl).toMatchObject({
+      isSuccess: false,
+      failure: Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
+    });
+    expect(noUrl.message).toContain("spec URL");
+
+    served = null;
+    const down = await load(companyA, connectionA);
+    expect(down).toMatchObject({
+      isSuccess: false,
+      failure: Schemas.ToolDefinitionFailureEnum.ConnectionUnavailable,
+    });
+
+    const partial = specFor(setTools.slice(1));
+    served = partial;
+    const missing = await load(companyA, connectionA);
+    expect(missing).toMatchObject({
+      isSuccess: false,
+      failure: Schemas.ToolDefinitionFailureEnum.InvalidOps,
+    });
+    expect(missing.message).toContain(setTools[0]!.name);
   });
 });

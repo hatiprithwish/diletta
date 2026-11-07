@@ -27,6 +27,7 @@ export default class CronScheduleProvider {
         Schemas.CronJobEnum.EvalTranscriptSweep,
         Schemas.CronJobEnum.PlatformEvalCaseSync,
         Schemas.CronJobEnum.ContentRetentionPurge,
+        Schemas.CronJobEnum.ToolContractSync,
       );
       if (time.getUTCHours() === Constants.ACTIVITY_LOG_PARTITIONS_UTC_HOUR) {
         jobs.push(Schemas.CronJobEnum.ActivityLogPartitions);

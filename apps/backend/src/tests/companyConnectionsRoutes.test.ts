@@ -1,5 +1,5 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import { inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -8,6 +8,7 @@ import * as Schemas from "@app/schemas";
 import { activityLog, admins, companies, companyConnections, eventOutbox } from "@/db/tables";
 import worker from "@/index";
 import Utility from "@/utils/Utility";
+import { SPEC_URL, serveSpec, specFor } from "@/tests/helpers/toolSpec";
 // Declare env type for this test suite
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -153,6 +154,10 @@ afterAll(async () => {
   });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 // DEV_NOTE: Every request authenticates, resolves the company and runs its own transactions on the staging branch, so a
 // multi-step flow outlasts the default per-test timeout
 const ROUTE_FLOW_TIMEOUT_MS = 120_000;
@@ -265,6 +270,50 @@ describe(
         },
       });
       expect(badBody.status).toBe(400);
+    });
+
+    it("sets a spec URL and shaping, then checks and syncs the tool schemas: 403 / 404 / 400 / 502 / 200 (ADR 0009)", async () => {
+      const created = await call("POST", base(), { as: operator, body: stagingConnection() });
+      const publicId = (created.body.companyConnection as Schemas.CompanyConnectionWithStatus)
+        .publicId;
+      const path = `${base()}/${publicId}/contract-sync`;
+      const body = { isDryRun: true };
+
+      expect((await call("POST", path, { as: adminA, body })).status).toBe(403);
+      expect((await call("POST", path, { as: operator, body: {} })).status).toBe(400);
+      expect(
+        (await call("POST", `${base()}/${connectionB}/contract-sync`, { as: operator, body }))
+          .status,
+      ).toBe(404);
+      // No spec URL yet
+      expect((await call("POST", path, { as: operator, body })).status).toBe(400);
+
+      const refusedUrl = await call("PATCH", `${base()}/${publicId}`, {
+        as: operator,
+        body: { companyConnection: { openapiUrl: "http://host.example.com/openapi.json" } },
+      });
+      expect(refusedUrl.status).toBe(400);
+
+      const set = await call("PATCH", `${base()}/${publicId}`, {
+        as: operator,
+        body: {
+          companyConnection: {
+            openapiUrl: SPEC_URL,
+            openapiShaping: { isDefaultRequired: true, replaceComponents: {} },
+          },
+        },
+      });
+      expect(set.status).toBe(200);
+      expect((set.body.companyConnection as Schemas.CompanyConnectionWithStatus).openapiUrl).toBe(
+        SPEC_URL,
+      );
+
+      serveSpec(() => null);
+      expect((await call("POST", path, { as: operator, body })).status).toBe(502);
+      serveSpec(() => specFor([]));
+      const checked = await call("POST", path, { as: operator, body });
+      expect(checked.status).toBe(200);
+      expect(checked.body).toMatchObject({ isSuccess: true, isDryRun: true, changes: [] });
     });
 
     it("never reads or changes another company's connection", async () => {

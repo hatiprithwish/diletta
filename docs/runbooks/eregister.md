@@ -111,7 +111,7 @@ The harness signs the test user in through Firebase (`accounts:signInWithPasswor
 
 ## Tools (M7-2)
 
-The chatbot reads and changes eRegister configuration through 47 tools (`Schemas.EREGISTER_TOOL_DEFINITIONS`, `packages/schemas/src/eregister/`). eRegister has no OpenAPI spec, so the tools are written by hand over eRegister's own Zod request schemas. Each tool runs as the signed-in user, with that user's eRegister role.
+The chatbot reads and changes eRegister configuration through 47 tools (`Schemas.EREGISTER_TOOL_DEFINITIONS`, `packages/schemas/src/eregister/`). The tools are bindings written in code (which fields a tool sends, how it is read back and undone); each field's schema comes from eRegister's OpenAPI spec (`/api/openapi.json`) and follows it (`docs/runbooks/tool-contracts.md`). Each tool runs as the signed-in user, with that user's eRegister role.
 
 | Area          | Reads                                                                         | Writes                                                       |
 | ------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -151,17 +151,11 @@ A field eRegister reshapes when it is read isn't compared. That covers a registe
 
 One tool, by hand: the company's page › **Tools** (`docs/runbooks/operators.md`): open it, **New version**, edit the draft, save, **Make active**. The steps below change them all from code, so the next seed keeps them:
 
-1. If an eRegister request body changed, regenerate the input schemas from an eregister-backend checkout at the deployed commit:
-
-   ```bash
-   pnpm --filter @app/schemas eregister:schemas --eregister ../wbb/eregister/eregister-backend
-   ```
-
-   The header of `EregisterInputSchemas.ts` names the eRegister commit. Commit it with the change. `EregisterTools.test.ts` fails if a body grows past 20K characters or a tool stops converting.
+1. A change to an eRegister request body needs nothing here: the schema syncs from the spec (`docs/runbooks/tool-contracts.md`). Change a binding (the fields a tool sends, its readback, undo or approval) in `packages/schemas/src/eregister/EregisterTools.ts` and `EregisterCommon.ts` (`EREGISTER_BODY_FIELDS`). One-time per eRegister connection, set its spec URL and shaping (`PATCH /operator/companies/<companyPublicId>/connections/<connectionPublicId>` with `{ "companyConnection": { "openapiUrl": "<eRegister API>/api/openapi.json", "openapiShaping": <Schemas.EREGISTER_OPENAPI_SHAPING> } }`).
 
 2. Store the tools on the connection. On the company's page › **Tools › Load tool set**, pick eRegister and the connection. It loads the set the deployed backend was built with, so deploy the change first. Each tool ends active at its newest version, and each change records an audit row as you. The dialog shows the `{name, version}` pins. The API is `POST /operator/companies/<companyPublicId>/tool-definitions/tool-sets` with `{ "toolSet": "eregister", "connectionPublicId": "<connectionPublicId>" }`.
 
-   It is idempotent. A tool gets a new version only when it changed, so a config pinned to the old version keeps it. It refuses while a tool has a Draft version (an operator is editing it), naming the tools. It refuses a connection that isn't the company's or isn't Active.
+   It is idempotent. A tool gets a new version only when it changed, so a config pinned to the old version keeps it. It refuses while a tool has a Draft version (an operator is editing it), naming the tools. It refuses a connection that isn't the company's or isn't Active, one with no spec URL, a spec it can't read and a spec with no operation for a tool; a tool that sends a field the spec doesn't name loads, and the answer names it.
 
    Without the UI (local, before a deploy), the script does the same as the owner role on the staging branch (`apps/backend/.env`), unaudited, like the test host seed:
 

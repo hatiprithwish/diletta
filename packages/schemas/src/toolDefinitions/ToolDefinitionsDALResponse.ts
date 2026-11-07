@@ -15,7 +15,15 @@ export interface ToolDefinitionsDALResponse extends ApiResponse {
 export interface ToolConnectionDALResponse extends ApiResponse {
   connection?: Pick<
     CompanyConnection,
-    "id" | "status" | "adapterType" | "baseUrl" | "authType" | "authConfig" | "credentialScope"
+    | "id"
+    | "status"
+    | "adapterType"
+    | "baseUrl"
+    | "authType"
+    | "authConfig"
+    | "credentialScope"
+    | "openapiUrl"
+    | "openapiShaping"
   >;
 }
 
@@ -54,4 +62,9 @@ export interface ToolDefinitionOptionsDALResponse extends ApiResponse {
 // DEV_NOTE: M7-8. The rows a batch write touched, with what their audit rows need
 export interface ToolDefinitionKeysDALResponse extends ApiResponse {
   toolDefinitions?: Pick<ToolDefinition, "id" | "publicId" | "name" | "version">[];
+}
+
+// DEV_NOTE: ADR 0009: the names of a connection's tools that follow its spec (a version of the name has an operation_id)
+export interface ToolDefinitionNamesDALResponse extends ApiResponse {
+  names?: string[];
 }

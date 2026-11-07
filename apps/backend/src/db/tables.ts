@@ -300,6 +300,11 @@ export const companyConnections = table(
     jwtIssuer: t.text("jwt_issuer").notNull(),
     allowedOrigins: t.text("allowed_origins").array().notNull(),
     resetOp: t.jsonb("reset_op"), // staging only: eval cleanup after a run
+    openapiUrl: t.text("openapi_url"), // ADR 0009: the host's OpenAPI spec; null = tool schemas aren't synced
+    openapiShaping: t.jsonb("openapi_shaping"), // ZOpenApiShaping; null = DEFAULT_OPENAPI_SHAPING
+    openapiSpecHash: t.text("openapi_spec_hash"), // sha-256 of the last spec read; unchanged = nothing to do
+    openapiSyncedAt: t.timestamp("openapi_synced_at", { withTimezone: true }),
+    openapiFailure: t.smallint("openapi_failure").$type<Schemas.ToolContractSyncFailureIntEnum>(), // null = last sync fine
     status: t
       .smallint()
       .$type<Schemas.CompanyConnectionStatusIntEnum>()
@@ -382,6 +387,8 @@ export const toolDefinitions = table(
     description: t.text().notNull(),
     risk: t.smallint().$type<Schemas.ToolDefinitionRiskIntEnum>().notNull(),
     schemaVersion: t.smallint("schema_version").notNull().default(1), // which ZToolOpsV<n> parses the op columns
+    operationId: t.text("operation_id"), // ADR 0009: the spec operation call_op sends; null = never synced
+    contractHash: t.text("contract_hash"), // sha-256 of the input_schema this version was made from
     inputSchema: t.jsonb("input_schema").notNull(),
     callOp: t.jsonb("call_op").notNull(),
     readbackOp: t.jsonb("readback_op"),
